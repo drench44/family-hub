@@ -476,7 +476,8 @@ def test_tiles_routes_happy_end_to_end(client, monkeypatch):
           "feelsLike": 74.0, "feelsDesc": "Comfortable", "fcLow": 58.0,
           "fcHigh": 81.0, "uvIndex": 6, "uvDesc": "High", "aqi": 42,
           "aqiCategory": "Good", "humidity": 55, "dewPoint": 54.0,
-          "weatherStale": False, "hourlyTemps": [70.0, 71.5, 73.0]}
+          "weatherStale": False,
+          "tempSeries": {"temps": [70.0, 71.5, 73.0], "nowIndex": 1}}
     rooms = {"available": True, "rooms": [
         {"name": "Living Room", "channel": 1, "temp_f": 71.0, "humidity": 48,
          "stale": False, "battery_low": False}]}
@@ -510,7 +511,7 @@ def test_tiles_routes_happy_end_to_end(client, monkeypatch):
     assert wj["conditions"] == "Partly Cloudy" and wj["feels"] == 74.0
     assert wj["high"] == 81.0 and wj["low"] == 58.0
     assert wj["uv"] == 6 and wj["aqi"] == 42 and wj["aqi_cat"] == "Good"
-    assert wj["spark"] == [70.0, 71.5, 73.0]
+    assert wj["spark"] == [70.0, 71.5, 73.0] and wj["spark_now"] == 1
 
     c = client.get("/api/tiles/climate")
     assert c.status_code == 200
