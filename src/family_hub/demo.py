@@ -238,3 +238,15 @@ def demo_cameras() -> list[dict]:
         {"src": "demo-front", "label": "Front Door", "demo": True, "tone": "cool"},
         {"src": "demo-yard", "label": "Back Yard", "demo": True, "tone": "warm"},
     ]
+
+
+def demo_camera_page() -> list[dict]:
+    """Four placeholder cameras for the Cameras-tab 2x2 grid (row-major:
+    top-left, top-right, bottom-left, bottom-right). Same shape as
+    ``demo_cameras()`` so DEMO renders a full grid for a README screenshot."""
+    return [
+        {"src": "demo-drive", "label": "Driveway", "demo": True, "tone": "cool"},
+        {"src": "demo-mail", "label": "Mailbox", "demo": True, "tone": "cool"},
+        {"src": "demo-yard", "label": "Back Yard", "demo": True, "tone": "warm"},
+        {"src": "demo-side", "label": "Side Gate", "demo": True, "tone": "warm"},
+    ]
