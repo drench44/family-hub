@@ -24,11 +24,11 @@ exempt.
 
 ## Testing the wall layout visually
 
-The wall is a FIXED-WIDTH desktop layout: `.wrap { width: 1880px }`. It does not
+The wall is a FIXED-WIDTH desktop layout: `.wrap { width: 1920px }`. It does not
 shrink to fit a narrower window; it overflows. So when you debug or screenshot
-the wall in a browser (or a headless/automation viewport), render it at **1880px
+the wall in a browser (or a headless/automation viewport), render it at **1920px
 wide or more**, or keep the viewport in desktop mode (> 1000px) and zoom the page
-out so the 1880px content fits. In a narrower window the right-hand columns
+out so the 1920px content fits. In a narrower window the right-hand columns
 (calendar, cameras, weather, climate) scroll off-screen and their measurements
 are meaningless. Several "looks fine to me" false negatives have come from
 measuring a viewport that never rendered those columns; trust a real full-width
