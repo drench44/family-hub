@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from . import chores as chlogic
 from . import db as fdb
+from . import demo as fdemo
 from . import tiles
 from . import todos as tdlogic
 from .calendar_sync import GoogleCalendarClient, sync_once
@@ -46,6 +47,12 @@ DB_PATH = os.environ.get("DB_PATH", "data/hub.db")
 TOKEN_PATH = os.environ.get("TOKEN_PATH", "data/token.json")
 TZ = ZoneInfo(os.environ.get("TZ", "America/Los_Angeles"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "web", "static")
+
+# DEMO=1 turns the whole app into a self-contained sample wall (fake family,
+# placeholder cameras, canned weather/climate) for a README screenshot or a
+# "try it" run: no real calendars, cameras, or feeds needed. Every DEMO branch
+# below is gated on this flag, so an unset DEMO changes zero behavior.
+DEMO = os.environ.get("DEMO", "") == "1"
 
 
 def _compute_build() -> str:
@@ -150,6 +157,25 @@ def _ensure_history_backfill(conn) -> None:
              len(day_rows))
 
 
+def _ensure_demo_seed(conn) -> None:
+    """DEMO=1 only: seed the fake sample family into an EMPTY db on first open,
+    so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on there
+    being no people yet, so it never re-seeds or touches a real db (and a plain
+    unset-DEMO run never reaches here at all)."""
+    if conn.execute("SELECT 1 FROM people LIMIT 1").fetchone() is not None:
+        return
+    try:
+        fdemo.seed_demo(conn, _today())
+    except Exception:
+        # The fdb helpers self-commit, so a seed that raises partway has already
+        # written some rows (people first). Wipe them so the empty-db guard fires
+        # again next open and re-seeds cleanly, instead of seeing the half-written
+        # people and serving a permanently half-populated demo.
+        fdemo.clear_demo(conn)
+        raise
+    log.info("DEMO mode: seeded the sample family wall")
+
+
 def _db():
     """Module-level SQLite connection with a cheap self-heal ping per use, so a
     corrupted/closed handle recovers instead of erroring forever."""
@@ -173,6 +199,21 @@ def _db():
                     pass
                 _conn = None
                 raise
+            if DEMO:
+                try:
+                    _ensure_demo_seed(_conn)
+                except Exception:
+                    # Partial seed already wiped (clear_demo). Drop the handle so
+                    # the next request reconnects and retries the seed from empty,
+                    # rather than caching a connection whose seed never completed.
+                    log.error("DEMO seed failed; dropping handle to retry",
+                              exc_info=True)
+                    try:
+                        _conn.close()
+                    except Exception:
+                        pass
+                    _conn = None
+                    raise
         else:
             try:
                 _conn.execute("SELECT 1")
@@ -265,6 +306,18 @@ def _links() -> dict:
     # (missing "src"/"id"/"url", or a non-integer vw) must not raise out of
     # /api/hub and blank the ENTIRE wall (chores, calendar, every tile) over one
     # typo. A bad entry is skipped and logged; the good ones still render.
+    if DEMO:
+        # Placeholder camera tiles (no go2rtc, no liveness probe): the frontend
+        # paints a static gradient for each (see hub.js tileCamera). Panels
+        # still come from config below (empty is fine in demo).
+        cameras = fdemo.demo_cameras()
+    else:
+        cameras = _config_camera_links()
+    panels = _config_panel_links()
+    return {"cameras": cameras, "panels": panels}
+
+
+def _config_camera_links() -> list[dict]:
     cameras = []
     for cam in cfg.cameras:
         try:
@@ -285,6 +338,10 @@ def _links() -> dict:
             })
         except (KeyError, ValueError, TypeError) as e:
             log.warning("skipping malformed camera config entry %r: %s", cam, e)
+    return cameras
+
+
+def _config_panel_links() -> list[dict]:
     # panels: config-driven always-on dashboard embeds (see Config.panels for
     # the field semantics). Passed through with defaults resolved so the
     # frontend never guesses.
@@ -305,7 +362,7 @@ def _links() -> dict:
             })
         except (KeyError, ValueError, TypeError) as e:
             log.warning("skipping malformed panel config entry %r: %s", p, e)
-    return {"cameras": cameras, "panels": panels}
+    return panels
 
 
 @app.get("/health")
@@ -724,11 +781,15 @@ def calendar(days: int = 90, past: int = 45):
 
 @app.get("/api/tiles/climate")
 async def tile_climate():
+    if DEMO:
+        return fdemo.demo_climate()   # canned rooms; no feed hit
     return await tiles.climate_tile(_http, cfg)
 
 
 @app.get("/api/tiles/weather")
 async def tile_weather():
+    if DEMO:
+        return fdemo.demo_weather()   # canned forecast; no feed hit
     return await tiles.weather_tile(_http, cfg)
 
 
