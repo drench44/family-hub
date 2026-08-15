@@ -7,7 +7,7 @@
 
      data-theme   light | dark
      data-accent  cyan | violet | amber | green
-     data-cols    none | wells
+     data-cols    none | wells | lines
 
    Fallback order for each preference:
      1. localStorage  (fh.theme / fh.accent / fh.cols)
@@ -28,7 +28,7 @@
 
   var THEMES = ["light", "dark"];
   var ACCENTS = ["cyan", "violet", "amber", "green"];
-  var COLUMNS = ["none", "wells"];
+  var COLUMNS = ["none", "wells", "lines"];
 
   var DEFAULT_THEME = "dark";
   var DEFAULT_ACCENT = "cyan";

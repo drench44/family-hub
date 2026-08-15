@@ -57,6 +57,63 @@ def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
+def test_hub_carries_a_stable_build_token(client):
+    """/api/hub exposes a `build` token — a 12-char hex hash of the baked frontend
+    assets — that the wall diffs across polls to auto-reload after a deploy. It must
+    be a non-empty, well-formed hex string, and stable within a running process."""
+    import re
+    body = client.get("/api/hub").json()
+    assert "build" in body, "the /api/hub payload must carry a build token"
+    build = body["build"]
+    assert isinstance(build, str) and re.fullmatch(r"[0-9a-f]{12}", build), \
+        f"build must be a 12-char hex token, got {build!r}"
+    assert client.get("/api/hub").json()["build"] == build, \
+        "the build token is stable while the process (and its baked assets) is unchanged"
+
+
+def test_compute_build_survives_broken_bake_and_shouts(app_mod, tmp_path, monkeypatch, caplog):
+    """BUILD is computed at import time, so _compute_build must never raise on an
+    unreadable/missing static dir. A totally broken bake logs an ERROR loudly (its
+    whole reason to exist per the silent-failure gate) and still returns a
+    well-formed token distinct from the real one, rather than crashing the app."""
+    import logging
+    import re
+    real = app_mod._compute_build()
+    assert re.fullmatch(r"[0-9a-f]{12}", real)
+    monkeypatch.setattr(app_mod, "STATIC_DIR", str(tmp_path / "no-such-static"))
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        broken = app_mod._compute_build()   # nothing readable -> ERROR, no raise
+    assert isinstance(broken, str) and re.fullmatch(r"[0-9a-f]{12}", broken)
+    assert broken != real, "a broken bake must not collide with the real build token"
+    assert any("bake is broken" in r.getMessage()
+               for r in caplog.records if r.levelno >= logging.ERROR), \
+        "a totally broken bake must be logged LOUDLY (error), not swallowed"
+
+
+def test_compute_build_warns_on_one_bad_asset_but_hashes_the_rest(
+        app_mod, tmp_path, monkeypatch, caplog):
+    """A single unreadable asset among readable ones WARNS (naming it) and still
+    produces a token from the rest — it must not silently drop the file, and one
+    bad asset is a warning, not a total-failure error."""
+    import logging
+    import re
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "ok.css").write_text("body{}")
+    # A directory that matches the *.js glob: open() on it raises IsADirectoryError
+    # (an OSError), exercising the per-file warning branch deterministically.
+    (static / "broken.js").mkdir()
+    monkeypatch.setattr(app_mod, "STATIC_DIR", str(static))
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        token = app_mod._compute_build()
+    assert re.fullmatch(r"[0-9a-f]{12}", token)
+    assert any("broken.js" in r.getMessage() and "unreadable" in r.getMessage()
+               for r in caplog.records if r.levelno == logging.WARNING), \
+        "the unreadable asset must be named in a WARNING, not silently skipped"
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records), \
+        "one bad asset among good ones is a warning, not a total-failure error"
+
+
 def _reload_with(tmp_path, monkeypatch, extra):
     """Reload the app against a minimal config plus `extra` keys (e.g. a theme
     block). Mirrors the app_mod fixture but lets a test pick the config."""

@@ -46,6 +46,50 @@ DB_PATH = os.environ.get("DB_PATH", "data/hub.db")
 TOKEN_PATH = os.environ.get("TOKEN_PATH", "data/token.json")
 TZ = ZoneInfo(os.environ.get("TZ", "America/Los_Angeles"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "web", "static")
+
+
+def _compute_build() -> str:
+    """Short token that changes whenever any baked frontend asset changes, so the
+    wall can auto-reload after a deploy. The frontend is BAKED into the image and a
+    deploy rebuilds + restarts the container, so hashing the served asset files at
+    startup yields a fresh value each deploy (and a stable one between deploys)."""
+    import glob
+    import hashlib
+    h = hashlib.sha256()
+    hashed = 0
+    # Glob the served asset types (sorted for a deterministic, cross-filesystem
+    # order) rather than a hardcoded list, so a NEWLY ADDED asset is tracked
+    # automatically. A literal tuple would silently miss it — the new file's
+    # changes would never bump the token and never reach the kiosk.
+    paths = sorted(p for ext in ("*.html", "*.css", "*.js")
+                   for p in glob.glob(os.path.join(STATIC_DIR, ext)))
+    for path in paths:
+        name = os.path.basename(path)
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            # Globbed but unreadable (a race, a permission change, or a dir that
+            # matched). The token can't track this file — say so LOUDLY rather
+            # than swallow it.
+            log.warning("build hash: asset %s unreadable (%s) — "
+                        "auto-reload will miss changes to it", name, e)
+            continue
+        # Fold the NAME in too, so an add/remove/rename bumps the token even when
+        # the surviving bytes are identical.
+        h.update(name.encode())
+        h.update(data)
+        hashed += 1
+    if not hashed:
+        # No asset was readable: STATIC_DIR is wrong or the bake is broken.
+        # Returning the empty-input hash here would be a stable, plausible-looking
+        # token that freezes auto-reload with no signal at all. Shout instead.
+        log.error("build hash: NO static assets readable under %s — the frontend "
+                  "bake is broken; deploy auto-reload is disabled", STATIC_DIR)
+    return h.hexdigest()[:12]
+
+
+BUILD = _compute_build()
 _HEX = re.compile(r"#[0-9a-fA-F]{6}$")
 
 _db_dir = os.path.dirname(DB_PATH)
@@ -244,6 +288,9 @@ def hub():
         "todos": todos_block,
         "calendar": _calendar_block(c, today, 14),
         "links": _links(),
+        # A deploy-changing token: the wall reloads itself when it changes, so a
+        # baked frontend update reaches the kiosk without a manual refresh.
+        "build": BUILD,
         # House-default display theme (or None). The wall/admin stamp it live
         # on a fresh device with no localStorage override; None => the shipped
         # dark/cyan/none stays. Never persisted client-side.
