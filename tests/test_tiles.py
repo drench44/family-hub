@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import httpx
 
@@ -167,8 +168,8 @@ def test_climate_connect_error_unavailable_not_cached():
     assert len(run_tile(tiles.climate_tile, ok)["rooms"]) == 3
 
 
-# Synthetic wx.json summary — generic values only, no house data. Includes an
-# hourly array so the spark-mapping path is exercised.
+# Synthetic wx.json summary — generic values only, no house data. Includes a
+# tempSeries so the temperature-chart mapping path is exercised.
 WX_OK = {
     "temp": 72.0, "tempUnit": "F", "conditions": "Partly Cloudy",
     "feelsLike": 74.0, "feelsDesc": "Comfortable",
@@ -177,7 +178,7 @@ WX_OK = {
     "aqi": 42, "aqiCategory": "Good",
     "humidity": 55, "dewPoint": 54.0,
     "weatherStale": False,
-    "hourlyTemps": [70.0, 71.5, 73.0, 74.0, 72.0],
+    "tempSeries": {"temps": [70.0, 71.5, 73.0, 74.0, 72.0], "nowIndex": 2},
 }
 
 
@@ -193,7 +194,7 @@ def test_weather_maps_wx_json_to_trimmed_shape():
         "conditions": "Partly Cloudy", "feels": 74.0, "feels_desc": "Comfortable",
         "low": 58.0, "high": 81.0, "uv": 6, "uv_desc": "High",
         "aqi": 42, "aqi_cat": "Good", "humidity": 55, "dew_point": 54.0,
-        "spark": [70.0, 71.5, 73.0, 74.0, 72.0], "stale": False,
+        "spark": [70.0, 71.5, 73.0, 74.0, 72.0], "spark_now": 2, "stale": False,
     }
 
 
@@ -206,7 +207,8 @@ def test_weather_missing_keys_become_none_not_crash():
     assert t["available"] is True
     assert t["temp"] == 60.0
     assert t["unit"] is None and t["high"] is None and t["stale"] is None
-    assert t["spark"] == []   # no hourly array -> empty, frontend hides sparkline
+    assert t["spark"] == []   # no tempSeries -> empty, frontend hides the chart
+    assert t["spark_now"] is None
 
 
 def test_weather_non_dict_body_unavailable_not_500():
@@ -218,6 +220,45 @@ def test_weather_non_dict_body_unavailable_not_500():
         def served(req, _b=body):
             return httpx.Response(200, json=_b)
         assert run_tile(tiles.weather_tile, served) == {"available": False}
+
+
+def test_weather_spark_handles_tempseries_shapes():
+    # valid series -> temps + now passed through
+    assert tiles._weather_spark(
+        {"tempSeries": {"temps": [70.0, 71.0, 72.0], "nowIndex": 1}}
+    ) == {"temps": [70.0, 71.0, 72.0], "now": 1}
+    # out-of-range / non-int / bool nowIndex -> now is None (never a bad marker)
+    for bad in (5, -1, "1", True, None):
+        assert tiles._weather_spark(
+            {"tempSeries": {"temps": [70.0, 71.0], "nowIndex": bad}}
+        )["now"] is None
+    # ANY non-numeric point makes the whole series malformed -> hidden, rather
+    # than silently dropped (which would shift the positional nowIndex marker)
+    assert tiles._weather_spark(
+        {"tempSeries": {"temps": [70.0, "x", 72.0], "nowIndex": 0}}
+    ) == {"temps": [], "now": None}
+    # a non-iterable / non-list / empty temps degrades to empty, never crashes
+    for temps in (42, True, None, "70", {}, []):
+        assert tiles._weather_spark(
+            {"tempSeries": {"temps": temps, "nowIndex": 0}}
+        ) == {"temps": [], "now": None}
+    # absent / non-dict tempSeries (and an empty dict) -> empty, no marker
+    for wx in ({}, {"tempSeries": None}, {"tempSeries": [70, 71]}, {"tempSeries": {}}):
+        assert tiles._weather_spark(wx) == {"temps": [], "now": None}
+
+
+def test_weather_warns_when_temp_present_but_no_chart_series(caplog):
+    # The original bug: a valid temp with no usable series silently blanked the
+    # chart and nobody noticed. A recurrence must now show up in the logs.
+    tiles.reset_caches()
+
+    def served(req):
+        return httpx.Response(200, json={"temp": 61.0, "tempUnit": "F"})  # no tempSeries
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        t = run_tile(tiles.weather_tile, served)
+    assert t["available"] is True and t["spark"] == [] and t["spark_now"] is None
+    assert any("no usable tempSeries" in r.getMessage() for r in caplog.records), \
+        "a valid-temp-but-empty-chart feed must warn (the original silent bug)"
 
 
 def test_weather_base_unset_no_fetch():
