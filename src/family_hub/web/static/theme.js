@@ -5,7 +5,7 @@
    never flashes the wrong theme. It reads the persisted preferences and
    stamps three attributes on <html>:
 
-     data-theme   light | dark
+     data-theme   light | soft | dark | grey | black
      data-accent  cyan | violet | amber | green
      data-cols    none | wells | lines
 
@@ -26,7 +26,7 @@
 
   var root = document.documentElement;
 
-  var THEMES = ["light", "dark"];
+  var THEMES = ["light", "soft", "dark", "grey", "black"];
   var ACCENTS = ["cyan", "violet", "amber", "green"];
   var COLUMNS = ["none", "wells", "lines"];
 
