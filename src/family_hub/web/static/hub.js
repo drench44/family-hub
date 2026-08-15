@@ -912,6 +912,10 @@ function openOverlay(view) {
     renderTodosFull();                       // then refresh from the API
   }
   overlay().classList.add('open');
+  // Lock the page behind the overlay: the tall wall page keeps its own
+  // scrollbar otherwise, which shows beside a full-screen overlay (the camera
+  // page especially). Cleared in closeOverlay.
+  document.body.classList.add('overlay-open');
   // Start + probe the grid streams now that the overlay is visible (offsetParent
   // is non-null once .open is set), so the live tiles connect and reveal.
   if (view === 'cameras-page' && (links.camera_page || []).length) probeCamera();
@@ -920,6 +924,7 @@ function openOverlay(view) {
 
 function closeOverlay() {
   overlay().classList.remove('open');
+  document.body.classList.remove('overlay-open');
   document.getElementById('overlay-content').innerHTML = '';
   openView = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
