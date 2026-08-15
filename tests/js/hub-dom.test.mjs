@@ -1544,15 +1544,20 @@ test('climate card shows the indoor RH + dew aggregate footer (labeled, fail-sof
   assert.ok(!dpOnly.html.includes(' RH'), 'no RH segment when indoor_rh is absent');
 });
 
-test('the streak chip is labeled a day-streak (not a task count)', () => {
+test('the streak chip shows the fire count with an honest tooltip (no misleading "days in a row" claim)', () => {
   const { sandbox } = newHub();
   const html = sandbox.personCardHtml(
     { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 3, chores: [], week: [] });
-  assert.match(html, /class="chip-streak"[^>]*>🔥 3<span class="chip-streak-lbl">day streak<\/span>/);
+  // bare "🔥 3" with no visible sub-label
+  assert.match(html, /class="chip-streak"[^>]*>🔥 3<\/span>/);
+  assert.ok(!html.includes('chip-streak-lbl') && !html.includes('day streak'),
+    'no "day streak" sub-label (it overstated non-daily chores)');
+  // the tooltip is honest: rest days neither count nor break the streak
+  assert.match(html, /title="3 chore days finished in a row \(a day with no chores neither counts nor breaks it\)"/);
   // exactly at the threshold (=== 2): the chip renders (guards >= vs >)
   const two = sandbox.personCardHtml(
     { person: { id: 'p3', name: 'Kai', color: '#7A5AF8' }, streak: 2, chores: [], week: [] });
-  assert.match(two, /class="chip-streak"[^>]*>🔥 2<span class="chip-streak-lbl">day streak<\/span>/,
+  assert.match(two, /class="chip-streak"[^>]*>🔥 2<\/span>/,
     'a 2-day streak (the boundary) still shows the chip');
   // below the threshold (<2): no chip at all
   const none = sandbox.personCardHtml(
