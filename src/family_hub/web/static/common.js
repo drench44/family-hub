@@ -248,17 +248,20 @@ function panelFit(w, vw, vh, maxH) {
   };
 }
 
-// Zoom factor that fits the fixed 1920x1080 wall onto an arbitrary screen (w,h =
-// the viewport). Returns a CSS `zoom` string, or '' meaning "leave it 1:1"
-// (unset the inline zoom). Only ever scales DOWN, so the exact-1920x1080 Pi
-// kiosk and any larger screen stay pixel-perfect. A non-positive viewport (a
-// background or just-created tab measures 0) returns '' so the wall never
-// collapses to zoom:0; <=1000px returns '' because the mobile reflow owns that
-// layout. Kept here (not in hub.js) so the branches are unit-testable, like
-// panelFit above.
-function wallZoom(w, h) {
-  if (!w || !h || w <= 1000) return '';
-  const scale = Math.min(w / 1920, h / 1080);
+// Zoom factor that fits the fixed 1920px-wide wall onto an arbitrary screen
+// (w = viewport width). Returns a CSS `zoom` string, or '' meaning "leave it
+// 1:1" (unset the inline zoom). Fits to WIDTH: it fills the screen edge to edge
+// horizontally and lets the page scroll vertically if a short window needs it
+// (the original desktop behavior). Fitting BOTH width and height instead left
+// big empty side borders on any screen whose aspect isn't 16:9 (e.g. a laptop
+// whose browser chrome eats height). Only ever scales DOWN, so the exact-1920
+// Pi kiosk and any wider screen stay pixel-perfect; a non-positive width (a
+// background/just-created tab measures 0) and <=1000px both return '' (never
+// collapse to zoom:0; the mobile reflow owns its own layout). Kept here (not in
+// hub.js) so the branches are unit-testable, like panelFit above.
+function wallZoom(w) {
+  if (!w || w <= 1000) return '';
+  const scale = w / 1920;
   return scale >= 1 ? '' : String(scale);
 }
 

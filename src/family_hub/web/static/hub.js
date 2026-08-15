@@ -1285,7 +1285,7 @@ let fitDebounce = null;
 function fitWall() {
   const wrap = document.querySelector('.wrap');
   if (!wrap) { console.warn('fitWall: .wrap not found; wall will not fit-scale'); return; }
-  wrap.style.zoom = wallZoom(window.innerWidth, window.innerHeight);
+  wrap.style.zoom = wallZoom(window.innerWidth);
 }
 fitWall();
 
