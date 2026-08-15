@@ -97,6 +97,13 @@ optional and independent — add the pieces you have.
 > `src/family_hub/web/static`, `docker compose build web` — a bare restart
 > keeps the old files.
 
+## Put it on a wall (Raspberry Pi kiosk)
+
+To mount the wall on a touchscreen, a Raspberry Pi makes a tidy appliance:
+it boots straight into the dashboard, fullscreen, no browser chrome, no
+cursor, and never sleeps. See **[docs/raspberry-pi-kiosk.md](docs/raspberry-pi-kiosk.md)**
+for the full walkthrough, with copy-paste files in [`docs/kiosk/`](docs/kiosk/).
+
 ## config.json reference
 
 | Key | What it is |
