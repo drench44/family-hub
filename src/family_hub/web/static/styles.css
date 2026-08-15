@@ -975,6 +975,56 @@ body {
   margin-top: 12px; white-space: pre-wrap; word-break: break-word;
 }
 
+/* ================= on-screen keyboard (osk.js) ================
+   The touchscreen wall has no physical keyboard, so tapping a text field docks
+   this at the bottom of the VIEWPORT. It is a fixed sibling of .wrap, so the
+   wall's `.wrap { zoom }` (fitWall) never scales it - the keys stay full-size
+   and touch-friendly at any wall zoom. Everything themes through the tokens, so
+   it matches all five modes for free.
+
+   Layered ABOVE the input-bearing modals it serves: the To-Do add field lives
+   inside #overlay (z 50) and the chore fields inside .chore-modal (z 90), so a
+   keyboard beneath them would hide behind the very field it types into. It sits
+   just under the failure toast (z 100). */
+.osk {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 99;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--edge);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.28);
+  -webkit-user-select: none; user-select: none;
+  touch-action: manipulation;
+}
+.osk.hidden { display: none; }
+.osk-row { display: flex; justify-content: center; gap: 8px; }
+.osk-key {
+  flex: 1 1 0; min-width: 0; min-height: 46px;
+  font-family: var(--sans); font-size: 20px; line-height: 1; color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.osk-key:active { background: var(--accent-soft); border-color: var(--accent); }
+.osk-key:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Command row: Space carries the row, Shift/Backspace/Done ride a little wider
+   than a single letter. */
+.osk-space { flex: 6 1 0; }
+.osk-shift, .osk-back { flex: 1.7 1 0; font-size: 22px; }
+.osk-done {
+  flex: 2 1 0; font-weight: 600;
+  color: var(--accent-ink); background: var(--accent); border-color: var(--accent);
+}
+/* Armed one-shot shift lights up like the Done key. */
+.osk-shift.active {
+  color: var(--accent-ink); background: var(--accent); border-color: var(--accent);
+}
+/* While the keyboard is docked (osk.js stamps this on <body>), lift the failure
+   toast clear of it so a "couldn't save" message isn't hidden behind the keys. */
+.osk-open .hub-toast { bottom: calc(56px + 5 * 54px); }
+
 /* ====================== mobile tab bar ======================= */
 /* Hidden on the wall; the mobile block below turns it on. */
 .tabbar {

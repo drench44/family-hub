@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub · Manage</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=55">
+  <link rel="stylesheet" href="styles.css?v=56">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
   <script src="theme.js?v=5"></script>
@@ -74,7 +74,10 @@
     </section>
   </div>
 
-  <script src="common.js?v=34"></script>
+  <script src="common.js?v=35"></script>
+  <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
+       after common.js (oskApplyKey); self-gates on touch. -->
+  <script src="osk.js?v=1"></script>
   <script src="admin.js?v=34"></script>
 </body>
 </html>
