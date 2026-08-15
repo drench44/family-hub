@@ -19,7 +19,7 @@ vm.runInContext(readFileSync(join(staticDir, 'common.js'), 'utf8'), sandbox);
 const {
   escapeHtml, fmtTime, dayLabel,
   idleReturnMs, nightClass,
-  fmtTimeRange, monthName, eventColor,
+  fmtTimeRange, monthName, eventColor, wallZoom,
 } = sandbox;
 const panelFit = (...a) => ({ ...sandbox.panelFit(...a) });
 const monthGrid = (...a) => JSON.parse(JSON.stringify(sandbox.monthGrid(...a)));
@@ -144,6 +144,35 @@ test('panelFit never upscales past 1:1', () => {
   const f = panelFit(2000, 1280, 720, 2000);
   assert.equal(f.scale, 1);
   assert.deepEqual([f.width, f.height], [1280, 720]);
+});
+
+test('wallZoom stays 1:1 on the exact 1920x1080 Pi kiosk', () => {
+  assert.equal(wallZoom(1920, 1080), '');
+});
+
+test('wallZoom scales a laptop down to fit (width binds)', () => {
+  assert.equal(wallZoom(1440, 900), '0.75');   // min(1440/1920, 900/1080) = 0.75
+});
+
+test('wallZoom picks the height ratio on wide-but-short screens', () => {
+  // min(1, 800/1080) = the height ratio; a min->max swap would return '' here
+  assert.equal(wallZoom(1920, 800), String(800 / 1080));
+});
+
+test('wallZoom never upscales a larger screen', () => {
+  assert.equal(wallZoom(2560, 1440), '');
+});
+
+test('wallZoom leaves the mobile reflow (<=1000px) alone', () => {
+  assert.equal(wallZoom(1000, 1080), '');       // at the breakpoint: mobile owns it
+  assert.notEqual(wallZoom(1001, 1080), '');    // just above: the wall scales
+});
+
+test('wallZoom never collapses to zoom:0 on a zero/undefined viewport', () => {
+  // a background/just-created tab measures 0; a raw ratio would set zoom:"0"
+  assert.equal(wallZoom(0, 0), '');
+  assert.equal(wallZoom(1440, 0), '');
+  assert.equal(wallZoom(undefined, undefined), '');
 });
 
 test('escapeHtml neutralizes markup', () => {
