@@ -47,8 +47,12 @@
 :root[data-accent="amber"]  { --accent:#D98A15; --accent-soft:rgba(217,138,21,.14); }
 :root[data-accent="green"]  { --accent:#17A672; --accent-soft:rgba(23,166,114,.14); }
 
+/* NO-JS fallback only: theme.js always stamps an explicit data-theme before
+   first paint, so this OS-preference block must match ONLY when no data-theme
+   is present. Keying off :not([data-theme]) (not :not([data-theme="light"]))
+   stops it from bleeding dark tokens into soft under a dark OS. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root:not([data-theme]) {
     --ground:    #0B0E15;
     --surface:   #141A26;
     --surface-2: #1B2231;
@@ -62,9 +66,9 @@
     --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
     --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
   }
-  :root:not([data-theme="light"])[data-accent="violet"]{--accent:#A78BFA;--accent-ink:#150E2E;--accent-soft:rgba(167,139,250,.16);}
-  :root:not([data-theme="light"])[data-accent="amber"] {--accent:#F0B45C;--accent-ink:#231703;--accent-soft:rgba(240,180,92,.16);}
-  :root:not([data-theme="light"])[data-accent="green"] {--accent:#5FD3A0;--accent-ink:#04170F;--accent-soft:rgba(95,211,160,.16);}
+  :root:not([data-theme])[data-accent="violet"]{--accent:#A78BFA;--accent-ink:#150E2E;--accent-soft:rgba(167,139,250,.16);}
+  :root:not([data-theme])[data-accent="amber"] {--accent:#F0B45C;--accent-ink:#231703;--accent-soft:rgba(240,180,92,.16);}
+  :root:not([data-theme])[data-accent="green"] {--accent:#5FD3A0;--accent-ink:#04170F;--accent-soft:rgba(95,211,160,.16);}
 }
 :root[data-theme="dark"] {
   --ground:#0B0E15; --surface:#141A26; --surface-2:#1B2231; --edge:#29313F; --edge-soft:#202836;
@@ -74,9 +78,49 @@
   --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
   --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
 }
-:root[data-theme="dark"][data-accent="violet"]{--accent:#A78BFA;--accent-ink:#150E2E;--accent-soft:rgba(167,139,250,.16);}
-:root[data-theme="dark"][data-accent="amber"] {--accent:#F0B45C;--accent-ink:#231703;--accent-soft:rgba(240,180,92,.16);}
-:root[data-theme="dark"][data-accent="green"] {--accent:#5FD3A0;--accent-ink:#04170F;--accent-soft:rgba(95,211,160,.16);}
+/* Soft: a warm "paper" light, softer than Light. Uses the light-family accents,
+   so the base :root[data-accent] rules already apply (no extra accent rules). */
+:root[data-theme="soft"] {
+  --ground:#E8E3D7; --surface:#F7F3EB; --surface-2:#DFD9CC; --edge:#D2CABA; --edge-soft:#E0D9CA;
+  --ink:#2B271F; --dim:#6D6557; --faint:#9B9485;
+  --good:#178A63; --warn:#C07C15; --crit:#CE5050;
+  --shadow:0 1px 2px rgba(60,50,30,.05), 0 8px 24px rgba(60,50,30,.06);
+  --p1:#E86A9E; --p2:#3E9BE8; --p3:#E39A2A;
+  --accent:#0E9BCF; --accent-ink:#FFFFFF; --accent-soft:rgba(14,155,207,.12);
+}
+/* Soft is light-family, but its own [data-theme="soft"] block (specificity
+   0,2,0, later in the file) would otherwise beat the base :root[data-accent]
+   rules (also 0,2,0) and pin the accent to cyan. Give Soft its own light-family
+   accent overrides at 0,3,0 so the accent picker works, exactly as grey/black
+   do for the dark family. */
+:root[data-theme="soft"][data-accent="violet"]{--accent:#7A5AF0;--accent-soft:rgba(122,90,240,.12);}
+:root[data-theme="soft"][data-accent="amber"] {--accent:#D98A15;--accent-soft:rgba(217,138,21,.14);}
+:root[data-theme="soft"][data-accent="green"] {--accent:#17A672;--accent-soft:rgba(23,166,114,.14);}
+/* Grey: neutral charcoal, no blue tint. Dark-family accents (see the shared
+   accent-override lists below). */
+:root[data-theme="grey"] {
+  --ground:#141415; --surface:#1F1F21; --surface-2:#272729; --edge:#38383B; --edge-soft:#2C2C2E;
+  --ink:#ECECEE; --dim:#A1A1A7; --faint:#6B6B71;
+  --good:#5FD3A0; --warn:#F0B45C; --crit:#EB7373;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+  --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
+}
+/* Black: true OLED black; cards lifted just enough to separate. Dark-family
+   accents (see the shared accent-override lists below). */
+:root[data-theme="black"] {
+  --ground:#000000; --surface:#0C0C0E; --surface-2:#151517; --edge:#28282B; --edge-soft:#1A1A1C;
+  --ink:#ECECEE; --dim:#9A9AA0; --faint:#5E5E64;
+  --good:#5FD3A0; --warn:#F0B45C; --crit:#EB7373;
+  --shadow:0 1px 2px rgba(0,0,0,.6), 0 12px 34px rgba(0,0,0,.55);
+  --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+  --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
+}
+/* Dark-family accent overrides: dark, grey, and black share the violet/amber/
+   green accent values. Soft is absent on purpose (it uses the light accents). */
+:root[data-theme="dark"][data-accent="violet"], :root[data-theme="grey"][data-accent="violet"], :root[data-theme="black"][data-accent="violet"]{--accent:#A78BFA;--accent-ink:#150E2E;--accent-soft:rgba(167,139,250,.16);}
+:root[data-theme="dark"][data-accent="amber"], :root[data-theme="grey"][data-accent="amber"], :root[data-theme="black"][data-accent="amber"] {--accent:#F0B45C;--accent-ink:#231703;--accent-soft:rgba(240,180,92,.16);}
+:root[data-theme="dark"][data-accent="green"], :root[data-theme="grey"][data-accent="green"], :root[data-theme="black"][data-accent="green"] {--accent:#5FD3A0;--accent-ink:#04170F;--accent-soft:rgba(95,211,160,.16);}
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 /* ground backstop so the theme's page color always shows behind a scrolling
@@ -967,6 +1011,13 @@ body {
   font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .04em;
   color: var(--dim); padding: 8px 16px; border-radius: 999px; line-height: 1;
   min-height: 40px; }
+/* The Theme seg carries five modes (Light / Soft / Blue / Grey / Black), too
+   many for the default 2-up pill row. Lay it out as a tidy 5-column grid with
+   trimmed horizontal padding so every label stays legible in the narrow gear
+   popover. Only the Theme seg opts in (via .seg-theme); the 3-button Columns
+   seg keeps the default inline-flex row. */
+.theme-ctl .seg.seg-theme { display: grid; grid-template-columns: repeat(5, 1fr); }
+.theme-ctl .seg.seg-theme button { padding: 8px 4px; letter-spacing: .02em; text-align: center; }
 .theme-ctl .seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
 .theme-ctl .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .theme-ctl .swatches { display: inline-flex; gap: 7px; }

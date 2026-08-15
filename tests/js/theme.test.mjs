@@ -76,6 +76,25 @@ test('setTheme(light) stamps data-theme and persists fh.theme', () => {
   assert.equal(localStorage.getItem('fh.theme'), 'light');
 });
 
+test('all five theme modes are accepted, stamped, and persisted', () => {
+  // The wall offers five modes; "dark" is the legacy blue-navy value (labelled
+  // "Blue" in the UI), joined by soft/grey/black. Each must stamp + persist.
+  for (const mode of ['light', 'soft', 'dark', 'grey', 'black']) {
+    const { root, localStorage, win } = loadTheme();
+    win.setTheme(mode);
+    assert.equal(root.getAttribute('data-theme'), mode);
+    assert.equal(localStorage.getItem('fh.theme'), mode);
+  }
+});
+
+test('an invalid theme is rejected: no stamp, no persist', () => {
+  // Guards the THEMES whitelist now that it has five entries.
+  const { root, localStorage, win } = loadTheme();
+  win.setTheme('rainbow');   // not one of the five
+  assert.equal(root.getAttribute('data-theme'), 'dark');   // still the default
+  assert.equal(localStorage.getItem('fh.theme'), null);
+});
+
 test('setColumns(wells) stamps data-cols and persists fh.cols', () => {
   // PT1: the accept path for columns (only the reject path was covered before).
   const { root, localStorage, win } = loadTheme();

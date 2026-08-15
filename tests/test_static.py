@@ -303,18 +303,42 @@ def test_theme_tokens_base_on_root_no_override_orphans():
 
 
 def test_display_controls_present_on_both_surfaces():
-    """The persisted theme picker (Task 5) ships on the admin page AND in the
-    wall's gear popover: Light/Dark, the four accents, and None/Wells columns."""
+    """The persisted theme picker ships on the admin page AND in the wall's gear
+    popover: the five theme modes (Light/Soft/Blue=dark/Grey/Black), the four
+    accents, and None/Wells/Lines columns. The blue-navy dark keeps its stored
+    value "dark" (labelled "Blue") so no prefs migrate."""
     admin = (STATIC / "admin.html").read_text()
     index = (STATIC / "index.html").read_text()
     for html in (admin, index):
-        assert 'data-theme-set="light"' in html and 'data-theme-set="dark"' in html
+        for mode in ("light", "soft", "dark", "grey", "black"):
+            assert f'data-theme-set="{mode}"' in html, f"missing the {mode} theme button"
         for accent in ("cyan", "violet", "amber", "green"):
             assert f'data-c="{accent}"' in html, f"missing the {accent} accent swatch"
         assert 'data-cols-set="none"' in html and 'data-cols-set="wells"' in html \
             and 'data-cols-set="lines"' in html
     # the wall must be re-themable without a phone: the gear + its popover
     assert 'id="wall-gear"' in index and 'id="theme-pop"' in index
+
+
+def test_five_theme_token_blocks_defined_in_css():
+    """Each selectable mode resolves its own token block. Light is the bare
+    :root base; the other four are explicit [data-theme] blocks. "dark" is the
+    unchanged blue-navy; soft/grey/black are the new modes."""
+    for mode in ("soft", "dark", "grey", "black"):
+        assert f':root[data-theme="{mode}"]' in CSS, f"missing token block for {mode}"
+
+
+def test_non_light_modes_have_working_accent_overrides():
+    """Every non-Light mode redefines --accent in its own [data-theme] block
+    (specificity 0,2,0), which beats the base :root[data-accent] rules (also
+    0,2,0, earlier in the file). So each such mode MUST carry its own per-accent
+    overrides at 0,3,0 or the accent picker is dead in that mode: grey/black use
+    dark-family values, soft uses light-family values. (Light is the bare :root,
+    which the base :root[data-accent] rules already win over, so it needs none.)"""
+    for accent in ("violet", "amber", "green"):
+        for mode in ("dark", "grey", "black", "soft"):
+            assert f':root[data-theme="{mode}"][data-accent="{accent}"]' in CSS, \
+                f"{mode} missing the {accent} accent override (picker would be dead)"
 
 
 def test_columns_control_offers_none_wells_and_lines():
