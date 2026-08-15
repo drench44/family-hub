@@ -962,11 +962,14 @@ function wxStat(k, vHtml) {
   return `<div class="stat"><div class="k">${k}</div><div class="v num">${vHtml}</div></div>`;
 }
 
-/* The SVG sparkline: normalize the numeric temp series into the 0 0 300 46
-   viewBox (padded top/bottom so the line clears the edges), as a gradient area
-   fill + a stroked line + an emphasized endpoint circle. Returns '' (hide it)
-   when fewer than 2 numeric points survive the filter. */
-function sparkSvg(spark) {
+/* Temperature curve for the weather card: a ~24h window (observed past +
+   forecast ahead) normalized into the 0 0 300 46 viewBox (padded top/bottom so
+   the line clears the edges). `nowIndex` marks the current hour: the line is
+   solid for the observed past and lighter for the forecast ahead, with a faint
+   vertical guide and a dot at "now". Absent/out-of-range nowIndex -> all solid,
+   dot on the last point. Returns '' (hide it) when fewer than 2 numeric points
+   survive the filter. */
+function sparkSvg(spark, nowIndex) {
   const vals = (Array.isArray(spark) ? spark : [])
     .filter((v) => typeof v === 'number' && isFinite(v));
   if (vals.length < 2) return '';
@@ -979,16 +982,21 @@ function sparkSvg(spark) {
     x: rnd((i / (n - 1)) * W),
     y: rnd(PT + (1 - (v - min) / range) * usable),
   }));
-  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' ');
-  const last = pts[n - 1];
-  const area = `${line} L${last.x},${H} L${pts[0].x},${H} Z`;
+  const path = (seg) => seg.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' ');
+  const ni = (Number.isInteger(nowIndex) && nowIndex >= 0 && nowIndex < n) ? nowIndex : n - 1;
+  const now = pts[ni];
+  const area = `${path(pts)} L${pts[n - 1].x},${H} L${pts[0].x},${H} Z`;
+  const past = path(pts.slice(0, ni + 1));      // observed
+  const future = ni < n - 1 ? path(pts.slice(ni)) : '';   // forecast (overlaps at now)
   return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`
     + `<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">`
-    + `<stop offset="0" stop-color="var(--accent)" stop-opacity=".28"/>`
+    + `<stop offset="0" stop-color="var(--accent)" stop-opacity=".26"/>`
     + `<stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>`
     + `<path d="${area}" fill="url(#sg)"/>`
-    + `<path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2"/>`
-    + `<circle cx="${last.x}" cy="${last.y}" r="3" fill="var(--accent)"/>`
+    + (future ? `<path d="${future}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-opacity=".38"/>` : '')
+    + `<path d="${past}" fill="none" stroke="var(--accent)" stroke-width="2"/>`
+    + `<line x1="${now.x}" y1="0" x2="${now.x}" y2="${H}" stroke="var(--accent)" stroke-opacity=".2" stroke-width="1"/>`
+    + `<circle cx="${now.x}" cy="${now.y}" r="2.6" fill="var(--accent)"/>`
     + `</svg>`;
 }
 
@@ -1020,7 +1028,7 @@ function weatherCardHtml(wx) {
     + `<span class="deg num">${tp.deg}</span></div>`
     + `<div class="cond">${cond}</div>`
     + `</div><span class="sun">${wxIcon(wx.conditions)}</span></div>`
-    + sparkSvg(wx.spark)
+    + sparkSvg(wx.spark, wx.spark_now)
     + `<div class="stats">${stats}</div>`
     + `</article>`;
 }
