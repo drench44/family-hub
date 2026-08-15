@@ -1012,10 +1012,10 @@ test('sectionHead emits a .shead with tick, label, and an expand button', () => 
   assert.match(html, /⛶ All chores/);
 });
 
-test('sectionHead with no overlay/expandLabel emits no expand button (e.g. Cameras)', () => {
+test('sectionHead with no overlay/expandLabel emits no expand button', () => {
   const { sandbox } = newHub();
-  const html = sandbox.sectionHead('Cameras');
-  assert.match(html, /<h2>Cameras<\/h2>/);
+  const html = sandbox.sectionHead('Plain Section');
+  assert.match(html, /<h2>Plain Section<\/h2>/);
   assert.ok(!html.includes('class="expand"'), 'no expand button without an overlay');
   assert.ok(!html.includes('class="act"'), 'no action slot without an overlay');
 });
@@ -1190,8 +1190,10 @@ test('initTiles prepends a Cameras header only when cameras exist', () => {
   assert.ok(html.startsWith('<div class="shead">'),
     'the shared .shead section header is prepended ahead of the camera tiles');
   assert.match(html, /<h2>Cameras<\/h2>/, 'the header names the Cameras section');
-  // Cameras has no expand overlay — the header carries no expand button
-  assert.ok(!html.includes('class="expand"'), 'the Cameras header has no expand button');
+  // The Cameras header carries a "Camera page" expand button that opens the
+  // 2x2 grid full-screen — the wall's only entry point to the camera page.
+  assert.match(html, /class="expand"[^>]*data-overlay="cameras-page"/,
+    'the Cameras header has a Camera page expand button');
   assert.match(html, /data-cam="cam1"/);
 });
 
@@ -1456,6 +1458,49 @@ test('camera full-screen shows the warm stream first, HD twin stacked in front (
   assert.ok(content.children[1].classList.contains('cam-hd-upgrade'), 'HD is the upgrade layer');
   assert.ok(!content.children[1].classList.contains('ready'),
     'HD is NOT revealed until its stream is probed live');
+});
+
+test('openOverlay("cameras-page") renders the 2x2 grid and probes the streams after open', () => {
+  const { document, sandbox } = newHub();
+  captureTimers(sandbox);
+  const started = [];   // probe fetches issued synchronously by this open
+  sandbox.fetch = (url) => { started.push(String(url)); return new Promise(() => {}); };
+  vm.runInContext(
+    "links = { camera_page: [" +
+    "{ src:'a', label:'Drive', tile:'/wr/a', full:'/wr/a', has_hd:false, hd_src:'a' }," +
+    "{ src:'b', label:'Mail', tile:'/wr/b', full:'/wr/b', has_hd:false, hd_src:'b' } ] };", sandbox);
+
+  sandbox.openOverlay('cameras-page');
+
+  const content = document.getElementById('overlay-content');
+  assert.match(content.innerHTML, /class="camera-page"/, 'renders the full-screen grid container');
+  assert.match(content.innerHTML, /data-cam="a"/);
+  assert.match(content.innerHTML, /data-cam="b"/);
+  // each grid tile still opens that single camera full-screen when tapped
+  assert.match(content.innerHTML, /data-overlay="camera:a"/);
+  assert.ok(document.getElementById('overlay').classList.contains('open'), 'overlay opened');
+  // The streams must be probed once the overlay is open — deleting the probe
+  // call would leave every grid tile permanently offline in production.
+  const srcs = started.map((u) => u.match(/src=([^&]+)/)[1]).sort();
+  assert.deepEqual(srcs, ['a', 'b'], 'probeCamera fired for the grid after open');
+});
+
+test('openOverlay("cameras-page") with an empty camera_page shows a note, not a black grid', () => {
+  const { document, sandbox } = newHub();
+  captureTimers(sandbox);
+  const started = [];
+  sandbox.fetch = (url) => { started.push(String(url)); return new Promise(() => {}); };
+  // Wall has a camera (so the button shows) but the grid list is empty.
+  vm.runInContext(
+    "links = { cameras: [{ src:'x', label:'X', tile:'/t', full:'/f' }], camera_page: [] };", sandbox);
+
+  sandbox.openOverlay('cameras-page');
+
+  const content = document.getElementById('overlay-content');
+  assert.match(content.innerHTML, /camera-page-empty/, 'shows an explicit empty-state note');
+  assert.ok(!content.innerHTML.includes('data-cam='), 'no camera tiles rendered');
+  assert.ok(document.getElementById('overlay').classList.contains('open'), 'overlay still opens');
+  assert.equal(started.length, 0, 'no probe fetches for an empty grid');
 });
 
 test('camera full-screen with no HD twin shows a single (already warm) stream, no upgrade', () => {
