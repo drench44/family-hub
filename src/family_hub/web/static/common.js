@@ -265,6 +265,36 @@ function wallZoom(w) {
   return scale >= 1 ? '' : String(scale);
 }
 
+/* The text transform behind the on-screen keyboard (osk.js): apply one key to
+   `value` at the [selStart, selEnd] selection and return the new {value, caret}.
+   Kept here (no DOM) so the insert / Backspace / Space + maxlength branches are
+   unit-testable, exactly like panelFit above; osk.js's key handler is a thin
+   wrapper that reads the live input's value + selection, calls this, and writes
+   the result back. `key` is a single character, 'Backspace', or 'Space'.
+   `shift` capitalizes a character key (a no-op on digits/symbols); `maxlength`
+   (when > 0) refuses an insert that would overflow - setRangeText would NOT
+   honor it, so we enforce it here. */
+function oskApplyKey(value, selStart, selEnd, key, opts) {
+  const v = String(value == null ? '' : value);
+  const o = opts || {};
+  // Clamp the selection into range so a stale caret can't slice out of bounds.
+  const a = Math.max(0, Math.min(selStart | 0, v.length));
+  const b = Math.max(a, Math.min(selEnd | 0, v.length));
+  if (key === 'Backspace') {
+    if (b > a) return { value: v.slice(0, a) + v.slice(b), caret: a };       // drop the selection
+    if (a > 0) return { value: v.slice(0, a - 1) + v.slice(a), caret: a - 1 }; // drop the char before the caret
+    return { value: v, caret: a };                                            // at position 0: nothing to delete
+  }
+  const ch = key === 'Space' ? ' ' : (o.shift ? String(key).toUpperCase() : String(key));
+  // maxlength only bites on a pure insert: replacing a selection can only keep
+  // or shrink the length, so a full field drops the char with the caret unmoved.
+  const nextLen = v.length - (b - a) + ch.length;
+  if (o.maxlength && o.maxlength > 0 && nextLen > o.maxlength) {
+    return { value: v, caret: a };
+  }
+  return { value: v.slice(0, a) + ch + v.slice(b), caret: a + ch.length };
+}
+
 /* Chore form <-> API payload, kept PURE (no DOM) so the admin form's
    serialization is unit-testable. A mis-serialized days_mask or rotation_order
    here would otherwise surface only as a silent 422 or a wrong-schedule chore
