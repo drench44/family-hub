@@ -217,8 +217,8 @@ body {
   align-items: start;
 }
 .people-col { grid-area: people; display: flex; flex-direction: column; gap: 12px; }
-.people-list { display: flex; flex-direction: column; gap: 16px; }
-.todo-slot { grid-area: todo; min-width: 0; }
+.people-list { display: flex; flex-direction: column; gap: 12px; }
+.todo-slot { grid-area: todo; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .tiles { grid-area: tiles; }
 
 /* ------- always-on dashboard panels (weather almanac + house climate) ------ */
@@ -242,7 +242,7 @@ body {
 /* The header + card are one visual unit inside the always-on panels column; the
    small gap keeps the .shead tight above its .card (the column's own gap is
    larger, meant to separate whole sections). */
-.weather-slot { display: flex; flex-direction: column; gap: 8px; }
+.weather-slot { display: flex; flex-direction: column; gap: 12px; }
 /* .wx / .spark / .q copied verbatim from the binding mockup spec. */
 .wx { padding: 16px; }
 .wx .top { display: flex; align-items: flex-start; gap: 4px; }
@@ -272,7 +272,7 @@ body {
 /* ------- native house-climate summary card (replaces the climate embed) ----- */
 /* header + card are one visual unit, like .weather-slot (the small gap keeps the
    .shead tight above its .card; the panels column's own gap separates sections) */
-.rooms-slot { display: flex; flex-direction: column; gap: 8px; }
+.rooms-slot { display: flex; flex-direction: column; gap: 12px; }
 /* .rooms / .rhead / .room copied verbatim from the binding mockup spec. */
 .rooms { padding: 8px 16px 14px; }
 .rhead { display: flex; gap: 12px; padding: 0 0 2px; }
@@ -293,7 +293,7 @@ body {
 .rfoot-v .num { color: var(--ink); font-weight: 650; }
 
 /* ========================== calendar ========================= */
-.cal { grid-area: cal; display: flex; flex-direction: column; gap: 10px; }
+.cal { grid-area: cal; display: flex; flex-direction: column; gap: 12px; }
 .cal-note {
   background: var(--surface);
   border: 1px solid var(--edge);
@@ -559,7 +559,7 @@ body {
 }
 .todo-act-del { color: color-mix(in srgb, var(--crit) 90%, transparent); }   /* the crit red */
 /* three bucket columns at wall width; the mobile block below collapses to one */
-.todo-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: start; }
+.todo-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: start; margin-top: 16px; }
 .todo-section { width: 100%; }
 .todo-sec-head {
   font-family: var(--mono); font-size: 10px; font-weight: 600;

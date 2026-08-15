@@ -970,7 +970,9 @@ function wxIcon(conditions) {
 /* Split a temperature into the big whole-number part and the ".<frac>°<unit>"
    tail, matching the mockup (74 | .8°F). Carries a .95→x.0 rounding case. */
 function wxTempParts(temp, unit) {
-  const u = unit ? escapeHtml(String(unit)) : '';
+  // The feed's unit may already carry the degree sign ("°F"); strip a leading
+  // one so we always render exactly one ° and never "°°F".
+  const u = unit ? escapeHtml(String(unit).replace(/^\s*°/, '')) : '';
   const t = Number(temp);
   if (!isFinite(t)) return { whole: '--', deg: `°${u}` };
   let whole = Math.trunc(t);
