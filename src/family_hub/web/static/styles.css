@@ -153,7 +153,7 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
-.wrap { width: 1880px; margin: 0 auto; padding: 0 24px 40px; }
+.wrap { width: 1920px; margin: 0 auto; padding: 0 24px 40px; }
 
 /* ============================ top bar ========================== */
 .topbar {
@@ -202,7 +202,7 @@ body {
   /* chores lead the wall (operator, 2026-08-12); to-dos moved under the
      calendar and cameras got their own column (operator, 2026-08-14):
      people | calendar+to-dos | cameras | dashboards */
-  grid-template-columns: 380px minmax(0, 0.95fr) 400px minmax(0, 1.05fr);
+  grid-template-columns: 380px minmax(0, 1fr) 400px 400px;
   /* The 1fr second row only works because .hub-grid's own height stays
      indefinite (the page grows/scrolls to fit it). If an ancestor ever pins
      a definite height or overflow:hidden for a no-scroll kiosk mode, 1fr
