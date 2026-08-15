@@ -46,6 +46,26 @@ DB_PATH = os.environ.get("DB_PATH", "data/hub.db")
 TOKEN_PATH = os.environ.get("TOKEN_PATH", "data/token.json")
 TZ = ZoneInfo(os.environ.get("TZ", "America/Los_Angeles"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "web", "static")
+
+
+def _compute_build() -> str:
+    """Short token that changes whenever any baked frontend asset changes, so the
+    wall can auto-reload after a deploy. The frontend is BAKED into the image and a
+    deploy rebuilds + restarts the container, so hashing the served asset files at
+    startup yields a fresh value each deploy (and a stable one between deploys)."""
+    import hashlib
+    h = hashlib.sha256()
+    for name in ("index.html", "admin.html", "styles.css", "hub.js",
+                 "common.js", "admin.js", "theme.js"):
+        try:
+            with open(os.path.join(STATIC_DIR, name), "rb") as fh:
+                h.update(fh.read())
+        except OSError:
+            pass
+    return h.hexdigest()[:12]
+
+
+BUILD = _compute_build()
 _HEX = re.compile(r"#[0-9a-fA-F]{6}$")
 
 _db_dir = os.path.dirname(DB_PATH)
@@ -244,6 +264,9 @@ def hub():
         "todos": todos_block,
         "calendar": _calendar_block(c, today, 14),
         "links": _links(),
+        # A deploy-changing token: the wall reloads itself when it changes, so a
+        # baked frontend update reaches the kiosk without a manual refresh.
+        "build": BUILD,
         # House-default display theme (or None). The wall/admin stamp it live
         # on a fresh device with no localStorage override; None => the shipped
         # dark/cyan/none stays. Never persisted client-side.
