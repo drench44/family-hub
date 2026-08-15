@@ -121,6 +121,36 @@ vcgencmd get_throttled     # 0x0 = healthy; non-zero = undervoltage/throttling
 A non-zero `get_throttled` almost always means an underpowered supply — use
 the official Pi supply, and don't power the touchscreen off the Pi.
 
+## Sleep the display overnight
+
+To have the screen switch off at night and back on in the morning, drive the
+monitor's DPMS power state from cron. DPMS keeps the resolution configured, so
+the wall never relayouts (unlike `xrandr --output --off`), and a kiosk has no
+night-time input to wake it back up.
+
+Save this as `~/wall-sleep.sh` and `chmod +x` it:
+
+```bash
+#!/bin/bash
+export DISPLAY=:0
+export XAUTHORITY=$HOME/.Xauthority
+case "$1" in
+  off) xset dpms force off ;;
+  on)  xset s off; xset dpms force on ;;
+esac
+```
+
+Then add two cron lines (`crontab -e`) — cron uses the Pi's local timezone, so
+set that first with `sudo raspi-config` if it's still UTC:
+
+```cron
+0 22 * * * /home/YOUR_USER/wall-sleep.sh off   # 10pm: sleep
+0 6  * * * /home/YOUR_USER/wall-sleep.sh on    # 6am: wake
+```
+
+(If the Pi ever reboots overnight the screen comes back on until the next
+scheduled "off"; rare enough to ignore for most walls.)
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
