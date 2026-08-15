@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=51">
+  <link rel="stylesheet" href="styles.css?v=52">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
   <script src="theme.js?v=3"></script>
@@ -18,6 +18,9 @@
       <span class="conn" id="conn-word">live</span>
       <span class="spacer"></span>
       <span class="clock"><span class="clock-date" id="clock-date"></span><span class="num" id="clock-time"></span></span>
+      <!-- Refresh: reload the wall from the touchscreen (picks up a new deploy
+           or unsticks a stale page) without needing a keyboard or a phone. -->
+      <button class="wall-refresh" id="wall-refresh" type="button" aria-label="Refresh" title="Refresh">↻</button>
       <!-- Display gear: re-theme the wall touchscreen without a phone. Opens the
            popover below; the SAME three controls the admin page carries. -->
       <button class="wall-gear" id="wall-gear" type="button" aria-label="Display settings" aria-haspopup="dialog" aria-expanded="false">⚙</button>
@@ -115,6 +118,6 @@
   </div>
 
   <script src="common.js?v=32"></script>
-  <script src="hub.js?v=51"></script>
+  <script src="hub.js?v=52"></script>
 </body>
 </html>

@@ -945,14 +945,16 @@ body {
 
 /* wall gear + its dismissible popover (so the wall can be re-themed without a
    phone). The gear sits in the topbar; the popover floats under it. */
-.wall-gear {
+.wall-gear, .wall-refresh {
   flex: none; width: 40px; height: 40px; border-radius: 10px;
   display: inline-grid; place-items: center;
   background: var(--surface); border: 1px solid var(--edge);
   color: var(--dim); font-size: 18px; line-height: 1; cursor: pointer;
 }
-.wall-gear:hover { color: var(--ink); border-color: var(--accent); }
-.wall-gear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wall-gear:hover, .wall-refresh:hover { color: var(--ink); border-color: var(--accent); }
+.wall-gear:focus-visible, .wall-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* the refresh glyph nudges toward the accent on press, so a touch feels acknowledged */
+.wall-refresh:active { color: var(--accent); transform: rotate(-90deg); transition: transform 120ms ease-out; }
 .theme-pop {
   position: absolute; top: 58px; right: 24px; z-index: 60;
   display: none;
