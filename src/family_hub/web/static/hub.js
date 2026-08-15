@@ -651,6 +651,7 @@ function celebrate(card, color) {
 /* --------------------------------------------------------------- tiles */
 
 function tileCamera(cam) {
+  if (cam.demo) return tileCameraDemo(cam);
   // Live WebRTC embed (sub-second), not a snapshot loop — the 5s JPEG refresh
   // read as choppy on the wall. Starts offline; the probe flips it live.
   const src = escapeHtml(cam.src);
@@ -659,6 +660,19 @@ function tileCamera(cam) {
     + `<iframe class="cam-frame hidden" title="${escapeHtml(cam.label)} camera"></iframe>`
     + `<span class="tile-live hidden">● LIVE</span>`
     + `<span class="tile-offline">offline</span>`
+    + `</button>`;
+}
+
+/* Demo mode: no go2rtc stream to embed, so paint a static gradient placeholder
+   with a small "DEMO VIEW" marker in the same tile chrome. The tile still opens
+   full-screen (a matching full-bleed placeholder); the probe skips it. */
+function tileCameraDemo(cam) {
+  const src = escapeHtml(cam.src);
+  const tone = cam.tone === 'warm' ? 'warm' : 'cool';
+  return `<button class="card tile tile-camera" type="button" data-overlay="camera:${src}" data-cam="${src}">`
+    + `<div class="tile-label">${escapeHtml(cam.label)}</div>`
+    + `<div class="cam-demo cam-demo-${tone}"><span class="cam-demo-mark">Demo view</span></div>`
+    + `<span class="tile-live">● LIVE</span>`
     + `</button>`;
 }
 
@@ -684,6 +698,7 @@ async function probeCamera() {
 }
 
 async function probeOneCamera(cam) {
+  if (cam.demo) return;   // placeholder tile: no stream, nothing to probe
   const tile = document.querySelector(`.tile-camera[data-cam="${cam.src}"]`);
   if (!tile) return;
   const frame = tile.querySelector('.cam-frame');
@@ -771,6 +786,15 @@ function makeFittedIframe(src, vw, vh) {
    for good if the HD never comes up. Once the HD is live we cross-fade and drop
    the base so a single stream decodes. */
 function openCameraFull(content, cam, view) {
+  if (cam.demo) {
+    // No stream to full-screen; show the same gradient placeholder full-bleed.
+    const tone = cam.tone === 'warm' ? 'warm' : 'cool';
+    const ph = document.createElement('div');
+    ph.className = `cam-demo cam-demo-${tone} cam-demo-full`;
+    ph.innerHTML = '<span class="cam-demo-mark">Demo view</span>';
+    content.appendChild(ph);
+    return;
+  }
   const base = makeIframe(cam.tile || cam.full);
   content.appendChild(base);
   if (!cam.has_hd) return;   // no distinct HD stream — the warm stream is all there is
