@@ -248,6 +248,20 @@ function panelFit(w, vw, vh, maxH) {
   };
 }
 
+// Zoom factor that fits the fixed 1920x1080 wall onto an arbitrary screen (w,h =
+// the viewport). Returns a CSS `zoom` string, or '' meaning "leave it 1:1"
+// (unset the inline zoom). Only ever scales DOWN, so the exact-1920x1080 Pi
+// kiosk and any larger screen stay pixel-perfect. A non-positive viewport (a
+// background or just-created tab measures 0) returns '' so the wall never
+// collapses to zoom:0; <=1000px returns '' because the mobile reflow owns that
+// layout. Kept here (not in hub.js) so the branches are unit-testable, like
+// panelFit above.
+function wallZoom(w, h) {
+  if (!w || !h || w <= 1000) return '';
+  const scale = Math.min(w / 1920, h / 1080);
+  return scale >= 1 ? '' : String(scale);
+}
+
 /* Chore form <-> API payload, kept PURE (no DOM) so the admin form's
    serialization is unit-testable. A mis-serialized days_mask or rotation_order
    here would otherwise surface only as a silent 422 or a wrong-schedule chore

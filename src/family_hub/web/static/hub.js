@@ -1275,7 +1275,22 @@ async function fetchClimate() {
 }
 
 let fitDebounce = null;
+/* Fit-to-screen. The wall is authored at a fixed 1920x1080 canvas. On the
+   target Pi kiosk that IS the viewport, so nothing scales (1:1). On any other
+   screen — a laptop, a differently-sized monitor — scale the whole wall down to
+   fit, so the right-hand columns are never clipped and there is never a
+   horizontal scrollbar. Only ever scale DOWN (big screens stay 1:1, centered,
+   rather than upscaling to blur). The mobile reflow (<=1000px) owns its own
+   single-column layout, so leave it untouched there. */
+function fitWall() {
+  const wrap = document.querySelector('.wrap');
+  if (!wrap) { console.warn('fitWall: .wrap not found; wall will not fit-scale'); return; }
+  wrap.style.zoom = wallZoom(window.innerWidth, window.innerHeight);
+}
+fitWall();
+
 window.addEventListener('resize', () => {
+  fitWall();
   clearTimeout(fitDebounce);
   // wirePanels too: growing past the mobile breakpoint reveals panels that
   // were hidden (and so unwired) at load — don't leave them dark until poll
