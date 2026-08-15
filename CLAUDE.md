@@ -22,6 +22,23 @@ Verify tests genuinely RUN (not silently skipped). This is the default gate — 
 should happen without being asked. Docs-only changes (`*.md`, comments) are
 exempt.
 
+## Testing the wall layout visually
+
+The wall is a FIXED-WIDTH desktop layout: `.wrap { width: 1880px }`. It does not
+shrink to fit a narrower window; it overflows. So when you debug or screenshot
+the wall in a browser (or a headless/automation viewport), render it at **1880px
+wide or more**, or keep the viewport in desktop mode (> 1000px) and zoom the page
+out so the 1880px content fits. In a narrower window the right-hand columns
+(calendar, cameras, weather, climate) scroll off-screen and their measurements
+are meaningless. Several "looks fine to me" false negatives have come from
+measuring a viewport that never rendered those columns; trust a real full-width
+screenshot over a cramped-viewport measurement. Below 1000px the
+`@media (max-width: 1000px)` mobile layout takes over (single column + the fixed
+bottom tab bar). `.is-night` dims the page from 22:00–06:00 (and, because a CSS
+`filter` establishes a containing block for `position: fixed` descendants, that
+dim is applied to the body's children, never to `<body>` (a test guards it).
+Test all of: full desktop width, the mobile breakpoint, and night mode.
+
 ## After cloning
 
 After cloning, run `scripts/install-hooks.sh` — installs the pre-push
