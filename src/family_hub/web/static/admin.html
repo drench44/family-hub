@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub · Manage</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=53">
+  <link rel="stylesheet" href="styles.css?v=54">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
-  <script src="theme.js?v=3"></script>
+  <script src="theme.js?v=4"></script>
 </head>
 <body class="admin-page">
   <div class="admin-wrap">
@@ -24,9 +24,12 @@
            setColumns as the wall gear; the choice is saved on THIS device. -->
       <div class="admin-card">
         <div class="theme-ctl" id="theme-ctl">
-          <div class="seg" role="group" aria-label="Theme">
+          <div class="seg seg-theme" role="group" aria-label="Theme">
             <button type="button" data-theme-set="light">Light</button>
-            <button type="button" data-theme-set="dark">Dark</button>
+            <button type="button" data-theme-set="soft">Soft</button>
+            <button type="button" data-theme-set="dark">Blue</button>
+            <button type="button" data-theme-set="grey">Grey</button>
+            <button type="button" data-theme-set="black">Black</button>
           </div>
           <div class="swatches" role="group" aria-label="Accent color">
             <button class="swatch" type="button" data-c="cyan"   aria-label="Cyan accent"></button>
