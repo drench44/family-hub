@@ -2,7 +2,7 @@
 //
 // theme.js runs synchronously from <head> BEFORE any other script: it reads the
 // persisted preferences (localStorage fh.theme/fh.accent/fh.cols, then a
-// window.FH_THEME config default, then hardcoded dark/cyan/none) and stamps
+// window.FH_THEME config default, then hardcoded grey/green/none) and stamps
 // data-theme/data-accent/data-cols on <html>, and exposes setters (which
 // persist) plus stamp-only appliers (which do NOT persist).
 //
@@ -52,10 +52,10 @@ function loadTheme({ storage = {}, fhTheme } = {}) {
   return { root, localStorage, win };
 }
 
-test('fresh device with no prefs stamps the hardcoded dark/cyan/none default', () => {
+test('fresh device with no prefs stamps the hardcoded grey/green/none default', () => {
   const { root, localStorage } = loadTheme();
-  assert.equal(root.getAttribute('data-theme'), 'dark');
-  assert.equal(root.getAttribute('data-accent'), 'cyan');
+  assert.equal(root.getAttribute('data-theme'), 'grey');
+  assert.equal(root.getAttribute('data-accent'), 'green');
   assert.equal(root.getAttribute('data-cols'), 'none');
   // the default is a fallback, NOT a stored choice — nothing was persisted
   assert.equal(localStorage.getItem('fh.theme'), null);
@@ -91,7 +91,7 @@ test('an invalid theme is rejected: no stamp, no persist', () => {
   // Guards the THEMES whitelist now that it has five entries.
   const { root, localStorage, win } = loadTheme();
   win.setTheme('rainbow');   // not one of the five
-  assert.equal(root.getAttribute('data-theme'), 'dark');   // still the default
+  assert.equal(root.getAttribute('data-theme'), 'grey');   // still the default
   assert.equal(localStorage.getItem('fh.theme'), null);
 });
 

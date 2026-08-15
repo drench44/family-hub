@@ -141,7 +141,7 @@ def test_hub_theme_house_default_present(tmp_path, monkeypatch):
 
 def test_hub_theme_absent_is_null(tmp_path, monkeypatch):
     """No theme in config => /api/hub reports null. That's the documented
-    fallback: the wall keeps theme.js's shipped dark/cyan/none default."""
+    fallback: the wall keeps theme.js's shipped grey/green/none default."""
     appmod = _reload_with(tmp_path, monkeypatch, {})
     with TestClient(appmod.app) as c:
         body = c.get("/api/hub").json()
@@ -168,6 +168,19 @@ def test_hub_theme_lines_column_survives(tmp_path, monkeypatch):
     with TestClient(appmod.app) as c:
         theme = c.get("/api/hub").json()["theme"]
     assert theme == {"accent": "cyan", "columns": "lines"}
+
+
+def test_hub_theme_new_modes_survive(tmp_path, monkeypatch):
+    """All five wall modes (light/soft/dark/grey/black) round-trip through config
+    validation. Regression: _THEME_AXES['mode'] listed only light/dark, so a
+    house default of grey/soft/black was silently dropped and fresh devices fell
+    back to the hardcoded default instead of the configured mode."""
+    for mode in ("soft", "grey", "black"):
+        appmod = _reload_with(tmp_path, monkeypatch,
+                              {"theme": {"mode": mode, "accent": "green"}})
+        with TestClient(appmod.app) as c:
+            theme = c.get("/api/hub").json()["theme"]
+        assert theme == {"mode": mode, "accent": "green"}, f"{mode} was dropped"
 
 
 @pytest.mark.parametrize("bad_theme", ["dark", []])

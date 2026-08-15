@@ -22,5 +22,5 @@
   "go2rtc_base": "http://192.168.1.50:1984",
   "climate_base": "",
   "weather_base": "",
-  "theme": { "mode": "dark", "accent": "cyan", "columns": "none" }
+  "theme": { "mode": "grey", "accent": "green", "columns": "none" }
 }
