@@ -106,9 +106,16 @@ body {
   color: var(--faint);
 }
 
-/* Night: the whole page dims after 22:00. The clock is lifted onto its own
+/* Night: the whole page dims after 22:00. The dim is applied to each DIRECT
+   CHILD of <body>, never to <body>/.is-night itself: a `filter` on an element
+   makes it the containing block for its position:fixed descendants, so putting
+   it on <body> unpinned the fixed mobile tab bar and the full-screen overlays
+   (they scrolled off with the page at night). Filtering the children (all
+   siblings of those fixed elements) dims the whole wall while every fixed
+   element stays pinned to the viewport. Do NOT move `filter` back onto
+   `.is-night`/<body> (a test guards this). The clock is lifted onto its own
    layer so it stays crisp against the dimmed field. */
-.is-night { filter: brightness(0.55); }
+.is-night > * { filter: brightness(0.55); }
 
 /* ============ THE ONE CARD + SECTION-HEADER SYSTEM (Task 2) ============ */
 /* A SINGLE .card box treatment and a SINGLE .shead section header are the

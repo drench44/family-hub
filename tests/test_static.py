@@ -334,6 +334,62 @@ def test_wells_column_separation_is_styled():
     assert 'data-cols="wells"' in CSS, "the Wells columns option has no visible effect"
 
 
+# Properties that make an element the containing block for its position:fixed
+# descendants. Putting ANY of these on .is-night (the <body>) unpins the fixed
+# mobile tab bar + overlays so they scroll off at night. `filter` shipped the
+# bug once; the rest cause the identical failure, so guard the whole class.
+_CONTAINING_BLOCK_PROPS = {
+    "filter", "transform", "perspective", "backdrop-filter",
+    "will-change", "contain",
+}
+
+
+def _selector_subject(sel):
+    """The element a selector actually styles = its last compound (after the
+    final descendant/child/sibling combinator)."""
+    return re.split(r"\s*[>~+]\s*|\s+", sel.strip())[-1]
+
+
+def test_night_dim_never_makes_the_body_a_fixed_containing_block():
+    """REGRESSION GUARD: the night dim (.is-night) must apply its dim to the
+    body's CHILDREN, never to the .is-night element (the <body>) itself. Any of
+    filter/transform/perspective/backdrop-filter/will-change/contain on an
+    element makes it the containing block for its position:fixed descendants, so
+    putting one on <body> unpins the fixed mobile tab bar and the full-screen
+    overlays -- they scroll off with the page at night. This bug shipped once
+    (filter on .is-night); guard the whole property class so it never returns.
+
+    Robust to the ways a regression could hide: comments stripped, @media (and
+    other at-rule) wrappers flattened (the mobile tab bar is the whole point, so
+    a media query is the likeliest reintroduction site), and compound/pseudo/
+    attribute forms (`.is-night.foo`, `.is-night:hover`, `body.is-night`) all
+    caught by matching whether `.is-night` is the selector's SUBJECT."""
+    css = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)      # strip comments
+    css = re.sub(r"@[\w-]+[^{}]*\{", "", css)            # flatten at-rule wrappers
+    for m in re.finditer(r"([^{}]+)\{([^}]*)\}", css):
+        selectors, block = m.group(1), m.group(2)
+        props = {d.split(":", 1)[0].strip().lower()
+                 for d in block.split(";") if ":" in d}
+        if not (props & _CONTAINING_BLOCK_PROPS):
+            continue
+        for sel in selectors.split(","):
+            subj = _selector_subject(sel)
+            # `.is-night` present in the SUBJECT compound (not just a descendant
+            # of it): `\b`-style boundary so `.is-nightly` is not a match.
+            if re.search(r"\.is-night(?![\w-])", subj):
+                bad = props & _CONTAINING_BLOCK_PROPS
+                raise AssertionError(
+                    f"{sorted(bad)} on the .is-night element (the <body>) makes "
+                    "it a containing block for position:fixed descendants, "
+                    "unpinning the mobile tab bar and overlays; apply the night "
+                    "dim to its children (`.is-night > *`) instead. Offending "
+                    f"selector: {sel.strip()!r}")
+    # ...and the dim must still be applied to the children (tied to the actual
+    # dim rule, whitespace-tolerant), or night mode silently stops dimming.
+    assert re.search(r"\.is-night\s*>[^{}]*\{[^}]*(?:brightness|filter)", css), \
+        "the night dim must still be applied to .is-night's children"
+
+
 @pytest.mark.parametrize("html_path", HTML_FILES, ids=lambda p: p.name)
 def test_theme_js_is_first_script(html_path):
     """theme.js stamps data-theme/data-accent/data-cols on <html> before first
