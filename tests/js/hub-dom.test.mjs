@@ -1527,6 +1527,21 @@ test('climate card shows the indoor RH + dew aggregate footer (labeled, fail-sof
   const noAgg = renderClimateHtml({ available: true, rooms: [
     { name: 'Bedroom', channel: 'ch1', temp_f: 70, humidity: 50, stale: false }] });
   assert.ok(!noAgg.html.includes('class="rfoot"'), 'no footer when indoor RH/dew are absent');
+
+  // partial: RH present, dew absent -> footer shows ONLY RH (each value guarded
+  // independently, so a collapsed `isFinite(rh) && isFinite(dp)` would regress)
+  const rhOnly = renderClimateHtml({ available: true, indoor_rh: 48, indoor_dp: null,
+    rooms: [{ name: 'Bedroom', channel: 'ch1', temp_f: 70, humidity: 50, stale: false }] });
+  assert.match(rhOnly.html, /class="rfoot"/, 'RH-only still renders the footer');
+  assert.match(rhOnly.html, /48%<\/b> RH/);
+  assert.ok(!rhOnly.html.includes('dew'), 'no dew segment when indoor_dp is absent');
+
+  // partial: dew present, RH absent -> footer shows ONLY dew
+  const dpOnly = renderClimateHtml({ available: true, indoor_rh: null, indoor_dp: 55,
+    rooms: [{ name: 'Bedroom', channel: 'ch1', temp_f: 70, humidity: 50, stale: false }] });
+  assert.match(dpOnly.html, /class="rfoot"/, 'dew-only still renders the footer');
+  assert.match(dpOnly.html, /55°<\/b> dew/);
+  assert.ok(!dpOnly.html.includes(' RH'), 'no RH segment when indoor_rh is absent');
 });
 
 test('the streak chip is labeled a day-streak (not a task count)', () => {
@@ -1534,6 +1549,11 @@ test('the streak chip is labeled a day-streak (not a task count)', () => {
   const html = sandbox.personCardHtml(
     { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 3, chores: [], week: [] });
   assert.match(html, /class="chip-streak"[^>]*>🔥 3<span class="chip-streak-lbl">day streak<\/span>/);
+  // exactly at the threshold (=== 2): the chip renders (guards >= vs >)
+  const two = sandbox.personCardHtml(
+    { person: { id: 'p3', name: 'Kai', color: '#7A5AF8' }, streak: 2, chores: [], week: [] });
+  assert.match(two, /class="chip-streak"[^>]*>🔥 2<span class="chip-streak-lbl">day streak<\/span>/,
+    'a 2-day streak (the boundary) still shows the chip');
   // below the threshold (<2): no chip at all
   const none = sandbox.personCardHtml(
     { person: { id: 'p2', name: 'Milo', color: '#E39A2A' }, streak: 1, chores: [], week: [] });
@@ -1569,6 +1589,68 @@ test('the wall auto-reloads on a build-token change, but not mid-interaction, an
   payload = { ...payload, build: 'ccc' };
   await sandbox.poll();
   assert.equal(reloads, 1, 'a build change does not reload the wall mid-interaction');
+});
+
+test('auto-reload defers for EVERY wallBusy condition (each modal + theme-pop), not just the overlay', async () => {
+  const conditions = [
+    { name: 'ev-modal shown', setup: (doc) => doc.getElementById('ev-modal').classList.remove('hidden') },
+    { name: 'chore-modal shown', setup: (doc) => doc.getElementById('chore-modal').classList.remove('hidden') },
+    { name: 'confirm-modal shown', setup: (doc) => doc.getElementById('confirm-modal').classList.remove('hidden') },
+    { name: 'theme-pop open', setup: (doc) => {
+        let p = doc.getElementById('theme-pop');
+        if (!p) { p = doc.createElement('div'); p._id = 'theme-pop'; doc.body.appendChild(p); }
+        p.classList.add('open');
+      } },
+  ];
+  for (const { name, setup } of conditions) {
+    const { document, sandbox } = newHub();
+    // idle baseline: hide the three seeded modals and clear any recent interaction
+    ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+    sandbox.noteInteraction(0);
+    let reloads = 0;
+    sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+    let payload = { date: '2026-08-15', people: [], todos: {},
+      calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+    sandbox.fetch = async (url) => url === '/api/hub' ? okResp(payload) : okResp({});
+    await sandbox.poll();                     // seed the build token while idle
+    setup(document);                          // now busy in exactly one way
+    payload = { ...payload, build: 'bbb' };
+    await sandbox.poll();
+    assert.equal(reloads, 0, `a build change must not reload while busy: ${name}`);
+  }
+});
+
+test('auto-reload defers briefly after a direct tap (bare-wall chore taps open no overlay), then fires once idle', async () => {
+  const { document, sandbox } = newHub();
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  let reloads = 0;
+  sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  sandbox.fetch = async (url) => url === '/api/hub' ? okResp(payload) : okResp({});
+  await sandbox.poll();                        // seed build 'aaa'
+  sandbox.noteInteraction();                   // a tap JUST happened, no overlay open
+  payload = { ...payload, build: 'bbb' };
+  await sandbox.poll();
+  assert.equal(reloads, 0, 'a deploy does not reload within the quiet window after a tap');
+  sandbox.noteInteraction(Date.now() - 60000); // last tap was a minute ago -> wall is idle
+  await sandbox.poll();
+  assert.equal(reloads, 1, 'once past the interaction quiet window, the deferred reload fires');
+});
+
+test('auto-reload stays dormant when the payload carries no build token (no reload, no throw)', async () => {
+  const { document, sandbox } = newHub();
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  sandbox.noteInteraction(0);
+  let reloads = 0;
+  sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+  // NOTE: no `build` key at all
+  const payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {} };
+  sandbox.fetch = async (url) => url === '/api/hub' ? okResp(payload) : okResp({});
+  await sandbox.poll();
+  await sandbox.poll();
+  assert.equal(reloads, 0, 'a payload with no build token never triggers a reload');
 });
 
 test('native cards warn only on genuine misconfig, not the boot race (SF4)', () => {

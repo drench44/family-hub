@@ -309,20 +309,23 @@ def test_display_controls_present_on_both_surfaces():
         assert 'data-theme-set="light"' in html and 'data-theme-set="dark"' in html
         for accent in ("cyan", "violet", "amber", "green"):
             assert f'data-c="{accent}"' in html, f"missing the {accent} accent swatch"
-        assert 'data-cols-set="none"' in html and 'data-cols-set="wells"' in html
+        assert 'data-cols-set="none"' in html and 'data-cols-set="wells"' in html \
+            and 'data-cols-set="lines"' in html
     # the wall must be re-themable without a phone: the gear + its popover
     assert 'id="wall-gear"' in index and 'id="theme-pop"' in index
 
 
-def test_columns_control_offers_only_none_and_wells():
-    """Ruling 3: 'Lines' column separation is decided-out. No lines button
-    anywhere, and no dead .grid[data-cols="lines"] / lines-column CSS."""
-    assert 'data-cols-set="lines"' not in ALL_HTML, "Lines column button must not ship"
-    assert ">Lines<" not in ALL_HTML, "no Lines label in any control"
-    assert 'data-cols="lines"' not in CSS, "no dead 'lines' column CSS"
-    # the offered options are exactly none + wells
+def test_columns_control_offers_none_wells_and_lines():
+    """All three mockup separation options ship (Lines was added back on request):
+    each has a button on both surfaces AND consuming CSS so it visibly does
+    something (no dead option)."""
+    assert 'data-cols-set="lines"' in ALL_HTML, "the Lines column button must ship"
+    assert ">Lines<" in ALL_HTML, "the Lines label must be present"
+    assert 'data-cols="lines"' in CSS, "the Lines option must have consuming CSS"
+    # the offered options are exactly none + wells + lines
     offered = set(re.findall(r'data-cols-set="([^"]+)"', ALL_HTML))
-    assert offered == {"none", "wells"}, f"columns offered {offered}, expected none+wells"
+    assert offered == {"none", "wells", "lines"}, \
+        f"columns offered {offered}, expected none+wells+lines"
 
 
 def test_wells_column_separation_is_styled():

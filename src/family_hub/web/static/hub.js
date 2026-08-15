@@ -813,6 +813,15 @@ function armIdle() {
 
 let hubData = null;
 let loadedBuild = null;   // /api/hub build token at page load; a change => deploy => reload
+let lastInteraction = 0;  // ms of the last user touch/keypress (see noteInteraction)
+const INTERACTION_QUIET_MS = 4000;
+// Records a user touch/keypress so the deploy auto-reload defers for a few
+// seconds afterwards. wallBusy()'s modal checks don't cover the bare wall:
+// chore rows are tappable on the main face with NO overlay open, so without
+// this a deploy could reload the page out from under a tap. The optional `ts`
+// exists only so tests can place the last interaction at a chosen instant;
+// production always calls it with no argument.
+function noteInteraction(ts) { lastInteraction = (ts === undefined ? Date.now() : ts); }
 let data_date = '';
 let panelsWired = false;
 
@@ -1215,7 +1224,10 @@ function wallBusy() {
     return !!(el && !el.classList.contains('hidden'));
   };
   return hasClass('overlay', 'open') || hasClass('theme-pop', 'open')
-    || shown('ev-modal') || shown('chore-modal') || shown('confirm-modal');
+    || shown('ev-modal') || shown('chore-modal') || shown('confirm-modal')
+    // a direct tap on the bare wall (e.g. a chore toggle) opens no overlay, so
+    // defer the reload for a short quiet window after any recent interaction
+    || (Date.now() - lastInteraction < INTERACTION_QUIET_MS);
 }
 
 async function poll() {
@@ -1504,7 +1516,7 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#overlay-home')) { closeDeleteConfirm(); closeChoreEditor(); closeEventDetail(); closeOverlay(); }
 });
 ['pointerdown', 'touchstart', 'keydown'].forEach((evt) =>
-  document.addEventListener(evt, () => { if (openView) armIdle(); }, { passive: true }));
+  document.addEventListener(evt, () => { noteInteraction(); if (openView) armIdle(); }, { passive: true }));
 document.addEventListener('submit', (e) => {
   if (e.target && e.target.id === 'todo-add-form') { e.preventDefault(); addTodo(); }
 });
