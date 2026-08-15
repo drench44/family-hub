@@ -462,7 +462,7 @@ def hub():
         "build": BUILD,
         # House-default display theme (or None). The wall/admin stamp it live
         # on a fresh device with no localStorage override; None => the shipped
-        # dark/cyan/none stays. Never persisted client-side.
+        # grey/green/none stays. Never persisted client-side.
         "theme": cfg.theme,
     }
 

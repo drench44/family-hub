@@ -12,7 +12,7 @@
    (guarded :root:not([data-theme="light"])) and an explicit :root[data-theme="dark"].
    Accent is a separate axis (data-accent) so "pick a color" is independent of
    "pick light/dark". theme.js stamps data-theme/data-accent/data-cols on <html>
-   before first paint; the default is dark + cyan.
+   before first paint; the default is grey + green.
 
    The Task 1 foundation kept a parallel set of legacy dark-only tokens so the
    old rules kept resolving during the migration; Task 10 finished migrating

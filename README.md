@@ -10,7 +10,7 @@ an accent color you pick.
 
 ![family-hub](docs/hub.png)
 
-*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, and at-a-glance weather + per-room climate. Shown in the default dark theme with a cyan accent and sample data.*
+*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, and at-a-glance weather + per-room climate. Shown in the default grey theme with a green accent and sample data.*
 
 ![family-hub on a phone](docs/phone.png)
 
@@ -23,8 +23,9 @@ at one URL.
 ## What it looks like
 
 - **Wall (1920×1080):** chores | calendar + to-dos | cameras | weather +
-  climate, all in one card system. **Light or dark, with a pick-your-accent
-  color** (cyan, violet, amber, or green) and an optional subtle column
+  climate, all in one card system. **Five display modes** (light, soft, blue,
+  grey, black) **with a pick-your-accent color** (cyan, violet, amber, or green)
+  and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
 - **Phone / tablet (≤1000px):** the same page reflows to five bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather.

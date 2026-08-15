@@ -15,5 +15,5 @@
   "go2rtc_base": "",
   "climate_base": "",
   "weather_base": "",
-  "theme": { "mode": "dark", "accent": "cyan", "columns": "none" }
+  "theme": { "mode": "grey", "accent": "green", "columns": "none" }
 }
