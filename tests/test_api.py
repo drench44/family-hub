@@ -991,6 +991,49 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
     assert fdb.day_log(app_mod._db(), yesterday) == []
 
 
+def test_interrupted_backfill_rolls_back_whole_then_retries(app_mod, monkeypatch):
+    """An interrupted backfill must commit NOTHING (no partial day-log, flag
+    unset) so it re-runs from scratch on the next boot — a half-written history
+    would read missing days as rest days and silently INFLATE streaks."""
+    from fastapi.testclient import TestClient
+    conn = fdb.connect(app_mod.DB_PATH)
+    fdb.ensure_schema(conn)
+    today = dt.date.fromisoformat(app_mod._today().isoformat())
+    epoch = (today - dt.timedelta(days=10)).isoformat()
+    pid = fdb.add_person(conn, "Remy", "#5BC9F0")
+    cid = fdb.add_chore(conn, title="Dishes", icon="", schedule_kind="daily",
+                        days_mask=0, assign_kind="fixed", fixed_person_id=pid,
+                        rotation_order=[], rotation_epoch=epoch)
+    for i in (2, 1):
+        fdb.set_completion(conn, cid, (today - dt.timedelta(days=i)).isoformat(), pid)
+    conn.close()
+
+    # blow up once, partway through the day loop
+    real_plan_rows = app_mod.chlogic.plan_rows
+    boom_day = today - dt.timedelta(days=5)
+    state = {"raised": False}
+
+    def flaky(chores, people, d):
+        if d == boom_day and not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("simulated crash mid-backfill")
+        return real_plan_rows(chores, people, d)
+    monkeypatch.setattr(app_mod.chlogic, "plan_rows", flaky)
+
+    with TestClient(app_mod.app, raise_server_exceptions=False) as tc:
+        assert tc.get("/api/hub").status_code == 500       # backfill aborted
+    # a separate handle (no app backfill) proves nothing partial was committed
+    raw = fdb.connect(app_mod.DB_PATH)
+    assert fdb.logs_between(raw, "2000-01-01", "2100-01-01") == []
+    assert not fdb.kv_get(raw, "occlog_backfill_done")
+    raw.close()
+    # next boot: the fault is spent, so the retry runs to completion
+    assert state["raised"] is True
+    with TestClient(app_mod.app) as tc:
+        assert tc.get("/api/hub").json()["people"][0]["streak"] == 2
+    assert fdb.kv_get(app_mod._db(), "occlog_backfill_done") is True
+
+
 def test_hub_drops_timed_event_that_ended_at_midnight(client, app_mod):
     """A timed event whose end is exactly 00:00 today was over before today
     began — it must not be kept by the span-overlap filter (which slices the
@@ -1017,4 +1060,49 @@ def test_calendar_endpoint_rejects_absurd_windows(client):
     assert client.get("/api/calendar?days=1000000000").status_code == 422
     assert client.get("/api/calendar?past=99999").status_code == 422
     assert client.get("/api/calendar?days=-1").status_code == 422
+    assert client.get("/api/calendar?past=-1").status_code == 422
     assert client.get("/api/calendar?days=90&past=45").status_code == 200
+
+
+def test_today_freeze_updates_when_the_plan_changes(client, app_mod):
+    """Today is live until it becomes past: a mid-day plan change (here a
+    reassignment) must OVERWRITE today's frozen log on the next serve, or
+    tomorrow's 'yesterday' view would show the stale first-serve plan."""
+    c = app_mod._db()
+    today = app_mod._today().isoformat()
+    pa = client.post("/api/admin/people",
+                     json={"name": "A", "color": "#111111"}).json()["id"]
+    pb = client.post("/api/admin/people",
+                     json={"name": "B", "color": "#222222"}).json()["id"]
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pa}).json()["id"]
+    client.get("/api/hub")   # freeze today with A assigned
+    assert [(r["chore_id"], r["person_id"]) for r in fdb.day_log(c, today)] == \
+        [(cid, pa)]
+    client.patch(f"/api/admin/chores/{cid}", json={"fixed_person_id": pb})
+    client.get("/api/hub")   # re-serve -> today's frozen row must follow to B
+    assert [(r["chore_id"], r["person_id"]) for r in fdb.day_log(c, today)] == \
+        [(cid, pb)]
+
+
+def test_future_day_overlays_live_plan_into_streak_and_week(client, app_mod):
+    """A future day isn't frozen, but the day browser overlays its live plan so
+    the prospective streak/week reflect that day's occurring chores."""
+    today = app_mod._today()
+    tomorrow = today + dt.timedelta(days=1)
+    pid = client.post("/api/admin/people",
+                      json={"name": "Sam", "color": "#C39BEA"}).json()["id"]
+    cid = client.post("/api/admin/chores", json={
+        "title": "Sweep", "schedule_kind": "days",
+        "days_mask": 1 << tomorrow.weekday(), "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    sam = client.get(
+        f"/api/chores/day?date={tomorrow.isoformat()}").json()["people"][0]
+    assert [ch["title"] for ch in sam["chores"]] == ["Sweep"]   # occurs tomorrow
+    assert len(sam["week"]) == 7
+    # tomorrow is the last week-strip cell; the chore occurs + isn't done ->
+    # "none" (not "rest"), which only holds if the live overlay populated the
+    # future day's occurrence set
+    assert sam["week"][-1] == "none"
+    assert "streak" in sam

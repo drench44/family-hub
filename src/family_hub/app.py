@@ -113,28 +113,41 @@ def _today() -> dt.date:
 
 def _ensure_history_backfill(conn) -> None:
     """One-time upgrade for deployments that predate the occurrence log:
-    reconstruct the last 370 days of chore history from current definitions —
-    exactly what those days displayed before the log existed — so streaks
-    survive the upgrade. Guarded by a kv flag so it never runs twice (a later
-    empty log day must mean 'rest', not 'please re-derive from live defs');
-    fresh DBs just set the flag."""
+    best-effort reconstruct the last 370 days of chore history from the
+    CURRENT chore/person definitions so streaks survive the upgrade. (Best
+    effort, not exact: a chore edited or a person deactivated between a
+    historical day and the upgrade is reconstructed with today's values —
+    there is no prior record to consult. It's a one-time approximation.)
+
+    Guarded by a kv flag so it never runs twice — a later empty log day must
+    mean 'rest', not 're-derive from live defs'. The write is atomic (rows +
+    flag in one transaction via db.backfill_occurrence_log), so an interrupted
+    run commits nothing and retries whole next boot rather than freezing a
+    streak-inflating partial history. Fresh DBs just set the flag."""
     if fdb.kv_get(conn, "occlog_backfill_done"):
         return
     has_completions = conn.execute(
         "SELECT 1 FROM completions LIMIT 1").fetchone() is not None
     has_log = conn.execute(
         "SELECT 1 FROM occurrence_log LIMIT 1").fetchone() is not None
-    if has_completions and not has_log:
-        people = fdb.list_people(conn)
-        chores = fdb.list_chores(conn)
-        today = _today()
-        for i in range(370, 0, -1):
-            d = today - dt.timedelta(days=i)
-            rows = chlogic.plan_rows(chores, people, d)
-            if rows:
-                fdb.replace_day_log(conn, d.isoformat(), rows)
-        log.info("occurrence log backfilled from legacy completions")
-    fdb.kv_set(conn, "occlog_backfill_done", True)
+    if not (has_completions and not has_log):
+        fdb.kv_set(conn, "occlog_backfill_done", True)   # fresh / already-logged
+        return
+    people = fdb.list_people(conn)
+    chores = fdb.list_chores(conn)
+    today = _today()
+    # Build every day eagerly BEFORE touching the DB: a failure here (bad row)
+    # raises with zero writes done; the atomic helper then commits all days and
+    # the flag together, or nothing.
+    day_rows = []
+    for i in range(370, 0, -1):
+        d = today - dt.timedelta(days=i)
+        rows = chlogic.plan_rows(chores, people, d)
+        if rows:
+            day_rows.append((d.isoformat(), rows))
+    fdb.backfill_occurrence_log(conn, day_rows, "occlog_backfill_done")
+    log.info("occurrence log backfilled from legacy completions (%d days)",
+             len(day_rows))
 
 
 def _db():
@@ -145,7 +158,21 @@ def _db():
         if _conn is None:
             _conn = fdb.connect(DB_PATH)
             fdb.ensure_schema(_conn)
-            _ensure_history_backfill(_conn)
+            try:
+                _ensure_history_backfill(_conn)
+            except Exception:
+                # The backfill is atomic (already rolled back). Drop the
+                # half-initialized handle so the NEXT request reconnects and
+                # retries the one-time upgrade, rather than serving zeroed
+                # history forever under a connection whose backfill never ran.
+                log.error("history backfill failed; dropping handle to retry",
+                          exc_info=True)
+                try:
+                    _conn.close()
+                except Exception:
+                    pass
+                _conn = None
+                raise
         else:
             try:
                 _conn.execute("SELECT 1")

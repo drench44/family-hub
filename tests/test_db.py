@@ -1,6 +1,54 @@
+import sqlite3
+
 import pytest
 
 from family_hub import db as fdb
+
+
+class _CrashConn(sqlite3.Connection):
+    """A connection that raises on the first execute() whose SQL contains
+    ``crash_on`` — lets a test interrupt a migration deterministically to
+    prove it rolls back whole instead of half-applying."""
+    crash_on = None
+
+    def execute(self, sql, *args):
+        if self.crash_on and self.crash_on in sql:
+            raise sqlite3.OperationalError(f"simulated crash on {self.crash_on}")
+        return super().execute(sql, *args)
+
+
+def _legacy_fk_db(path):
+    """A DB whose completions table still FK-references chores(id) (the
+    pre-frozen-history shape), with one person/chore/completion seeded."""
+    c = sqlite3.connect(path, factory=_CrashConn)
+    c.row_factory = sqlite3.Row
+    c.executescript("""
+        CREATE TABLE people(
+          id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE chores(
+          id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+          icon TEXT NOT NULL DEFAULT '',
+          schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days')),
+          days_mask INTEGER NOT NULL DEFAULT 0,
+          assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+          fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+          rotation_epoch TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE completions(
+          chore_id INTEGER NOT NULL REFERENCES chores(id),
+          date TEXT NOT NULL,
+          person_id INTEGER NOT NULL REFERENCES people(id),
+          done_at TEXT NOT NULL, PRIMARY KEY(chore_id, date));
+    """)
+    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Rem', '#5BC9F0')")
+    c.execute("""INSERT INTO chores(id, title, schedule_kind, assign_kind,
+                 fixed_person_id, rotation_epoch)
+                 VALUES(1, 'Trash', 'daily', 'fixed', 7, '2026-08-01')""")
+    c.execute("""INSERT INTO completions VALUES(1, '2026-08-12', 7,
+                 '2026-08-12T20:00:00+00:00')""")
+    c.commit()
+    return c
 
 
 def test_schema_idempotent(conn):
@@ -224,6 +272,44 @@ def test_delete_chore_keeps_history(conn):
         [{"chore_id": cid, "date": "2026-08-12", "person_id": pid}]
     assert [r["chore_id"] for r in fdb.day_log(conn, "2026-08-12")] == [cid]
     assert fdb.delete_chore(conn, cid) is False
+
+
+def test_completions_migration_is_atomic_and_recovers(tmp_path):
+    """A crash mid-rebuild must leave the ORIGINAL completions intact (rows +
+    data) and no stranded completions_new — then the next boot completes the
+    migration cleanly, never a boot-loop 'table already exists'."""
+    c = _legacy_fk_db(str(tmp_path / "old.db"))
+    c.crash_on = "RENAME TO completions"       # die between DROP and RENAME
+    with pytest.raises(sqlite3.OperationalError):
+        fdb.ensure_schema(c)
+    # the completion row survived the aborted migration, unmigrated but present
+    assert fdb.completions_between(c, "2026-08-12", "2026-08-12") == \
+        [{"chore_id": 1, "date": "2026-08-12", "person_id": 7}]
+    assert not list(c.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='completions_new'")), \
+        "the half-built table must be rolled back, not stranded"
+    # next boot finishes the job with no wedge
+    c.crash_on = None
+    fdb.ensure_schema(c)
+    assert fdb.completions_between(c, "2026-08-12", "2026-08-12") != []
+    assert "chores" not in {r["table"]
+                            for r in c.execute("PRAGMA foreign_key_list(completions)")}
+    assert fdb.delete_chore(c, 1) is True      # FK really gone
+    c.close()
+
+
+def test_completions_migration_survives_stranded_new_table(tmp_path):
+    """Defense in depth: even if a prior (pre-atomic) run left a stranded
+    completions_new behind, the rebuild drops it first instead of erroring on
+    a duplicate CREATE."""
+    c = _legacy_fk_db(str(tmp_path / "old.db"))
+    c.execute("CREATE TABLE completions_new(x)")   # leftover junk from a crash
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.completions_between(c, "2026-08-12", "2026-08-12") != []
+    assert "chores" not in {r["table"]
+                            for r in c.execute("PRAGMA foreign_key_list(completions)")}
+    c.close()
 
 
 def test_schema_migrates_completions_chore_fk_away(tmp_path):

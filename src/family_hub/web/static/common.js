@@ -134,22 +134,25 @@ function addDays(dateStr, n) {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
-/* The list of days an event occupies. All-day events cover [start, end) per
-   Google's exclusive end date. Timed events cover start day through end day
-   INCLUSIVE (an overnighter is on both days — that's what keeps a
-   still-running event on today's feed), except an end at exactly midnight,
-   which belongs to the previous day. Capped at 62 days so a malformed span
-   can't hang the wall. */
+/* The last calendar day an event is visible on. All-day ends are exclusive
+   (Google's convention), so the last visible day is end-1. A timed event is
+   visible through its end day INCLUSIVE (an overnighter is on both days —
+   that's what keeps a still-running event on today's feed), except an end at
+   exactly midnight, which belongs to the previous day. */
+function lastVisibleDay(ev) {
+  const s = (ev.start_ts || '').slice(0, 10);
+  if (ev.all_day) return addDays((ev.end_ts || s).slice(0, 10), -1);
+  const endTs = ev.end_ts || '';
+  let last = endTs.slice(0, 10) || s;
+  if (last > s && endTs.slice(11, 16) === '00:00') last = addDays(last, -1);
+  return last;
+}
+
+/* The list of days an event occupies, start through lastVisibleDay inclusive.
+   Capped at 62 days so a malformed span can't hang the wall. */
 function expandDays(ev) {
   const s = (ev.start_ts || '').slice(0, 10);
-  let last;   // last day the event is visible on
-  if (ev.all_day) {
-    last = addDays((ev.end_ts || s).slice(0, 10), -1);
-  } else {
-    const endTs = ev.end_ts || '';
-    last = endTs.slice(0, 10) || s;
-    if (last > s && endTs.slice(11, 16) === '00:00') last = addDays(last, -1);
-  }
+  const last = lastVisibleDay(ev);
   const out = [];
   let d = s;
   while (d <= last && out.length < 62) { out.push(d); d = addDays(d, 1); }

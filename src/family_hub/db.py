@@ -88,26 +88,45 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     # 2026-08-15: completions used to FK-reference chores(id), which made
     # deleting a chore impossible without also purging its history. Frozen
     # history keeps those rows, so rebuild the table without that FK.
-    # (SQLite can't drop a constraint in place; PRAGMA foreign_keys can't
-    # change inside a transaction, hence the explicit off/on around it.)
     fk_parents = {r["table"]
                   for r in conn.execute("PRAGMA foreign_key_list(completions)")}
     if "chores" in fk_parents:
-        conn.execute("PRAGMA foreign_keys=OFF")
-        try:
-            with conn:
-                conn.executescript("""
-                    CREATE TABLE completions_new(
-                      chore_id INTEGER NOT NULL,
-                      date TEXT NOT NULL,
-                      person_id INTEGER NOT NULL REFERENCES people(id),
-                      done_at TEXT NOT NULL, PRIMARY KEY(chore_id, date));
-                    INSERT INTO completions_new SELECT * FROM completions;
-                    DROP TABLE completions;
-                    ALTER TABLE completions_new RENAME TO completions;
-                """)
-        finally:
-            conn.execute("PRAGMA foreign_keys=ON")
+        _drop_completions_chore_fk(conn)
+
+
+def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
+    """Rebuild `completions` without its legacy FK to chores(id), preserving
+    every row, as ONE atomic transaction. An interrupted rebuild (crash, power
+    loss, disk-full) rolls back whole, so the family's completion history is
+    never half-migrated or lost and the next boot retries from a clean slate.
+
+    Not `executescript` (which force-commits each statement, defeating the
+    transaction) and not `with conn:` alone — FK enforcement can't toggle
+    inside a transaction, so it is set around an explicit BEGIN/COMMIT with the
+    connection in autocommit mode. The leading DROP IF EXISTS clears any
+    completions_new stranded by a pre-atomic crash, so a retry can't wedge on a
+    duplicate CREATE."""
+    prior_iso = conn.isolation_level
+    conn.isolation_level = None            # explicit BEGIN/COMMIT/ROLLBACK are ours
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute("DROP TABLE IF EXISTS completions_new")
+        conn.execute("""CREATE TABLE completions_new(
+                          chore_id INTEGER NOT NULL,
+                          date TEXT NOT NULL,
+                          person_id INTEGER NOT NULL REFERENCES people(id),
+                          done_at TEXT NOT NULL, PRIMARY KEY(chore_id, date))""")
+        conn.execute("INSERT INTO completions_new SELECT * FROM completions")
+        conn.execute("DROP TABLE completions")
+        conn.execute("ALTER TABLE completions_new RENAME TO completions")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
 
 
 # --- people ---------------------------------------------------------------
@@ -228,6 +247,24 @@ def log_row(conn, chore_id: int, date: str) -> dict | None:
         "SELECT * FROM occurrence_log WHERE chore_id = ? AND date = ?",
         (chore_id, date)).fetchone()
     return _log_row(r) if r is not None else None
+
+
+def backfill_occurrence_log(conn, day_rows: list, done_flag_key: str) -> None:
+    """Insert reconstructed occurrence-log rows for many days AND set the
+    backfill-done kv flag in ONE transaction — all-or-nothing. An interrupted
+    legacy-upgrade backfill therefore rolls back whole and re-runs from scratch
+    on the next boot, instead of freezing a partial history (whose missing days
+    would read as rest days and silently inflate streaks). ``day_rows`` is a
+    list of (date, rows) where each row has the plan_rows shape."""
+    with conn:   # single transaction: every day + the flag, or nothing
+        for date, rows in day_rows:
+            conn.executemany(
+                "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
+                "icon, rot) VALUES(?, ?, ?, ?, ?, ?)",
+                [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
+                  r["rot"]) for r in rows])
+        conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
+                     (done_flag_key, json.dumps(True)))
 
 
 # --- completions ----------------------------------------------------------
