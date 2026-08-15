@@ -414,6 +414,24 @@ def test_admin_people_crud_and_validation(client, app_mod):
     assert state["people"][0]["name"] == "Remy2"
 
 
+def test_admin_delete_person_hard_removes_and_404s(client, app_mod):
+    """The hard-delete endpoint removes the person entirely (distinct from the
+    PATCH active=0 deactivate path); an unknown id is a 404."""
+    pid = client.post("/api/admin/people",
+                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    # a chore fixed to them, to prove the delete clears assignments too
+    cid = client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+
+    assert client.delete(f"/api/admin/people/{pid}").status_code == 200
+    state = client.get("/api/admin/state").json()
+    assert all(p["id"] != pid for p in state["people"])           # gone entirely
+    assert next(c for c in state["chores"]
+                if c["id"] == cid)["fixed_person_id"] is None     # assignment cleared
+    assert client.delete(f"/api/admin/people/{pid}").status_code == 404  # already gone
+
+
 def test_admin_chores_crud_and_validation(client, app_mod):
     pr = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
     pid = pr.json()["id"]

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=60">
+  <link rel="stylesheet" href="styles.css?v=61">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
   <script src="theme.js?v=5"></script>
@@ -117,7 +117,7 @@
   <div class="confirm-modal hidden" id="confirm-modal">
     <div class="confirm-card" id="confirm-card">
       <div class="confirm-msg" id="confirm-msg"></div>
-      <div class="confirm-sub">It stays on past days; it&rsquo;s removed from today on.</div>
+      <div class="confirm-sub" id="confirm-sub">It stays on past days; it&rsquo;s removed from today on.</div>
       <div class="confirm-actions">
         <button class="confirm-cancel" type="button" data-confirm-cancel="1">Cancel</button>
         <button class="confirm-del" type="button" data-confirm-del="1">Delete</button>
@@ -125,10 +125,10 @@
     </div>
   </div>
 
-  <script src="common.js?v=36"></script>
+  <script src="common.js?v=37"></script>
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
   <script src="osk.js?v=1"></script>
-  <script src="hub.js?v=58"></script>
+  <script src="hub.js?v=60"></script>
 </body>
 </html>

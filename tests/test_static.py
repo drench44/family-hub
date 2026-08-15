@@ -254,10 +254,12 @@ def test_tab_bar_covers_all_tabs():
         "body must start on the chores tab"
 
 
-def test_admin_swatch_palette_present():
-    admin = ((STATIC / "admin.js").read_text() + (STATIC / "admin.html").read_text()).lower()
+def test_swatch_palette_present():
+    # SWATCHES moved from admin.js to common.js (shared with the Chores-page
+    # inline people editor); the palette must still ship there in full.
+    common = (STATIC / "common.js").read_text().lower()
     for hx in SWATCH_HEXES:
-        assert hx.lower() in admin, f"admin is missing swatch hex {hx}"
+        assert hx.lower() in common, f"common.js is missing swatch hex {hx}"
 
 
 def test_swatch_hexes_meet_dual_theme_contrast():
