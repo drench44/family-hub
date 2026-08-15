@@ -37,7 +37,7 @@ services:
     # (my_cam_name_), where the original used dashes — match your
     # go2rtc.yaml stream URLs accordingly (check the WebUI on :5050).
     # Pinned (was :latest) so a re-pull can't silently change behavior; bump
-    # deliberately. Consider digest-pinning like go2rtc below for full immutability.
+    # deliberately. Consider digest-pinning (@sha256:...) for full immutability.
     image: idisposablegithub365/wyze-bridge:4.5.0
     container_name: family-hub-wyze-bridge
     restart: unless-stopped

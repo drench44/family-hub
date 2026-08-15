@@ -29,7 +29,12 @@ async function j(url, opts) {
       try { detail = (await r.json()).detail || ''; } catch (e) { /* not json */ }
       throw new Error(detail || `${url} -> HTTP ${r.status}`);
     }
-    return r.status === 204 ? null : r.json();
+    // `return await` (not bare `return r.json()`) is load-bearing: it keeps the
+    // finally — and so clearTimeout — deferred until the BODY resolves. A bare
+    // return would disarm the abort timer the instant headers arrive, leaving a
+    // server that flushes 200 headers then stalls the body hung forever (the
+    // exact frozen-but-"live" failure this timeout exists to prevent).
+    return r.status === 204 ? null : await r.json();
   } finally {
     if (timer !== null) clearTimeout(timer);
   }

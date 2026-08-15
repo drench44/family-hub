@@ -138,24 +138,31 @@ def _rfc3339(d: dt.datetime) -> str:
 class GoogleCalendarClient:
     def __init__(self, token_path: str):
         self.token_path = token_path
+        self._bad_token_warned = False   # throttle: configured() runs every sync tick
 
     def configured(self) -> bool:
         """True iff the token file exists and parses as credentials."""
         if not os.path.exists(self.token_path):
+            self._bad_token_warned = False
             return False
         try:
             from google.oauth2.credentials import Credentials
             Credentials.from_authorized_user_file(self.token_path, SCOPES)
+            self._bad_token_warned = False
             return True
         except Exception:
             # The file is PRESENT but won't parse (half-written during a refresh,
             # hand-edited, or a lib schema change). That's a different condition
             # from "never set up" — reporting it silently as "not connected yet"
             # sends the owner to re-run setup for the wrong reason. Log it so the
-            # real cause is diagnosable; still fail closed to unconfigured.
-            log.warning("token file %s is present but did not parse as "
-                        "credentials; treating as not connected",
-                        self.token_path, exc_info=True)
+            # real cause is diagnosable; still fail closed to unconfigured. Warn
+            # only once per bad-token episode (configured() runs every sync tick,
+            # so a persistently-corrupt file must not spam a stack trace each cycle).
+            if not self._bad_token_warned:
+                log.warning("token file %s is present but did not parse as "
+                            "credentials; treating as not connected",
+                            self.token_path, exc_info=True)
+                self._bad_token_warned = True
             return False
 
     def _creds(self):
