@@ -131,6 +131,7 @@ for the full walkthrough, with copy-paste files in [`docs/kiosk/`](docs/kiosk/).
 | `calendars` | Calendar sources, in display order (see below) |
 | `calendar_window_days` / `calendar_past_days` | Sync window forward / back |
 | `cameras` | go2rtc streams shown as tiles: `{"src","label"}` + optional `"hd"` (higher-res twin used full-screen) |
+| `camera_page` | The phone/tablet **Cameras** tab as a 2×2 (row-major) live grid — same entry shape as `cameras`, but its own set and order, so the tab can show cameras the wall column doesn't. Omit to reuse `cameras`. |
 | `panels` | Always-on dashboard embeds (see below) |
 | `go2rtc_base` | Your go2rtc URL (browser-reachable), omit if no cameras |
 | `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
@@ -198,6 +199,11 @@ Camera tiles are live sub-second WebRTC streams via
    Wyze. Set `webrtc.candidates` to your server's LAN IP.
 2. `docker compose up -d go2rtc`
 3. Add each stream to `cameras` in config.json.
+
+On phones and tablets the **Cameras** tab shows a 2×2 live grid instead of the
+wall's stacked column. It defaults to your `cameras`; set `camera_page` to give
+that grid its own set and order (top-left, top-right, bottom-left, bottom-right)
+— handy for surfacing a camera there that isn't on the wall.
 
 > **Slow first picture? Check the camera's keyframe interval.** An H.264
 > viewer can only start decoding at a keyframe, and go2rtc passes streams

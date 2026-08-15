@@ -678,6 +678,12 @@ body {
 .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tile.is-offline { opacity: 0.55; }
 .tile-camera { grid-column: 1 / -1; position: relative; }
+
+/* Cameras-tab 2x2 live grid. Hidden by default — it only appears under the
+   mobile Cameras tab (see the max-width rules below); the wall keeps its
+   .tiles column. Its camera tiles sit two-up rather than spanning full width. */
+.camgrid { display: none; grid-template-columns: 1fr 1fr; gap: 12px; }
+.camgrid .tile-camera { grid-column: auto; }
 .tile-label {
   font-family: var(--mono); font-size: 10px; font-weight: 600;
   letter-spacing: 0.16em; text-transform: uppercase;
@@ -1197,7 +1203,10 @@ body {
   body[data-tab="cams"] .people-col,
   body[data-tab="cams"] .cal,
   body[data-tab="cams"] .panels,
-  body[data-tab="cams"] .todos-page { display: none; }
+  body[data-tab="cams"] .todos-page,
+  body[data-tab="cams"] .tiles { display: none; }
+  /* Cameras tab shows the 2x2 grid, not the wall's stacked column. */
+  body[data-tab="cams"] .camgrid { display: grid; }
   body[data-tab="weather"] .people-col,
   body[data-tab="weather"] .cal,
   body[data-tab="weather"] .tiles,

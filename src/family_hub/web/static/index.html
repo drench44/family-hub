@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=56">
+  <link rel="stylesheet" href="styles.css?v=57">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
   <script src="theme.js?v=5"></script>
@@ -67,6 +67,11 @@
         <div id="people" class="people-list"></div>
       </section>
       <div class="tiles" id="tiles"></div>
+      <!-- Cameras-tab 2x2 live grid (phones/tablets). Hidden on the wall by CSS;
+           the wall uses the .tiles column above. Built by hub.js from the
+           camera_page list in /api/hub links. A <section> (like the other
+           labelled regions) so its aria-label is exposed. -->
+      <section class="camgrid" id="camgrid" aria-label="Cameras"></section>
       <!-- Always-on live dashboard embeds, built by hub.js from the panels
            list in /api/hub links (config-driven since 2026-08-13). -->
       <section class="panels" id="panels" aria-label="Dashboards"></section>
@@ -124,6 +129,6 @@
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
   <script src="osk.js?v=1"></script>
-  <script src="hub.js?v=55"></script>
+  <script src="hub.js?v=56"></script>
 </body>
 </html>

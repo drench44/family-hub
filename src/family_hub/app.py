@@ -311,15 +311,19 @@ def _links() -> dict:
         # paints a static gradient for each (see hub.js tileCamera). Panels
         # still come from config below (empty is fine in demo).
         cameras = fdemo.demo_cameras()
+        camera_page = fdemo.demo_camera_page()
     else:
-        cameras = _config_camera_links()
+        cameras = _camera_links(cfg.cameras)
+        # The Cameras-tab grid: its own config list, or the wall cameras when
+        # unset, so an existing config without `camera_page` still fills the grid.
+        camera_page = _camera_links(cfg.camera_page or cfg.cameras)
     panels = _config_panel_links()
-    return {"cameras": cameras, "panels": panels}
+    return {"cameras": cameras, "panels": panels, "camera_page": camera_page}
 
 
-def _config_camera_links() -> list[dict]:
+def _camera_links(entries: list[dict]) -> list[dict]:
     cameras = []
-    for cam in cfg.cameras:
+    for cam in entries:
         try:
             src = cam["src"]
             hd_src = cam.get("hd", src)
