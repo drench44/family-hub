@@ -278,6 +278,12 @@ body {
 .room .rv { font-size: 16px; font-weight: 650; width: 50px; text-align: right; }
 .room .rh { font-size: 13px; color: var(--dim); width: 50px; text-align: right; }
 .room.warn .rv { color: var(--warn); }
+/* whole-house indoor aggregate (RH + dew) — a labeled footer under the rooms */
+.rfoot { display: flex; align-items: baseline; gap: 12px; padding: 11px 0 2px; margin-top: 4px;
+  border-top: 1px solid var(--edge); }
+.rfoot .rk { flex: 1; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.rfoot-v { font-size: 13px; color: var(--dim); }
+.rfoot-v .num { color: var(--ink); font-weight: 650; }
 
 /* ========================== calendar ========================= */
 .cal { grid-area: cal; display: flex; flex-direction: column; gap: 10px; }
@@ -365,6 +371,9 @@ body {
   border-radius: 999px;
   padding: 2px 8px;
 }
+/* clarifies the 🔥 is a day-streak, not today's completed-chore count */
+.chip-streak-lbl { margin-left: 5px; font-size: 9px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; opacity: .8; }
 .week-strip { display: flex; gap: 4px; margin-left: auto; }
 .ws-cell { width: 10px; height: 10px; border-radius: 2px; background: var(--edge); }
 .ws-done { background: var(--good); }
@@ -945,10 +954,10 @@ body {
    them in a row via the default .theme-ctl flex-wrap) */
 .theme-pop .theme-ctl { flex-direction: column; align-items: flex-start; gap: 0; }
 
-/* ==================== columns: "wells" separation (Ruling 3) ==================== */
+/* ==================== column separation ==================== */
 /* The Columns control stamps data-cols on <html>. "none" (default) is the flat
-   layout; "wells" wraps each column's stack in a soft tinted panel. Only none +
-   wells ship — "lines" is decided-out, so there is deliberately no lines CSS. */
+   layout; "wells" wraps each column's stack in a soft tinted panel; "lines"
+   draws thin vertical rules between the columns. */
 :root[data-cols="wells"] .hub-grid { gap: 16px; }
 :root[data-cols="wells"] .people-col,
 :root[data-cols="wells"] .cal,
@@ -960,6 +969,31 @@ body {
   border-radius: 18px;
   padding: 15px 15px 20px;
 }
+
+/* "lines": one thin vertical rule in each of the three gaps between the four
+   columns. Each rule is a pseudo-element on a column that spans BOTH grid rows
+   (people, tiles, panels); align-self:stretch overrides the grid's
+   align-items:start so those columns fill the full grid height and the three
+   rules render at equal length (not each column's own content height), sitting
+   centered in the 24px gap. Decorative only (pointer-events off so it never
+   intercepts a touch on the wall). */
+:root[data-cols="lines"] .people-col,
+:root[data-cols="lines"] .tiles,
+:root[data-cols="lines"] .panels { position: relative; align-self: stretch; }
+:root[data-cols="lines"] .people-col::after,
+:root[data-cols="lines"] .tiles::before,
+:root[data-cols="lines"] .panels::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--edge-soft);
+  pointer-events: none;
+}
+:root[data-cols="lines"] .people-col::after { right: -12px; }
+:root[data-cols="lines"] .tiles::before { left: -12px; }
+:root[data-cols="lines"] .panels::before { left: -12px; }
 
 /* ============================ mobile ========================== */
 /* Under 1000px the fixed 1920 canvas would mean endless sideways scrolling,
@@ -974,6 +1008,12 @@ body {
   /* stretch overrides the wall grid's align-items:start — without it every
      section shrinks to content width (caught on the phone 2026-08-13) */
   .hub-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+  /* column separation is a wall-only, 4-column concern; on the phone reflow
+     (one stacked flex column) the "lines" rules would hang stray 1px ticks off
+     a full-width section, so neutralize them here */
+  :root[data-cols="lines"] .people-col::after,
+  :root[data-cols="lines"] .tiles::before,
+  :root[data-cols="lines"] .panels::before { display: none; }
   /* the wall's under-calendar to-do card has no phone equivalent — the
      dedicated To-Dos tab already covers phones (operator, 2026-08-14) */
   .todo-slot { display: none; }
