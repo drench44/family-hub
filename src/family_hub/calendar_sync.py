@@ -148,6 +148,14 @@ class GoogleCalendarClient:
             Credentials.from_authorized_user_file(self.token_path, SCOPES)
             return True
         except Exception:
+            # The file is PRESENT but won't parse (half-written during a refresh,
+            # hand-edited, or a lib schema change). That's a different condition
+            # from "never set up" — reporting it silently as "not connected yet"
+            # sends the owner to re-run setup for the wrong reason. Log it so the
+            # real cause is diagnosable; still fail closed to unconfigured.
+            log.warning("token file %s is present but did not parse as "
+                        "credentials; treating as not connected",
+                        self.token_path, exc_info=True)
             return False
 
     def _creds(self):

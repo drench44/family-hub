@@ -150,12 +150,24 @@ def test_hub_theme_absent_is_null(tmp_path, monkeypatch):
 
 def test_hub_theme_invalid_axes_dropped(tmp_path, monkeypatch):
     """Bad values are dropped per-axis rather than crashing: an invalid mode and
-    the decided-out 'lines' column fall away, a valid accent survives."""
+    an unknown column value fall away, a valid accent survives."""
     appmod = _reload_with(tmp_path, monkeypatch,
-                          {"theme": {"mode": "neon", "accent": "green", "columns": "lines"}})
+                          {"theme": {"mode": "neon", "accent": "green", "columns": "stripes"}})
     with TestClient(appmod.app) as c:
         theme = c.get("/api/hub").json()["theme"]
     assert theme == {"accent": "green"}
+
+
+def test_hub_theme_lines_column_survives(tmp_path, monkeypatch):
+    """The 'lines' column option ships across the whole frontend (theme.js, both
+    HTML pages, CSS), so a house-default columns:lines must round-trip through
+    config validation. Regression: _THEME_AXES omitted 'lines', so _clean_theme
+    silently dropped it and fresh devices fell back to 'none'."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"theme": {"accent": "cyan", "columns": "lines"}})
+    with TestClient(appmod.app) as c:
+        theme = c.get("/api/hub").json()["theme"]
+    assert theme == {"accent": "cyan", "columns": "lines"}
 
 
 @pytest.mark.parametrize("bad_theme", ["dark", []])
@@ -326,12 +338,55 @@ def test_chores_day_past_future_and_validation(client, app_mod):
     assert client.get(f"/api/chores/day?date={far}").status_code == 422
 
 
+def test_hub_keeps_in_progress_multiday_event(client, app_mod):
+    """A multi-day event that started before today but is still running must stay
+    on the wall's home feed; one that already ended must not. Regression: the
+    feed filtered on start date alone and dropped in-progress spans."""
+    c = app_mod._db()
+    today = _today()
+    fdb.replace_events(c, [
+        # all-day span: started 4 days ago, end_ts (exclusive) is tomorrow, so
+        # its last visible day is today — in progress right now.
+        {"id": "trip", "calendar_id": "cal", "title": "Vacation", "all_day": 1,
+         "start_ts": (today - dt.timedelta(days=4)).isoformat(),
+         "end_ts": (today + dt.timedelta(days=1)).isoformat()},
+        # all-day span that ended yesterday (exclusive end = today), last visible
+        # day was the day before yesterday — must be gone.
+        {"id": "past", "calendar_id": "cal", "title": "Old Trip", "all_day": 1,
+         "start_ts": (today - dt.timedelta(days=3)).isoformat(),
+         "end_ts": today.isoformat()},
+    ])
+    ids = {e["id"] for e in client.get("/api/hub").json()["calendar"]["events"]}
+    assert "trip" in ids, "an in-progress multi-day event must stay on the wall"
+    assert "past" not in ids, "an event that ended before today must not appear"
+
+
+def test_hub_todos_failure_flags_not_ok(client, app_mod, monkeypatch):
+    """When the todos read/group throws, /api/hub still serves (empty buckets)
+    but flags todos_ok=false so the wall shows 'couldn't load' rather than an
+    empty card the family would read as 'all caught up'."""
+    def boom(*a, **k):
+        raise RuntimeError("todos read failed")
+    monkeypatch.setattr(app_mod.fdb, "list_todos", boom)
+    body = client.get("/api/hub").json()
+    assert body["todos_ok"] is False
+    assert body["todos"] == {b: [] for b in app_mod.tdlogic.BUCKETS}
+
+
+def test_hub_todos_ok_by_default(client, app_mod):
+    assert client.get("/api/hub").json()["todos_ok"] is True
+
+
 def test_admin_people_crud_and_validation(client, app_mod):
     r = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
     assert r.status_code == 200
     pid = r.json()["id"]
     assert client.post("/api/admin/people", json={"name": "x", "color": "blue"}).status_code == 422
     assert client.post("/api/admin/people", json={"name": "", "color": "#5BC9F0"}).status_code == 422
+    # A trailing newline must NOT slip through the hex check ($ vs \Z): a
+    # malformed color would otherwise reach the client as a CSS value.
+    assert client.post("/api/admin/people",
+                       json={"name": "x", "color": "#5BC9F0\n"}).status_code == 422
     assert client.patch(f"/api/admin/people/{pid}", json={"name": "Remy2"}).status_code == 200
     assert client.patch("/api/admin/people/9999", json={"name": "z"}).status_code == 404
     state = client.get("/api/admin/state").json()

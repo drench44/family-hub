@@ -14,6 +14,9 @@ const CAM_HD_FADE_MS = 450;   // drop the base after the cross-fade; keep > the 
 let links = {};
 let weatherData = null;   // last /api/tiles/weather payload (native weather card)
 let climateData = null;   // last /api/tiles/climate payload (native climate card)
+let weatherFails = 0;     // consecutive weather fetch failures (see fetchWeather)
+let climateFails = 0;     // consecutive climate fetch failures (see fetchClimate)
+const TILE_FAIL_LIMIT = 3;   // keep the last good card until this many in a row
 let warnedNoWeatherSlot = false;   // one-time warn: weather_base set, no 'weather' panel
 let warnedNoClimateSlot = false;   // one-time warn: climate_base set, no 'climate' panel
 let lastPeople = [];      // remember done-counts to fire the celebration once
@@ -49,6 +52,18 @@ function indexEvents(evs) {
   (evs || []).forEach((ev) => { evIndex[ev.id] = ev; });
 }
 
+/* Old ids from calendar windows that have scrolled into the past are never
+   referenced again but would accumulate over a multi-day uptime. Once the index
+   grows large, rebuild it from the only two live sources — the home feed and the
+   last-fetched month window — which keeps everything currently on screen
+   tappable and drops the rest. A no-op until the cap, so normal use is untouched. */
+function pruneEvIndex() {
+  if (Object.keys(evIndex).length <= 4000) return;
+  for (const k in evIndex) delete evIndex[k];
+  indexEvents(hubData && hubData.calendar && hubData.calendar.events);
+  indexEvents(calWin && calWin.events);
+}
+
 function sortDayEvents(evs) {
   return evs.sort((a, b) => (b.all_day - a.all_day) || a.start_ts.localeCompare(b.start_ts));
 }
@@ -65,7 +80,7 @@ function bucketByDay(evs) {
 }
 
 function eventRow(ev) {
-  const color = eventColor(ev);
+  const color = safeColor(eventColor(ev));
   const ended = eventEnded(ev, Date.now());
   const timeCell = ev.all_day
     ? `<span class="cal-allday" style="border-color:${escapeHtml(color)};color:${escapeHtml(color)}">all day</span>`
@@ -137,7 +152,13 @@ async function fetchCalWindow() {
     calWin = await j('/api/calendar?days=90&past=45');
     indexEvents(calWin.events);
   } catch (e) {
-    calWin = calWin || { status: { ok: false, error: 'unreachable' }, events: [] };
+    // On a failed refresh keep the cached events, but DON'T preserve a stale
+    // ok:true status — downgrade it so the existing "showing the last events we
+    // saw" banner fires instead of painting hours-old events as current.
+    console.warn('calendar window refresh failed; keeping cached events', e);
+    calWin = calWin
+      ? { ...calWin, status: { ok: false, error: 'unreachable' } }
+      : { status: { ok: false, error: 'unreachable' }, events: [] };
   }
 }
 
@@ -153,7 +174,7 @@ function monthCellHtml(cell, byDay, todayStr) {
     + `<span class="mg-num num">${dayNum}</span>`
     + shown.map((ev) =>
       `<span class="mg-ev" data-eid="${escapeHtml(ev.id)}">`
-      + `<span class="mg-dot" style="background:${escapeHtml(eventColor(ev))}"></span>`
+      + `<span class="mg-dot" style="background:${safeColor(eventColor(ev))}"></span>`
       + `<span class="mg-ev-title">${escapeHtml(ev.title)}</span></span>`).join('')
     + (more > 0 ? `<span class="mg-more">+${more} more</span>` : '')
     + `</div>`;
@@ -234,7 +255,7 @@ function calNav(dir) {
 function openEventDetail(eid) {
   const ev = evIndex[eid];
   if (!ev) return;
-  const color = eventColor(ev);
+  const color = safeColor(eventColor(ev));
   const todayStr = data_date || '';
   const dayLine = `${dayLabel(ev.start_ts.slice(0, 10), todayStr)} · ${fmtTimeRange(ev)}`;
   const loc = ev.location
@@ -315,9 +336,9 @@ function personCardHtml(p, opts = {}) {
       + `</button>`
     : '';
   // --pc drives the done check + strike color: completion wears YOUR color
-  return `<div class="card person-card${editing ? ' is-editing' : ''}" data-person="${p.person.id}" style="--pc:${escapeHtml(p.person.color)}">`
+  return `<div class="card person-card${editing ? ' is-editing' : ''}" data-person="${p.person.id}" style="--pc:${safeColor(p.person.color)}">`
     + `<div class="person-head">`
-    + `<span class="person-name" style="color:${escapeHtml(p.person.color)}">${escapeHtml(p.person.name)}</span>`
+    + `<span class="person-name" style="color:${safeColor(p.person.color)}">${escapeHtml(p.person.name)}</span>`
     + streak
     + weekStripHtml(p.week)
     + `</div>`
@@ -403,7 +424,10 @@ function renderPeople(data) {
    (operator, 2026-08-14) — separate from the person cards it used to trail. */
 function renderTodoSlot(data) {
   const host = document.getElementById('todo-slot');
-  host.innerHTML = todoCardHtml(data.todos);
+  // todos_ok===false means the server's todos read/group threw and it shipped
+  // empty buckets as a fail-soft. Render a "couldn't load" note, NOT a
+  // reassuring empty card the family would read as "all caught up".
+  host.innerHTML = todoCardHtml(data.todos, data.todos_ok !== false);
 }
 
 /* ---------------------------------------------------------------- to-dos */
@@ -445,12 +469,14 @@ function todoBucketCount(list) {
   return (list || []).filter((t) => !t.done_at).length;
 }
 
-function todoCardHtml(todos) {
+function todoCardHtml(todos, ok = true) {
   const b = todos || {};
   const nowItems = (b.now || []).slice(0, 5);
-  const rows = nowItems.length
-    ? nowItems.map((t) => todoRowHtml(t, false)).join('')
-    : `<div class="cal-empty">nothing on the list</div>`;
+  const rows = !ok
+    ? `<div class="cal-empty">couldn’t load the list — is the hub reachable?</div>`
+    : nowItems.length
+      ? nowItems.map((t) => todoRowHtml(t, false)).join('')
+      : `<div class="cal-empty">nothing on the list</div>`;
   const chips = [['now', true], ['soon', false], ['later', false]]
     .map(([bk, isNow]) => `<span class="chip${isNow ? ' now' : ''}">`
       + `${todoBucketCount(b[bk])} ${bk}</span>`).join('');
@@ -574,6 +600,9 @@ async function deleteTodo(id) {
 
 /* Confetti + flash the first time a person finishes all their chores today. */
 function fireCelebrations(people) {
+  // Prune keys from earlier days so the Set can't grow unbounded across a
+  // multi-day wall uptime (one key per person per completed day).
+  for (const k of celebrated) { if (!k.endsWith(`:${data_date}`)) celebrated.delete(k); }
   people.forEach((p) => {
     const key = `${p.person.id}:${data_date}`;
     const complete = p.total > 0 && p.done_count === p.total;
@@ -1072,8 +1101,13 @@ function renderWeather(wx = weatherData) {
 async function fetchWeather() {
   try {
     weatherData = await j('/api/tiles/weather');
+    weatherFails = 0;
   } catch (e) {
-    weatherData = { available: false };
+    // Keep the last good card on a single flaky poll instead of blinking to
+    // "unavailable" for 60s; only give up after several failures in a row (or
+    // if we never had data). poll()'s offline badge already flags the outage.
+    weatherFails += 1;
+    if (!weatherData || weatherFails >= TILE_FAIL_LIMIT) weatherData = { available: false };
   }
   renderWeather();
 }
@@ -1189,8 +1223,12 @@ function renderClimate(cl = climateData) {
 async function fetchClimate() {
   try {
     climateData = await j('/api/tiles/climate');
+    climateFails = 0;
   } catch (e) {
-    climateData = { available: false };
+    // Same as fetchWeather: hold the last good reading through a transient blip
+    // rather than flashing "unavailable"; fall back only after repeated misses.
+    climateFails += 1;
+    if (!climateData || climateFails >= TILE_FAIL_LIMIT) climateData = { available: false };
   }
   renderClimate();
 }
@@ -1258,12 +1296,26 @@ async function poll() {
     renderCalendar(data);
     renderPeople(data);
     renderTodoSlot(data);
+    pruneEvIndex();
     document.body.dataset.conn = 'up';
     document.getElementById('conn-word').textContent = 'live';
   } catch (e) {
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
   }
+}
+
+// The 60s interval must not STACK polls: with the fetch timeout above, a poll to
+// a wedged server stays in flight up to J_TIMEOUT_MS, and an unguarded interval
+// would keep firing new requests every 60s until the browser's ~6-connection
+// budget fills with dead sockets. Skip a scheduled tick while one is still
+// running. (Direct poll() calls — a chore/todo write's refresh — are user-paced
+// and intentionally always run, so the guard lives here, not inside poll().)
+let scheduledPollInFlight = false;
+function scheduledPoll() {
+  if (scheduledPollInFlight) return;
+  scheduledPollInFlight = true;
+  poll().finally(() => { scheduledPollInFlight = false; });
 }
 
 let _toastTimer = null;
@@ -1605,7 +1657,7 @@ setInterval(tickClock, 1000);
 poll().then(probeCamera);
 fetchWeather();
 fetchClimate();
-setInterval(poll, POLL_MS);
+setInterval(scheduledPoll, POLL_MS);
 setInterval(fetchWeather, POLL_MS);
 setInterval(fetchClimate, POLL_MS);
 setInterval(probeCamera, CAM_PROBE_MS);

@@ -90,7 +90,10 @@ def _compute_build() -> str:
 
 
 BUILD = _compute_build()
-_HEX = re.compile(r"#[0-9a-fA-F]{6}$")
+# \Z (end of string), not $ — in non-MULTILINE mode $ also matches just before a
+# trailing newline, so "#ff0000\n" would slip through and reach the client as a
+# CSS color. \Z anchors the true end.
+_HEX = re.compile(r"#[0-9a-fA-F]{6}\Z")
 
 _db_dir = os.path.dirname(DB_PATH)
 if _db_dir:
@@ -167,8 +170,18 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     horizon = (today + dt.timedelta(days=days)).isoformat()
     events = []
     for e in fdb.list_events(c):
-        day = e["start_ts"][:10]
-        if day < lo or day > horizon:
+        # Keep an event whose SPAN overlaps [lo, horizon] — not just its start.
+        # A multi-day event that began before the window but is still running
+        # today must stay on the wall (e.g. a vacation the family is living);
+        # filtering on the start alone silently dropped those. All-day end_ts is
+        # exclusive, so its last VISIBLE day is end-1; a timed end_ts is the real
+        # end. Compare the last visible day to the low bound and the start to the
+        # high bound; the frontend still expands the kept row per-day itself.
+        start_day = e["start_ts"][:10]
+        end_day = e["end_ts"][:10]
+        if e["all_day"] and end_day > start_day:
+            end_day = (dt.date.fromisoformat(end_day) - dt.timedelta(days=1)).isoformat()
+        if end_day < lo or start_day > horizon:
             continue
         cal = cal_map.get(e["calendar_id"], {})
         events.append({
@@ -277,15 +290,23 @@ def hub():
     # other unexpected failure in the group/read path) must not 500 the whole
     # wall over one broken bucket. GET /api/todos keeps NO such wrapper: a
     # 500 there is visible and correct, since it's a direct read of that data.
+    todos_ok = True
     try:
         todos_block = tdlogic.group(fdb.list_todos(c), today)
     except Exception:
-        log.warning("todos block failed; serving empty buckets", exc_info=True)
+        # A real bug (bad row, read failure) — not an expected "empty list", so
+        # log at ERROR. Empty buckets look identical to "nothing to do", which
+        # would tell the family they're caught up when the list is actually
+        # intact but unrenderable; ship a todos_ok flag so the wall can show a
+        # "couldn't load" note instead of a reassuring empty card.
+        log.error("todos block failed; serving empty buckets", exc_info=True)
         todos_block = {b: [] for b in tdlogic.BUCKETS}
+        todos_ok = False
     return {
         "date": today.isoformat(),
         "people": _people_day(c, today),
         "todos": todos_block,
+        "todos_ok": todos_ok,
         "calendar": _calendar_block(c, today, 14),
         "links": _links(),
         # A deploy-changing token: the wall reloads itself when it changes, so a

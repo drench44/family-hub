@@ -334,3 +334,15 @@ test('todoFailMessage: distinguishes a concurrent-edit 404 from a generic failur
   assert.equal(sandbox.todoFailMessage('/api/todos/1 -> HTTP 500'),
     'Couldn’t save — check the hub and tap again.');
 });
+
+test('safeColor: passes hex/keywords through, neutralizes CSS-injection attempts', () => {
+  // legitimate values survive unchanged (so inline style="" output is identical)
+  assert.equal(sandbox.safeColor('#5BC9F0'), '#5BC9F0');
+  assert.equal(sandbox.safeColor('#abc'), '#abc');
+  assert.equal(sandbox.safeColor('red'), 'red');
+  // a value carrying extra CSS declarations (`;`/`:`) can't reach the attribute
+  assert.equal(sandbox.safeColor('red;background:url(x)'), 'transparent');
+  assert.equal(sandbox.safeColor('#fff;position:fixed'), 'transparent');
+  assert.equal(sandbox.safeColor(''), 'transparent');
+  assert.equal(sandbox.safeColor(null), 'transparent');
+});
