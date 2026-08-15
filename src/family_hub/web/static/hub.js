@@ -1284,10 +1284,8 @@ let fitDebounce = null;
    single-column layout, so leave it untouched there. */
 function fitWall() {
   const wrap = document.querySelector('.wrap');
-  if (!wrap) return;
-  if (window.innerWidth <= 1000) { wrap.style.zoom = ''; return; }
-  const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-  wrap.style.zoom = scale >= 1 ? '' : String(scale);
+  if (!wrap) { console.warn('fitWall: .wrap not found; wall will not fit-scale'); return; }
+  wrap.style.zoom = wallZoom(window.innerWidth, window.innerHeight);
 }
 fitWall();
 
