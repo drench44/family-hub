@@ -683,7 +683,8 @@ function initTiles() {
   if (tilesBuilt || !links.cameras) return;
   const cams = links.cameras || [];
   document.getElementById('tiles').innerHTML = cams.length
-    ? sectionHead('Cameras') + cams.map(tileCamera).join('')
+    ? sectionHead('Cameras', { overlay: 'cameras-page', expandLabel: 'Camera page' })
+      + cams.map(tileCamera).join('')
     : '';
   tilesBuilt = true;
 }
@@ -880,6 +881,20 @@ function openOverlay(view) {
     const cam = [...(links.cameras || []), ...(links.camera_page || [])]
       .find((c) => c.src === view.slice(7));
     if (cam) openCameraFull(content, cam, view);
+  } else if (view === 'cameras-page') {
+    // Full-screen 2x2 live grid — the "camera page" reachable from the wall's
+    // Cameras header (the wall has no tab bar). Same tiles as the mobile
+    // Cameras tab, from camera_page. Tapping a tile still opens that one cam
+    // full-screen (each tile keeps its data-overlay="camera:<src>"). Streams
+    // are started by the probe below, AFTER the overlay opens (a tile's stream
+    // must never start while it's display:none — see probeOneCamera).
+    const cams = links.camera_page || [];
+    // Guard the empty case: the header button shows whenever the wall has any
+    // camera, but camera_page can be empty (e.g. every entry dropped as
+    // malformed server-side). Never open a featureless black overlay — say so.
+    content.innerHTML = cams.length
+      ? `<div class="camera-page">${cams.map(tileCamera).join('')}</div>`
+      : `<div class="camera-page camera-page-empty">No cameras configured.</div>`;
   } else if (view === 'calendar') {
     content.innerHTML = `<div class="overlay-panel"><div id="cal-full"></div></div>`;
     calState.mode = 'month';
@@ -897,6 +912,9 @@ function openOverlay(view) {
     renderTodosFull();                       // then refresh from the API
   }
   overlay().classList.add('open');
+  // Start + probe the grid streams now that the overlay is visible (offsetParent
+  // is non-null once .open is set), so the live tiles connect and reveal.
+  if (view === 'cameras-page' && (links.camera_page || []).length) probeCamera();
   armIdle();
 }
 
