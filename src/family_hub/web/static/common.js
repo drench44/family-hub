@@ -306,28 +306,44 @@ function choreDaysMask(days) {
   return arr.reduce((m, i) => m | (1 << i), 0);
 }
 
+/* Form `repeat` ('daily'|'weekly'|'once') <-> API schedule_kind
+   ('daily'|'days'|'once'). A one-time chore is always one person on one date. */
+function choreScheduleKind(repeat) {
+  if (repeat === 'weekly') return 'days';
+  if (repeat === 'once') return 'once';
+  return 'daily';
+}
+
 function buildChorePayload(f) {
+  const kind = choreScheduleKind(f.repeat);
+  const assign = kind === 'once' ? 'fixed' : f.assign;
   return {
     title: (f.title || '').trim(),
     icon: (f.icon || '').trim(),
-    schedule_kind: f.repeat === 'weekly' ? 'days' : 'daily',
-    days_mask: choreDaysMask(f.days),
-    assign_kind: f.assign,
-    fixed_person_id: f.assign === 'fixed'
+    schedule_kind: kind,
+    days_mask: kind === 'days' ? choreDaysMask(f.days) : 0,
+    assign_kind: assign,
+    fixed_person_id: assign === 'fixed'
       ? (f.person === null || f.person === '' || f.person === undefined ? null : Number(f.person))
       : null,
-    rotation_order: f.assign === 'rotation' ? (f.rot || []).slice() : [],
+    rotation_order: assign === 'rotation' ? (f.rot || []).slice() : [],
+    // The one-time due date; the server ignores it for daily/weekly chores.
+    date: kind === 'once' ? (f.date || '') : null,
   };
 }
 
 function choreToModel(ch) {
   const days = new Set();
   for (let i = 0; i < 7; i++) if ((ch.days_mask >> i) & 1) days.add(i);
+  const repeat = ch.schedule_kind === 'days' ? 'weekly'
+    : (ch.schedule_kind === 'once' ? 'once' : 'daily');
   return {
     title: ch.title, icon: ch.icon,
-    repeat: ch.schedule_kind === 'days' ? 'weekly' : 'daily',
+    repeat,
     days, assign: ch.assign_kind, fixed_person_id: ch.fixed_person_id,
     rot: ch.rotation_order.slice(),
+    // For a one-time chore the due date is stored as rotation_epoch.
+    date: ch.schedule_kind === 'once' ? (ch.rotation_epoch || '') : '',
   };
 }
 
@@ -347,8 +363,10 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       <div class="segmented f-repeat">
         <button class="seg-btn" type="button" data-repeat="daily">Daily</button>
         <button class="seg-btn" type="button" data-repeat="weekly">Weekly</button>
+        <button class="seg-btn" type="button" data-repeat="once">Once</button>
       </div>
-      <div class="day-chips f-days"></div></div>
+      <div class="day-chips f-days"></div>
+      <input class="txt-input f-date" type="date"></div>
     <div class="field"><label>Who does it</label>
       <div class="segmented f-assign">
         <button class="seg-btn" type="button" data-assign="fixed">One person</button>
@@ -364,6 +382,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
   const $ = (sel) => host.querySelector(sel);
   $('.f-title').value = model.title || '';
   $('.f-icon').value = model.icon || '';
+  $('.f-date').value = model.date || (model.repeat === 'once' ? todayISO() : '');
   const active = people.filter((p) => p.active);
   $('.f-person').innerHTML = active.map((p) =>
     `<option value="${p.id}"${p.id === model.fixed_person_id ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
@@ -372,18 +391,25 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
     $('.f-repeat').querySelectorAll('.seg-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.repeat === model.repeat));
     $('.f-days').classList.toggle('hidden', model.repeat !== 'weekly');
+    $('.f-date').classList.toggle('hidden', model.repeat !== 'once');
   };
   const paintDays = () => {
     $('.f-days').innerHTML = DAY_LABELS.map((d, i) =>
       `<button class="day-chip${model.days.has(i) ? ' selected' : ''}" type="button" data-day="${i}">${d}</button>`).join('');
   };
   const paintAssign = () => {
+    // A one-time chore is always one person — hide the Rotation choice entirely
+    // and pin the assignment to a fixed person.
+    const once = model.repeat === 'once';
+    const rotBtn = $('.f-assign').querySelector('[data-assign="rotation"]');
+    if (rotBtn) rotBtn.classList.toggle('hidden', once);
+    const assign = once ? 'fixed' : model.assign;
     $('.f-assign').querySelectorAll('.seg-btn').forEach((b) =>
-      b.classList.toggle('active', b.dataset.assign === model.assign));
-    $('.f-person').classList.toggle('hidden', model.assign !== 'fixed');
-    $('.f-rotadd').classList.toggle('hidden', model.assign !== 'rotation');
-    $('.f-rotation').classList.toggle('hidden', model.assign !== 'rotation');
-    $('.f-rothint').classList.toggle('hidden', model.assign !== 'rotation');
+      b.classList.toggle('active', b.dataset.assign === assign));
+    $('.f-person').classList.toggle('hidden', assign !== 'fixed');
+    $('.f-rotadd').classList.toggle('hidden', assign !== 'rotation');
+    $('.f-rotation').classList.toggle('hidden', assign !== 'rotation');
+    $('.f-rothint').classList.toggle('hidden', assign !== 'rotation');
   };
   const paintRotation = () => {
     $('.f-rotadd').innerHTML = active.map((p) =>
@@ -399,7 +425,14 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
 
   $('.f-repeat').onclick = (e) => {
     const b = e.target.closest('[data-repeat]');
-    if (b) { model.repeat = b.dataset.repeat; paintRepeat(); }
+    if (!b) return;
+    model.repeat = b.dataset.repeat;
+    if (model.repeat === 'once') {
+      model.assign = 'fixed';                       // one-time is one person
+      if (!$('.f-date').value) $('.f-date').value = todayISO();
+    }
+    paintRepeat();
+    paintAssign();                                  // rotation choice shows/hides with once
   };
   $('.f-days').onclick = (e) => {
     const b = e.target.closest('[data-day]');
@@ -426,21 +459,30 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
   };
   $('[data-submit]').onclick = () => {
     // Serialization lives in buildChorePayload above (pure, tested).
+    const assign = model.repeat === 'once' ? 'fixed' : model.assign;
     const body = buildChorePayload({
       title: $('.f-title').value,
       icon: $('.f-icon').value,
       repeat: model.repeat,
       days: model.days,
-      assign: model.assign,
-      person: model.assign === 'fixed' ? $('.f-person').value : null,
+      assign,
+      person: assign === 'fixed' ? $('.f-person').value : null,
       rot: model.rot,
+      date: $('.f-date').value,
     });
     onsubmit(body, $('.f-error'));
   };
 }
 
+/* Today as 'YYYY-MM-DD' in the viewer's local zone — the default due date for a
+   new one-time chore (the household and display share one timezone). */
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function freshChoreModel() {
-  return { title: '', icon: '', repeat: 'daily', days: new Set(), assign: 'fixed', fixed_person_id: null, rot: [] };
+  return { title: '', icon: '', repeat: 'daily', days: new Set(), assign: 'fixed', fixed_person_id: null, rot: [], date: '' };
 }
 
 /* Attempt a chore check-off/uncheck; returns true on success, false if the

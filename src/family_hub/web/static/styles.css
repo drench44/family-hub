@@ -1343,6 +1343,10 @@ body.overlay-open { overflow: hidden; }
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 .day-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+/* The one-time chore's due-date picker (shown only when Repeat = Once). It
+   reuses .txt-input's box; this rule just keeps it self-sized rather than
+   stretching the full field width like the text inputs. */
+.f-date { align-self: flex-start; }
 .day-chip {
   font-family: var(--mono); font-size: 12px;
   color: var(--dim); background: var(--surface-2);

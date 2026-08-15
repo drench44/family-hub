@@ -33,8 +33,9 @@ at one URL.
   day drill-in, tap-any-event detail cards, your own Google sidebar colors,
   multi-day events painted across their span, ended events struck through.
 - **Chores:** per-person cards in each person's color, streaks (🔥), a 7-day
-  week strip, deterministic rotations, a browsable day history, and a one-shot
-  confetti celebration when someone clears their day.
+  week strip, deterministic rotations, one-time chores due on a single date, a
+  browsable day history, and a one-shot confetti celebration when someone
+  clears their day.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
   carry over until done, checked items linger struck-through until midnight,
@@ -270,10 +271,12 @@ each stream every 30s and never fakes a LIVE badge.
 ## The chores model
 
 **People** are nicknames with a color — the one expressive hue on the wall.
-**A chore** has a schedule (`daily`, or specific weekdays) and an assignment
+**A chore** has a schedule (`daily`, specific weekdays, or `once` — a one-time
+chore due on a single date, then gone from the wall) and an assignment
 (`fixed` to one person, or a `rotation`: an ordered list of people, repeats
 allowed, assigned deterministically — `rotation_order[n mod len]` over the
 chore's occurrence count, so there is no stored "whose turn" state to drift).
+A one-time chore is always one person on that date.
 Rotations skip deactivated people — their turns fall to the remaining members.
 Completion is one tap; past days are read-only. **History is frozen:** each
 served day's plan is recorded (the `occurrence_log` table), and past days

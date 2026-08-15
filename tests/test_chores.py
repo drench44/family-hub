@@ -25,6 +25,18 @@ def test_occurs_daily_and_days_mask():
     assert not ch.occurs(C(active=0), mon)
 
 
+def test_occurs_once_only_on_its_date():
+    due = dt.date(2026, 8, 20)
+    once = C(schedule_kind="once", rotation_epoch="2026-08-20")
+    assert ch.occurs(once, due)
+    assert not ch.occurs(once, due - dt.timedelta(days=1))   # before: shared epoch guard
+    # the day AFTER is what pins the new once-branch (d == epoch), since the
+    # before-date case is already caught by the generic d < epoch guard
+    assert not ch.occurs(once, due + dt.timedelta(days=1))
+    assert not ch.occurs(C(schedule_kind="once", rotation_epoch="2026-08-20",
+                           active=0), due)                    # inactive never occurs
+
+
 def test_occurrences_before_daily_closed_form():
     daily = C(rotation_epoch="2026-08-03")
     assert ch.occurrences_before(daily, dt.date(2026, 8, 3)) == 0

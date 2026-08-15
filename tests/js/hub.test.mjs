@@ -237,8 +237,42 @@ test('buildChorePayload: daily fixed chore trims and shapes correctly', () => {
   })));
   assert.deepEqual(p, {
     title: 'Dishes', icon: '🍽️', schedule_kind: 'daily', days_mask: 0,
-    assign_kind: 'fixed', fixed_person_id: 3, rotation_order: [],
+    assign_kind: 'fixed', fixed_person_id: 3, rotation_order: [], date: null,
   });
+});
+
+test('buildChorePayload: one-time chore carries its date and forces fixed', () => {
+  const p = JSON.parse(JSON.stringify(sandbox.buildChorePayload({
+    title: 'Return library books', icon: '📚', repeat: 'once',
+    days: new Set([1, 3]), assign: 'rotation', person: '4', rot: [5, 6],
+    date: '2026-08-20',
+  })));
+  assert.deepEqual(p, {
+    title: 'Return library books', icon: '📚', schedule_kind: 'once',
+    days_mask: 0,                       // a one-time chore never carries a weekly mask
+    assign_kind: 'fixed',              // rotation is coerced away
+    fixed_person_id: 4, rotation_order: [], date: '2026-08-20',
+  });
+});
+
+test('choreToModel: one-time chore maps rotation_epoch back to the date field', () => {
+  const m = sandbox.choreToModel({
+    title: 'Pay dues', icon: '', schedule_kind: 'once', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 2, rotation_order: [],
+    rotation_epoch: '2026-09-01',
+  });
+  assert.equal(m.repeat, 'once');
+  assert.equal(m.date, '2026-09-01');
+});
+
+test('choreToModel: daily chore has an empty date (rotation_epoch is not a due date)', () => {
+  const m = sandbox.choreToModel({
+    title: 'Bed', icon: '', schedule_kind: 'daily', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [],
+    rotation_epoch: '2026-08-01',
+  });
+  assert.equal(m.repeat, 'daily');
+  assert.equal(m.date, '');
 });
 
 test('buildChorePayload: weekly rotation computes days_mask (Mon/Wed/Fri=21)', () => {

@@ -641,6 +641,9 @@ class ChoreIn(BaseModel):
     assign_kind: str
     fixed_person_id: int | None = None
     rotation_order: list[int] = []
+    # A one-time chore's single due date ('YYYY-MM-DD'); stored as rotation_epoch.
+    # Ignored for daily/weekly chores (those anchor to today).
+    date: str | None = None
 
 
 class ChorePatch(BaseModel):
@@ -651,6 +654,7 @@ class ChorePatch(BaseModel):
     assign_kind: str | None = None
     fixed_person_id: int | None = None
     rotation_order: list[int] | None = None
+    date: str | None = None
     sort: int | None = None
     active: int | None = None
 
@@ -670,13 +674,35 @@ def _validate_chore(merged: dict) -> None:
         raise HTTPException(422, "title must be 1–60 characters")
     if len(merged.get("icon") or "") > 4:
         raise HTTPException(422, "icon must be at most 4 characters")
-    if merged["schedule_kind"] not in ("daily", "days"):
-        raise HTTPException(422, "schedule_kind must be daily or days")
+    kind = merged["schedule_kind"]
+    if kind not in ("daily", "days", "once"):
+        raise HTTPException(422, "schedule_kind must be daily, days or once")
     mask = merged.get("days_mask") or 0
     if not (0 <= mask <= 127):
         raise HTTPException(422, "days_mask must be 0–127")
-    if merged["schedule_kind"] == "days" and mask == 0:
+    if kind == "days" and mask == 0:
         raise HTTPException(422, "pick at least one day for a weekly chore")
+    if kind == "once":
+        # A one-time chore is one person on one date — no rotation.
+        if merged["assign_kind"] != "fixed":
+            raise HTTPException(422, "a one-time chore is for one person")
+        # The date arrives as `date`. When the key is absent (a patch that
+        # isn't touching the date), fall back to the stored rotation_epoch so
+        # the existing due date stands. An explicitly EMPTY date is a clear,
+        # not an absence — reject it rather than silently reusing the old date
+        # (which would also let the write corrupt rotation_epoch to "").
+        supplied = merged.get("date")
+        due = supplied if supplied is not None else merged.get("rotation_epoch")
+        try:
+            due_date = dt.date.fromisoformat(due or "")
+        except (TypeError, ValueError):
+            raise HTTPException(422, "pick a valid date for a one-time chore")
+        # A date the user is actively setting can't be in the past — the chore
+        # would never appear. A title-only edit of an already-past one-time
+        # chore falls back to the stored epoch (supplied is None) and skips
+        # this, so past chores stay editable.
+        if supplied is not None and due_date < _today():
+            raise HTTPException(422, "pick today or a later date for a one-time chore")
     if merged["assign_kind"] not in ("fixed", "rotation"):
         raise HTTPException(422, "assign_kind must be fixed or rotation")
     if merged["assign_kind"] == "fixed" and merged.get("fixed_person_id") is None:
@@ -732,14 +758,18 @@ def admin_add_chore(ch: ChoreIn):
     c = _db()
     merged = ch.model_dump()
     _validate_chore(merged)
+    kind = merged["schedule_kind"]
+    # A one-time chore stores its single due date as rotation_epoch; daily/weekly
+    # chores anchor to today.
+    epoch = merged["date"] if kind == "once" else _today().isoformat()
     cid = fdb.add_chore(
         c, title=merged["title"].strip(), icon=merged["icon"],
-        schedule_kind=merged["schedule_kind"],
-        days_mask=merged["days_mask"] if merged["schedule_kind"] == "days" else 0,
+        schedule_kind=kind,
+        days_mask=merged["days_mask"] if kind == "days" else 0,
         assign_kind=merged["assign_kind"],
         fixed_person_id=merged["fixed_person_id"] if merged["assign_kind"] == "fixed" else None,
         rotation_order=merged["rotation_order"] if merged["assign_kind"] == "rotation" else [],
-        rotation_epoch=_today().isoformat())
+        rotation_epoch=epoch)
     return _chore_row(c, cid)
 
 
@@ -749,14 +779,36 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
     row = _chore_row(c, cid)
     fields = ch.model_dump(exclude_unset=True)
     merged = {**row, **fields}
+    kind = merged["schedule_kind"]
+    # Converting a daily/weekly chore to one-time needs a real due date. Its
+    # existing rotation_epoch is a creation anchor (a past date for any chore
+    # older than today), not a due date — inheriting it would land the one-time
+    # chore in the past, invisible forever. _validate_chore's fallback can't
+    # tell this conversion from a title-only edit of an already-once chore, so
+    # the old-kind check lives here where the row is in scope.
+    if kind == "once" and row["schedule_kind"] != "once" and not fields.get("date"):
+        raise HTTPException(422, "pick a date for a one-time chore")
     _validate_chore(merged)
     # keep dependent columns coherent with the resolved kind
-    if merged["schedule_kind"] != "days":
+    if kind != "days":
         fields["days_mask"] = 0
     if merged["assign_kind"] == "fixed":
         fields["rotation_order"] = []
     else:
         fields["fixed_person_id"] = None
+    # A one-time chore's due date lives in rotation_epoch; translate the API's
+    # `date` field onto it. `date` isn't a chore column, so drop it either way.
+    # An empty date can't reach a write (validation rejects it), so gate on a
+    # truthy value defensively.
+    due = fields.pop("date", None)
+    if kind == "once":
+        if due:
+            fields["rotation_epoch"] = due
+    elif row["schedule_kind"] == "once":
+        # Leaving one-time for daily/weekly: re-anchor to today, matching
+        # add_chore. The stored rotation_epoch was the one-time due date (maybe
+        # future), which would otherwise hide the now-recurring chore until it.
+        fields["rotation_epoch"] = _today().isoformat()
     if "title" in fields:
         fields["title"] = fields["title"].strip()
     fdb.update_chore(c, cid, **fields)
