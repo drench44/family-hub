@@ -296,8 +296,11 @@ function choreRowHtml(ch, firstName, opts = {}) {
 function personCardHtml(p, opts = {}) {
   const { readonly = false, editing = false } = opts;
   const first = (p.person.name || '').split(' ')[0];
+  // The 🔥 is a day-streak (consecutive days this person cleared their chores),
+  // NOT today's completed count — label it so that's unambiguous on the wall.
   const streak = p.streak >= 2
-    ? `<span class="chip-streak">🔥 ${p.streak}</span>` : '';
+    ? `<span class="chip-streak" title="${p.streak} days in a row of finishing chores">`
+      + `🔥 ${p.streak}<span class="chip-streak-lbl">day streak</span></span>` : '';
   const rows = p.chores.length
     ? p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing })).join('')
     : (editing ? '' : `<div class="cal-empty">nothing this day</div>`);
@@ -809,6 +812,7 @@ function armIdle() {
 /* --------------------------------------------------------------- polling */
 
 let hubData = null;
+let loadedBuild = null;   // /api/hub build token at page load; a change => deploy => reload
 let data_date = '';
 let panelsWired = false;
 
@@ -1111,10 +1115,21 @@ function climateCardHtml(cl) {
   const rows = rooms.length
     ? rooms.map(roomRowHtml).join('')
     : `<div class="cal-empty">no indoor sensors reporting</div>`;
+  // Whole-house indoor aggregate (from /api/humidity) as a labeled footer — the
+  // per-room grid has no Dew column, so show RH + dew explicitly here. Fail-soft:
+  // only the values actually present render.
+  const rh = cl.indoor_rh, dp = cl.indoor_dp;
+  const parts = [];
+  if (Number.isFinite(rh)) parts.push(`<b class="num">${Math.round(rh)}%</b> RH`);
+  if (Number.isFinite(dp)) parts.push(`<b class="num">${Math.round(dp)}°</b> dew`);
+  const foot = parts.length
+    ? `<div class="rfoot"><span class="rk">Indoor</span>`
+      + `<span class="rfoot-v">${parts.join(' · ')}</span></div>` : '';
   return `<article class="card rooms">`
     + `<div class="rhead"><span class="rk"></span>`
     + `<span class="u">Temp</span><span class="u">Humidity</span></div>`
     + rows
+    + foot
     + `</article>`;
 }
 
@@ -1188,10 +1203,32 @@ setInterval(() => {
     setTimeout(() => reloadPanel(`frame-${p.id}`, p.url), i * 60000));
 }, PANEL_RELOAD_MS);
 
+/* True while the wall is showing something the user is mid-interaction with, so
+   the auto-reload defers instead of yanking it away. */
+function wallBusy() {
+  const hasClass = (id, cls) => {
+    const el = document.getElementById(id);
+    return !!(el && el.classList.contains(cls));
+  };
+  const shown = (id) => {
+    const el = document.getElementById(id);
+    return !!(el && !el.classList.contains('hidden'));
+  };
+  return hasClass('overlay', 'open') || hasClass('theme-pop', 'open')
+    || shown('ev-modal') || shown('chore-modal') || shown('confirm-modal');
+}
+
 async function poll() {
   try {
     const data = await j('/api/hub');
     hubData = data;
+    // Auto-reload when a deploy changes the baked frontend (the server's build
+    // token changes), so the kiosk picks up updates without a manual refresh —
+    // but never mid-interaction (defer to a later poll once the wall is idle).
+    if (data.build) {
+      if (loadedBuild === null) loadedBuild = data.build;
+      else if (data.build !== loadedBuild && !wallBusy()) { location.reload(); return; }
+    }
     data_date = data.date;
     links = data.links || {};
     applyHouseTheme(data.theme);   // house default on a fresh (un-overridden) device

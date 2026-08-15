@@ -1517,6 +1517,60 @@ test('climate card: available:false renders no card and does NOT throw', () => {
   assert.match(out.html, /wx-offline/, 'a slim offline note stands in for the card');
 });
 
+test('climate card shows the indoor RH + dew aggregate footer (labeled, fail-soft)', () => {
+  const { html } = renderClimateHtml(CLIMATE);   // indoor_rh 48, indoor_dp 55
+  assert.match(html, /class="rfoot"/, 'the indoor aggregate footer renders');
+  assert.match(html, /class="rk">Indoor<\/span>/);
+  assert.match(html, /48%<\/b> RH/);
+  assert.match(html, /55°<\/b> dew/);
+  // fail-soft: no indoor_rh/indoor_dp -> no footer
+  const noAgg = renderClimateHtml({ available: true, rooms: [
+    { name: 'Bedroom', channel: 'ch1', temp_f: 70, humidity: 50, stale: false }] });
+  assert.ok(!noAgg.html.includes('class="rfoot"'), 'no footer when indoor RH/dew are absent');
+});
+
+test('the streak chip is labeled a day-streak (not a task count)', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.personCardHtml(
+    { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 3, chores: [], week: [] });
+  assert.match(html, /class="chip-streak"[^>]*>🔥 3<span class="chip-streak-lbl">day streak<\/span>/);
+  // below the threshold (<2): no chip at all
+  const none = sandbox.personCardHtml(
+    { person: { id: 'p2', name: 'Milo', color: '#E39A2A' }, streak: 1, chores: [], week: [] });
+  assert.ok(!none.includes('chip-streak'), 'no streak chip below the threshold');
+});
+
+test('the wall auto-reloads on a build-token change, but not mid-interaction, and never loops', async () => {
+  const { document, sandbox } = newHub();
+  // seeded modals -> hidden (production initial state) so the wall reads idle
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => {
+    const el = document.getElementById(id); if (el) el.classList.add('hidden');
+  });
+  let reloads = 0;
+  sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  sandbox.fetch = async (url) =>
+    url === '/api/hub' ? okResp(payload) : { ok: true, status: 200, json: async () => ({}) };
+
+  await sandbox.poll();
+  assert.equal(reloads, 0, 'first poll records the build, no reload');
+  await sandbox.poll();
+  assert.equal(reloads, 0, 'an UNCHANGED build never reloads (no reload loop)');
+
+  payload = { ...payload, build: 'bbb' };
+  await sandbox.poll();
+  assert.equal(reloads, 1, 'a changed build reloads the idle wall');
+
+  // mid-interaction (overlay open) -> a further change does NOT yank it away
+  let ov = document.getElementById('overlay');
+  if (!ov) { ov = document.createElement('div'); ov._id = 'overlay'; document.body.appendChild(ov); }
+  ov.classList.add('open');
+  payload = { ...payload, build: 'ccc' };
+  await sandbox.poll();
+  assert.equal(reloads, 1, 'a build change does not reload the wall mid-interaction');
+});
+
 test('native cards warn only on genuine misconfig, not the boot race (SF4)', () => {
   // The warn lives in renderWeather/renderClimate's slot-absent branch;
   // #weather-slot / #climate-slot are NOT seeded, so a fresh newHub() exercises

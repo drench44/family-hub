@@ -278,6 +278,12 @@ body {
 .room .rv { font-size: 16px; font-weight: 650; width: 50px; text-align: right; }
 .room .rh { font-size: 13px; color: var(--dim); width: 50px; text-align: right; }
 .room.warn .rv { color: var(--warn); }
+/* whole-house indoor aggregate (RH + dew) — a labeled footer under the rooms */
+.rfoot { display: flex; align-items: baseline; gap: 12px; padding: 11px 0 2px; margin-top: 4px;
+  border-top: 1px solid var(--edge); }
+.rfoot .rk { flex: 1; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.rfoot-v { font-size: 13px; color: var(--dim); }
+.rfoot-v .num { color: var(--ink); font-weight: 650; }
 
 /* ========================== calendar ========================= */
 .cal { grid-area: cal; display: flex; flex-direction: column; gap: 10px; }
@@ -365,6 +371,9 @@ body {
   border-radius: 999px;
   padding: 2px 8px;
 }
+/* clarifies the 🔥 is a day-streak, not today's completed-chore count */
+.chip-streak-lbl { margin-left: 5px; font-size: 9px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; opacity: .8; }
 .week-strip { display: flex; gap: 4px; margin-left: auto; }
 .ws-cell { width: 10px; height: 10px; border-radius: 2px; background: var(--edge); }
 .ws-done { background: var(--good); }
