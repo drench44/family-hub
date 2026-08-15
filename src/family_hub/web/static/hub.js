@@ -1643,6 +1643,8 @@ function closeThemePop() {
 // Separate delegated listener (the big one above owns the dashboard surfaces).
 document.addEventListener('click', (e) => {
   const pop = document.getElementById('theme-pop');
+  // Refresh button: reload the wall (picks up a new deploy, unsticks a stale page).
+  if (e.target.closest('#wall-refresh')) { location.reload(); return; }
   const gear = e.target.closest('#wall-gear');
   if (gear && pop) {
     const open = pop.classList.toggle('open');
