@@ -29,7 +29,7 @@ class Config:
     panels: list[dict] = field(default_factory=list)
     # Optional house-default display theme for a FRESH device that has no
     # per-device override yet: {"mode","accent","columns"}. None = no house
-    # override (a fresh device keeps the shipped dark/cyan/none). The frontend
+    # override (a fresh device keeps the shipped grey/green/none). The frontend
     # never persists this into localStorage — it only stamps it live — so
     # changing it here re-themes every un-overridden device on next poll.
     theme: dict | None = None
@@ -46,7 +46,7 @@ _THEME_AXES = {
 def _clean_theme(raw_theme: object) -> dict | None:
     """Keep only the valid axes from a config `theme` block. Returns None when
     absent or when nothing valid survives, which the API reports as "no house
-    override" (the frontend then falls back to dark/cyan/none)."""
+    override" (the frontend then falls back to grey/green/none)."""
     if not isinstance(raw_theme, dict):
         return None
     cleaned = {

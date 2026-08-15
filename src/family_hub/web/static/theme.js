@@ -13,7 +13,7 @@
      1. localStorage  (fh.theme / fh.accent / fh.cols)
      2. window.FH_THEME  { mode, accent, columns }, injected by the
         page from server config (arrives in a later task; may be undefined now)
-     3. hardcoded default  dark / cyan / none
+     3. hardcoded default  grey / green / none
 
    Exposes setTheme(mode) / setAccent(name) / setColumns(name): each
    validates its value, writes the localStorage key, and re-stamps the
