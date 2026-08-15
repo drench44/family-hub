@@ -79,12 +79,15 @@ function bucketByDay(evs) {
   return byDay;
 }
 
-function eventRow(ev) {
+function eventRow(ev, day) {
   const color = safeColor(eventColor(ev));
   const ended = eventEnded(ev, Date.now());
+  // On a continuation day (a timed event that started earlier) the start time
+  // is stale — show when it ENDS instead.
+  const continuation = !ev.all_day && day && (ev.start_ts || '').slice(0, 10) < day;
   const timeCell = ev.all_day
     ? `<span class="cal-allday" style="border-color:${escapeHtml(color)};color:${escapeHtml(color)}">all day</span>`
-    : `<span class="cal-time num">${escapeHtml(fmtTime(ev.start_ts))}</span>`;
+    : `<span class="cal-time num">${continuation ? '→ ' : ''}${escapeHtml(fmtTime(continuation ? ev.end_ts : ev.start_ts))}</span>`;
   return `<div class="cal-ev${ended ? ' ended' : ''}" data-eid="${escapeHtml(ev.id)}" tabindex="0">`
     + `<span class="cal-rail" style="background:${escapeHtml(color)}"></span>`
     + timeCell
@@ -105,7 +108,7 @@ function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
     const isToday = d === todayStr;
     html += `<div class="card cal-day${isToday ? ' is-today' : ''}">`
       + dayHeadHtml(d, todayStr)
-      + (evs.length ? evs.map(eventRow).join('')
+      + (evs.length ? evs.map((ev) => eventRow(ev, d)).join('')
         : `<div class="cal-empty">nothing scheduled</div>`)
       + `</div>`;
   }

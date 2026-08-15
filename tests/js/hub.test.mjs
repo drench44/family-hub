@@ -30,14 +30,25 @@ test('addDays crosses months and years', () => {
   assert.equal(sandbox.addDays('2026-01-01', -1), '2025-12-31');
 });
 
-test('expandDays: timed=start day; multi-day all-day covers every day (end exclusive)', () => {
-  const timed = { all_day: 0, start_ts: '2026-08-13T10:00:00-07:00', end_ts: '2026-08-13T11:00:00-07:00' };
-  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.expandDays(timed))), ['2026-08-13']);
+test('expandDays: multi-day all-day covers every day (end exclusive)', () => {
   const span = { all_day: 1, start_ts: '2026-08-01', end_ts: '2026-08-04' };
   assert.deepEqual(JSON.parse(JSON.stringify(sandbox.expandDays(span))),
     ['2026-08-01', '2026-08-02', '2026-08-03']);
   const single = { all_day: 1, start_ts: '2026-08-01', end_ts: '2026-08-02' };
   assert.deepEqual(JSON.parse(JSON.stringify(sandbox.expandDays(single))), ['2026-08-01']);
+});
+
+test('expandDays: timed events cover start through end day, so in-progress ones stay visible', () => {
+  const sameDay = { all_day: 0, start_ts: '2026-08-13T10:00:00-07:00', end_ts: '2026-08-13T11:00:00-07:00' };
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.expandDays(sameDay))), ['2026-08-13']);
+  // an overnighter occupies both days (this is what keeps a still-running
+  // event on today's feed even though it started yesterday)
+  const overnight = { all_day: 0, start_ts: '2026-08-12T22:00:00-07:00', end_ts: '2026-08-13T06:00:00-07:00' };
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.expandDays(overnight))),
+    ['2026-08-12', '2026-08-13']);
+  // ...but an end at exactly midnight belongs to the previous day only
+  const tillMidnight = { all_day: 0, start_ts: '2026-08-12T20:00:00-07:00', end_ts: '2026-08-13T00:00:00-07:00' };
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.expandDays(tillMidnight))), ['2026-08-12']);
 });
 
 test('fmtTimeRange: all-day, same-day span, cross-day span', () => {

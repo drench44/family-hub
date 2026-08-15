@@ -207,7 +207,11 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
         # high bound; the frontend still expands the kept row per-day itself.
         start_day = e["start_ts"][:10]
         end_day = e["end_ts"][:10]
-        if e["all_day"] and end_day > start_day:
+        if end_day > start_day and (
+                e["all_day"] or e["end_ts"][11:16] == "00:00"):
+            # all-day end dates are exclusive; a timed end at exactly midnight
+            # likewise belongs to the previous day (a 8pm–12am show is not
+            # "on" the next morning)
             end_day = (dt.date.fromisoformat(end_day) - dt.timedelta(days=1)).isoformat()
         if end_day < lo or start_day > horizon:
             continue
@@ -678,6 +682,10 @@ def admin_delete_chore(cid: int):
 
 @app.get("/api/calendar")
 def calendar(days: int = 90, past: int = 45):
+    # Bounded to the order of the sync window; a huge value would otherwise
+    # overflow the date math into a 500.
+    if not (0 <= days <= 366 and 0 <= past <= 366):
+        raise HTTPException(422, "days/past out of range")
     c = _db()
     return _calendar_block(c, _today(), days, past_days=past)
 

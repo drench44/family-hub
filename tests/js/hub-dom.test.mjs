@@ -397,6 +397,28 @@ test('renderCalendar maps event title/time/all-day into the calendar DOM', () =>
   assert.ok(!html.includes('<b>all week</b>'), 'event title markup is inert');
 });
 
+test('renderCalendar keeps an in-progress timed event on today, marked with its end time', () => {
+  // Started yesterday, still running now: the backend keeps the row (its span
+  // overlaps today) and the home feed must actually SHOW it on today — the
+  // old start-day-only bucketing silently dropped exactly these events.
+  const { document, sandbox } = newHub();
+  sandbox.renderCalendar({
+    date: '2026-08-14',
+    calendar: { status: { ok: true }, events: [
+      {
+        id: 'trip', title: 'Overnighter', all_day: 0,
+        start_ts: '2026-08-13T22:00:00-07:00',
+        end_ts: '2026-08-14T06:00:00-07:00',
+        color: '#5BC9F0',
+      },
+    ] },
+  });
+  const html = document.getElementById('cal').innerHTML;
+  assert.match(html, /class="cal-title">Overnighter</, 'the running event is on the feed');
+  // On a continuation day the time cell shows when it ENDS, not a stale start
+  assert.match(html, /class="cal-time num">→ 6am</);
+});
+
 test('safeColor is applied at the color sinks: a hostile color can NOT inject extra CSS', () => {
   // Guards the WIRING, not just the helper: reverting any sink from safeColor()
   // back to escapeHtml() (which passes ;/: through) would re-open CSS injection

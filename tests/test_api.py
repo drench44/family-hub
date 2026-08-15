@@ -989,3 +989,32 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
     with TestClient(app_mod.app) as tc:
         tc.get("/api/hub")
     assert fdb.day_log(app_mod._db(), yesterday) == []
+
+
+def test_hub_drops_timed_event_that_ended_at_midnight(client, app_mod):
+    """A timed event whose end is exactly 00:00 today was over before today
+    began — it must not be kept by the span-overlap filter (which slices the
+    end DATE and would otherwise count it as 'today')."""
+    c = app_mod._db()
+    today = app_mod._today()
+    yest = today - dt.timedelta(days=1)
+    fdb.replace_events(c, [
+        {"id": "mid", "calendar_id": "cal", "title": "Late show", "all_day": 0,
+         "start_ts": f"{yest.isoformat()}T20:00:00-07:00",
+         "end_ts": f"{today.isoformat()}T00:00:00-07:00"},
+        {"id": "run", "calendar_id": "cal", "title": "Overnighter", "all_day": 0,
+         "start_ts": f"{yest.isoformat()}T22:00:00-07:00",
+         "end_ts": f"{today.isoformat()}T06:00:00-07:00"},
+    ])
+    ids = {e["id"] for e in client.get("/api/hub").json()["calendar"]["events"]}
+    assert "run" in ids, "a timed event still running today must be kept"
+    assert "mid" not in ids, "a timed event that ended AT midnight is yesterday's"
+
+
+def test_calendar_endpoint_rejects_absurd_windows(client):
+    """days/past beyond the sync window are a client bug; clamp-by-422 rather
+    than letting a huge timedelta 500 the endpoint."""
+    assert client.get("/api/calendar?days=1000000000").status_code == 422
+    assert client.get("/api/calendar?past=99999").status_code == 422
+    assert client.get("/api/calendar?days=-1").status_code == 422
+    assert client.get("/api/calendar?days=90&past=45").status_code == 200
