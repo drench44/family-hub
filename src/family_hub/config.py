@@ -37,7 +37,7 @@ class Config:
 
 # Allowed values per theme axis; anything else is dropped (never crashes).
 _THEME_AXES = {
-    "mode": {"light", "dark"},
+    "mode": {"light", "soft", "dark", "grey", "black"},
     "accent": {"cyan", "violet", "amber", "green"},
     "columns": {"none", "wells", "lines"},
 }

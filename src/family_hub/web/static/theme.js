@@ -30,8 +30,8 @@
   var ACCENTS = ["cyan", "violet", "amber", "green"];
   var COLUMNS = ["none", "wells", "lines"];
 
-  var DEFAULT_THEME = "dark";
-  var DEFAULT_ACCENT = "cyan";
+  var DEFAULT_THEME = "grey";
+  var DEFAULT_ACCENT = "green";
   var DEFAULT_COLUMNS = "none";
 
   // localStorage can throw (private mode / disabled storage); never let that
