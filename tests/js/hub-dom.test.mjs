@@ -1448,6 +1448,29 @@ test('weather card renders temp, condition/feels, UV, AQI, humidity and dew', ()
   assert.match(html, /Dew point<\/div><div class="v num">58.5°/);
 });
 
+test('wxTempParts renders exactly one degree, even when the unit already carries one (no °°F)', () => {
+  const { sandbox } = newHub();
+  // the live feed sends the unit WITH the degree ("°F") -> must not double it
+  const a = sandbox.wxTempParts(74.8, '°F');
+  assert.equal(a.whole + a.deg, '74.8°F', 'no doubled degree when unit is "°F"');
+  assert.ok(!a.deg.includes('°°'));
+  // a unit without a degree still gets exactly one
+  const b = sandbox.wxTempParts(61, 'F');
+  assert.equal(b.whole + b.deg, '61.0°F');
+  // a bare-degree unit ("°") stays a single degree (strip then re-add)
+  assert.equal(sandbox.wxTempParts(61, '°').deg, '.0°');
+  // non-finite fallback also stays single-degree
+  const c = sandbox.wxTempParts(NaN, '°F');
+  assert.ok(!c.deg.includes('°°'), 'no doubled degree in the non-finite fallback');
+  assert.equal(c.whole, '--');
+});
+
+test('the weather card temp shows a single degree with the real feed unit "°F"', () => {
+  const { html } = renderWeatherHtml({ ...WX_GOOD, temp: 72.9, unit: '°F' });
+  assert.ok(!html.includes('°°'), 'no doubled degree in the rendered card');
+  assert.match(html, /class="deg num">\.9°F</);
+});
+
 test('weather card escapes string fields (conditions markup is inert)', () => {
   const { html } = renderWeatherHtml({ ...WX_GOOD, conditions: 'Sun <script>x</script>', spark: [] });
   assert.ok(!html.includes('<script>'), 'a markup-bearing conditions string is not live HTML');
