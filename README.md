@@ -97,6 +97,24 @@ optional and independent — add the pieces you have.
 > `src/family_hub/web/static`, `docker compose build web` — a bare restart
 > keeps the old files.
 
+## Try the demo
+
+Want to see the whole wall before wiring up anything? Run it with `DEMO=1` and
+it comes up as a fully populated sample: a fake family (Ava, Milo, Ruby) with
+chores, streaks and a week strip, a shared to-do list, a few calendar events,
+canned weather and per-room climate cards, and placeholder camera tiles. No
+config, no calendars, no cameras, no feeds needed. Nothing reaches the network.
+
+```bash
+DEMO=1 DB_PATH="$(mktemp -d)/demo.db" CONFIG_PATH=config.demo.json \
+  PYTHONPATH=src DISABLE_SYNC=1 \
+  python3 -m uvicorn family_hub.app:app --port 8139
+```
+
+Then open `http://localhost:8139/`. Everything is fake sample data seeded on
+first launch, so it's safe to poke at. (`docker compose` users can pass the
+same `DEMO=1` in the `web` service's environment.)
+
 ## Put it on a wall (Raspberry Pi kiosk)
 
 To mount the wall on a touchscreen, a Raspberry Pi makes a tidy appliance:

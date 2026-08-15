@@ -658,6 +658,44 @@ body {
   border-radius: 999px; padding: 2px 7px;
 }
 
+/* Demo-mode camera tiles: no go2rtc stream to embed, so a static gradient
+   placeholder stands in for a live picture. Front-door tiles read cool/bluish,
+   back-yard warm; a faint "DEMO VIEW" marker sits bottom-left. Deepened in dark
+   theme so it reads as a night frame instead of a bright wash. */
+.cam-demo {
+  display: flex; align-items: flex-end;
+  width: 100%; aspect-ratio: 16 / 9;
+  border-radius: 8px; overflow: hidden; padding: 10px;
+}
+.cam-demo-full {   /* full-screen overlay variant: fill the viewport */
+  position: absolute; inset: 0;
+  aspect-ratio: auto; border-radius: 0; padding: 24px;
+}
+.cam-demo-cool { background: linear-gradient(150deg, #d3e7f6 0%, #9dc1df 48%, #6d8fb0 100%); }
+.cam-demo-warm { background: linear-gradient(150deg, #f4e3c6 0%, #dcc491 48%, #b3975f 100%); }
+.cam-demo-mark {
+  font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(10, 13, 20, 0.34);
+  border-radius: 999px; padding: 2px 8px;
+}
+.cam-demo-full .cam-demo-mark { font-size: 12px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cam-demo-cool {
+    background: linear-gradient(160deg, #9dc0e0 0%, #6d93b8 50%, #46698f 100%);
+  }
+  :root:not([data-theme="light"]) .cam-demo-warm {
+    background: linear-gradient(160deg, #d3b785 0%, #a2855a 50%, #6f5a3a 100%);
+  }
+}
+:root[data-theme="dark"] .cam-demo-cool {
+  background: linear-gradient(160deg, #9dc0e0 0%, #6d93b8 50%, #46698f 100%);
+}
+:root[data-theme="dark"] .cam-demo-warm {
+  background: linear-gradient(160deg, #d3b785 0%, #a2855a 50%, #6f5a3a 100%);
+}
+
 /* =========================== overlays ======================== */
 .overlay {
   position: fixed; inset: 0; z-index: 50;
@@ -1024,6 +1062,10 @@ body {
   .wrap { width: auto; max-width: 640px; padding: 0 14px calc(86px + env(safe-area-inset-bottom)); }
   .topbar { padding: 14px 2px 12px; }
   .clock .clock-date { display: none; }
+  /* the refresh button is a wall/kiosk affordance (no keyboard there); phones
+     reload natively, and keeping it would overflow the narrow topbar and clip
+     the gear off-screen. Hide it on the phone reflow. */
+  .wall-refresh { display: none; }
   /* stretch overrides the wall grid's align-items:start — without it every
      section shrinks to content width (caught on the phone 2026-08-13) */
   .hub-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
