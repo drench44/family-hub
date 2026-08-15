@@ -4,6 +4,7 @@ Reloads the app with DEMO=1 against a temp DB + a demo config (weather/climate
 panels present so the native cards have a slot) and proves the wall comes up
 fully populated with the fake family, and that an unset DEMO seeds nothing.
 """
+import datetime as dt
 import importlib
 import json
 
@@ -110,4 +111,67 @@ def test_no_demo_env_seeds_nothing(tmp_path, monkeypatch):
     importlib.reload(appmod)
     with TestClient(appmod.app) as c:
         hub = c.get("/api/hub").json()
+        # the weather/climate demo payloads are gated too: with DEMO unset and no
+        # real feed configured, the tiles report unavailable, never the canned
+        # 74.8 / Upstairs demo values leaking into a real deployment.
+        wj = c.get("/api/tiles/weather").json()
+        cj = c.get("/api/tiles/climate").json()
     assert hub["people"] == [] and hub["links"]["cameras"] == []
+    assert wj.get("temp") != 74.8 and wj.get("available") is not True
+    assert cj.get("available") is not True
+
+
+def test_demo_calendar_dates_are_relative_to_today(demo_client):
+    """The demo must always look current: events are dated off today, not a
+    hardcoded/stale date that would fall out of the calendar window over time."""
+    hub = demo_client.get("/api/hub").json()
+    today = dt.date.fromisoformat(hub["date"])
+    guitar = next(e for e in hub["calendar"]["events"] if e["title"] == "Guitar lesson")
+    assert guitar["start_ts"][:10] == (today + dt.timedelta(days=3)).isoformat()
+
+
+def test_demo_never_clobbers_an_existing_real_db(tmp_path, monkeypatch):
+    """DEMO=1 accidentally pointed at a real family's db must not seed into it
+    or wipe it: the empty-db guard protects the real people already there."""
+    db = tmp_path / "hub.db"
+    monkeypatch.setenv("DB_PATH", str(db))
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    # pre-populate one real person straight into the db
+    import family_hub.db as fdb
+    conn = fdb.connect(str(db))
+    fdb.ensure_schema(conn)
+    fdb.add_person(conn, "RealKid", "#123456")
+    conn.close()
+    # now open the SAME db under DEMO=1
+    monkeypatch.setenv("DEMO", "1")
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    with TestClient(appmod.app) as c:
+        names = [r["person"]["name"] for r in c.get("/api/hub").json()["people"]]
+    assert names == ["RealKid"]   # untouched; no Ava/Milo/Ruby seeded in
+
+
+def test_partial_demo_seed_is_wiped_so_the_next_open_retries(tmp_path, monkeypatch):
+    """A seed that raises partway must leave the db EMPTY (not half-populated),
+    so the empty-db guard fires again and the next open re-seeds cleanly."""
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    monkeypatch.setenv("DEMO", "1")
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    import family_hub.db as fdb
+
+    def flaky_seed(conn, today):
+        fdb.add_person(conn, "Ava", "#E86A9E")   # commits a partial row, then dies
+        raise RuntimeError("boom")
+    monkeypatch.setattr(appmod.fdemo, "seed_demo", flaky_seed)
+
+    # first open: the seed fails, so the request 500s...
+    with TestClient(appmod.app, raise_server_exceptions=False) as c:
+        assert c.get("/api/hub").status_code == 500
+    # ...but the half-written person was wiped back out, leaving an empty db.
+    probe = fdb.connect(str(tmp_path / "hub.db"))
+    assert probe.execute("SELECT COUNT(*) FROM people").fetchone()[0] == 0
+    probe.close()

@@ -44,6 +44,24 @@ def _add_daily_fixed(conn, title, icon, person_id, epoch):
         rotation_epoch=epoch)
 
 
+# Every table seed_demo writes into; children (FK holders) before parents.
+_SEEDED_TABLES = ("completions", "occurrence_log", "todos", "events", "chores", "people")
+
+
+def clear_demo(conn) -> None:
+    """Undo everything seed_demo writes, back to an empty db. app.py calls this
+    when a seed raises partway: the fdb helpers each self-commit, so a failed
+    seed can leave people/chores already written, and the "no people yet" guard
+    would then treat that half-written db as already seeded. Wiping lets the
+    guard fire again and the next open re-seed cleanly. Only ever runs against a
+    db app.py already found empty, so it never deletes a real family's data."""
+    with conn:
+        for tbl in _SEEDED_TABLES:
+            conn.execute(f"DELETE FROM {tbl}")
+        conn.execute(
+            "DELETE FROM kv WHERE key IN ('calendar_status', 'calendar_colors')")
+
+
 def seed_demo(conn, today: dt.date) -> None:
     """Seed the whole sample wall (people, chores, ~6 days of history, todos and
     calendar events) into an EMPTY db. Intended to run once, on first open."""

@@ -164,7 +164,15 @@ def _ensure_demo_seed(conn) -> None:
     unset-DEMO run never reaches here at all)."""
     if conn.execute("SELECT 1 FROM people LIMIT 1").fetchone() is not None:
         return
-    fdemo.seed_demo(conn, _today())
+    try:
+        fdemo.seed_demo(conn, _today())
+    except Exception:
+        # The fdb helpers self-commit, so a seed that raises partway has already
+        # written some rows (people first). Wipe them so the empty-db guard fires
+        # again next open and re-seeds cleanly, instead of seeing the half-written
+        # people and serving a permanently half-populated demo.
+        fdemo.clear_demo(conn)
+        raise
     log.info("DEMO mode: seeded the sample family wall")
 
 
@@ -192,7 +200,20 @@ def _db():
                 _conn = None
                 raise
             if DEMO:
-                _ensure_demo_seed(_conn)
+                try:
+                    _ensure_demo_seed(_conn)
+                except Exception:
+                    # Partial seed already wiped (clear_demo). Drop the handle so
+                    # the next request reconnects and retries the seed from empty,
+                    # rather than caching a connection whose seed never completed.
+                    log.error("DEMO seed failed; dropping handle to retry",
+                              exc_info=True)
+                    try:
+                        _conn.close()
+                    except Exception:
+                        pass
+                    _conn = None
+                    raise
         else:
             try:
                 _conn.execute("SELECT 1")
