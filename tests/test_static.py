@@ -328,16 +328,17 @@ def test_five_theme_token_blocks_defined_in_css():
         assert f':root[data-theme="{mode}"]' in CSS, f"missing token block for {mode}"
 
 
-def test_dark_family_modes_share_accent_overrides():
-    """Grey and Black are dark-family, so they must join dark's accent-override
-    selector lists for each of violet/amber/green. Soft is absent on purpose (it
-    inherits the light accents from the base :root[data-accent] rules)."""
+def test_non_light_modes_have_working_accent_overrides():
+    """Every non-Light mode redefines --accent in its own [data-theme] block
+    (specificity 0,2,0), which beats the base :root[data-accent] rules (also
+    0,2,0, earlier in the file). So each such mode MUST carry its own per-accent
+    overrides at 0,3,0 or the accent picker is dead in that mode: grey/black use
+    dark-family values, soft uses light-family values. (Light is the bare :root,
+    which the base :root[data-accent] rules already win over, so it needs none.)"""
     for accent in ("violet", "amber", "green"):
-        for mode in ("dark", "grey", "black"):
+        for mode in ("dark", "grey", "black", "soft"):
             assert f':root[data-theme="{mode}"][data-accent="{accent}"]' in CSS, \
-                f"{mode} missing the {accent} accent override"
-        assert f':root[data-theme="soft"][data-accent="{accent}"]' not in CSS, \
-            "soft must not carry a dark-family accent override"
+                f"{mode} missing the {accent} accent override (picker would be dead)"
 
 
 def test_columns_control_offers_none_wells_and_lines():

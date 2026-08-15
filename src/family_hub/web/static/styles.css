@@ -88,6 +88,14 @@
   --p1:#E86A9E; --p2:#3E9BE8; --p3:#E39A2A;
   --accent:#0E9BCF; --accent-ink:#FFFFFF; --accent-soft:rgba(14,155,207,.12);
 }
+/* Soft is light-family, but its own [data-theme="soft"] block (specificity
+   0,2,0, later in the file) would otherwise beat the base :root[data-accent]
+   rules (also 0,2,0) and pin the accent to cyan. Give Soft its own light-family
+   accent overrides at 0,3,0 so the accent picker works, exactly as grey/black
+   do for the dark family. */
+:root[data-theme="soft"][data-accent="violet"]{--accent:#7A5AF0;--accent-soft:rgba(122,90,240,.12);}
+:root[data-theme="soft"][data-accent="amber"] {--accent:#D98A15;--accent-soft:rgba(217,138,21,.14);}
+:root[data-theme="soft"][data-accent="green"] {--accent:#17A672;--accent-soft:rgba(23,166,114,.14);}
 /* Grey: neutral charcoal, no blue tint. Dark-family accents (see the shared
    accent-override lists below). */
 :root[data-theme="grey"] {
