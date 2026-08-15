@@ -107,9 +107,9 @@ def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
     completions_new stranded by a pre-atomic crash, so a retry can't wedge on a
     duplicate CREATE."""
     prior_iso = conn.isolation_level
-    conn.isolation_level = None            # explicit BEGIN/COMMIT/ROLLBACK are ours
-    conn.execute("PRAGMA foreign_keys=OFF")
     try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("BEGIN")
         conn.execute("DROP TABLE IF EXISTS completions_new")
         conn.execute("""CREATE TABLE completions_new(
@@ -122,9 +122,14 @@ def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE completions_new RENAME TO completions")
         conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        # roll back only if BEGIN actually opened a transaction, so a failure
+        # BEFORE it (e.g. the PRAGMA) doesn't mask itself with "no transaction"
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     finally:
+        # always restore FK enforcement and the connection's transaction mode,
+        # even if the rebuild raised before/inside the transaction
         conn.execute("PRAGMA foreign_keys=ON")
         conn.isolation_level = prior_iso
 

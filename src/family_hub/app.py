@@ -184,6 +184,11 @@ def _db():
                     pass
                 _conn = fdb.connect(DB_PATH)
                 fdb.ensure_schema(_conn)
+                # No drop-handle guard here (unlike the fresh-connect branch):
+                # reaching this reconnect means a handle was already established
+                # once, so the backfill flag is set by now and this call returns
+                # at its kv_get guard without doing — or being able to fail on —
+                # any backfill work.
                 _ensure_history_backfill(_conn)
         return _conn
 
