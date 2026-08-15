@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly SQLite snapshot of family-hub (chores/calendar) into the vault
+
+[Service]
+Type=oneshot
+# EDIT: your user + wherever you installed the script; set FH_DB / FH_OUT
+# if your paths differ from the script's defaults.
+User=YOUR-USER
+ExecStart=/home/YOUR-USER/bin/family-hub-backup.sh

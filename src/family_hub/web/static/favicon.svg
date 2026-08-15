@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Family Hub mark: night tile, teal roofline, one mint life-dot -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#0A0D14"/>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="none" stroke="#5BC9F0" stroke-opacity="0.35" stroke-width="2"/>
+  <path d="M14 34 L32 17 L50 34" fill="none" stroke="#5BC9F0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M20 34 L20 48 L44 48 L44 34" fill="none" stroke="#5BC9F0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="41" r="5" fill="#8AE0AD"/>
+</svg>

@@ -1,0 +1,26 @@
+{
+  "port": 8138,
+  "calendar_window_days": 90,
+  "calendar_past_days": 45,
+  "calendars": [
+    { "id": "you@gmail.com", "label": "You", "color": "#5BC9F0", "person": null },
+    { "id": "partner@gmail.com", "label": "Partner", "color": "#E9A8C9", "person": null },
+    { "id": "en.usa#holiday@group.v.calendar.google.com", "label": "US Holidays", "color": "#8AE0AD", "person": null },
+    { "id": "school", "label": "School", "color": "#C39BEA", "person": null,
+      "kind": "ics", "url": "webcal://example.org/school-calendar.ics" }
+  ],
+  "cameras": [
+    { "src": "porch", "label": "Front Porch", "hd": "porch_hd" },
+    { "src": "wyze", "label": "Back Yard" }
+  ],
+  "panels": [
+    { "id": "weather", "label": "Weather", "url": "http://192.168.1.50:8137/",
+      "vw": 1024, "vh": 600, "full": "fit" },
+    { "id": "climate", "label": "House Climate", "url": "http://192.168.1.50:8090/",
+      "vw": 1024, "vh": 600, "full": "fit" }
+  ],
+  "go2rtc_base": "http://192.168.1.50:1984",
+  "climate_base": "",
+  "weather_base": "",
+  "theme": { "mode": "dark", "accent": "cyan", "columns": "none" }
+}

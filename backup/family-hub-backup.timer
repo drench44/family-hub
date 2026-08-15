@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly family-hub SQLite snapshot
+
+[Timer]
+OnCalendar=*-*-* 02:25:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
