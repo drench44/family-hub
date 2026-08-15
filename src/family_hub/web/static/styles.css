@@ -840,6 +840,10 @@ body {
   font-size: 20px; color: var(--ink); line-height: 1.4;
   word-break: break-word;
 }
+.confirm-sub {
+  margin-top: 8px;
+  font-size: 14px; color: var(--dim); line-height: 1.4;
+}
 .confirm-actions { display: flex; gap: 12px; margin-top: 22px; }
 .confirm-actions button {
   flex: 1; min-height: 52px;

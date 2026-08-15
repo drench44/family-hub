@@ -230,9 +230,15 @@ each stream every 30s and never fakes a LIVE badge.
 (`fixed` to one person, or a `rotation`: an ordered list of people, repeats
 allowed, assigned deterministically — `rotation_order[n mod len]` over the
 chore's occurrence count, so there is no stored "whose turn" state to drift).
-Completion is one tap; past days are read-only. Streaks count consecutive
-completed days (rest days skip, an unfinished today is forgiven). It's all
-managed from `/admin.html`.
+Rotations skip deactivated people — their turns fall to the remaining members.
+Completion is one tap; past days are read-only. **History is frozen:** each
+served day's plan is recorded (the `occurrence_log` table), and past days
+render from that record — so editing a schedule, reshuffling a rotation,
+deactivating, or even deleting a chore changes today and the future only.
+Nobody's streak is rewritten by an edit, and a deleted chore still shows on
+the days it was actually done. Streaks count consecutive completed days (rest
+days skip, an unfinished today is forgiven). It's all managed from
+`/admin.html`.
 
 ## Backup
 

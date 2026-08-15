@@ -25,10 +25,18 @@ CREATE TABLE IF NOT EXISTS chores(
   rotation_epoch TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS completions(
-  chore_id INTEGER NOT NULL REFERENCES chores(id),
+  chore_id INTEGER NOT NULL,
   date TEXT NOT NULL,
   person_id INTEGER NOT NULL REFERENCES people(id),
   done_at TEXT NOT NULL, PRIMARY KEY(chore_id, date));
+CREATE TABLE IF NOT EXISTS occurrence_log(
+  date TEXT NOT NULL,
+  chore_id INTEGER NOT NULL,
+  person_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  icon TEXT NOT NULL DEFAULT '',
+  rot INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(date, chore_id));
 CREATE TABLE IF NOT EXISTS events(
   id TEXT PRIMARY KEY, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
   start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
@@ -77,6 +85,29 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         if col not in existing:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col} {ddl}")
     conn.commit()
+    # 2026-08-15: completions used to FK-reference chores(id), which made
+    # deleting a chore impossible without also purging its history. Frozen
+    # history keeps those rows, so rebuild the table without that FK.
+    # (SQLite can't drop a constraint in place; PRAGMA foreign_keys can't
+    # change inside a transaction, hence the explicit off/on around it.)
+    fk_parents = {r["table"]
+                  for r in conn.execute("PRAGMA foreign_key_list(completions)")}
+    if "chores" in fk_parents:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            with conn:
+                conn.executescript("""
+                    CREATE TABLE completions_new(
+                      chore_id INTEGER NOT NULL,
+                      date TEXT NOT NULL,
+                      person_id INTEGER NOT NULL REFERENCES people(id),
+                      done_at TEXT NOT NULL, PRIMARY KEY(chore_id, date));
+                    INSERT INTO completions_new SELECT * FROM completions;
+                    DROP TABLE completions;
+                    ALTER TABLE completions_new RENAME TO completions;
+                """)
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
 
 
 # --- people ---------------------------------------------------------------
@@ -147,11 +178,56 @@ def update_chore(conn, cid: int, **fields) -> None:
 
 
 def delete_chore(conn, cid: int) -> bool:
-    """Delete a chore and its completion rows. Returns True if it existed."""
+    """Delete a chore definition. Its completion and occurrence-log rows are
+    KEPT — history is frozen; deletion only removes the chore from today
+    onward (today's log rows drop out on the next day-plan write). Returns
+    True if it existed."""
     with conn:
-        conn.execute("DELETE FROM completions WHERE chore_id = ?", (cid,))
         cur = conn.execute("DELETE FROM chores WHERE id = ?", (cid,))
         return cur.rowcount > 0
+
+
+# --- occurrence log (frozen chore history) --------------------------------
+#
+# One row per (date, chore) the wall actually served: who it was assigned to
+# and the display snapshot (title/icon/rot). Past days render from these rows,
+# never from live chore definitions, so edits and deletions can't rewrite
+# history. No FKs on purpose — rows must outlive their chore.
+
+def _log_row(r: sqlite3.Row) -> dict:
+    return dict(r)
+
+
+def replace_day_log(conn, date: str, rows: list[dict]) -> None:
+    """Freeze ``date``'s plan: fully replace that day's log rows."""
+    with conn:
+        conn.execute("DELETE FROM occurrence_log WHERE date = ?", (date,))
+        conn.executemany(
+            "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
+            "icon, rot) VALUES(?, ?, ?, ?, ?, ?)",
+            [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
+              r["rot"]) for r in rows])
+
+
+def day_log(conn, date: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM occurrence_log WHERE date = ? ORDER BY chore_id",
+        (date,))
+    return [_log_row(r) for r in rows]
+
+
+def logs_between(conn, date_from: str, date_to: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM occurrence_log WHERE date >= ? AND date <= ? "
+        "ORDER BY date, chore_id", (date_from, date_to))
+    return [_log_row(r) for r in rows]
+
+
+def log_row(conn, chore_id: int, date: str) -> dict | None:
+    r = conn.execute(
+        "SELECT * FROM occurrence_log WHERE chore_id = ? AND date = ?",
+        (chore_id, date)).fetchone()
+    return _log_row(r) if r is not None else None
 
 
 # --- completions ----------------------------------------------------------

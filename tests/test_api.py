@@ -263,7 +263,7 @@ def test_complete_404_and_422(client, app_mod):
                         assign_kind="fixed", fixed_person_id=pid, rotation_order=[],
                         rotation_epoch=today.isoformat())
     assert client.post("/api/chores/9999/complete").status_code == 404
-    # date before epoch -> does not occur -> 422
+    # past date that was never served/logged -> did not occur -> 422
     past = (today - dt.timedelta(days=5)).isoformat()
     r = client.post(f"/api/chores/{cid}/complete", json={"date": past})
     assert r.status_code == 422
@@ -320,6 +320,11 @@ def test_chores_day_past_future_and_validation(client, app_mod):
                         days_mask=0, assign_kind="fixed", fixed_person_id=pid,
                         rotation_order=[], rotation_epoch=epoch)
     yesterday = (today - dt.timedelta(days=1)).isoformat()
+    # past days render from the frozen occurrence log, so history is seeded
+    # there (the wall writes it live each served day)
+    fdb.replace_day_log(c, yesterday, [
+        {"chore_id": cid, "person_id": pid, "title": "Sweep", "icon": "",
+         "rot": 0}])
     fdb.set_completion(c, cid, yesterday, pid)
 
     day = client.get(f"/api/chores/day?date={yesterday}").json()
@@ -421,24 +426,36 @@ def test_admin_chores_crud_and_validation(client, app_mod):
     assert any(ch["days_mask"] == 0b0000101 for ch in state["chores"])
 
 
-def test_delete_chore_removes_it_and_its_completions(client, app_mod):
+def test_delete_chore_keeps_past_days_and_clears_today(client, app_mod):
+    """Frozen history: deleting a chore removes it from today onward but past
+    days keep showing it, done flags intact."""
     c = app_mod._db()
+    today = app_mod._today()
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
     pr = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
     pid = pr.json()["id"]
     ok = client.post("/api/admin/chores", json={
         "title": "Dishes", "icon": "🍽️", "schedule_kind": "daily", "days_mask": 0,
         "assign_kind": "fixed", "fixed_person_id": pid, "rotation_order": []})
     cid = ok.json()["id"]
-    today = app_mod._today().isoformat()
-    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
-    assert fdb.completions_between(c, today, today) != []   # completion recorded
+    fdb.replace_day_log(c, yesterday, [
+        {"chore_id": cid, "person_id": pid, "title": "Dishes", "icon": "🍽️",
+         "rot": 0}])
+    fdb.set_completion(c, cid, yesterday, pid)
 
     r = client.delete(f"/api/admin/chores/{cid}")
     assert r.status_code == 200 and r.json() == {"ok": True}
 
     state = client.get("/api/admin/state").json()
-    assert all(ch["id"] != cid for ch in state["chores"])         # gone from admin list
-    assert fdb.completions_between(c, today, today) == []         # no orphaned completion
+    assert all(ch["id"] != cid for ch in state["chores"])   # gone from admin list
+    # today's plan no longer carries it
+    hub = client.get("/api/hub").json()
+    assert all(row["chores"] == [] for row in hub["people"])
+    # ...but yesterday still shows it, done
+    day = client.get(f"/api/chores/day?date={yesterday}").json()
+    remy = day["people"][0]
+    assert [(x["title"], x["done"]) for x in remy["chores"]] == [("Dishes", True)]
+    assert fdb.completions_between(c, yesterday, yesterday) != []
 
 
 def test_delete_unknown_chore_404(client):
@@ -803,3 +820,172 @@ def test_todos_uncomplete_open_item_is_noop_and_delete_removes(client):
     assert client.delete(f"/api/todos/{tid}").json() == {"ok": True}
     data = client.get("/api/todos").json()
     assert data["buckets"]["now"] == [] and data["recent_done"] == []
+
+
+# --- frozen chore history (occurrence log) ---------------------------------
+
+def _seed_person_chore(client, title="Dishes", icon="", **chore_kw):
+    pid = client.post("/api/admin/people",
+                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    body = {"title": title, "icon": icon, "schedule_kind": "daily",
+            "days_mask": 0, "assign_kind": "fixed", "fixed_person_id": pid,
+            "rotation_order": []}
+    body.update(chore_kw)
+    if body["assign_kind"] == "rotation" and body["rotation_order"] == []:
+        body["rotation_order"] = [pid]
+    cid = client.post("/api/admin/chores", json=body).json()["id"]
+    return pid, cid
+
+
+def _log(c, date, cid, pid, title="Dishes", icon="", rot=0):
+    fdb.replace_day_log(c, date, [
+        {"chore_id": cid, "person_id": pid, "title": title, "icon": icon,
+         "rot": rot}])
+
+
+def test_hub_writes_todays_occurrence_log(client, app_mod):
+    c = app_mod._db()
+    today = app_mod._today().isoformat()
+    pid, cid = _seed_person_chore(client)
+    assert fdb.day_log(c, today) == []          # nothing served yet
+    client.get("/api/hub")
+    rows = fdb.day_log(c, today)
+    assert [(r["chore_id"], r["person_id"], r["title"]) for r in rows] == \
+        [(cid, pid, "Dishes")]
+    # future days are never frozen
+    tomorrow = (app_mod._today() + dt.timedelta(days=1)).isoformat()
+    client.get(f"/api/chores/day?date={tomorrow}")
+    assert fdb.day_log(c, tomorrow) == []
+
+
+def test_schedule_edit_freezes_history(client, app_mod):
+    """The audit's headline bug: adding a weekday used to zero streaks by
+    retroactively marking every past new-weekday as missed. Past days now come
+    from the log, so the edit changes nothing before today."""
+    c = app_mod._db()
+    today = app_mod._today()
+    pid, cid = _seed_person_chore(client)
+    for i in (3, 2, 1):
+        d = (today - dt.timedelta(days=i)).isoformat()
+        _log(c, d, cid, pid)
+        fdb.set_completion(c, cid, d, pid)
+    before = client.get("/api/hub").json()["people"][0]["streak"]
+    assert before == 3
+    # shrink the schedule to one weekday — an edit that used to rewrite history
+    assert client.patch(f"/api/admin/chores/{cid}", json={
+        "schedule_kind": "days", "days_mask": 0b0000010}).status_code == 200
+    after = client.get("/api/hub").json()["people"][0]
+    assert after["streak"] == 3
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
+    day = client.get(f"/api/chores/day?date={yesterday}").json()
+    assert day["people"][0]["chores"][0]["done"] is True
+
+
+def test_rotation_edit_does_not_reshuffle_past_days(client, app_mod):
+    c = app_mod._db()
+    today = app_mod._today()
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
+    p1 = client.post("/api/admin/people",
+                     json={"name": "A", "color": "#111111"}).json()["id"]
+    p2 = client.post("/api/admin/people",
+                     json={"name": "B", "color": "#222222"}).json()["id"]
+    cid = client.post("/api/admin/chores", json={
+        "title": "Cat", "schedule_kind": "daily", "assign_kind": "rotation",
+        "rotation_order": [p1, p2]}).json()["id"]
+    _log(c, yesterday, cid, p1, title="Cat", rot=1)
+    fdb.set_completion(c, cid, yesterday, p1)
+    # reorder + extend the rotation — used to reassign past days
+    p3 = client.post("/api/admin/people",
+                     json={"name": "C", "color": "#333333"}).json()["id"]
+    client.patch(f"/api/admin/chores/{cid}",
+                 json={"rotation_order": [p3, p2, p1]})
+    day = client.get(f"/api/chores/day?date={yesterday}").json()
+    by_name = {row["person"]["name"]: row for row in day["people"]}
+    assert [x["done"] for x in by_name["A"]["chores"]] == [True]
+    assert by_name["B"]["chores"] == [] and by_name["C"]["chores"] == []
+
+
+def test_deactivate_chore_keeps_past_days(client, app_mod):
+    c = app_mod._db()
+    today = app_mod._today()
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
+    pid, cid = _seed_person_chore(client)
+    _log(c, yesterday, cid, pid)
+    fdb.set_completion(c, cid, yesterday, pid)
+    client.patch(f"/api/admin/chores/{cid}", json={"active": 0})
+    hub = client.get("/api/hub").json()
+    assert all(row["chores"] == [] for row in hub["people"])   # gone today
+    day = client.get(f"/api/chores/day?date={yesterday}").json()
+    assert day["people"][0]["chores"][0]["done"] is True       # kept yesterday
+
+
+def test_rotation_skips_deactivated_person_from_today(client, app_mod):
+    """A deactivated person's rotation turns fall to the remaining members
+    instead of producing an unassignable ghost day (audit finding)."""
+    p1 = client.post("/api/admin/people",
+                     json={"name": "A", "color": "#111111"}).json()["id"]
+    p2 = client.post("/api/admin/people",
+                     json={"name": "B", "color": "#222222"}).json()["id"]
+    client.post("/api/admin/chores", json={
+        "title": "Cat", "schedule_kind": "daily", "assign_kind": "rotation",
+        "rotation_order": [p1, p2]})
+    # today is occurrence 0 -> p1's turn; deactivate p1 -> falls to p2
+    client.patch(f"/api/admin/people/{p1}", json={"active": 0})
+    hub = client.get("/api/hub").json()
+    assert [row["person"]["name"] for row in hub["people"]] == ["B"]
+    assert [x["title"] for x in hub["people"][0]["chores"]] == ["Cat"]
+
+
+def test_complete_past_day_uses_log_even_for_deleted_chore(client, app_mod):
+    c = app_mod._db()
+    today = app_mod._today()
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
+    pid, cid = _seed_person_chore(client)
+    _log(c, yesterday, cid, pid)
+    client.delete(f"/api/admin/chores/{cid}")
+    # toggle done on the frozen row: person defaults to the logged assignee
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": yesterday})
+    assert r.status_code == 200
+    assert fdb.completions_between(c, yesterday, yesterday)[0]["person_id"] == pid
+    # ...and back off
+    assert client.delete(
+        f"/api/chores/{cid}/complete?date={yesterday}").status_code == 200
+    assert fdb.completions_between(c, yesterday, yesterday) == []
+
+
+def test_complete_rejects_out_of_range_dates(client, app_mod):
+    pid, cid = _seed_person_chore(client)
+    far = (app_mod._today() + dt.timedelta(days=400)).isoformat()
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": far})
+    assert r.status_code == 422
+
+
+def test_legacy_db_backfills_occurrence_log_once(app_mod):
+    """A pre-log deployment (completions but an empty occurrence_log) gets its
+    recent history reconstructed from current definitions on first boot, so
+    existing streaks survive the upgrade; the backfill never runs again."""
+    from fastapi.testclient import TestClient
+    conn = fdb.connect(app_mod.DB_PATH)
+    fdb.ensure_schema(conn)
+    today = dt.date.fromisoformat(app_mod._today().isoformat())
+    epoch = (today - dt.timedelta(days=10)).isoformat()
+    pid = fdb.add_person(conn, "Remy", "#5BC9F0")
+    cid = fdb.add_chore(conn, title="Dishes", icon="", schedule_kind="daily",
+                        days_mask=0, assign_kind="fixed", fixed_person_id=pid,
+                        rotation_order=[], rotation_epoch=epoch)
+    for i in (2, 1):
+        fdb.set_completion(conn, cid, (today - dt.timedelta(days=i)).isoformat(), pid)
+    conn.close()
+    with TestClient(app_mod.app) as tc:
+        hub = tc.get("/api/hub").json()
+        assert hub["people"][0]["streak"] == 2
+    c = app_mod._db()
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
+    assert [r["chore_id"] for r in fdb.day_log(c, yesterday)] == [cid]
+    # the backfill is one-shot: wiping a day and re-connecting must not
+    # resurrect it from live definitions
+    fdb.replace_day_log(c, yesterday, [])
+    app_mod._conn = None
+    with TestClient(app_mod.app) as tc:
+        tc.get("/api/hub")
+    assert fdb.day_log(app_mod._db(), yesterday) == []

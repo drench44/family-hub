@@ -111,6 +111,32 @@ def _today() -> dt.date:
     return _now_local().date()
 
 
+def _ensure_history_backfill(conn) -> None:
+    """One-time upgrade for deployments that predate the occurrence log:
+    reconstruct the last 370 days of chore history from current definitions —
+    exactly what those days displayed before the log existed — so streaks
+    survive the upgrade. Guarded by a kv flag so it never runs twice (a later
+    empty log day must mean 'rest', not 'please re-derive from live defs');
+    fresh DBs just set the flag."""
+    if fdb.kv_get(conn, "occlog_backfill_done"):
+        return
+    has_completions = conn.execute(
+        "SELECT 1 FROM completions LIMIT 1").fetchone() is not None
+    has_log = conn.execute(
+        "SELECT 1 FROM occurrence_log LIMIT 1").fetchone() is not None
+    if has_completions and not has_log:
+        people = fdb.list_people(conn)
+        chores = fdb.list_chores(conn)
+        today = _today()
+        for i in range(370, 0, -1):
+            d = today - dt.timedelta(days=i)
+            rows = chlogic.plan_rows(chores, people, d)
+            if rows:
+                fdb.replace_day_log(conn, d.isoformat(), rows)
+        log.info("occurrence log backfilled from legacy completions")
+    fdb.kv_set(conn, "occlog_backfill_done", True)
+
+
 def _db():
     """Module-level SQLite connection with a cheap self-heal ping per use, so a
     corrupted/closed handle recovers instead of erroring forever."""
@@ -119,6 +145,7 @@ def _db():
         if _conn is None:
             _conn = fdb.connect(DB_PATH)
             fdb.ensure_schema(_conn)
+            _ensure_history_backfill(_conn)
         else:
             try:
                 _conn.execute("SELECT 1")
@@ -130,6 +157,7 @@ def _db():
                     pass
                 _conn = fdb.connect(DB_PATH)
                 fdb.ensure_schema(_conn)
+                _ensure_history_backfill(_conn)
         return _conn
 
 
@@ -249,36 +277,63 @@ def health():
     return {"status": "ok"}
 
 
+def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
+    """Write the day's live-resolved plan into the occurrence log — the moment
+    history becomes frozen. Skips the write when the frozen rows already match,
+    so the wall's constant polling doesn't churn the DB."""
+    def key(r):
+        return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"])
+    if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
+            sorted(key(r) for r in rows):
+        fdb.replace_day_log(c, d_str, rows)
+
+
 def _people_day(c, d: dt.date) -> list[dict]:
     """The per-person chore plan for date ``d`` — done flags, rotation tags,
     and streak/week computed AS OF that day. Shared by the hub home feed
-    (d=today) and the full-screen chores day browser."""
+    (d=today) and the full-screen chores day browser.
+
+    History is FROZEN: past days render from the occurrence log exactly as
+    they were served, so editing or deleting a chore only changes today and
+    the future. Today is resolved live from current definitions and frozen
+    into the log on each serve; future days are resolved live, never logged.
+    A past day the wall never served (server down, pre-install) has no log
+    rows and reads as a rest day — streak-neutral by design."""
+    today = _today()
     d_str = d.isoformat()
     people = fdb.list_people(c)
-    chores = fdb.list_chores(c)
+    if d < today:
+        rows = fdb.day_log(c, d_str)
+    else:
+        rows = chlogic.plan_rows(fdb.list_chores(c), people, d)
+        if d == today:
+            _freeze_day(c, d_str, rows)
 
-    days = fdb.completions_between(c, d_str, d_str)
-    completed_ids = {r["chore_id"] for r in days}
-    plan = chlogic.day_plan(chores, people, d, completed_ids)
-
-    # annotate each chore row with whether it is rotation-assigned, so the wall
-    # can show the ↻ tag (day_plan keeps its minimal tested shape).
-    chore_by_id = {ch["id"]: ch for ch in chores}
-    for entry in plan:
-        for row in entry["chores"]:
-            src = chore_by_id.get(row["id"])
-            row["rot"] = bool(src and src["assign_kind"] == "rotation")
+    completed_ids = {r["chore_id"]
+                     for r in fdb.completions_between(c, d_str, d_str)}
+    plan = chlogic.day_plan(rows, people, completed_ids)
 
     window_from = (d - dt.timedelta(days=370)).isoformat()
+    logs = fdb.logs_between(c, window_from, d_str)
     history = fdb.completions_between(c, window_from, d_str)
     for entry in plan:
         pid = entry["person"]["id"]
+        occ: dict[str, set] = {}
+        for r in logs:
+            if r["person_id"] == pid:
+                occ.setdefault(r["date"], set()).add(r["chore_id"])
+        if d > today:
+            # future days aren't logged; overlay d's live rows so the browser
+            # can show a prospective streak/week for that day
+            live = {r["chore_id"] for r in rows if r["person_id"] == pid}
+            if live:
+                occ[d_str] = live
         cbd: dict[str, set] = {}
         for r in history:
             if r["person_id"] == pid:
                 cbd.setdefault(r["date"], set()).add(r["chore_id"])
-        entry["streak"] = chlogic.streak(pid, chores, cbd, d)
-        entry["week"] = chlogic.week_strip(pid, chores, cbd, d)
+        entry["streak"] = chlogic.streak(occ, cbd, d)
+        entry["week"] = chlogic.week_strip(occ, cbd, d)
     return plan
 
 
@@ -342,19 +397,33 @@ class CompleteBody(BaseModel):
 def complete(chore_id: int, body: CompleteBody | None = None):
     c = _db()
     body = body or CompleteBody()
-    chore = _chore_row(c, chore_id)
     date_str = body.date or _today().isoformat()
     try:
         d = dt.date.fromisoformat(date_str)
     except ValueError:
         raise HTTPException(422, "bad date")
-    if not chlogic.occurs(chore, d):
-        raise HTTPException(422, "chore does not occur on that date")
+    today = _today()
+    if abs((d - today).days) > 366:
+        raise HTTPException(422, "date out of range")
     person_id = body.person_id
-    if person_id is None:
-        person_id = chlogic.assignee_id(chore, d)
-    if person_id is None:
-        raise HTTPException(422, "no resolvable assignee")
+    if d < today:
+        # Frozen day: the occurrence log is the truth about what occurred and
+        # who was assigned — the chore may since have been edited or even
+        # deleted, and its frozen rows must stay toggleable.
+        row = fdb.log_row(c, chore_id, date_str)
+        if row is None:
+            raise HTTPException(422, "chore did not occur on that date")
+        if person_id is None:
+            person_id = row["person_id"]
+    else:
+        chore = _chore_row(c, chore_id)
+        if not chlogic.occurs(chore, d):
+            raise HTTPException(422, "chore does not occur on that date")
+        if person_id is None:
+            active_ids = {p["id"] for p in fdb.list_people(c)}
+            person_id = chlogic.assignee_id(chore, d, active_ids)
+        if person_id is None:
+            raise HTTPException(422, "no resolvable assignee")
     # Validate the (possibly client-supplied) person_id against a real person
     # before writing, so a malformed request can't record an invisible orphan
     # completion. _person_row raises 404 for an unknown id. (Fresh DBs also
