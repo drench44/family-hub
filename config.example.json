@@ -3,10 +3,10 @@
   "calendar_window_days": 90,
   "calendar_past_days": 45,
   "calendars": [
-    { "id": "you@gmail.com", "label": "You", "color": "#5BC9F0", "person": null },
-    { "id": "partner@gmail.com", "label": "Partner", "color": "#E9A8C9", "person": null },
-    { "id": "en.usa#holiday@group.v.calendar.google.com", "label": "US Holidays", "color": "#8AE0AD", "person": null },
-    { "id": "school", "label": "School", "color": "#C39BEA", "person": null,
+    { "id": "you@gmail.com", "label": "You", "color": "#5BC9F0" },
+    { "id": "partner@gmail.com", "label": "Partner", "color": "#E9A8C9" },
+    { "id": "en.usa#holiday@group.v.calendar.google.com", "label": "US Holidays", "color": "#8AE0AD" },
+    { "id": "school", "label": "School", "color": "#C39BEA",
       "kind": "ics", "url": "webcal://example.org/school-calendar.ics" }
   ],
   "cameras": [

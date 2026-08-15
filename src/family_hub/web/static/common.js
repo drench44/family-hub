@@ -5,14 +5,50 @@
    top-level declarations are visible to the scripts that follow. Pure: no DOM
    access here, so tests/js can load it into a vm sandbox with no document. */
 
+const J_TIMEOUT_MS = 12000;   // abort a hung request (see j)
+
 async function j(url, opts) {
-  const r = await fetch(url, opts);
-  if (!r.ok) {
-    let detail = '';
-    try { detail = (await r.json()).detail || ''; } catch (e) { /* not json */ }
-    throw new Error(detail || `${url} -> HTTP ${r.status}`);
+  // Guard against a CONNECTED-but-unresponsive server (flaky wifi, a wedged box,
+  // a router mid-reboot): a bare fetch to such a peer never rejects, so poll()
+  // never reaches its offline branch and the wall shows frozen data still badged
+  // "live". Abort after J_TIMEOUT_MS so the hang becomes a rejection the callers
+  // already handle. Only when the platform has AbortController — the browser
+  // always does; the vm test sandbox has no AbortController and stubs fetch with
+  // a fast resolver that can't hang, so it needs (and gets) no timeout.
+  let timer = null;
+  let fetchOpts = opts;
+  if (typeof AbortController !== 'undefined' && !(opts && opts.signal)) {
+    const ac = new AbortController();
+    timer = setTimeout(() => ac.abort(), J_TIMEOUT_MS);
+    fetchOpts = { ...(opts || {}), signal: ac.signal };
   }
-  return r.status === 204 ? null : r.json();
+  try {
+    const r = await fetch(url, fetchOpts);
+    if (!r.ok) {
+      let detail = '';
+      try { detail = (await r.json()).detail || ''; } catch (e) { /* not json */ }
+      throw new Error(detail || `${url} -> HTTP ${r.status}`);
+    }
+    // `return await` (not bare `return r.json()`) is load-bearing: it keeps the
+    // finally — and so clearTimeout — deferred until the BODY resolves. A bare
+    // return would disarm the abort timer the instant headers arrive, leaving a
+    // server that flushes 200 headers then stalls the body hung forever (the
+    // exact frozen-but-"live" failure this timeout exists to prevent).
+    return r.status === 204 ? null : await r.json();
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+/* Defense in depth for inline style="" sinks: colors reaching the DOM are all
+   server-constrained (person colors validated to #rrggbb, Google's own palette,
+   a hardcoded event-color map), but escapeHtml neutralizes quotes/<> and NOT
+   `;`/`:`, so a stray value could otherwise inject extra CSS declarations into
+   the same attribute. Pass only a hex token or a bare CSS keyword through; fall
+   back to a harmless value otherwise. */
+function safeColor(v) {
+  const s = String(v == null ? '' : v).trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(s) || /^[a-zA-Z]+$/.test(s) ? s : 'transparent';
 }
 
 function escapeHtml(s) {

@@ -39,6 +39,14 @@ FORBIDDEN = [
     # Examples/docs must use <= 3 decimals (city precision) to stay clear.
     r"-?\d{1,3}\.\d{4,}\s*,\s*-?\d{1,3}\.\d{4,}",
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----",       # PEM private-key block
+    # RFC1918 private-IP dotted-quads (10/8, 172.16/12, 192.168/16) — the most
+    # likely accidental leak (a real subnet pasted into a config or comment).
+    # A private-IP SHAPE is generic, not house-specific, so it belongs here; the
+    # one legitimate LAN IP in this repo is the canonical placeholder, stripped
+    # via ALLOWED_LINES below so a real OTHER subnet is still caught.
+    r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b",
 ]
 
 # Placeholder substrings that are NOT leaks. Each is stripped from a line
@@ -46,6 +54,7 @@ FORBIDDEN = [
 # value that happens to share the line. Generic placeholders ONLY.
 ALLOWED_LINES = [
     r"(?i)AA:BB:CC:DD:EE:FF|00:11:22:33:44:55",  # doc-placeholder MACs
+    r"192\.168\.1\.50",   # the repo's single canonical placeholder LAN IP
 ]
 
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".venv"}
@@ -107,3 +116,25 @@ def test_no_house_data():
                     hits.append(f"{rel}:{lineno}: {m.group(0)!r}")
     assert not hits, \
         "generic-secret shapes in the public engine:\n" + "\n".join(hits)
+
+
+def _line_hits(line):
+    """Apply the same scrub-then-match logic the scan uses, to one synthetic
+    line — so the guard's own regexes are unit-tested without touching the tree."""
+    scrubbed = line
+    for a in ALLOWED_LINES:
+        scrubbed = re.sub(a, "", scrubbed)
+    return any(re.search(pat, scrubbed) for pat in FORBIDDEN)
+
+
+def test_private_ip_shape_catches_real_subnets_but_allows_placeholder():
+    # A real (non-placeholder) LAN IP in any RFC1918 range is caught — this is
+    # the most likely accidental leak the guard now covers.
+    assert _line_hits('server = "http://192.168.7.42:8138"')
+    assert _line_hits("host 10.0.0.5")
+    assert _line_hits("gateway 172.16.4.1")
+    # The canonical placeholder is intentional documentation, so it's exempt.
+    assert not _line_hits('"url": "http://192.168.1.50:8137/"')
+    # Version-like numbers and bind defaults must NOT false-positive.
+    assert not _line_hits("starlette 0.52, httpx 10.2 shipped")
+    assert not _line_hits("binds 127.0.0.1 and 0.0.0.0 by default")

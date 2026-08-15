@@ -95,7 +95,7 @@ function renderPeople() {
   document.getElementById('people-list').innerHTML = people.map((p) =>
     `<div class="admin-card${p.active ? '' : ' inactive'}" data-person="${p.id}">`
     + `<div class="row-between">`
-    + `<span class="person-name" style="color:${escapeHtml(p.color)}">${escapeHtml(p.name)}</span>`
+    + `<span class="person-name" style="color:${safeColor(p.color)}">${escapeHtml(p.name)}</span>`
     + `<span class="grow"></span>`
     + `<button class="btn-quiet" type="button" data-act="edit-person">Edit</button>`
     + `<button class="btn-quiet" type="button" data-act="toggle-person">${p.active ? 'Deactivate' : 'Activate'}</button>`

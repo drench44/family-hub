@@ -13,7 +13,7 @@ class Config:
     go2rtc_base: str = ""      # go2rtc restreamer; empty = no cameras
     calendar_window_days: int = 28
     calendar_past_days: int = 45   # month view browses back this far
-    # calendar sources: {"id","label","color","person"} plus optionally
+    # calendar sources: {"id","label","color"} plus optionally
     # "kind": "google" (default, needs the OAuth token) or "ics" with a
     # "url" (https:// or webcal:// feed — iCloud shared calendars, holiday
     # feeds, school calendars).
@@ -39,7 +39,7 @@ class Config:
 _THEME_AXES = {
     "mode": {"light", "dark"},
     "accent": {"cyan", "violet", "amber", "green"},
-    "columns": {"none", "wells"},
+    "columns": {"none", "wells", "lines"},
 }
 
 

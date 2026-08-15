@@ -397,6 +397,72 @@ test('renderCalendar maps event title/time/all-day into the calendar DOM', () =>
   assert.ok(!html.includes('<b>all week</b>'), 'event title markup is inert');
 });
 
+test('safeColor is applied at the color sinks: a hostile color can NOT inject extra CSS', () => {
+  // Guards the WIRING, not just the helper: reverting any sink from safeColor()
+  // back to escapeHtml() (which passes ;/: through) would re-open CSS injection
+  // and this test would fail — the isolated safeColor unit test would not catch it.
+  const { document, sandbox } = newHub();
+  const hostile = 'red;background:url(https://evil/x)';
+  sandbox.renderCalendar({
+    date: '2026-08-14',
+    calendar: { status: { ok: true }, events: [
+      { id: 'e1', title: 'Picnic', all_day: 1, start_ts: '2026-08-14', end_ts: '2026-08-15', color: hostile },
+    ] },
+  });
+  const cal = document.getElementById('cal').innerHTML;
+  assert.doesNotMatch(cal, /background:url/, 'no injected declaration at the event color sink');
+  assert.match(cal, /background:transparent/, 'malformed color falls back to transparent');
+  // person --pc / name color sink
+  const card = sandbox.personCardHtml(
+    { person: { id: 1, name: 'Bo', color: hostile }, chores: [], week: [], streak: 0, total: 0, done_count: 0 },
+    { readonly: true });
+  assert.doesNotMatch(card, /background:url/, 'no injected declaration at the person color sink');
+  assert.match(card, /--pc:transparent/);
+});
+
+test('scheduledPoll: skips a second tick while a poll is still in flight (no stacked requests)', async () => {
+  const { sandbox } = newHub();
+  await flush();   // let the load-time poll settle first (it uses poll(), not scheduledPoll)
+  let hubCalls = 0;
+  sandbox.fetch = (url) => { if (url === '/api/hub') hubCalls++; return new Promise(() => {}); }; // hangs
+  sandbox.scheduledPoll();           // starts a poll that never resolves
+  const afterFirst = hubCalls;
+  assert.ok(afterFirst >= 1, 'the first scheduled tick issued a poll');
+  sandbox.scheduledPoll();           // in-flight -> must NOT start another
+  assert.equal(hubCalls, afterFirst, 'no second /api/hub request while one is in flight');
+});
+
+test('fetchCalWindow: a failed refresh keeps cached events but downgrades ok:true so the stale banner fires', async () => {
+  const { sandbox } = newHub();
+  await flush();
+  sandbox.fetch = async () => okResp({ status: { ok: true },
+    events: [{ id: 'x', title: 'Picnic', all_day: 1, start_ts: '2026-08-14', end_ts: '2026-08-15' }] });
+  await sandbox.fetchCalWindow();
+  assert.equal(vm.runInContext('calWin.status.ok', sandbox), true);
+  assert.equal(vm.runInContext('calWin.events.length', sandbox), 1);
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchCalWindow();
+  assert.equal(vm.runInContext('calWin.events.length', sandbox), 1, 'cached events retained on failure');
+  assert.equal(vm.runInContext('calWin.status.ok', sandbox), false, 'stale ok:true downgraded, banner will fire');
+});
+
+test('pruneEvIndex: rebuilds from live sources once the index grows past the cap', () => {
+  const { sandbox } = newHub();
+  // stuff the index past the 4000-key cap with stale ids from old windows
+  const stale = Array.from({ length: 4001 }, (_, i) =>
+    ({ id: 'old' + i, all_day: 1, start_ts: '2020-01-01', end_ts: '2020-01-02' }));
+  sandbox.indexEvents(stale);
+  // the two live sources hold a small current set
+  vm.runInContext(
+    "hubData = { calendar: { events: [{ id: 'live1', all_day: 1, start_ts: '2026-08-14', end_ts: '2026-08-15' }] } };"
+    + " calWin = { events: [{ id: 'win1', all_day: 1, start_ts: '2026-08-14', end_ts: '2026-08-15' }] };",
+    sandbox);
+  sandbox.pruneEvIndex();
+  assert.equal(vm.runInContext('Object.keys(evIndex).length', sandbox), 2, 'rebuilt to just the live events');
+  assert.ok(vm.runInContext('!!evIndex.live1 && !!evIndex.win1', sandbox), 'on-screen events stay tappable');
+  assert.ok(vm.runInContext('!evIndex.old0', sandbox), 'stale ids evicted');
+});
+
 test('renderCalendar reads calendar.status and shows the auth banner', () => {
   const { document, sandbox } = newHub();
   sandbox.renderCalendar({
@@ -1022,6 +1088,25 @@ test('renderTodoSlot: header sits OUTSIDE the .card, the list sits INSIDE it (Ta
   assert.match(html, /<span class="chip">2 later<\/span><\/div>/);
 });
 
+test('renderTodoSlot: todos_ok===false shows a "couldn’t load" note, NOT an empty card', () => {
+  const { document, sandbox } = newHub();
+  // The server fell back to empty buckets on a read error and flagged it. The
+  // wall must NOT render this as "nothing on the list" (which reads as "all
+  // caught up") — it must say the list couldn't be loaded.
+  sandbox.renderTodoSlot({ todos: { now: [], soon: [], later: [] }, todos_ok: false });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /couldn.t load the list/);
+  assert.doesNotMatch(html, /nothing on the list/);
+});
+
+test('renderTodoSlot: a genuinely empty list (todos_ok omitted) still reads "nothing on the list"', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderTodoSlot({ todos: { now: [], soon: [], later: [] } });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /nothing on the list/);
+  assert.doesNotMatch(html, /couldn.t load the list/);
+});
+
 test('todosFullHtml: full-screen buckets are boxed like every other section, rows untouched', () => {
   const { sandbox } = newHub();
   vm.runInContext(
@@ -1322,6 +1407,28 @@ const WX_WARN = {
   humidity: 70, dew_point: 74, spark: [], stale: true,
 };
 
+test('fetchWeather: keeps the last good card through transient failures, gives up after the limit', async () => {
+  const { document, sandbox } = newHub();
+  await flush();   // let the load-time fetchWeather() (offline stub) settle first
+  const slot = document.createElement('div');
+  slot._id = 'weather-slot';
+  document.body.appendChild(slot);
+  // a good reading paints the card and resets the failure counter
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => WX_GOOD });
+  await sandbox.fetchWeather();
+  assert.match(slot.innerHTML, /class="temp num">74</, 'good card first');
+  // the feed now blips: single failures must NOT blank the card
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchWeather();   // fail 1
+  assert.match(slot.innerHTML, /class="temp num">74</, 'last-good retained after 1 fail');
+  assert.doesNotMatch(slot.innerHTML, /unavailable/i);
+  await sandbox.fetchWeather();   // fail 2
+  assert.match(slot.innerHTML, /class="temp num">74</, 'last-good retained after 2 fails');
+  // only after TILE_FAIL_LIMIT (3) consecutive misses does it fall back
+  await sandbox.fetchWeather();   // fail 3
+  assert.match(slot.innerHTML, /unavailable/i, 'gives up after the failure limit');
+});
+
 test('weather card renders temp, condition/feels, UV, AQI, humidity and dew', () => {
   const { html } = renderWeatherHtml(WX_GOOD);
   // header carries the almanac overlay hook (the "Full forecast" button)
@@ -1467,6 +1574,24 @@ const CLIMATE = {
   ],
   indoor_rh: 48, indoor_dp: 55,
 };
+
+test('fetchClimate: keeps the last good rooms through transient failures, gives up after the limit', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  const slot = document.createElement('div');
+  slot._id = 'climate-slot';
+  document.body.appendChild(slot);
+  sandbox.fetch = async () => okResp(CLIMATE);
+  await sandbox.fetchClimate();
+  assert.match(slot.innerHTML, /Living Room/, 'good rooms first');
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchClimate();   // fail 1
+  assert.match(slot.innerHTML, /Living Room/, 'last-good retained after 1 fail');
+  await sandbox.fetchClimate();   // fail 2
+  assert.match(slot.innerHTML, /Living Room/, 'last-good retained after 2 fails');
+  await sandbox.fetchClimate();   // fail 3
+  assert.match(slot.innerHTML, /unavailable/i, 'gives up after TILE_FAIL_LIMIT');
+});
 
 test('climate card renders one .room per INDOOR room with temp + humidity', () => {
   const { html } = renderClimateHtml(CLIMATE);
