@@ -101,21 +101,34 @@ async def climate_tile(client, cfg) -> dict:
     return result
 
 
-def _weather_spark(wx: dict) -> list:
-    """Small temperature sparkline series for the weather card. The confirmed
-    wx.json summary keys don't include an hourly array; if the feed exposes one
-    under ``hourlyTemps`` we map its numeric values, otherwise return [] (the
-    frontend hides the sparkline below 2 points, so [] is safe).
+def _weather_spark(wx: dict) -> dict:
+    """Temperature curve for the weather card from the almanac feed's
+    ``tempSeries`` (``{"temps": [hourly °, oldest->newest], "nowIndex": i}``).
+    The adapter builds a 24h window — ~12h of real observations behind and ~12h
+    of model forecast ahead — with ``nowIndex`` marking the current hour so the
+    chart can dot "now" and split solid-past / dashed-future.
 
-    VERIFY-AT-DEPLOY: confirm the real almanac feed's hourly-temperature key —
-    ``hourlyTemps`` is the plausible camelCase name matching the other feed keys,
-    but it was not re-probed on the live box (see task-6 report)."""
-    hourly = wx.get("hourlyTemps")
-    if isinstance(hourly, list):
-        # bool is an int subclass — exclude it so a stray True/False isn't a temp
-        return [t for t in hourly if isinstance(t, (int, float))
-                and not isinstance(t, bool)]
-    return []
+    Returns ``{"temps": [...], "now": i|None}``; an absent or malformed series
+    yields ``{"temps": [], "now": None}`` (the frontend hides the chart below 2
+    points). Verified against the live feed 2026-08-14 — the prior
+    ``hourlyTemps`` key was a guess that never existed in the feed."""
+    ts = wx.get("tempSeries")
+    if not isinstance(ts, dict):
+        return {"temps": [], "now": None}
+    raw = ts.get("temps")
+    raw = raw if isinstance(raw, list) else []   # a non-list (scalar/dict) => empty, not a crash
+    # Require EVERY point to be a real number (bool is an int subclass, so exclude
+    # it). Dropping interior points would shift nowIndex — a POSITIONAL marker —
+    # off its hour and render a plausible but WRONG "now" dot, so a single bad
+    # point makes the whole series malformed: hide the chart rather than
+    # misplace the marker.
+    temps = [t for t in raw if isinstance(t, (int, float)) and not isinstance(t, bool)]
+    if len(temps) != len(raw):
+        temps = []
+    now = ts.get("nowIndex")
+    now = now if (isinstance(now, int) and not isinstance(now, bool)
+                  and 0 <= now < len(temps)) else None
+    return {"temps": temps, "now": now}
 
 
 async def weather_tile(client, cfg) -> dict:
@@ -134,6 +147,7 @@ async def weather_tile(client, cfg) -> dict:
         # which would make wx.get(...) raise AttributeError. Catching it here
         # keeps the fail-soft contract (never a 500) instead of letting it
         # propagate out of the route.
+        spark = _weather_spark(wx)
         result = {
             "available": True,
             "temp": wx.get("temp"),
@@ -149,7 +163,8 @@ async def weather_tile(client, cfg) -> dict:
             "aqi_cat": wx.get("aqiCategory"),
             "humidity": wx.get("humidity"),
             "dew_point": wx.get("dewPoint"),
-            "spark": _weather_spark(wx),
+            "spark": spark["temps"],
+            "spark_now": spark["now"],
             "stale": wx.get("weatherStale"),
         }
         # A 200-but-empty upstream ({}, {"error": "warming up"}, temp
@@ -159,6 +174,13 @@ async def weather_tile(client, cfg) -> dict:
         temp = result.get("temp")
         if not isinstance(temp, (int, float)) or isinstance(temp, bool):
             return {"available": False}
+        if not result["spark"]:
+            # A valid temp but no chart series is exactly the silent failure that
+            # hid the temp chart for weeks (the old code read a feed key that
+            # never existed). Say so LOUDLY so the next feed-shape drift is caught
+            # in the logs instead of just quietly blanking the chart.
+            log.warning("weather feed has a valid temp but no usable tempSeries "
+                        "(temp chart hidden); wx keys: %s", sorted(wx)[:20])
     except Exception as e:
         log.warning("weather tile wx.json unavailable: %s", e)
         return {"available": False}   # not cached: retry on the next poll

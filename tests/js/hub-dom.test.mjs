@@ -1314,7 +1314,7 @@ function renderWeatherHtml(payload) {
 const WX_GOOD = {
   available: true, temp: 74.8, unit: 'F', conditions: 'Clear & sunny', feels: 78,
   low: 59, high: 81, uv: 3, uv_desc: 'Low', aqi: 42, aqi_cat: 'Good',
-  humidity: 57, dew_point: 58.5, spark: [70, 71, 73, 75, 78, 80, 79, 77], stale: false,
+  humidity: 57, dew_point: 58.5, spark: [70, 71, 73, 75, 78, 80, 79, 77], spark_now: 4, stale: false,
 };
 const WX_WARN = {
   available: true, temp: 90, unit: 'F', conditions: 'Hazy', feels: 98,
@@ -1361,13 +1361,41 @@ test('weather card AQI + UV chips pick .warn by category / high UV', () => {
   assert.match(html, /<span class="q warn">Very High<\/span>/);
 });
 
-test('weather card draws the sparkline (area + line + endpoint) when spark has >=2 points', () => {
-  const { html } = renderWeatherHtml(WX_GOOD);
-  assert.ok(html.includes('<svg class="spark"'), 'the sparkline svg is present');
+test('weather card draws the temp chart with an observed/forecast split and a "now" marker', () => {
+  const { html } = renderWeatherHtml(WX_GOOD);   // 8 pts, now at index 4
+  assert.ok(html.includes('<svg class="spark"'), 'the temp chart svg is present');
   assert.match(html, /viewBox="0 0 300 46"/, 'normalized to the 0 0 300 46 viewBox');
-  assert.match(html, /<path d="M[^"]*Z" fill="url\(#sg\)"/, 'gradient area path');
-  assert.match(html, /<path d="M[^"]*" fill="none" stroke="var\(--accent\)"/, 'stroked line path');
-  assert.match(html, /<circle cx="300"[^>]*fill="var\(--accent\)"/, 'emphasized endpoint circle');
+  assert.match(html, /<path d="M[^"]*Z" fill="url\(#sg\)"/, 'gradient area under the curve');
+  // the observed-past line is solid (full opacity, no stroke-opacity attr) —
+  // it's the chart's primary content, so pin it against accidental removal
+  assert.match(html, /fill="none" stroke="var\(--accent\)" stroke-width="2"\/>/,
+    'solid observed-past line');
+  // the forecast-ahead segment is drawn fainter than the observed past
+  assert.match(html, /fill="none" stroke="var\(--accent\)" stroke-width="2" stroke-opacity="\.38"/,
+    'faded forecast segment');
+  // now marker: a dot + a faint vertical guide at the current hour (i=4 of 8 -> x=171.4)
+  assert.match(html, /<circle cx="171\.4"[^>]*fill="var\(--accent\)"/, 'dot on the current hour');
+  assert.match(html, /<line x1="171\.4"[^>]*stroke-opacity="\.2"/, 'faint "now" guide line');
+});
+
+test('temp chart falls back to a last-point dot, all solid, when no now index is given', () => {
+  const { html } = renderWeatherHtml({ ...WX_GOOD, spark_now: undefined });
+  assert.match(html, /<circle cx="300"[^>]*fill="var\(--accent\)"/, 'dot on the last point');
+  assert.ok(!html.includes('stroke-opacity=".38"'), 'no separate forecast segment when now is unknown');
+});
+
+test('temp chart with an out-of-range integer now index falls back to the last point (no throw)', () => {
+  let out;
+  assert.doesNotThrow(() => { out = renderWeatherHtml({ ...WX_GOOD, spark_now: 99 }); });
+  assert.match(out.html, /<circle cx="300"[^>]*fill="var\(--accent\)"/, 'dot on the last point');
+  assert.ok(!out.html.includes('stroke-opacity=".38"'), 'no forecast segment when now is out of range');
+});
+
+test('temp chart with now at index 0 renders an all-forecast curve with the dot at the start', () => {
+  const { html } = renderWeatherHtml({ ...WX_GOOD, spark_now: 0 });   // 8 pts, now at index 0
+  assert.match(html, /fill="none" stroke="var\(--accent\)" stroke-width="2" stroke-opacity="\.38"/,
+    'the whole curve is drawn as forecast');
+  assert.match(html, /<circle cx="0"[^>]*fill="var\(--accent\)"/, 'dot at the first point (x=0)');
 });
 
 test('weather card HIDES the sparkline when spark is empty (fewer than 2 points)', () => {
