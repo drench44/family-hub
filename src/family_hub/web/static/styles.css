@@ -758,6 +758,26 @@ body {
    2026-08-12: full-screen views rendered as a strip). */
 .overlay-content { position: absolute; inset: 0; }
 .overlay-frame { width: 100%; height: 100%; border: 0; }
+/* Full-screen 2x2 camera grid (the "camera page" opened from the wall's Cameras
+   header). Fills the overlay; each cell's live stream fills its cell, with the
+   label floated over the top-left corner. */
+.camera-page {
+  position: absolute; inset: 0;
+  display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+  gap: 10px; padding: 60px 16px 16px;
+}
+.camera-page .tile-camera { grid-column: auto; min-height: 0; padding: 0; }
+.camera-page .cam-frame { aspect-ratio: auto; height: 100%; border-radius: 10px; }
+.camera-page .tile-label {
+  position: absolute; top: 10px; left: 14px; z-index: 1; margin: 0;
+  background: rgba(10, 13, 20, 0.55); padding: 3px 8px; border-radius: 999px;
+}
+/* Empty state: no cameras configured — a centered note, never a black void. */
+.camera-page-empty {
+  display: flex; align-items: center; justify-content: center;
+  grid-template-columns: none; grid-template-rows: none;
+  color: var(--faint); font-family: var(--mono); font-size: 14px;
+}
 /* Progressive full-screen camera: the warm medium stream shows instantly as the
    in-flow base; its HD twin loads in front (absolute, transparent) and fades in
    once its stream is probed live (JS adds .ready). The fade duration here must
