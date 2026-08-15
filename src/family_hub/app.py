@@ -53,15 +53,39 @@ def _compute_build() -> str:
     wall can auto-reload after a deploy. The frontend is BAKED into the image and a
     deploy rebuilds + restarts the container, so hashing the served asset files at
     startup yields a fresh value each deploy (and a stable one between deploys)."""
+    import glob
     import hashlib
     h = hashlib.sha256()
-    for name in ("index.html", "admin.html", "styles.css", "hub.js",
-                 "common.js", "admin.js", "theme.js"):
+    hashed = 0
+    # Glob the served asset types (sorted for a deterministic, cross-filesystem
+    # order) rather than a hardcoded list, so a NEWLY ADDED asset is tracked
+    # automatically. A literal tuple would silently miss it — the new file's
+    # changes would never bump the token and never reach the kiosk.
+    paths = sorted(p for ext in ("*.html", "*.css", "*.js")
+                   for p in glob.glob(os.path.join(STATIC_DIR, ext)))
+    for path in paths:
+        name = os.path.basename(path)
         try:
-            with open(os.path.join(STATIC_DIR, name), "rb") as fh:
-                h.update(fh.read())
-        except OSError:
-            pass
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            # Globbed but unreadable (a race, a permission change, or a dir that
+            # matched). The token can't track this file — say so LOUDLY rather
+            # than swallow it.
+            log.warning("build hash: asset %s unreadable (%s) — "
+                        "auto-reload will miss changes to it", name, e)
+            continue
+        # Fold the NAME in too, so an add/remove/rename bumps the token even when
+        # the surviving bytes are identical.
+        h.update(name.encode())
+        h.update(data)
+        hashed += 1
+    if not hashed:
+        # No asset was readable: STATIC_DIR is wrong or the bake is broken.
+        # Returning the empty-input hash here would be a stable, plausible-looking
+        # token that freezes auto-reload with no signal at all. Shout instead.
+        log.error("build hash: NO static assets readable under %s — the frontend "
+                  "bake is broken; deploy auto-reload is disabled", STATIC_DIR)
     return h.hexdigest()[:12]
 
 

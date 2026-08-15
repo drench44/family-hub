@@ -84,9 +84,17 @@ test('setColumns(wells) stamps data-cols and persists fh.cols', () => {
   assert.equal(localStorage.getItem('fh.cols'), 'wells');
 });
 
+test('setColumns(lines) stamps data-cols and persists fh.cols', () => {
+  // Lines is the third, mockup-parity separation option (added on request).
+  const { root, localStorage, win } = loadTheme();
+  win.setColumns('lines');
+  assert.equal(root.getAttribute('data-cols'), 'lines');
+  assert.equal(localStorage.getItem('fh.cols'), 'lines');
+});
+
 test('an invalid value is rejected: no stamp, no persist', () => {
   const { root, localStorage, win } = loadTheme();
-  win.setColumns('lines');   // Ruling 3: only none/wells exist
+  win.setColumns('stripes');   // not one of none/wells/lines
   assert.equal(root.getAttribute('data-cols'), 'none');   // still the default
   assert.equal(localStorage.getItem('fh.cols'), null);
 });
