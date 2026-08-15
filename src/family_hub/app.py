@@ -803,9 +803,15 @@ async def tile_camera(src: str = "cam"):
     # primary src (tile liveness) and any "hd" twin (full-screen readiness probe)
     # are allowed; nothing else.
     # skip a malformed entry (no "src") the same way _links() does, rather than
-    # 500-ing every probe over one config typo.
-    allowed = {cam["src"] for cam in cfg.cameras if cam.get("src")}
-    allowed |= {cam["hd"] for cam in cfg.cameras if cam.get("hd")}
+    # 500-ing every probe over one config typo. Both the wall column (`cameras`)
+    # and the Cameras-tab / camera-page grid (`camera_page`) are probe-able, so a
+    # grid-only camera (e.g. one shown only on the camera page) can report live.
+    allowed = set()
+    for entry in (*cfg.cameras, *cfg.camera_page):
+        if entry.get("src"):
+            allowed.add(entry["src"])
+        if entry.get("hd"):
+            allowed.add(entry["hd"])
     allowed = allowed or {"cam"}
     if src not in allowed:
         raise HTTPException(404, "unknown camera")
