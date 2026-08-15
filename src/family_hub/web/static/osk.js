@@ -18,13 +18,21 @@
   // pure transform lives in common.js (oskApplyKey) and is tested there, so the
   // gate can bail before building any DOM.
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return;
-  if (!(navigator.maxTouchPoints > 0)) return;
+  // Touch device? maxTouchPoints is the primary signal, but some Linux touch
+  // drivers under Chromium leave it 0 while still reporting a coarse pointer, so
+  // fall back to the pointer media query. A laptop/desktop (fine pointer, no
+  // touch points) fails both and no-ops - it has a real keyboard.
+  const hasTouch = navigator.maxTouchPoints > 0
+    || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  if (!hasTouch) return;
 
   // The inputs the keyboard serves. A `.txt-input` <select> (the chore person
   // picker) also carries the class, so oskTypeable() below excludes non-text
   // controls - the keyboard must only attach to something you can type into.
   const OSK_SEL = '#todo-add-input, .txt-input';
-  const TYPEABLE_TYPES = ['text', 'search', 'url', 'email', 'tel', ''];
+  // Only input types whose selection API works: email/number report null
+  // selectionStart, which would land every keystroke at index 0 (reversed text).
+  const TYPEABLE_TYPES = ['text', 'search', 'url', 'tel', ''];
 
   const KEY_ROWS = [
     '1234567890'.split(''),
@@ -127,7 +135,11 @@
     const el = activeInput;
     if (!el) return;
     const max = el.maxLength;   // the DOM returns -1 when the attribute is absent
-    const res = oskApplyKey(el.value, el.selectionStart, el.selectionEnd, key, {
+    // A selection-less input type would report null here; default to the end of
+    // the field so a keystroke appends rather than landing at index 0.
+    const start = el.selectionStart == null ? el.value.length : el.selectionStart;
+    const end = el.selectionEnd == null ? el.value.length : el.selectionEnd;
+    const res = oskApplyKey(el.value, start, end, key, {
       shift: shiftOn,
       maxlength: max > 0 ? max : 0,
     });
@@ -140,12 +152,19 @@
   function onKey(key) {
     if (key === 'Shift') { shiftOn = !shiftOn; paintFaces(); return; }
     if (key === 'Done') {
-      // Submit the field's form if it has one (fires the existing todo-add
-      // submit handler); otherwise just dismiss.
       const el = activeInput;
       const form = el && el.form;
-      if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
-      else if (el) el.blur();
+      if (form && typeof form.requestSubmit === 'function') {
+        form.requestSubmit();   // e.g. #todo-add-form: adds the to-do
+      } else if (el) {
+        // The chore editor is a non-<form> div with a [data-submit] Save button,
+        // so el.form is null there. Commit through that button (its own
+        // validation surfaces an error if the chore is incomplete) instead of
+        // dismissing the keyboard with nothing saved.
+        const scope = el.closest('.chore-modal, .chore-card, dialog, [role="dialog"]');
+        const submit = scope && scope.querySelector('[data-submit]');
+        if (submit) submit.click(); else el.blur();
+      }
       hide();
       return;
     }
@@ -157,7 +176,12 @@
   // FOCUS PRESERVATION: pressing a key must not steal focus from the input (a
   // blur would collapse the caret and, on the wall, dismiss the keyboard). Cancel
   // the default focus-shift on press; do the actual key work on click.
-  const keepFocus = (e) => { if (e.target.closest('.osk-key')) e.preventDefault(); };
+  // preventDefault on ANY press inside the keyboard - not just on a key - so a
+  // tap that lands in the gaps/padding between keys (real dead zones on an
+  // imprecise touchscreen) still doesn't blur the input and dismiss the board.
+  // The whole .osk is user-select:none with no focusable non-button content, so
+  // cancelling the focus-shift everywhere is safe.
+  const keepFocus = (e) => { e.preventDefault(); };
   oskEl.addEventListener('pointerdown', keepFocus);
   oskEl.addEventListener('mousedown', keepFocus);   // pointer-events-off fallback
   oskEl.addEventListener('click', (e) => {

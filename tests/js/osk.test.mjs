@@ -28,6 +28,13 @@ test('insert a char at the end', () => {
   assert.deepEqual(apply('cat', 3, 3, 's', {}), { value: 'cats', caret: 4 });
 });
 
+test('a null selection (some inputs report it) is treated as caret at start', () => {
+  // real browsers return null selectionStart/End for certain input types; the
+  // wrapper passes them straight through, so oskApplyKey must coerce null -> 0
+  // rather than mis-place the character.
+  assert.deepEqual(apply('hi', null, null, 'x', {}), { value: 'xhi', caret: 1 });
+});
+
 test('a character key replaces the current selection', () => {
   // "cat" with "at" selected (1..3), type 'x' -> "cx"
   assert.deepEqual(apply('cat', 1, 3, 'x', {}), { value: 'cx', caret: 2 });
