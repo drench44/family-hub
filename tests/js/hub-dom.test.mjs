@@ -38,7 +38,7 @@ const SEEDED_IDS = [
   'panels', 'tabbar', 'overlay', 'overlay-home', 'overlay-content', 'ev-modal',
   'ev-card',
   'chore-modal', 'chore-card', 'chore-editor',
-  'confirm-modal', 'confirm-card', 'confirm-msg',
+  'confirm-modal', 'confirm-card', 'confirm-msg', 'confirm-sub',
 ];
 
 function makeClassList() {
@@ -633,6 +633,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
 
   const completeCalls = [];
   const adminChoreCalls = [];   // POST/PATCH /api/admin/chores writes from the editor
+  const adminPeopleCalls = [];  // POST/PATCH/DELETE /api/admin/people from the people editor
   const okJson = (v) => ({ ok: true, status: 200, json: async () => v });
   const sandbox = {
     document,
@@ -659,6 +660,14 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
         }
         if (/\/api\/admin\/chores(\/\d+)?$/.test(url)) {
           adminChoreCalls.push({
+            url,
+            method: (opts && opts.method) || 'GET',
+            body: opts && opts.body ? JSON.parse(opts.body) : null,
+          });
+          return okJson({ id: 99 });
+        }
+        if (/\/api\/admin\/people(\/\d+)?$/.test(url)) {
+          adminPeopleCalls.push({
             url,
             method: (opts && opts.method) || 'GET',
             body: opts && opts.body ? JSON.parse(opts.body) : null,
@@ -703,7 +712,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   };
   return {
     sandbox, document, registry, choresFull, completeCalls, adminChoreCalls,
-    tap, tapConfirm, read,
+    adminPeopleCalls, tap, tapConfirm, read,
   };
 }
 
@@ -1061,6 +1070,209 @@ test('chores overlay: a "Manage on the admin page" link shows in both modes', ()
   // edit mode: the footer persists (visible in BOTH view and edit mode)
   tap('[data-chedit="1"]');
   assert.ok(choresFull.querySelector('.manage-admin-link'), 'the link persists in edit mode');
+});
+
+// --- inline people admin on the Chores page (edit mode) ------------------
+
+// Enter edit mode and let ensurePeopleThenRerender's /api/admin/state fetch
+// resolve + repaint, so the people-editor section is present in the DOM.
+async function enterEditWithPeople(ctx) {
+  ctx.tap('[data-chedit="1"]');
+  await flush();               // ensurePeopleThenRerender fetch + re-render
+}
+
+// hub.js's showToast creates #toast on <body> and writes the message as
+// textContent (see the showToast test above).
+const readToast = (ctx) => {
+  const el = ctx.document.getElementById('toast');
+  return el ? el.textContent : '';
+};
+
+test('people admin: edit mode renders a People section with a row + controls per person', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  assert.ok(!ctx.choresFull.innerHTML.includes('padmin'), 'no people editor in view mode');
+  await enterEditWithPeople(ctx);
+  const html = ctx.choresFull.innerHTML;
+  assert.match(html, /class="padmin"/, 'the people section rendered');
+  assert.match(html, /Sam Rivera/);
+  assert.match(html, /Alex Kim/);
+  // per-person controls + the add-person affordance
+  assert.ok(ctx.choresFull.querySelector('[data-pedit="1"]'), 'Edit control');
+  assert.ok(ctx.choresFull.querySelector('[data-ptoggle="1"]'), 'Deactivate control');
+  assert.ok(ctx.choresFull.querySelector('[data-pdel="1"]'), 'Delete control');
+  assert.ok(ctx.choresFull.querySelector('[data-padd="1"]'), 'Add person control');
+});
+
+test('people admin: tapping "Add person" opens the shared person form; submit POSTs {name,color}', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-padd="1"]');
+  const editor = ctx.registry['chore-editor'];
+  assert.ok(editor.querySelector('[data-pname]'), 'the person name field opened in the modal');
+  assert.ok(!ctx.registry['chore-modal'].classList.contains('hidden'), 'the modal is shown');
+  // fill the name and submit (color defaults to the first swatch)
+  editor.querySelector('[data-pname]').value = 'Jordan';
+  editor.querySelector('[data-psubmit]').onclick();
+  await flush();
+  const post = ctx.adminPeopleCalls.find((c) => c.method === 'POST');
+  assert.ok(post, 'a POST /api/admin/people fired');
+  assert.equal(post.url, '/api/admin/people');
+  assert.equal(post.body.name, 'Jordan');
+  assert.match(post.body.color, /^#[0-9A-Fa-f]{6}$/, 'a palette color was sent');
+});
+
+test('people admin: tapping Edit seeds the form and saves via PATCH', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-pedit="1"]');
+  const editor = ctx.registry['chore-editor'];
+  assert.equal(editor.querySelector('[data-pname]').value, 'Sam Rivera', 'seeded with the name');
+  editor.querySelector('[data-pname]').value = 'Samuel';
+  editor.querySelector('[data-psubmit]').onclick();
+  await flush();
+  const patch = ctx.adminPeopleCalls.find((c) => c.method === 'PATCH');
+  assert.ok(patch, 'a PATCH fired');
+  assert.equal(patch.url, '/api/admin/people/1');
+  assert.equal(patch.body.name, 'Samuel');
+});
+
+test('people admin: Deactivate PATCHes the active flag off', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-ptoggle="1"]');
+  await flush();
+  const patch = ctx.adminPeopleCalls.find((c) => c.url === '/api/admin/people/1' && c.method === 'PATCH');
+  assert.ok(patch, 'a PATCH fired');
+  assert.equal(patch.body.active, 0, 'toggles active off (Sam starts active)');
+});
+
+test('people admin: Delete shows a person confirm (not the chore copy) and fires DELETE only on confirm', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-pdel="1"]');
+  const modal = ctx.document.getElementById('confirm-modal');
+  assert.ok(!modal.classList.contains('hidden'), 'the confirm is shown');
+  assert.match(ctx.document.getElementById('confirm-msg').textContent, /Sam Rivera/, 'names the person');
+  assert.match(ctx.document.getElementById('confirm-sub').textContent, /Removed for good/, 'blunt hard-delete warning');
+  assert.equal(ctx.adminPeopleCalls.length, 0, 'no DELETE before confirming');
+  // confirm
+  ctx.tapConfirm(['[data-confirm-del]']);
+  await flush();
+  const del = ctx.adminPeopleCalls.find((c) => c.method === 'DELETE');
+  assert.ok(del, 'a DELETE fired on confirm');
+  assert.equal(del.url, '/api/admin/people/1');
+});
+
+test('people admin: a FAILED /api/admin/state keeps the cards and shows a visible note (not a silent blank)', async () => {
+  // fetch fails for admin/state; the cards still paint and the section explains
+  // itself rather than vanishing silently
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  ctx.sandbox.fetch = async (url) => {
+    if (url === '/api/admin/state') return failResp(500, 'Disk full (test)');
+    throw new Error('offline in test');
+  };
+  await enterEditWithPeople(ctx);
+  assert.match(ctx.choresFull.innerHTML, /Feed cat/, 'chore cards still present');
+  assert.ok(!ctx.choresFull.innerHTML.includes('class="padmin"'), 'no people editor on fetch failure');
+  assert.match(ctx.choresFull.innerHTML, /couldn.t load people/i, 'a visible note explains the failure');
+});
+
+test('people admin: a FAILED add save shows the error inline and keeps the editor open', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-padd="1"]');
+  const editor = ctx.registry['chore-editor'];
+  // make the write fail (state still loads so the editor can open)
+  ctx.sandbox.fetch = async (url) => {
+    if (url === '/api/admin/state') return okResp({ people: SAMPLE_ADMIN.people, chores: SAMPLE_ADMIN.chores });
+    if (url === '/api/admin/people') return failResp(422, 'name must be 1–30 characters');
+    throw new Error('offline in test');
+  };
+  editor.querySelector('[data-pname]').value = '';
+  editor.querySelector('[data-psubmit]').onclick();
+  await flush();
+  assert.ok(!ctx.registry['chore-modal'].classList.contains('hidden'), 'editor stays open on failure');
+  const err = editor.querySelector('[data-perror]');
+  assert.ok(!err.classList.contains('hidden'), 'the inline error is shown');
+  assert.match(err.textContent, /name must be/, 'it carries the server detail');
+});
+
+test('people admin: a FAILED Deactivate shows a toast and does not refresh', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  let polls = 0;
+  ctx.sandbox.fetch = async (url, opts) => {
+    if (/\/api\/hub/.test(url)) { polls++; throw new Error('offline'); }
+    if (/\/api\/admin\/people\/\d+$/.test(url) && opts && opts.method === 'PATCH') {
+      return failResp(500, 'Disk full (test)');
+    }
+    throw new Error('offline in test');
+  };
+  ctx.tap('[data-ptoggle="1"]');
+  await flush();
+  assert.match(readToast(ctx), /disk full/i, 'a toast surfaces the failure reason');
+  assert.equal(polls, 0, 'no refresh poll ran after the failed write');
+});
+
+test('people admin: a FAILED person Delete shows a toast and runs no refresh', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  let polls = 0;
+  ctx.sandbox.fetch = async (url, opts) => {
+    if (/\/api\/hub/.test(url)) { polls++; throw new Error('offline'); }
+    if (/\/api\/admin\/people\/\d+$/.test(url) && opts && opts.method === 'DELETE') {
+      return failResp(500, 'Disk full (test)');
+    }
+    throw new Error('offline in test');
+  };
+  ctx.tap('[data-pdel="1"]');
+  ctx.tapConfirm(['[data-confirm-del]']);
+  await flush();
+  assert.match(readToast(ctx), /disk full/i, 'a toast surfaces the failure reason');
+  assert.equal(polls, 0, 'no refresh poll ran after the failed delete');
+});
+
+test('people admin: an inactive person shows Activate + .inactive and reactivates (PATCH active:1)', async () => {
+  const adminState = {
+    people: [{ id: 1, name: 'Sam Rivera', color: '#5BC9F0', active: 0 }],
+    chores: [],
+  };
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, adminState);
+  await enterEditWithPeople(ctx);
+  const row = ctx.choresFull.querySelector('[data-padmin="1"]');
+  assert.ok(row.classList.contains('inactive'), 'inactive row carries .inactive');
+  assert.match(ctx.choresFull.innerHTML, /Activate/, 'shows the Activate label');
+  ctx.tap('[data-ptoggle="1"]');
+  await flush();
+  const patch = ctx.adminPeopleCalls.find((c) => c.method === 'PATCH');
+  assert.equal(patch.body.active, 1, 'reactivates (active 0 -> 1)');
+});
+
+test('people admin: a rename invalidates the cache so the re-render shows fresh data', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  // install the stub BEFORE entering edit, so call #1 is the edit-mode load and
+  // call #2 is the post-mutation re-fetch (proving the cache was invalidated).
+  let stateCalls = 0;
+  ctx.sandbox.fetch = async (url, opts) => {
+    if (url === '/api/admin/state') {
+      stateCalls++;
+      const name = stateCalls === 1 ? 'Sam Rivera' : 'Samuel';
+      return okResp({ people: [{ id: 1, name, color: '#5BC9F0', active: 1 }], chores: [] });
+    }
+    if (/\/api\/admin\/people\/\d+$/.test(url) && opts && opts.method === 'PATCH') return okResp({ id: 1 });
+    if (/\/api\/hub/.test(url)) throw new Error('offline');   // poll takes offline
+    throw new Error('offline in test');
+  };
+  await enterEditWithPeople(ctx);
+  assert.equal(stateCalls, 1, 'edit mode loaded the people once');
+  ctx.tap('[data-pedit="1"]');
+  const editor = ctx.registry['chore-editor'];
+  assert.equal(editor.querySelector('[data-pname]').value, 'Sam Rivera', 'seeded from the first load');
+  editor.querySelector('[data-pname]').value = 'Samuel';
+  editor.querySelector('[data-psubmit]').onclick();
+  await flush(); await flush();   // submit -> refreshPeopleAdmin -> re-fetch -> re-render
+  assert.ok(stateCalls >= 2, 'the cache was invalidated and re-fetched');
+  assert.match(ctx.choresFull.innerHTML, /Samuel/, 'the re-render shows the fresh name');
 });
 
 test('sectionHead emits a .shead with tick, label, and an expand button', () => {

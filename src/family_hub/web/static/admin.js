@@ -4,15 +4,8 @@
    /api/admin/* routes. Every mutation refreshes from GET /api/admin/state;
    422 details render inline (never alert()). Depends on common.js globals. */
 
-// 16 vivid, cheerful hues spanning the wheel. Each is dual-legible: WCAG
-// contrast >= 3:1 against BOTH the light-theme card (#FFFFFF) and the
-// dark-theme card (#141A26). See tests/test_static.py::test_swatch_hexes_meet_dual_theme_contrast.
-const SWATCHES = ['#FA4352', '#F64E06', '#BE7A05', '#978B04',
-  '#5B9904', '#049F1E', '#049C6A', '#049E8C',
-  '#0594C3', '#3587FA', '#717CFB', '#9371FB',
-  '#B95DFB', '#E721F9', '#F928B4', '#FA3C7B'];
-// DAY_LABELS, buildChoreForm and freshChoreModel now live in common.js, shared
-// with the hub wall — see common.js for the reusable chore-form implementation.
+// SWATCHES, paintSwatches, DAY_LABELS, buildChoreForm and freshChoreModel now
+// live in common.js, shared with the hub wall — see common.js.
 
 let people = [];
 let chores = [];
@@ -58,18 +51,6 @@ function armConfirm(btn, run) {
     btn.classList.remove('arm');
     load();     // restore the original label
   }, 3000));
-}
-
-/* --------------------------------------------------------------- swatches */
-
-function paintSwatches(host, selected, onpick) {
-  host.innerHTML = SWATCHES.map((hx) =>
-    `<button class="swatch${hx === selected ? ' selected' : ''}" type="button" `
-    + `style="background:${hx}" data-hex="${hx}" aria-label="${hx}"></button>`).join('');
-  host.onclick = (e) => {
-    const b = e.target.closest('.swatch');
-    if (b) onpick(b.dataset.hex);
-  };
 }
 
 /* ---------------------------------------------------------------- people */

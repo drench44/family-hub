@@ -347,6 +347,28 @@ function choreToModel(ch) {
   };
 }
 
+/* 16 vivid, cheerful hues spanning the wheel — the person-color palette. Each
+   is dual-legible: WCAG contrast >= 3:1 against BOTH the light-theme card
+   (#FFFFFF) and the dark-theme card (#141A26). See
+   tests/test_static.py::test_swatch_hexes_meet_dual_theme_contrast. Shared by
+   the admin page and the Chores-page inline people editor. */
+const SWATCHES = ['#FA4352', '#F64E06', '#BE7A05', '#978B04',
+  '#5B9904', '#049F1E', '#049C6A', '#049E8C',
+  '#0594C3', '#3587FA', '#717CFB', '#9371FB',
+  '#B95DFB', '#E721F9', '#F928B4', '#FA3C7B'];
+
+/* Paint the swatch picker into `host` and wire taps to `onpick(hex)`. The
+   background is a palette hex (never user input); aria-label carries the hex. */
+function paintSwatches(host, selected, onpick) {
+  host.innerHTML = SWATCHES.map((hx) =>
+    `<button class="swatch${hx === selected ? ' selected' : ''}" type="button" `
+    + `style="background:${safeColor(hx)}" data-hex="${hx}" aria-label="${escapeHtml(hx)}"></button>`).join('');
+  host.onclick = (e) => {
+    const b = e.target.closest('.swatch');
+    if (b) onpick(b.dataset.hex);
+  };
+}
+
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // bit 0..6
 
 /* One reusable chore form. `model` seeds it; `onsubmit(body, errEl)` fires with
@@ -483,6 +505,31 @@ function todayISO() {
 
 function freshChoreModel() {
   return { title: '', icon: '', repeat: 'daily', days: new Set(), assign: 'fixed', fixed_person_id: null, rot: [], date: '' };
+}
+
+function freshPersonModel() {
+  return { name: '', color: SWATCHES[0] };
+}
+
+/* One reusable person form (name + color swatches), shared by the admin page
+   and the Chores-page inline people editor. `model` seeds it; `onsubmit(body,
+   errEl)` fires with {name, color}. DOM hooks are data-* attributes (not
+   classes) so the form needs no styling of its own — it reuses .txt-input /
+   .swatches / .form-error / .btn-primary. */
+function buildPersonForm(host, model, submitLabel, onsubmit) {
+  host.innerHTML = `
+    <div class="field"><label>Name / nickname</label>
+      <input class="txt-input" data-pname maxlength="30" autocomplete="off"></div>
+    <div class="field"><label>Color</label><div class="swatches" data-pswatches></div></div>
+    <div class="form-error hidden" data-perror></div>
+    <button class="btn-primary" type="button" data-psubmit>${escapeHtml(submitLabel)}</button>`;
+  const $ = (sel) => host.querySelector(sel);
+  $('[data-pname]').value = model.name || '';
+  const paint = () => paintSwatches($('[data-pswatches]'), model.color,
+    (hx) => { model.color = hx; paint(); });
+  paint();
+  $('[data-psubmit]').onclick = () =>
+    onsubmit({ name: $('[data-pname]').value.trim(), color: model.color }, $('[data-perror]'));
 }
 
 /* Attempt a chore check-off/uncheck; returns true on success, false if the

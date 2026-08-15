@@ -46,8 +46,10 @@ at one URL.
   sensor goes stale). Tap **⛶ Full** on either to open your full weather or
   climate dashboard. Both fail soft: a dead feed quietly hides its card, never
   the wall.
-- **Manage:** `/admin.html` from any browser: people, a bigger and brighter
-  color palette, chores, schedules, rotations. No app to install.
+- **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
+  people (rename, recolor, deactivate, or delete) right on the touchscreen —
+  no phone needed. `/admin.html` from any browser does the same. No app to
+  install.
 
 ## Architecture & trust model
 
@@ -284,8 +286,11 @@ render from that record — so editing a schedule, reshuffling a rotation,
 deactivating, or even deleting a chore changes today and the future only.
 Nobody's streak is rewritten by an edit, and a deleted chore still shows on
 the days it was actually done. Streaks count consecutive completed days (rest
-days skip, an unfinished today is forgiven). It's all managed from
-`/admin.html`.
+days skip, an unfinished today is forgiven). People and chores are managed
+right on the wall's Chores page (tap **Edit**) or from `/admin.html`. Deleting
+a person is history-safe: their frozen past days stay recorded, and they're
+stripped from every chore's rotation or fixed assignment; **Deactivate** is the
+reversible alternative.
 
 ## Backup
 
