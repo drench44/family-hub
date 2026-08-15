@@ -1,0 +1,68 @@
+services:
+  web:
+    build: { context: ., dockerfile: web.Dockerfile }
+    image: family-hub:1.0
+    container_name: family-hub
+    # your Linux user's uid:gid — must own ./data (id -u; id -g)
+    user: "${HUB_UID:-1000}:${HUB_GID:-1000}"
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      - TZ=${TZ:-America/Los_Angeles}
+      # camera fetches go over the compose network — a container can't hairpin
+      # its own stack's published LAN port (browser links stay on the LAN IP)
+      - GO2RTC_FETCH_BASE=http://go2rtc:1984
+    # HUB_BIND (in .env) pins every published port to one LAN interface.
+    # The hub has NO auth — never expose it beyond your LAN. See README.
+    ports: [ "${HUB_BIND:-0.0.0.0}:8138:8138" ]
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/data
+  wyze-bridge:
+    # OPTIONAL — only needed for Wyze cameras (no native RTSP): bridges them
+    # onto the compose network; go2rtc consumes
+    # rtsp://wyze-bridge:8554/<camera-name-slug>. Credentials live in the
+    # box-only data/wyze.env (email, password, API key — never in git).
+    # Remove this service if you have no Wyze cams.
+    #
+    # We use the IDisposable fork, not the original mrlt8/wyze-bridge: Wyze
+    # Cam v4 firmware 4.52.9 (2025) disabled the TUTK P2P protocol the
+    # original relied on (streams fail with IOTC_ER_TIMEOUT), and the
+    # original is no longer maintained. This fork auto-falls-back to Wyze's
+    # WebRTC backend, which still works. If you have v3/v4 cams on recent
+    # firmware, this is the image that works. MODEL_OVERRIDES pins v4s
+    # straight to WebRTC (skips a 5-failure TUTK wait); drop it if all your
+    # cams are older models that still speak TUTK.
+    # NOTE: this fork slugs stream names with UNDERSCORES
+    # (my_cam_name_), where the original used dashes — match your
+    # go2rtc.yaml stream URLs accordingly (check the WebUI on :5050).
+    image: idisposablegithub365/wyze-bridge:latest
+    container_name: family-hub-wyze-bridge
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      - TZ=${TZ:-America/Los_Angeles}
+      - WB_AUTH=False          # LAN-only WebUI, same trust model as the hub
+      # AUDIO POLICY: no camera on the hub ever carries a microphone track.
+      # (Also enforced per-stream in go2rtc.yaml via #media=video.)
+      - ENABLE_AUDIO=False
+      - MODEL_OVERRIDES=HL_CAM4:is_webrtc=true
+    # required:false so a fresh clone composes cleanly before Wyze is set up
+    env_file:
+      - path: ./data/wyze.env
+        required: false
+    ports:
+      - "${HUB_BIND:-0.0.0.0}:5050:5000"   # WebUI (setup/debug), LAN-only
+  go2rtc:
+    # OPTIONAL — only needed for camera tiles. Pin the digest after your
+    # first pull (docker compose pull go2rtc; record the sha256 here).
+    image: alexxit/go2rtc:1.9.14
+    container_name: family-hub-go2rtc
+    restart: unless-stopped
+    mem_limit: 128m
+    environment: [ "TZ=${TZ:-America/Los_Angeles}" ]
+    ports:
+      - "${HUB_BIND:-0.0.0.0}:1984:1984"
+      - "${HUB_BIND:-0.0.0.0}:8555:8555/tcp"
+      - "${HUB_BIND:-0.0.0.0}:8555:8555/udp"
+    volumes: [ "./data/go2rtc.yaml:/config/go2rtc.yaml" ]

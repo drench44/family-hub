@@ -1,0 +1,29 @@
+# Copy to data/go2rtc.yaml and fill in your real stream URLs.
+#
+# AUDIO POLICY: every stream ends in #media=video so no camera on the hub
+# ever carries a microphone track. Keep the suffix on any stream added here.
+streams:
+  # UniFi Protect: enable RTSP on the camera (Protect > camera > Advanced) and
+  # copy the rtsps:// URL — it is a per-camera capability token, TREAT AS A
+  # SECRET. Try it verbatim first; if go2rtc logs TLS/SRTP errors, switch the
+  # scheme to rtspx:// (go2rtc's skip-SRTP variant) with the same host/alias.
+  porch: rtsps://YOUR-PROTECT-CONSOLE:7441/PASTE_ALIAS_HERE?enableSrtp#media=video
+
+  # ALSO drop this channel's keyframe interval from Protect's 5s default to 1s
+  # (README > Cameras > "Slow first picture?") — otherwise every viewer joining
+  # a running stream waits up to 5s on black for the next keyframe.
+
+  # Optional 4K/high-res twin for full-screen (reference it as "hd" in the
+  # camera's config.json entry):
+  # porch_hd: rtsps://YOUR-PROTECT-CONSOLE:7441/PASTE_HD_ALIAS?enableSrtp#media=video
+
+  # Wyze cams (via the wyze-bridge container in docker-compose.yml).
+  # Stream name = the camera's Wyze name, lowercased. The IDisposable fork
+  # (see docker-compose.yml) slugs with UNDERSCORES — punctuation, spaces,
+  # and emoji all become underscores. ALWAYS check the bridge WebUI on :5050
+  # for the exact slug; it varies by bridge version.
+  # wyze: rtsp://wyze-bridge:8554/back_yard#media=video
+
+webrtc:
+  # Your box's LAN IP — browsers connect here for the live WebRTC streams.
+  candidates: [ "192.168.1.50:8555" ]

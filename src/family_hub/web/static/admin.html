@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Family Hub · Manage</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=44">
+  <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
+       (no theme flash). Must be the FIRST script in the document. -->
+  <script src="theme.js?v=2"></script>
+</head>
+<body class="admin-page">
+  <div class="admin-wrap">
+    <header class="admin-head">
+      <span class="breath-dot"></span>
+      <span class="wordmark">Family Hub · Manage</span>
+      <a class="admin-home" href="/">← Family Hub</a>
+    </header>
+
+    <section class="admin-section">
+      <h2>Display</h2>
+      <!-- Persisted per-device theme. These call the same setTheme/setAccent/
+           setColumns as the wall gear; the choice is saved on THIS device. -->
+      <div class="admin-card">
+        <div class="theme-ctl" id="theme-ctl">
+          <div class="seg" role="group" aria-label="Theme">
+            <button type="button" data-theme-set="light">Light</button>
+            <button type="button" data-theme-set="dark">Dark</button>
+          </div>
+          <div class="swatches" role="group" aria-label="Accent color">
+            <button class="swatch" type="button" data-c="cyan"   aria-label="Cyan accent"></button>
+            <button class="swatch" type="button" data-c="violet" aria-label="Violet accent"></button>
+            <button class="swatch" type="button" data-c="amber"  aria-label="Amber accent"></button>
+            <button class="swatch" type="button" data-c="green"  aria-label="Green accent"></button>
+          </div>
+          <div class="seg" role="group" aria-label="Column separation">
+            <button type="button" data-cols-set="none">None</button>
+            <button type="button" data-cols-set="wells">Wells</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="admin-section">
+      <h2>People</h2>
+      <div id="people-list"></div>
+      <div class="admin-card">
+        <form class="admin-form" id="person-form">
+          <div class="field">
+            <label for="person-name">Name / nickname</label>
+            <input class="txt-input" id="person-name" maxlength="30" autocomplete="off">
+          </div>
+          <div class="field">
+            <label>Color</label>
+            <div class="swatches" id="person-swatches"></div>
+          </div>
+          <div class="form-error hidden" id="person-error"></div>
+          <button class="btn-primary" type="submit">Add person</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="admin-section">
+      <h2>Chores</h2>
+      <div id="chore-list"></div>
+      <!-- The add-chore form is built by common.js (buildChoreForm), the same
+           builder used for each inline edit and for the wall — one source of truth. -->
+      <div class="admin-card" id="chore-add"></div>
+    </section>
+  </div>
+
+  <script src="common.js?v=32"></script>
+  <script src="admin.js?v=34"></script>
+</body>
+</html>

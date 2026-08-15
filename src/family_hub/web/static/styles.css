@@ -1,0 +1,1173 @@
+/* ================================================================
+   FAMILY HUB — the kitchen wall.
+   Dual-theme design (light + dark, either default), extending house-climate's
+   visual world. One expressive element beyond the neutral palette: PERSON
+   COLOR. Every color resolves through a theme token so both themes stay
+   legible; runs on a LAN wall display with no internet and no webfonts.
+   ================================================================ */
+/* ----------------------------------------------------------------------
+   THEME TOKENS.
+
+   Light is the bare :root; dark is redefined under BOTH prefers-color-scheme
+   (guarded :root:not([data-theme="light"])) and an explicit :root[data-theme="dark"].
+   Accent is a separate axis (data-accent) so "pick a color" is independent of
+   "pick light/dark". theme.js stamps data-theme/data-accent/data-cols on <html>
+   before first paint; the default is dark + cyan.
+
+   The Task 1 foundation kept a parallel set of legacy dark-only tokens so the
+   old rules kept resolving during the migration; Task 10 finished migrating
+   every rule onto this token set and removed those legacy color tokens, so the
+   whole wall + admin chrome now resolves correctly in BOTH themes. The only
+   theme-agnostic tokens left outside the light/dark blocks are the two font
+   stacks (they carry no color).
+   ---------------------------------------------------------------------- */
+:root {
+  /* font tokens are theme-agnostic (no color) so they live on the bare root */
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* ---- theme system: light base (dark + accent overrides follow) ---- */
+  --ground:    #EEF1F6;
+  --surface:   #FFFFFF;
+  --surface-2: #E7ECF3;
+  --edge:      #D6DCE6;
+  --edge-soft: #E4E9F0;
+  --ink:       #171C26;
+  --dim:       #58627A;
+  --faint:     #8A93A6;
+  --good:      #17A672;
+  --warn:      #D98A15;
+  --crit:      #E05656;
+  --shadow:    0 1px 2px rgba(20,28,45,.06), 0 8px 24px rgba(20,28,45,.06);
+  /* person hues (work on both grounds) */
+  --p1: #E86A9E; --p2: #3E9BE8; --p3: #E39A2A;
+  --accent: #0E9BCF; --accent-ink: #FFFFFF; --accent-soft: rgba(14,155,207,.12);
+}
+:root[data-accent="violet"] { --accent:#7A5AF0; --accent-soft:rgba(122,90,240,.12); }
+:root[data-accent="amber"]  { --accent:#D98A15; --accent-soft:rgba(217,138,21,.14); }
+:root[data-accent="green"]  { --accent:#17A672; --accent-soft:rgba(23,166,114,.14); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:    #0B0E15;
+    --surface:   #141A26;
+    --surface-2: #1B2231;
+    --edge:      #29313F;
+    --edge-soft: #202836;
+    --ink:       #E9EDF5;
+    --dim:       #98A3B6;
+    --faint:     #616D82;
+    --good:      #5FD3A0; --warn:#F0B45C; --crit:#EB7373;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+    --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
+  }
+  :root:not([data-theme="light"])[data-accent="violet"]{--accent:#A78BFA;--accent-ink:#150E2E;--accent-soft:rgba(167,139,250,.16);}
+  :root:not([data-theme="light"])[data-accent="amber"] {--accent:#F0B45C;--accent-ink:#231703;--accent-soft:rgba(240,180,92,.16);}
+  :root:not([data-theme="light"])[data-accent="green"] {--accent:#5FD3A0;--accent-ink:#04170F;--accent-soft:rgba(95,211,160,.16);}
+}
+:root[data-theme="dark"] {
+  --ground:#0B0E15; --surface:#141A26; --surface-2:#1B2231; --edge:#29313F; --edge-soft:#202836;
+  --ink:#E9EDF5; --dim:#98A3B6; --faint:#616D82;
+  --good:#5FD3A0; --warn:#F0B45C; --crit:#EB7373;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+  --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
+}
+:root[data-theme="dark"][data-accent="violet"]{--accent:#A78BFA;--accent-ink:#150E2E;--accent-soft:rgba(167,139,250,.16);}
+:root[data-theme="dark"][data-accent="amber"] {--accent:#F0B45C;--accent-ink:#231703;--accent-soft:rgba(240,180,92,.16);}
+:root[data-theme="dark"][data-accent="green"] {--accent:#5FD3A0;--accent-ink:#04170F;--accent-soft:rgba(95,211,160,.16);}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+/* ground backstop so the theme's page color always shows behind a scrolling
+   phone page (never a flash of canvas white or a stale dark field) */
+/* text-size-adjust:100% disables mobile/WebView "font boosting" (text
+   autosizing), which otherwise inflates line-heights on the kitchen wall's
+   kiosk browser and stretches the card rows vertically. Renders identically at
+   1:1 on desktop; the guard only matters on the touchscreen's WebView. */
+html { scrollbar-color: var(--edge) transparent; background: var(--ground);
+       -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--ground);
+  min-height: 100vh;
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num { font-variant-numeric: tabular-nums; }
+.micro {
+  font-family: var(--mono);
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Night: the whole page dims after 22:00. The clock is lifted onto its own
+   layer so it stays crisp against the dimmed field. */
+.is-night { filter: brightness(0.55); }
+
+/* ============ THE ONE CARD + SECTION-HEADER SYSTEM (Task 2) ============ */
+/* A SINGLE .card box treatment and a SINGLE .shead section header are the
+   source of truth for every section on the wall — no per-section bespoke
+   surface/border/radius/shadow. Copied verbatim from the binding mockup spec.
+   The section classes (.person-card / .cal-day / .tile / .panel) carry .card
+   for the box and keep ONLY their own accent (person-color check, today's
+   larger title, the editing outline, camera overlays). */
+/* section header — one system everywhere */
+.shead { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
+.shead .tick { width: 3px; height: 15px; border-radius: 3px; background: var(--accent); }
+.shead h2 { margin: 0; font-size: 12.5px; font-weight: 700; letter-spacing: .18em;
+            text-transform: uppercase; color: var(--dim); }
+.shead .act { margin-left: auto; }
+.expand { appearance: none; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; color: var(--dim); background: var(--surface); border: 1px solid var(--edge);
+  padding: 6px 12px; border-radius: 9px; display: inline-flex; align-items: center; gap: 6px; }
+.expand:hover { color: var(--ink); border-color: var(--accent); }
+.expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* the ONE card — every content unit uses it */
+.card {
+  background: var(--surface); border: 1px solid var(--edge); border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.card.pad { padding: 15px 16px; }
+
+/* ======================= wall page shell ======================= */
+/* The hub is designed at the wall monitor's size (Dell P2424HT, 1920x1080)
+   and does NOT reflow on big screens: desktop browsers show exactly the
+   wall's layout and scroll to see the rest (operator request 2026-08-12).
+   Below the mobile breakpoint (end of file) the SAME page reflows to a
+   phone layout with bottom tabs (operator request 2026-08-13). */
+.wall {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.wrap { width: 1880px; margin: 0 auto; padding: 0 24px 40px; }
+
+/* ============================ top bar ========================== */
+.topbar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 20px 4px 18px;
+  position: relative;   /* anchor for the theme gear's popover */
+}
+.breath-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 8px 1px color-mix(in srgb, var(--good) 55%, transparent);
+  animation: breathe 4.5s ease-in-out infinite;
+  flex: none;
+}
+[data-conn="down"] .breath-dot {
+  background: var(--crit);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--crit) 60%, transparent);
+  animation: none;
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 0.75; }
+  50% { transform: scale(1.35); opacity: 1; }
+}
+.wordmark {
+  font-family: var(--mono);
+  font-size: 13px; font-weight: 700;
+  letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--ink); white-space: nowrap;
+}
+.conn {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--good);
+}
+[data-conn="down"] .conn { color: var(--crit); }
+.spacer { flex: 1; }
+.clock {
+  font-family: var(--mono); font-size: 15px; color: var(--ink);
+  letter-spacing: 0.04em; isolation: isolate;
+}
+.clock .clock-date { color: var(--dim); margin-right: 12px; }
+
+/* ============================ layout ========================== */
+.hub-grid {
+  display: grid;
+  /* chores lead the wall (operator, 2026-08-12); to-dos moved under the
+     calendar and cameras got their own column (operator, 2026-08-14):
+     people | calendar+to-dos | cameras | dashboards */
+  grid-template-columns: 380px minmax(0, 0.95fr) 400px minmax(0, 1.05fr);
+  /* The 1fr second row only works because .hub-grid's own height stays
+     indefinite (the page grows/scrolls to fit it). If an ancestor ever pins
+     a definite height or overflow:hidden for a no-scroll kiosk mode, 1fr
+     starts dividing real, finite space and can crush the to-do row (below
+     the calendar in row 2) to zero. Re-check that change against this row
+     definition before shipping it. */
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "people cal tiles panels"
+    "people todo tiles panels";
+  gap: 24px;
+  align-items: start;
+}
+.people-col { grid-area: people; display: flex; flex-direction: column; gap: 12px; }
+.people-list { display: flex; flex-direction: column; gap: 16px; }
+.todo-slot { grid-area: todo; min-width: 0; }
+.tiles { grid-area: tiles; }
+
+/* ------- always-on dashboard panels (weather almanac + house climate) ------ */
+.panels { grid-area: panels; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+/* box lives on .card now; .panel keeps only its own padding */
+.panel { padding: 12px 12px 12px; }
+/* Each iframe renders at a fixed virtual viewport (data-vw/vh on the tag) and
+   hub.js scales it to fit the slot WITHOUT cropping (panelFit in common.js);
+   the view's height is set by JS to hug the scaled content exactly. */
+.panel-view {
+  height: 400px; /* pre-fit fallback; JS sets the real height */
+  overflow: hidden;
+  border-radius: 8px; background: #05070B;
+}
+.panel-frame {
+  transform-origin: 0 0;
+  border: 0; display: block;
+}
+
+/* ------- native weather summary card (replaces the weather iframe embed) ---- */
+/* The header + card are one visual unit inside the always-on panels column; the
+   small gap keeps the .shead tight above its .card (the column's own gap is
+   larger, meant to separate whole sections). */
+.weather-slot { display: flex; flex-direction: column; gap: 8px; }
+/* .wx / .spark / .q copied verbatim from the binding mockup spec. */
+.wx { padding: 16px; }
+.wx .top { display: flex; align-items: flex-start; gap: 4px; }
+.wx .temp { font-size: 46px; font-weight: 700; line-height: .95; letter-spacing: -.02em; }
+.wx .deg { font-size: 18px; color: var(--dim); margin-top: 4px; }
+.wx .cond { font-size: 13px; color: var(--dim); margin-top: 2px; }
+.wx .sun { margin-left: auto; font-size: 30px; }
+.spark { width: 100%; height: 46px; display: block; margin: 12px 0 4px; }
+.wx .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 18px; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--edge-soft); }
+.wx .stat .k { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.wx .stat .v { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.q { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; text-transform: uppercase; }
+.q.good { color: var(--good); background: color-mix(in srgb, var(--good) 16%, transparent); }
+.q.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+/* the temp + degree tail share a baseline row (mockup's inline flex) */
+.wx .tline { display: flex; align-items: flex-start; gap: 4px; }
+/* a quiet "stale reading" mark on the condition line */
+.wx-stale { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+/* fail-soft stand-in when the weather OR climate feed is unavailable — never a
+   blank column (shared by both native cards) */
+.wx-offline { padding: 14px 16px; color: var(--faint); font-size: 13px; font-style: italic; }
+/* neutral placeholder shown ONLY before the first fetch resolves, so the card
+   never flashes the "unavailable" note on boot (T7). A quiet empty card that
+   reserves roughly the card's height, no alarming copy. */
+.wx-loading { min-height: 120px; }
+
+/* ------- native house-climate summary card (replaces the climate embed) ----- */
+/* header + card are one visual unit, like .weather-slot (the small gap keeps the
+   .shead tight above its .card; the panels column's own gap separates sections) */
+.rooms-slot { display: flex; flex-direction: column; gap: 8px; }
+/* .rooms / .rhead / .room copied verbatim from the binding mockup spec. */
+.rooms { padding: 8px 16px 14px; }
+.rhead { display: flex; gap: 12px; padding: 0 0 2px; }
+.rhead .rk { flex: 1; }
+.rhead span { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.rhead .u { width: 50px; text-align: right; }
+.room { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--edge-soft); }
+.room:first-of-type { border-top: 0; }
+.room .rk { flex: 1; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.room .rv { font-size: 16px; font-weight: 650; width: 50px; text-align: right; }
+.room .rh { font-size: 13px; color: var(--dim); width: 50px; text-align: right; }
+.room.warn .rv { color: var(--warn); }
+
+/* ========================== calendar ========================= */
+.cal { grid-area: cal; display: flex; flex-direction: column; gap: 10px; }
+.cal-note {
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  padding: 18px 18px;
+  margin-bottom: 6px;
+  color: var(--dim);
+  font-size: 15px; line-height: 1.5;
+}
+/* Every day is its own .card so the boundary between days is a real edge, not
+   a floating label; the box treatment lives on .card. Today is distinguished by
+   its larger title + name color (below), not a divergent surface — one card
+   system (Task 2). */
+.cal-day { padding: 10px 14px 8px; }
+.cal-day.is-today { padding: 12px 14px 10px; }
+.cal-dayhead {
+  display: flex; align-items: baseline; gap: 9px;
+  font-family: var(--mono);
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--dim);
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--edge);
+}
+.cal-daydate, .cal-dayrel { color: var(--faint); letter-spacing: 0.12em; }
+.cal-dayrel { margin-left: auto; text-align: right; }
+.cal-day.is-today .cal-dayname { color: var(--accent); }
+.cal-empty {
+  font-size: 14px; font-style: italic; color: var(--faint);
+  padding: 4px 0;
+}
+.cal-ev {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--edge);
+}
+.cal-ev:first-of-type { border-top: 0; }
+.cal-rail {
+  flex: none; align-self: stretch;
+  width: 3px; border-radius: 3px;
+  background: var(--dim);
+}
+.cal-time {
+  flex: none; width: 64px; text-align: right;
+  font-family: var(--mono); font-size: 12px; color: var(--dim);
+}
+.cal-allday {
+  flex: none;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--dim);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.cal-title { flex: 1; font-size: 15px; color: var(--ink); }
+.cal-day.is-today .cal-title { font-size: 17px; }
+/* a timed event whose end has passed quiets down and strikes through */
+.cal-ev.ended .cal-title {
+  color: var(--faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
+}
+.cal-ev.ended .cal-time { opacity: 0.55; }
+.cal-ev.ended .cal-rail { opacity: 0.4; }
+
+/* ========================= person cards ====================== */
+/* box lives on .card now; .person-card keeps only its padding (the person color
+   rides --pc on the check + name, its section accent) */
+.person-card { padding: 16px; }
+.person-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 10px;
+}
+.person-name { font-size: 20px; font-weight: 600; }
+.chip-streak {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 25%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.week-strip { display: flex; gap: 4px; margin-left: auto; }
+.ws-cell { width: 10px; height: 10px; border-radius: 2px; background: var(--edge); }
+.ws-done { background: var(--good); }
+.ws-partial { background: color-mix(in srgb, var(--warn) 60%, transparent); }
+.ws-none { background: color-mix(in srgb, var(--crit) 45%, transparent); }
+.ws-rest { background: var(--edge); }
+.ws-today { outline: 1px solid var(--ink); outline-offset: 1px; }
+
+.chore-row {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 64px;
+  width: 100%;
+  padding: 4px 2px;
+  background: none; border: 0;
+  border-top: 1px solid var(--edge);
+  color: inherit; text-align: left;
+  cursor: pointer;
+}
+.chore-row:first-of-type { border-top: 0; }
+.chore-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.chore-check {
+  flex: none;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--edge);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; color: transparent;
+}
+/* completion wears the person's own color (--pc set on the card) */
+.chore-row.done .chore-check {
+  background: var(--pc, var(--good));
+  border-color: var(--pc, var(--good));
+  color: var(--accent-ink);
+  animation: check-pop 180ms ease-out;
+}
+@keyframes check-pop {
+  0% { transform: scale(0.6); }
+  60% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+.chore-body { flex: 1; display: flex; align-items: center; gap: 8px; }
+.chore-icon { font-size: 17px; }
+.chore-title { font-size: 17px; color: var(--ink); position: relative; }
+.chore-row.done .chore-title { color: var(--dim); }
+/* the strike sweeps through in their color — one-shot, like the check pop */
+.chore-row.done .chore-title::after {
+  content: '';
+  position: absolute; left: -2px; right: -2px; top: 52%;
+  height: 2px; border-radius: 2px;
+  background: var(--pc, var(--good));
+  opacity: 0.9;
+  transform-origin: left center;
+  animation: strike-sweep 260ms ease-out;
+}
+@keyframes strike-sweep {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+/* past/future days in the day browser: state is visible but not tappable */
+.chore-row.readonly { cursor: default; }
+.chore-row.readonly .chore-check { opacity: 0.85; }
+
+/* ---- chores overlay edit mode (today only; the Edit/Done toggle) ---- */
+/* The toggle sits at the right of the day-nav; active = you're editing. */
+.ch-edit-toggle {
+  font-family: var(--mono); font-size: 13px; letter-spacing: 0.08em;
+  text-transform: uppercase; padding: 0 18px;
+}
+.ch-edit-toggle.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* a card being edited gets a clear cool outline, readable across the room */
+.person-card.is-editing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+/* a per-chore edit affordance (pencil) at the right edge of each row */
+.chore-row.is-editing { cursor: pointer; }
+.chore-edit-hint {
+  flex: none; margin-left: auto;
+  font-size: 20px; color: var(--accent);
+}
+/* per-row delete control (edit mode only): a trash tap target at the far right,
+   crit-red so it reads unmistakably as destructive across the room. */
+.chore-del {
+  flex: none; margin-left: 6px;
+  width: 40px; height: 40px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: var(--crit);
+  background: color-mix(in srgb, var(--crit) 13%, transparent);
+  border: 1px solid var(--crit);
+}
+/* the "+ Add chore" row: cool, plus-in-a-circle, reads as an action not a task */
+.chore-add .chore-title { color: var(--accent); font-weight: 600; font-size: 17px; }
+.chore-add-plus {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-size: 22px; font-weight: 600;
+}
+.cal-nav-date { font-family: var(--mono); font-size: 12.5px; color: var(--faint); margin-left: 10px; }
+.chore-rot {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.04em; color: var(--faint);
+}
+
+/* --------------------------- to-dos -------------------------- */
+/* The shared household list. The card lives in its own #todo-slot column
+   under the calendar (no longer a DOM sibling of .person-card), but keeps
+   the same surface treatment; rows echo .chore-row but complete in the
+   neutral --accent, since nobody owns a shared item. */
+/* Task 3: re-boxed like everything else — sectionHead sits OUTSIDE the box,
+   the rows + count chips sit INSIDE a .card (matching .cal-day/.person-card).
+   .todo/.foot/.chip below are copied VERBATIM from the mockup spec. The
+   mockup's row-level classes (.titem/.tcheck/.ttitle) are NOT copied here:
+   the engine's row markup keeps its own .todo-row/.todo-check/.todo-title
+   classes (the click handler matches '.todo-row.done', see hub.js), and
+   those already carry their own full styling below — a duplicate,
+   never-applied copy under different class names would be dead CSS. */
+.todo { padding: 6px 16px 12px; }
+.todo .foot { display: flex; gap: 6px; padding-top: 10px; }
+.chip { font-size: 11px; font-weight: 600; letter-spacing: .04em; padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-2); color: var(--dim); }
+.chip.now { background: var(--accent-soft); color: var(--accent); }
+.todo-row, .todo-row-full {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 52px; width: 100%;
+  padding: 4px 2px;
+  background: none; border: 0;
+  border-top: 1px solid var(--edge);
+  color: inherit; text-align: left;
+}
+.todo-row { cursor: pointer; }
+.todo-row:first-of-type { border-top: 0; }
+/* .todo-row-full:first-of-type never matches inside .todo-section: the
+   sec-head div is the first div sibling, not a row, so target the row that
+   directly follows the bucket label instead. */
+.todo-sec-head + .todo-row-full { border-top: 0; }
+.todo-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.todo-check {
+  flex: none;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--edge);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; color: transparent;
+}
+.todo-row.done .todo-check,
+.todo-row-full.done .todo-check {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  animation: check-pop 180ms ease-out;
+}
+/* recently-done rows: a quiet static check, no circle */
+.todo-check-static { width: auto; height: auto; border: 0; color: var(--dim); }
+/* recently-done rows carry todo-row-full done, so .todo-row-full.done
+   .todo-check would otherwise re-fill/re-animate this static check */
+.todo-row-full.done .todo-check.todo-check-static {
+  background: none; border: 0; color: var(--dim); animation: none;
+}
+.todo-title { font-size: 17px; color: var(--ink); }
+.todo-row.done .todo-title, .todo-row-full.done .todo-title {
+  color: var(--dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--dim);
+}
+.todo-row-main, .todo-body {
+  background: none; border: 0; padding: 0;
+  color: inherit; cursor: pointer;
+}
+.todo-body { flex: 1; text-align: left; }
+.todo-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.todo-act {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--dim);
+  background: none;
+  border: 1px solid var(--edge); border-radius: 999px;
+  padding: 4px 10px; cursor: pointer;
+}
+.todo-act-del { color: color-mix(in srgb, var(--crit) 90%, transparent); }   /* the crit red */
+/* three bucket columns at wall width; the mobile block below collapses to one */
+.todo-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: start; }
+.todo-section { width: 100%; }
+.todo-sec-head {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--faint);
+  margin: 20px 0 4px;
+}
+.todo-add { display: flex; gap: 10px; align-items: center; }
+.todo-add input {
+  flex: 1; min-width: 0;
+  font-size: 16px; color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--edge); border-radius: 10px;
+  padding: 10px 12px;
+}
+.todo-add input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.todo-recent { margin-top: 24px; }
+.todo-recent summary {
+  cursor: pointer;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--faint);
+}
+.todos-page { display: none; }
+
+/* Completion celebration — one shot when a person clears their whole day. */
+.card-celebrate { animation: celebrate 900ms ease-out; position: relative; }
+@keyframes celebrate {
+  0% { border-color: var(--edge); }
+  30% { border-color: var(--good); box-shadow: 0 0 22px color-mix(in srgb, var(--good) 35%, transparent); }
+  100% { border-color: var(--edge); box-shadow: none; }
+}
+.confetti {
+  position: absolute; inset: 0; overflow: visible;
+  pointer-events: none;
+}
+.confetti-particle {
+  position: absolute; top: 14px; left: 50%;
+  width: 7px; height: 7px; border-radius: 2px;
+  opacity: 0;
+  animation: confetti-fly 900ms ease-out forwards;
+}
+@keyframes confetti-fly {
+  0% { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+  100% { opacity: 0; transform: translate(var(--dx, 0), var(--dy, 40px)) rotate(220deg); }
+}
+
+.empty-hub {
+  text-align: center; color: var(--dim);
+  font-family: var(--mono); font-size: 14px; line-height: 2;
+  padding: 40px 16px;
+}
+.empty-hub .empty-sub { color: var(--faint); font-size: 12px; }
+
+/* ============================ tiles ========================== */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tiles .shead { grid-column: 1 / -1; }
+/* box lives on .card now; .tile keeps only its layout + interaction */
+.tile {
+  display: block; width: 100%; text-align: left;
+  padding: 14px;
+  color: inherit;
+  cursor: pointer;
+}
+.tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tile.is-offline { opacity: 0.55; }
+.tile-camera { grid-column: 1 / -1; position: relative; }
+.tile-label {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 8px;
+}
+/* Section headers are the shared .shead system now (see top of file); the
+   camera tile's own label keeps the .tile-label micro treatment above. */
+.tile-offline { font-family: var(--mono); font-size: 13px; color: var(--faint); }
+.cam-frame {
+  display: block; width: 100%; aspect-ratio: 16 / 9;
+  border: 0; border-radius: 8px; background: #05070B;
+  pointer-events: none;   /* taps land on the tile -> full-screen overlay */
+}
+.tile-live {
+  /* bottom-right: go2rtc's player paints its own mode label top-right */
+  position: absolute; bottom: 22px; right: 22px;
+  font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--good);
+  background: rgba(10, 13, 20, 0.7);
+  border-radius: 999px; padding: 2px 7px;
+}
+
+/* =========================== overlays ======================== */
+.overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: #000;
+  display: none;
+}
+.overlay.open { display: block; }
+/* The content box must own the full viewport — an auto-height div collapses
+   the 100%-height iframe to the ~150px default (bug caught on the wall
+   2026-08-12: full-screen views rendered as a strip). */
+.overlay-content { position: absolute; inset: 0; }
+.overlay-frame { width: 100%; height: 100%; border: 0; }
+/* Progressive full-screen camera: the warm medium stream shows instantly as the
+   in-flow base; its HD twin loads in front (absolute, transparent) and fades in
+   once its stream is probed live (JS adds .ready). The fade duration here must
+   stay under hub.js CAM_HD_FADE_MS (450ms), which is when JS drops the base —
+   so the base is never yanked mid-fade. */
+.cam-hd-upgrade { position: absolute; inset: 0; opacity: 0; transition: opacity 0.4s ease; }
+.cam-hd-upgrade.ready { opacity: 1; }
+/* fixed-size kiosk pages scaled to fill: JS sets size/left/top/scale inline */
+.overlay-fitted { position: absolute; transform-origin: 0 0; }
+.overlay-panel {
+  width: 100%; height: 100%; overflow-y: auto;
+  /* top padding clears the fixed ⌂ home pill (16px offset + pill height) */
+  padding: 68px 24px 24px; background: var(--ground);
+}
+.overlay-home {
+  position: absolute; top: 16px; left: 16px; z-index: 2;
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 999px; padding: 8px 14px;
+  cursor: pointer;
+}
+.overlay-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* big overlay versions of calendar / chores reuse the hub DOM */
+.overlay-panel .cal-day.is-today .cal-title { font-size: 19px; }
+.overlay-title {
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--dim); margin: 8px 0 18px 0;
+}
+
+/* Footer of the all-chores overlay: a quiet link to the full /admin.html page.
+   Sits under the last person card, unobtrusive. */
+.manage-admin {
+  display: flex; justify-content: center;
+  margin: 28px auto 0;
+}
+.manage-admin-link {
+  display: inline-flex; align-items: center; min-height: 48px;
+  font-family: var(--mono); font-size: 14px; font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--dim); text-decoration: none;
+  padding: 0 24px; border-radius: 12px;
+  border: 1px solid var(--edge); background: var(--surface);
+}
+.manage-admin-link:hover { color: var(--ink); border-color: var(--accent); }
+.manage-admin-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ================== full calendar (overlay) ================== */
+.cal-ev { cursor: pointer; }
+.cal-ev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+.cal-nav {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 2px 16px;
+}
+.cal-nav-btn {
+  min-width: 46px; height: 42px;
+  font-size: 20px; color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 10px; cursor: pointer;
+}
+.cal-nav-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cal-nav-today { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; padding: 0 14px; }
+.cal-nav-title { font-size: 22px; font-weight: 600; margin-left: 10px; }
+.cal-back {
+  font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--dim);
+  background: none; border: 0; cursor: pointer;
+  padding: 4px 2px 14px;
+}
+.cal-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cal-body { min-height: 0; }
+
+.mgrid {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.mg-head {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--faint); text-align: center; padding: 4px 0 8px;
+}
+.mg-day {
+  min-height: 118px;
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 8px;
+  display: flex; flex-direction: column; gap: 4px;
+  cursor: pointer; overflow: hidden;
+}
+.mg-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mg-out { opacity: 0.38; }
+.mg-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mg-num { font-family: var(--mono); font-size: 13px; color: var(--dim); }
+.mg-today .mg-num { color: var(--accent); font-weight: 700; }
+.mg-ev {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--ink);
+  min-width: 0;
+}
+.mg-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.mg-ev-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mg-more { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+
+/* ==================== event detail card ====================== */
+.ev-modal {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.ev-card {
+  position: relative;
+  width: 100%; max-width: 560px; max-height: 80vh; overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  padding: 24px 26px 26px 30px;
+}
+.ev-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 5px; border-radius: 16px 0 0 16px; }
+
+/* ============ chore editor (add/edit, above the chores overlay) ============ */
+/* Mirrors .ev-modal's layering (z-index 90, over the z-index-50 overlay) so the
+   shared chore form floats above the all-chores view. Scrolls from the top —
+   the form is taller than the event card, so center-anchoring would clip it. */
+.chore-modal {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 24px; overflow-y: auto;
+}
+.chore-card {
+  position: relative;
+  width: 100%; max-width: 560px; margin: auto;
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  padding: 52px 26px 26px 26px;
+}
+.chore-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 40px; height: 40px;
+  font-size: 16px; color: var(--dim);
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: 50%; cursor: pointer;
+}
+.chore-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ============ delete confirm (custom; above the chores overlay) ============ */
+/* NOT window.confirm (blocked/ugly on kiosks). Layers above the editor too
+   (z-index 95 > the editor's 90 > the overlay's 50); the failure toast (100)
+   still wins. Centered — the card is short. */
+.confirm-modal {
+  position: fixed; inset: 0; z-index: 95;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.confirm-card {
+  width: 100%; max-width: 420px;
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  padding: 28px 26px 22px;
+  text-align: center;
+}
+.confirm-msg {
+  font-size: 20px; color: var(--ink); line-height: 1.4;
+  word-break: break-word;
+}
+.confirm-actions { display: flex; gap: 12px; margin-top: 22px; }
+.confirm-actions button {
+  flex: 1; min-height: 52px;
+  font-size: 16px; font-weight: 600;
+  border-radius: 12px; cursor: pointer;
+}
+.confirm-cancel {
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+}
+.confirm-del {
+  color: #fff;
+  background: var(--crit);
+  border: 1px solid var(--crit);
+}
+.confirm-cancel:focus-visible, .confirm-del:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.ev-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 40px; height: 40px;
+  font-size: 16px; color: var(--dim);
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: 50%; cursor: pointer;
+}
+.ev-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ev-title { font-size: 26px; font-weight: 600; line-height: 1.25; padding-right: 48px; }
+.ev-when { font-family: var(--mono); font-size: 14px; color: var(--dim); margin-top: 8px; }
+.ev-chip {
+  display: inline-block; margin-top: 12px;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  border: 1px solid; border-radius: 999px; padding: 3px 10px;
+}
+.ev-loc { font-size: 15px; color: var(--ink); margin-top: 14px; }
+.ev-desc {
+  font-size: 14px; color: var(--dim); line-height: 1.55;
+  margin-top: 12px; white-space: pre-wrap; word-break: break-word;
+}
+
+/* ====================== mobile tab bar ======================= */
+/* Hidden on the wall; the mobile block below turns it on. */
+.tabbar {
+  display: none;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border-top: 1px solid var(--edge);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.tab-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--faint);
+  background: none; border: 0; border-radius: 10px;
+  padding: 6px 4px; cursor: pointer;
+}
+.tab-btn .tab-ico { font-size: 20px; line-height: 1; }
+.tab-btn.active { color: var(--accent); }
+.tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ==================== theme / accent / columns control ==================== */
+/* The persisted display picker (Task 5): Light/Dark segmented, four accent
+   swatches, None/Wells columns. Shown on the admin page and inside the wall's
+   gear popover. Control CSS copied VERBATIM from the binding mockup spec, but
+   SCOPED under .theme-ctl so the mockup's `.swatch` (a 22px accent dot) never
+   collides with the admin's own person-color `.swatch` (a 32px square). */
+.theme-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
+.theme-ctl .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--edge);
+       border-radius: 999px; padding: 3px; gap: 2px; }
+.theme-ctl .seg button { appearance: none; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .04em;
+  color: var(--dim); padding: 8px 16px; border-radius: 999px; line-height: 1;
+  min-height: 40px; }
+.theme-ctl .seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+.theme-ctl .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-ctl .swatches { display: inline-flex; gap: 7px; }
+.theme-ctl .swatch { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent;
+  outline: none; padding: 0; }
+.theme-ctl .swatch[data-c="cyan"]   { background: #29b6e0; }
+.theme-ctl .swatch[data-c="violet"] { background: #8b6cf2; }
+.theme-ctl .swatch[data-c="amber"]  { background: #e2a03c; }
+.theme-ctl .swatch[data-c="green"]  { background: #22b583; }
+.theme-ctl .swatch.on { border-color: var(--ink); }
+.theme-ctl .swatch:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* wall gear + its dismissible popover (so the wall can be re-themed without a
+   phone). The gear sits in the topbar; the popover floats under it. */
+.wall-gear {
+  flex: none; width: 40px; height: 40px; border-radius: 10px;
+  display: inline-grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--edge);
+  color: var(--dim); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.wall-gear:hover { color: var(--ink); border-color: var(--accent); }
+.wall-gear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-pop {
+  position: absolute; top: 58px; right: 24px; z-index: 60;
+  display: none;
+  background: var(--surface); border: 1px solid var(--edge);
+  border-radius: 16px; box-shadow: var(--shadow);
+  padding: 16px 16px 18px;
+}
+.theme-pop.open { display: block; }
+.theme-pop .theme-pop-row { display: flex; flex-direction: column; gap: 8px; }
+.theme-pop .theme-pop-row + .theme-pop-row { margin-top: 14px; }
+.theme-pop .theme-pop-k {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint);
+}
+/* stack the three groups vertically inside the popover (the admin page keeps
+   them in a row via the default .theme-ctl flex-wrap) */
+.theme-pop .theme-ctl { flex-direction: column; align-items: flex-start; gap: 0; }
+
+/* ==================== columns: "wells" separation (Ruling 3) ==================== */
+/* The Columns control stamps data-cols on <html>. "none" (default) is the flat
+   layout; "wells" wraps each column's stack in a soft tinted panel. Only none +
+   wells ship — "lines" is decided-out, so there is deliberately no lines CSS. */
+:root[data-cols="wells"] .hub-grid { gap: 16px; }
+:root[data-cols="wells"] .people-col,
+:root[data-cols="wells"] .cal,
+:root[data-cols="wells"] .todo-slot,
+:root[data-cols="wells"] .tiles,
+:root[data-cols="wells"] .panels {
+  background: color-mix(in srgb, var(--ink) 4%, var(--ground));
+  border: 1px solid var(--edge-soft);
+  border-radius: 18px;
+  padding: 15px 15px 20px;
+}
+
+/* ============================ mobile ========================== */
+/* Under 1000px the fixed 1920 canvas would mean endless sideways scrolling,
+   so the SAME page reflows to one column: chores first, then calendar
+   (operator request 2026-08-13), with bottom tabs slicing off Cameras and
+   Weather. The breakpoint is high on purpose — portrait tablets and half
+   -screen windows get the phone layout, the 1920 wall never does. */
+@media (max-width: 1000px) {
+  .wrap { width: auto; max-width: 640px; padding: 0 14px calc(86px + env(safe-area-inset-bottom)); }
+  .topbar { padding: 14px 2px 12px; }
+  .clock .clock-date { display: none; }
+  /* stretch overrides the wall grid's align-items:start — without it every
+     section shrinks to content width (caught on the phone 2026-08-13) */
+  .hub-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+  /* the wall's under-calendar to-do card has no phone equivalent — the
+     dedicated To-Dos tab already covers phones (operator, 2026-08-14) */
+  .todo-slot { display: none; }
+  .tabbar { display: flex; }
+  /* the add row shares one flex line with the Now/Soon/Later segmented
+     control and Add button — on narrow phones that squeezes the input to
+     a stub, so let it wrap to its own full-width row */
+  .todo-add { flex-wrap: wrap; }
+  .todo-add input { flex: 1 1 100%; }
+  /* each tab shows exactly one surface of the one page */
+  body[data-tab="chores"] .cal,
+  body[data-tab="chores"] .tiles,
+  body[data-tab="chores"] .panels,
+  body[data-tab="chores"] .todos-page { display: none; }
+  body[data-tab="cal"] .people-col,
+  body[data-tab="cal"] .tiles,
+  body[data-tab="cal"] .panels,
+  body[data-tab="cal"] .todos-page { display: none; }
+  body[data-tab="cams"] .people-col,
+  body[data-tab="cams"] .cal,
+  body[data-tab="cams"] .panels,
+  body[data-tab="cams"] .todos-page { display: none; }
+  body[data-tab="weather"] .people-col,
+  body[data-tab="weather"] .cal,
+  body[data-tab="weather"] .tiles,
+  body[data-tab="weather"] .todos-page { display: none; }
+  body[data-tab="todos"] .people-col,
+  body[data-tab="todos"] .cal,
+  body[data-tab="todos"] .tiles,
+  body[data-tab="todos"] .panels { display: none; }
+  body[data-tab="todos"] .todos-page { display: block; padding: 12px; }
+  /* full-screen views on a small screen */
+  .overlay-panel { padding: 64px 12px 20px; }
+  .cal-nav { flex-wrap: wrap; row-gap: 8px; }
+  .cal-nav-title { font-size: 17px; }
+  .mgrid { gap: 3px; }
+  .mg-day { min-height: 52px; padding: 4px 5px; border-radius: 7px; }
+  .mg-ev-title { display: none; }   /* dots only — titles are one tap away */
+  .ev-card { padding: 20px 18px 22px 24px; }
+  .ev-title { font-size: 21px; }
+  .todo-cols { grid-template-columns: 1fr; gap: 0; }
+  .tab-btn { min-width: 0; }
+}
+
+/* five tabs need to fit down to 320px with no horizontal scroll */
+@media (max-width: 380px) {
+  .tab-btn { font-size: 9px; letter-spacing: 0.08em; padding: 6px 2px; }
+}
+
+/* ==================== reduced motion ========================= */
+@media (prefers-reduced-motion: reduce) {
+  /* kill every transition wholesale (mockup convention) so nothing eases; the
+     named animations below are additionally pinned off. */
+  * { transition: none !important; }
+  .breath-dot,
+  .chore-row.done .chore-check,
+  .chore-row.done .chore-title::after,
+  .todo-row.done .todo-check, .todo-row-full.done .todo-check,
+  .card-celebrate { animation: none; }
+  .card-celebrate { border-color: var(--good); }
+  .confetti-particle { display: none; }
+}
+
+/* =========================== admin =========================== */
+.admin-page { padding: 24px 16px 60px; }
+.admin-wrap { max-width: 560px; margin: 0 auto; }
+.admin-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 2px 20px;
+}
+/* Back to the wall — the admin page's only navigation off the page. */
+.admin-home {
+  margin-left: auto;
+  display: inline-flex; align-items: center; min-height: 44px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--dim); text-decoration: none;
+  padding: 0 16px; border-radius: 10px; border: 1px solid var(--edge);
+}
+.admin-home:hover { color: var(--ink); border-color: var(--accent); }
+.admin-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.admin-section { margin-top: 28px; }
+.admin-section > h2 {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 12px;
+}
+.admin-card {
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+.admin-card.inactive { opacity: 0.5; }
+.row-between { display: flex; align-items: center; gap: 10px; }
+.grow { flex: 1; }
+.admin-form { display: flex; flex-direction: column; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > label {
+  font-family: var(--mono); font-size: 12px;
+  letter-spacing: 0.06em; color: var(--dim);
+}
+.txt-input {
+  height: 44px; width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  color: var(--ink); font-size: 16px;
+  padding: 0 12px;
+}
+.txt-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.swatch {
+  width: 32px; height: 32px; border-radius: 8px;
+  border: 2px solid transparent; cursor: pointer;
+}
+.swatch.selected { border-color: var(--ink); }
+.swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.segmented { display: inline-flex; gap: 3px; background: var(--surface-2); border-radius: 10px; padding: 3px; }
+.seg-btn {
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--dim); background: none; border: 0;
+  padding: 8px 14px; border-radius: 8px; cursor: pointer;
+}
+.seg-btn.active { color: var(--ink); background: var(--accent-soft); }
+/* consistent focus-visible ring for the remaining admin/interactive controls
+   that carry no bespoke ring of their own (the file-wide convention) */
+.seg-btn:focus-visible, .day-chip:focus-visible, .btn-quiet:focus-visible,
+.todo-act:focus-visible, .chore-del:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.day-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.day-chip {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--dim); background: var(--surface-2);
+  border: 1px solid var(--edge); border-radius: 8px;
+  padding: 8px 10px; cursor: pointer;
+}
+.day-chip.selected { color: var(--ink); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.rot-add { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.rot-list { display: flex; flex-direction: column; gap: 6px; }
+.rot-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  font-family: var(--mono); font-size: 13px; color: var(--ink);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 8px; padding: 8px 10px;
+  cursor: pointer; text-align: left;
+}
+.rot-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn-primary {
+  width: 100%; height: 46px;
+  font-size: 15px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 10px; cursor: pointer;
+}
+.btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn-quiet {
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--faint); background: none; border: 0; cursor: pointer;
+}
+.btn-quiet.arm { color: var(--crit); }
+.form-error { color: var(--crit); font-size: 13px; }
+.hint { color: var(--faint); font-size: 12px; }
+.hidden { display: none; }
+
+/* Chore list rows carry a schedule/assignee subtitle the person list doesn't
+   (person cards are name-only). Giving it its own line — instead of running it
+   inline after the title, where wrap behavior swung on title length — keeps
+   every row's hierarchy the same regardless of how long the title or the
+   rotation chain is. The open inline editor gets the same divider treatment
+   `.chore-row` already uses on the wall (border-top: var(--edge)), so "reading
+   the chore" and "editing the chore" read as two distinct states, not one
+   run-on block. */
+.chore-meta { margin-top: 4px; }
+#chore-list [data-editor]:not(.hidden) {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--edge);
+}
+
+/* Transient failure toast (e.g. a chore check-off that couldn't be saved).
+   Bottom-centered, auto-hides; visibility toggled by .hub-toast-visible. */
+.hub-toast {
+  position: fixed; left: 50%; bottom: 32px;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--crit); color: #fff;
+  padding: 14px 22px; border-radius: 10px; font-size: 20px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  opacity: 0; pointer-events: none; z-index: 100;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.hub-toast-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
