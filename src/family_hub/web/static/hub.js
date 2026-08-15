@@ -398,11 +398,45 @@ async function renderChoresFull(prefetched) {
   const readonly = choreState.day !== data_date;
   // editing is a today-only mode; a readonly (past/future) day can never be in it
   const editing = choreState.editing && !readonly;
+  // The inline people editor needs the flat people list (colors + active flags)
+  // that /api/chores/day doesn't carry. When it's already cached we render it in
+  // this same pass; otherwise we fetch it and re-render once it lands, so the
+  // person cards still paint instantly on the first pass.
+  let peopleAdmin = '';
+  if (editing) {
+    if (choreAdminPeople) peopleAdmin = peopleAdminHtml(choreAdminPeople);
+    else if (choreAdminError) peopleAdmin = `<div class="cal-empty">couldn’t load people — is the hub reachable? Tap Done, then Edit to retry.</div>`;
+    else ensurePeopleThenRerender();
+  } else {
+    choreAdminPeople = null;   // drop stale cache when leaving edit
+    choreAdminError = false;
+  }
   host.innerHTML = choresNavHtml()
     + (people.length
       ? people.map((p) => personCardHtml(p, { readonly, editing })).join('')
       : `<div class="cal-empty">no people yet</div>`)
+    + peopleAdmin
     + manageAdminHtml();
+}
+
+/* Fetch the flat people list, cache it, and repaint the chores view once — but
+   only if edit mode is still open on today (the fetch may outlive it). On
+   failure the cache stays null so a later render retries; the editor just
+   doesn't appear rather than wedging the view. */
+async function ensurePeopleThenRerender() {
+  if (choreAdminLoading) return;   // a fetch from an earlier render pass is in flight
+  choreAdminLoading = true;
+  try {
+    choreAdminPeople = (await j('/api/admin/state')).people;
+    choreAdminError = false;
+  } catch (e) {
+    choreAdminError = true;   // render a visible note instead of vanishing
+  } finally {
+    choreAdminLoading = false;
+  }
+  if (openView === 'chores' && choreState.editing && choreState.day === data_date) {
+    renderChoresFull(hubData ? hubData.people : null);
+  }
 }
 
 /* Footer of the all-chores overlay (shown in BOTH view and edit mode): a plain
@@ -414,6 +448,37 @@ async function renderChoresFull(prefetched) {
 function manageAdminHtml() {
   return `<div class="manage-admin">`
     + `<a class="manage-admin-link" href="/admin.html">Manage chores on the admin page →</a>`
+    + `</div>`;
+}
+
+/* Flat people list (id/name/color/active) for the inline people editor —
+   /api/chores/day doesn't carry colors or active flags, so edit mode pulls
+   /api/admin/state. Cached while editing; nulled on leave and after any people
+   mutation so the next render re-fetches fresh. `choreAdminError` records a
+   failed load so the section shows a visible note instead of vanishing
+   silently. */
+let choreAdminPeople = null;
+let choreAdminError = false;
+let choreAdminLoading = false;   // in-flight guard: don't stack concurrent fetches
+
+/* The inline people-management section, shown under the person cards in edit
+   mode: rename/recolor, deactivate/reactivate, hard-delete, and add a person —
+   the whole household editable from the wall. */
+function peopleAdminHtml(people) {
+  const rows = (people || []).map((p) =>
+    `<div class="padmin-row${p.active ? '' : ' inactive'}" data-padmin="${p.id}">`
+    + `<span class="padmin-name" style="color:${safeColor(p.color)}">${escapeHtml(p.name)}</span>`
+    + `<button class="padmin-btn" type="button" data-pedit="${p.id}">Edit</button>`
+    + `<button class="padmin-btn" type="button" data-ptoggle="${p.id}">${p.active ? 'Deactivate' : 'Activate'}</button>`
+    + `<button class="padmin-btn padmin-del" type="button" data-pdel="${p.id}">Delete</button>`
+    + `</div>`).join('');
+  return `<div class="padmin">`
+    + `<div class="padmin-head">People</div>`
+    + rows
+    + `<button class="chore-row chore-add" type="button" data-padd="1">`
+    + `<span class="chore-check chore-add-plus">+</span>`
+    + `<span class="chore-body"><span class="chore-title">Add person</span></span>`
+    + `</button>`
     + `</div>`;
 }
 
@@ -1529,12 +1594,86 @@ async function openChoreEditor(seed) {
   if (openView) armIdle();   // keep the overlay alive while the editor is up
 }
 
+/* ------------------------------------------- people editor (add / edit) */
+
+/* After a people mutation: drop the cached admin people so the next render
+   re-fetches, poll() to refresh the wall's person cards (a rename/recolor/
+   activate shows there too), and repaint the chores view staying in edit. */
+async function refreshPeopleAdmin() {
+  choreAdminPeople = null;
+  await poll();
+  if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
+}
+
+/* POST/PATCH a person via the shared person form. On failure the editor stays
+   OPEN and the reason renders inline (same contract as the chore editor). */
+async function submitPerson(url, method, body, errEl) {
+  try {
+    await j(url, {
+      method, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    return;
+  }
+  closeChoreEditor();          // reuses the chore-modal shell
+  await refreshPeopleAdmin();
+}
+
+/* Open the shared person form in the chore-modal shell. Edit reads the cached
+   admin people (loaded when edit mode opened); add starts from a fresh model. */
+function openPersonEditor(seed) {
+  const host = document.getElementById('chore-editor');
+  let model;
+  let label;
+  let onsubmit;
+  if (seed.mode === 'edit') {
+    const p = (choreAdminPeople || []).find((x) => x.id === seed.personId);
+    if (!p) { showToast('That person is no longer here — refreshing.'); refreshPeopleAdmin(); return; }
+    model = { name: p.name, color: p.color };
+    label = 'Save';
+    onsubmit = (body, errEl) => submitPerson(`/api/admin/people/${p.id}`, 'PATCH', body, errEl);
+  } else {
+    model = freshPersonModel();
+    label = 'Add person';
+    onsubmit = (body, errEl) => submitPerson('/api/admin/people', 'POST', body, errEl);
+  }
+  buildPersonForm(host, model, label, onsubmit);
+  document.getElementById('chore-modal').classList.remove('hidden');
+  if (openView) armIdle();
+}
+
+/* Deactivate / reactivate a person (the reversible alternative to delete). */
+async function togglePersonActive(pid) {
+  const p = (choreAdminPeople || []).find((x) => x.id === pid);
+  if (!p) {
+    // the cache was dropped between render and tap (a concurrent refresh) —
+    // give feedback and refresh rather than swallowing the tap
+    showToast('That person is no longer here — refreshing.');
+    refreshPeopleAdmin();
+    return;
+  }
+  try {
+    await j(`/api/admin/people/${pid}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: p.active ? 0 : 1 }),
+    });
+  } catch (e) {
+    showToast(e.message || 'Couldn’t update — check the hub and try again.');
+    return;
+  }
+  await refreshPeopleAdmin();
+}
+
 /* ------------------------------------------------ delete (custom confirm) */
 
 /* A custom confirm — NOT window.confirm, which kiosks block and which looks
    wrong on the wall. It layers above the chores overlay (like the editor) and
-   names the chore. Cancel dismisses with no write; Delete fires the DELETE. */
-let pendingDeleteId = null;
+   names the target. Cancel dismisses with no write; Delete fires the DELETE.
+   Shared by chore delete and person hard-delete: `pendingDelete.kind` picks
+   which endpoint + refresh confirmDelete runs. */
+let pendingDelete = null;   // { kind: 'chore' | 'person', id }
 
 /* The wall's /api/hub payload carries each chore's title (nested under a
    person), so the confirm can name the chore without another fetch. */
@@ -1547,33 +1686,51 @@ function choreTitleById(cid) {
 }
 
 function openDeleteConfirm(cid) {
-  pendingDeleteId = cid;
+  pendingDelete = { kind: 'chore', id: cid };
   const title = choreTitleById(cid);
   document.getElementById('confirm-msg').textContent =
     title ? `Delete “${title}”?` : 'Delete this chore?';
+  document.getElementById('confirm-sub').textContent =
+    'It stays on past days; it’s removed from today on.';
+  document.getElementById('confirm-modal').classList.remove('hidden');
+  if (openView) armIdle();
+}
+
+/* Person hard-delete confirm — a distinct, blunter warning than chore delete:
+   the person is removed for good (deactivate is the reversible option). */
+function openPersonDeleteConfirm(pid) {
+  const p = (choreAdminPeople || []).find((x) => x.id === pid);
+  pendingDelete = { kind: 'person', id: pid };
+  document.getElementById('confirm-msg').textContent =
+    p ? `Delete ${p.name}?` : 'Delete this person?';
+  document.getElementById('confirm-sub').textContent =
+    'Removed for good. Past days keep their record. To pause instead, use Deactivate.';
   document.getElementById('confirm-modal').classList.remove('hidden');
   if (openView) armIdle();
 }
 
 function closeDeleteConfirm() {
-  pendingDeleteId = null;
+  pendingDelete = null;
   document.getElementById('confirm-modal').classList.add('hidden');
 }
 
-/* Confirmed: DELETE the chore, then refresh staying in edit mode (same path as
-   an add/edit save). On failure the reason surfaces as a toast and the chore
-   stays put — detect-don't-swallow, like submitChore/toggleChore. */
+/* Confirmed: DELETE the chore or person, then refresh staying in edit mode. On
+   failure the reason surfaces as a toast and nothing is removed —
+   detect-don't-swallow, like submitChore/toggleChore. */
 async function confirmDelete() {
-  const cid = pendingDeleteId;
-  if (cid == null) return;
+  const target = pendingDelete;
+  if (!target) return;
   closeDeleteConfirm();
+  const url = target.kind === 'person'
+    ? `/api/admin/people/${target.id}` : `/api/admin/chores/${target.id}`;
   try {
-    await j(`/api/admin/chores/${cid}`, { method: 'DELETE' });
+    await j(url, { method: 'DELETE' });
   } catch (e) {
-    showToast(e.message || 'Couldn’t delete the chore — check the hub and try again.');
+    showToast(e.message || 'Couldn’t delete — check the hub and try again.');
     return;
   }
-  await refreshChoresAfterEdit();
+  if (target.kind === 'person') await refreshPeopleAdmin();
+  else await refreshChoresAfterEdit();
 }
 
 /* --------------------------------------------------------------- wiring */
@@ -1652,6 +1809,15 @@ document.addEventListener('click', (e) => {
     openChoreEditor({ mode: 'edit', choreId: Number(editChore.dataset.editChore) });
     return;
   }
+  // inline people admin (edit mode): add / edit / deactivate / hard-delete. The
+  // delete confirm dispatches by kind (see confirmDelete).
+  if (e.target.closest('[data-padd]')) { openPersonEditor({ mode: 'add' }); return; }
+  const pedit = e.target.closest('[data-pedit]');
+  if (pedit) { openPersonEditor({ mode: 'edit', personId: Number(pedit.dataset.pedit) }); return; }
+  const ptoggle = e.target.closest('[data-ptoggle]');
+  if (ptoggle) { togglePersonActive(Number(ptoggle.dataset.ptoggle)); return; }
+  const pdel = e.target.closest('[data-pdel]');
+  if (pdel) { openPersonDeleteConfirm(Number(pdel.dataset.pdel)); return; }
   // to-dos: action buttons first, then check-off rows, then the add controls
   const tmove = e.target.closest('[data-todo-move]');
   if (tmove) { moveTodo(tmove.dataset.tid, tmove.dataset.todoMove); return; }

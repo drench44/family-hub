@@ -216,6 +216,36 @@ def update_person(conn, pid: int, **fields) -> None:
     conn.commit()
 
 
+def delete_person(conn, pid: int) -> bool:
+    """Hard-delete a person, history-safe, as ONE transaction. Their live
+    check-offs (completions) are removed — required anyway to clear the
+    completions -> people(id) FK — and they're stripped from every chore's
+    assignment: dropped from any rotation_order, and a fixed assignment to them
+    nulled (that chore then simply goes unassigned until reassigned, exactly as
+    plan_rows already treats an unresolvable assignee). The frozen
+    occurrence_log is deliberately left untouched — past days keep their
+    snapshot — but those rows won't render once the person is gone, since the
+    day plan only builds cards for current people. Returns True if the person
+    existed. All-or-nothing: an interrupted delete rolls back whole rather than
+    stranding a person half-removed from their rotations."""
+    with conn:
+        if conn.execute("SELECT 1 FROM people WHERE id = ?",
+                        (pid,)).fetchone() is None:
+            return False
+        for ch in conn.execute(
+                "SELECT id, rotation_order FROM chores").fetchall():
+            order = json.loads(ch["rotation_order"])
+            if pid in order:
+                conn.execute(
+                    "UPDATE chores SET rotation_order = ? WHERE id = ?",
+                    (json.dumps([x for x in order if x != pid]), ch["id"]))
+        conn.execute("UPDATE chores SET fixed_person_id = NULL "
+                     "WHERE fixed_person_id = ?", (pid,))
+        conn.execute("DELETE FROM completions WHERE person_id = ?", (pid,))
+        conn.execute("DELETE FROM people WHERE id = ?", (pid,))
+        return True
+
+
 # --- chores ---------------------------------------------------------------
 
 def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,

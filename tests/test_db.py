@@ -67,6 +67,38 @@ def test_person_crud(conn):
     assert len(fdb.list_people(conn, include_inactive=True)) == 1
 
 
+def test_delete_person_is_history_safe_and_cleans_assignments(conn):
+    """Hard delete removes the person + their completions and strips them from
+    every chore's assignment, but leaves the frozen occurrence_log intact."""
+    keep = fdb.add_person(conn, "Sam", "#5BC9F0")
+    gone = fdb.add_person(conn, "Alex", "#8AE0AD")
+    # a rotation chore including both, and a chore fixed to the doomed person
+    rot = fdb.add_chore(conn, title="Dishes", icon="", schedule_kind="daily",
+                        days_mask=0, assign_kind="rotation",
+                        fixed_person_id=None, rotation_order=[keep, gone, keep],
+                        rotation_epoch="2026-08-01")
+    fixed = fdb.add_chore(conn, title="Trash", icon="", schedule_kind="daily",
+                          days_mask=0, assign_kind="fixed", fixed_person_id=gone,
+                          rotation_order=[], rotation_epoch="2026-08-01")
+    fdb.set_completion(conn, rot, "2026-08-10", gone)
+    fdb.replace_day_log(conn, "2026-08-10", [
+        {"chore_id": rot, "person_id": gone, "title": "Dishes", "icon": "",
+         "rot": 1}])
+
+    assert fdb.delete_person(conn, gone) is True
+    # the person and their completions are gone; the other person survives
+    assert [p["id"] for p in fdb.list_people(conn, include_inactive=True)] == [keep]
+    assert fdb.completions_between(conn, "2026-08-10", "2026-08-10") == []
+    # rotation stripped of the deleted id (keep's slots preserved), fixed nulled
+    chores = {c["id"]: c for c in fdb.list_chores(conn)}
+    assert chores[rot]["rotation_order"] == [keep, keep]
+    assert chores[fixed]["fixed_person_id"] is None
+    # frozen history row is left intact (it just won't render without the person)
+    assert fdb.day_log(conn, "2026-08-10")[0]["person_id"] == gone
+    # deleting an unknown person is a no-op returning False
+    assert fdb.delete_person(conn, 9999) is False
+
+
 def test_chore_crud_and_shapes(conn):
     pid = fdb.add_person(conn, "Rem", "#5BC9F0")
     cid = fdb.add_chore(conn, title="Dishes", icon="🍽️", schedule_kind="daily",

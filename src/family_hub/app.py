@@ -753,6 +753,16 @@ def admin_patch_person(pid: int, p: PersonPatch):
     return _person_row(c, pid)
 
 
+@app.delete("/api/admin/people/{pid}")
+def admin_delete_person(pid: int):
+    """Hard-delete a person (history-safe — see db.delete_person). Distinct from
+    the deactivate path (PATCH active=0), which keeps the row for reactivation."""
+    c = _db()
+    if not fdb.delete_person(c, pid):
+        raise HTTPException(404, "unknown person")
+    return {"ok": True}
+
+
 @app.post("/api/admin/chores")
 def admin_add_chore(ch: ChoreIn):
     c = _db()
