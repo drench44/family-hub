@@ -296,11 +296,12 @@ function choreRowHtml(ch, firstName, opts = {}) {
 function personCardHtml(p, opts = {}) {
   const { readonly = false, editing = false } = opts;
   const first = (p.person.name || '').split(' ')[0];
-  // The 🔥 is a day-streak (consecutive days this person cleared their chores),
-  // NOT today's completed count — label it so that's unambiguous on the wall.
+  // The 🔥 count is chore-days finished in a row (a day with no chores neither
+  // counts nor breaks it; see chores.streak), NOT today's completed count. The
+  // tooltip spells this out since the bare number can't; no visible sub-label.
   const streak = p.streak >= 2
-    ? `<span class="chip-streak" title="${p.streak} days in a row of finishing chores">`
-      + `🔥 ${p.streak}<span class="chip-streak-lbl">day streak</span></span>` : '';
+    ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
+      + `🔥 ${p.streak}</span>` : '';
   const rows = p.chores.length
     ? p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing })).join('')
     : (editing ? '' : `<div class="cal-empty">nothing this day</div>`);

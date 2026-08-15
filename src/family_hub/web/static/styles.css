@@ -215,7 +215,7 @@ body {
 .tiles { grid-area: tiles; }
 
 /* ------- always-on dashboard panels (weather almanac + house climate) ------ */
-.panels { grid-area: panels; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.panels { grid-area: panels; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 /* box lives on .card now; .panel keeps only its own padding */
 .panel { padding: 12px 12px 12px; }
 /* Each iframe renders at a fixed virtual viewport (data-vw/vh on the tag) and
@@ -371,9 +371,6 @@ body {
   border-radius: 999px;
   padding: 2px 8px;
 }
-/* clarifies the 🔥 is a day-streak, not today's completed-chore count */
-.chip-streak-lbl { margin-left: 5px; font-size: 9px; font-weight: 700;
-  letter-spacing: .06em; text-transform: uppercase; opacity: .8; }
 .week-strip { display: flex; gap: 4px; margin-left: auto; }
 .ws-cell { width: 10px; height: 10px; border-radius: 2px; background: var(--edge); }
 .ws-done { background: var(--good); }
