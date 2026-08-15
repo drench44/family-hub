@@ -20,6 +20,11 @@ class Config:
     calendars: list[dict] = field(default_factory=list)
     # go2rtc streams shown as camera tiles, in order: [{"src","label"}, ...]
     cameras: list[dict] = field(default_factory=list)
+    # Cameras-tab 2x2 grid, in DOM (row-major) order: same entry shape as
+    # `cameras`. Lets the phone/tablet Cameras page show a different set/order
+    # than the wall's camera column (e.g. add a camera that isn't on the wall).
+    # Empty falls back to `cameras`, so a config that never sets it still works.
+    camera_page: list[dict] = field(default_factory=list)
     # always-on dashboard embeds, in order. Each: {"id","label","url","vw",
     # "vh"} plus optional "page_w" (lay the page out wider than the visible
     # region), "crop_top"/"crop_left" (pan the region to a card), "full"
@@ -69,6 +74,7 @@ def load_config(path: str) -> Config:
         calendar_past_days=int(raw.get("calendar_past_days", 45)),
         calendars=list(raw.get("calendars", [])),
         cameras=list(raw.get("cameras", [])),
+        camera_page=list(raw.get("camera_page", [])),
         panels=list(raw.get("panels", [])),
         theme=_clean_theme(raw.get("theme")),
     )

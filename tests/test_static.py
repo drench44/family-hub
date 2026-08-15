@@ -203,9 +203,16 @@ def test_admin_page_links_back_to_the_wall():
 
 MOBILE_TABS = ("chores", "cal", "cams", "weather")
 
-# each tab's surface, by the section class it leaves visible
+# the wall sections that each live in the hub grid; a tab shows one and hides
+# the rest. (.camgrid is not here — it is default-hidden and only the cams tab
+# reveals it.)
+WALL_SURFACES = {"people-col", "cal", "tiles", "panels"}
+
+# each tab's surface, by the section class it leaves visible. The cams tab shows
+# the 2x2 .camgrid grid and suppresses the wall's .tiles column entirely, so its
+# surface is none of the shared wall sections.
 TAB_SURFACE = {"chores": ".people-col", "cal": ".cal",
-               "cams": ".tiles", "weather": ".panels"}
+               "cams": ".camgrid", "weather": ".panels"}
 
 
 def test_mobile_reflow_block_present():
@@ -228,8 +235,14 @@ def test_each_tab_hides_every_other_surface():
         sel = mobile[mobile.index(f'body[data-tab="{tab}"]'):]
         sel = sel[:sel.index("}")]
         hidden = set(re.findall(r"\.(people-col|cal|tiles|panels)(?![\w-])", sel))
-        expect = {"people-col", "cal", "tiles", "panels"} - {own.lstrip(".")}
+        # A tab hides every wall surface except the one it reuses. The cams tab
+        # reuses none of them (it shows the .camgrid grid instead), so it hides
+        # all four wall sections.
+        expect = WALL_SURFACES - {own.lstrip(".")}
         assert hidden == expect, f"{tab} tab hides {hidden}, expected {expect}"
+    # The cams tab must actually reveal the 2x2 grid it suppressed the column for.
+    assert 'body[data-tab="cams"] .camgrid' in mobile, \
+        "cams tab must show the .camgrid 2x2 grid"
 
 
 def test_tab_bar_covers_all_tabs():

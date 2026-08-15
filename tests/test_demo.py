@@ -81,6 +81,14 @@ def test_demo_links_are_placeholder_cameras(demo_client):
     assert all("tile" not in c for c in cams)   # no go2rtc URLs in demo
 
 
+def test_demo_camera_page_is_a_four_tile_grid(demo_client):
+    """The Cameras-tab 2x2 grid renders four placeholder cameras in DEMO so a
+    screenshot shows a full grid; all four are placeholders with no go2rtc URLs."""
+    grid = demo_client.get("/api/hub").json()["links"]["camera_page"]
+    assert [c["label"] for c in grid] == ["Driveway", "Mailbox", "Back Yard", "Side Gate"]
+    assert all(c["demo"] is True and "tile" not in c for c in grid)
+
+
 def test_demo_weather_and_climate_tiles_are_canned(demo_client):
     wj = demo_client.get("/api/tiles/weather").json()
     assert wj["available"] is True and wj["temp"] == 74.8 and wj["uv"] == 6

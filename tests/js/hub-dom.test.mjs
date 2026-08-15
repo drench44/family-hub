@@ -34,6 +34,7 @@ const hubSrc = readFileSync(join(staticDir, 'hub.js'), 'utf8');
 // for real — that's the whole point of the showToast assertions below.
 const SEEDED_IDS = [
   'conn-word', 'clock-date', 'clock-time', 'cal', 'people', 'todo-slot', 'tiles',
+  'camgrid',
   'panels', 'tabbar', 'overlay', 'overlay-home', 'overlay-content', 'ev-modal',
   'ev-card',
   'chore-modal', 'chore-card', 'chore-editor',
@@ -1202,6 +1203,102 @@ test('initTiles renders no orphan header with zero cameras', () => {
 
   assert.equal(document.getElementById('tiles').innerHTML, '',
     'no cameras configured means no "Cameras" header with nothing under it');
+});
+
+/* ------------------------------------------------- Cameras-tab 2x2 grid */
+
+test('initCamGrid renders the camera_page cameras into #camgrid (config order, no header)', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext(
+    "links = { camera_page: [" +
+    "{ src: 'a', label: 'Drive', tile:'/t/a', full:'/f/a' }," +
+    "{ src: 'b', label: 'Mail', tile:'/t/b', full:'/f/b' } ] };", sandbox);
+
+  sandbox.initCamGrid();
+  const html = document.getElementById('camgrid').innerHTML;
+  // The grid IS the cameras page — no .shead section header, unlike the column.
+  assert.ok(!html.includes('class="shead"'), 'grid carries no section header');
+  assert.match(html, /data-cam="a"/);
+  assert.match(html, /data-cam="b"/);
+  // Row-major order preserved so the 2x2 fills as configured (TL, TR, BL, BR).
+  assert.ok(html.indexOf('data-cam="a"') < html.indexOf('data-cam="b"'),
+    'camera_page order preserved');
+});
+
+test('initCamGrid is a no-op until links arrive (does not latch built early)', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext('links = {};', sandbox);   // links payload not in yet
+  sandbox.initCamGrid();
+  assert.equal(document.getElementById('camgrid').innerHTML, '',
+    'nothing built before links.camera_page exists');
+  vm.runInContext(
+    "links = { camera_page: [{ src:'a', label:'A', tile:'/t/a', full:'/f/a' }] };", sandbox);
+  sandbox.initCamGrid();
+  assert.match(document.getElementById('camgrid').innerHTML, /data-cam="a"/,
+    'builds once links arrive');
+});
+
+function hubWithGrid(wallCams, gridCams) {
+  const { document, sandbox } = newHub();
+  vm.runInContext(
+    `links = { cameras: ${JSON.stringify(wallCams)}, ` +
+    `camera_page: ${JSON.stringify(gridCams)} };`, sandbox);
+  sandbox.initTiles();
+  sandbox.initCamGrid();
+  return { document, sandbox };
+}
+
+test('probeCamera dedups by src and drives every tile of a shared camera from one probe', async () => {
+  const SHARED = { src: 'drive', label: 'Drive', tile: '/wr/drive', full: '/wr/drive',
+                   has_hd: false, hd_src: 'drive' };
+  const GRID_ONLY = { src: 'mail', label: 'Mail', tile: '/wr/mail', full: '/wr/mail',
+                      has_hd: false, hd_src: 'mail' };
+  // 'drive' on the wall column AND the grid; 'mail' only in the grid.
+  const { document, sandbox } = hubWithGrid([SHARED], [SHARED, GRID_ONLY]);
+  // Capture the probes THIS call issues synchronously (before any await drains
+  // the load-time poll().then(probeCamera) microtask), the same isolation the
+  // concurrent-probe test above relies on.
+  const started = [];
+  const resolvers = [];
+  sandbox.fetch = (url) => new Promise((res) => { started.push(String(url)); resolvers.push(res); });
+
+  const done = sandbox.probeCamera();
+
+  // The probe set is the UNION of both surfaces, deduped by src: 'drive' is
+  // probed once despite two tiles, 'mail' once — no double snapshot.
+  const srcs = started.map((u) => u.match(/src=([^&]+)/)[1]).sort();
+  assert.deepEqual(srcs, ['drive', 'mail'], 'one probe per camera across both surfaces');
+
+  resolvers.forEach((res) => res({ ok: true }));
+  await done;
+
+  // The core new path: a camera that lives ONLY in camera_page must still be
+  // probed, or the grid tile would sit permanently offline.
+  const mailTiles = document.querySelectorAll('.tile-camera[data-cam="mail"]');
+  assert.equal(mailTiles.length, 1, 'mailbox renders only in the grid');
+  assert.ok(!mailTiles[0].classList.contains('is-offline'), 'grid-only camera probed live');
+
+  // One probe flips BOTH tiles of the shared src (querySelectorAll, not first-match).
+  const driveTiles = document.querySelectorAll('.tile-camera[data-cam="drive"]');
+  assert.equal(driveTiles.length, 2, 'shared camera renders on the column AND the grid');
+  driveTiles.forEach((t) => {
+    assert.ok(!t.classList.contains('is-offline'), 'both tiles of the shared src go live');
+    assert.ok(!t.querySelector('.tile-live').classList.contains('hidden'), 'LIVE badge on both');
+  });
+});
+
+test('a down grid-only camera marks its grid tile offline', async () => {
+  const GRID_ONLY = { src: 'mail', label: 'Mail', tile: '/wr/mail', full: '/wr/mail',
+                      has_hd: false, hd_src: 'mail' };
+  const { document, sandbox } = hubWithGrid([], [GRID_ONLY]);
+  sandbox.fetch = async () => { throw new Error('down'); };
+
+  await sandbox.probeCamera();
+
+  const tile = document.querySelector('.tile-camera[data-cam="mail"]');
+  assert.ok(tile.classList.contains('is-offline'), 'grid-only camera reflects offline');
+  assert.ok(tile.querySelector('.cam-frame').classList.contains('hidden'),
+    'frame stays hidden while the camera is down');
 });
 
 /* --------------------------------------------------------- camera probes */
