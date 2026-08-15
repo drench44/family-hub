@@ -1022,6 +1022,25 @@ test('renderTodoSlot: header sits OUTSIDE the .card, the list sits INSIDE it (Ta
   assert.match(html, /<span class="chip">2 later<\/span><\/div>/);
 });
 
+test('renderTodoSlot: todos_ok===false shows a "couldn’t load" note, NOT an empty card', () => {
+  const { document, sandbox } = newHub();
+  // The server fell back to empty buckets on a read error and flagged it. The
+  // wall must NOT render this as "nothing on the list" (which reads as "all
+  // caught up") — it must say the list couldn't be loaded.
+  sandbox.renderTodoSlot({ todos: { now: [], soon: [], later: [] }, todos_ok: false });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /couldn.t load the list/);
+  assert.doesNotMatch(html, /nothing on the list/);
+});
+
+test('renderTodoSlot: a genuinely empty list (todos_ok omitted) still reads "nothing on the list"', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderTodoSlot({ todos: { now: [], soon: [], later: [] } });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /nothing on the list/);
+  assert.doesNotMatch(html, /couldn.t load the list/);
+});
+
 test('todosFullHtml: full-screen buckets are boxed like every other section, rows untouched', () => {
   const { sandbox } = newHub();
   vm.runInContext(
@@ -1321,6 +1340,28 @@ const WX_WARN = {
   low: 75, high: 95, uv: 9, uv_desc: 'Very High', aqi: 151, aqi_cat: 'Unhealthy',
   humidity: 70, dew_point: 74, spark: [], stale: true,
 };
+
+test('fetchWeather: keeps the last good card through transient failures, gives up after the limit', async () => {
+  const { document, sandbox } = newHub();
+  await flush();   // let the load-time fetchWeather() (offline stub) settle first
+  const slot = document.createElement('div');
+  slot._id = 'weather-slot';
+  document.body.appendChild(slot);
+  // a good reading paints the card and resets the failure counter
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => WX_GOOD });
+  await sandbox.fetchWeather();
+  assert.match(slot.innerHTML, /class="temp num">74</, 'good card first');
+  // the feed now blips: single failures must NOT blank the card
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchWeather();   // fail 1
+  assert.match(slot.innerHTML, /class="temp num">74</, 'last-good retained after 1 fail');
+  assert.doesNotMatch(slot.innerHTML, /unavailable/i);
+  await sandbox.fetchWeather();   // fail 2
+  assert.match(slot.innerHTML, /class="temp num">74</, 'last-good retained after 2 fails');
+  // only after TILE_FAIL_LIMIT (3) consecutive misses does it fall back
+  await sandbox.fetchWeather();   // fail 3
+  assert.match(slot.innerHTML, /unavailable/i, 'gives up after the failure limit');
+});
 
 test('weather card renders temp, condition/feels, UV, AQI, humidity and dew', () => {
   const { html } = renderWeatherHtml(WX_GOOD);
