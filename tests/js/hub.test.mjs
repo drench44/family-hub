@@ -334,3 +334,58 @@ test('todoFailMessage: distinguishes a concurrent-edit 404 from a generic failur
   assert.equal(sandbox.todoFailMessage('/api/todos/1 -> HTTP 500'),
     'Couldn’t save — check the hub and tap again.');
 });
+
+test('j: aborts a hung request when the timeout fires, so callers get a rejection', async () => {
+  // The vm sandbox has no AbortController by default (so the timeout self-disables
+  // in the other tests). Inject a real one + a capturable timer to drive the abort.
+  const orig = { fetch: sandbox.fetch, AC: sandbox.AbortController,
+    st: sandbox.setTimeout, ct: sandbox.clearTimeout };
+  let fireTimeout = null;
+  sandbox.AbortController = AbortController;
+  sandbox.setTimeout = (fn) => { fireTimeout = fn; return 1; };
+  sandbox.clearTimeout = () => {};
+  let aborted = false;
+  sandbox.fetch = (url, opts) => new Promise((_res, rej) => {
+    opts.signal.addEventListener('abort', () => { aborted = true; rej(new Error('aborted')); });
+  });
+  try {
+    const p = sandbox.j('/api/hub');
+    assert.equal(typeof fireTimeout, 'function', 'a timeout was armed');
+    fireTimeout();                       // simulate J_TIMEOUT_MS elapsing
+    await assert.rejects(p);             // the hang becomes a rejection
+    assert.ok(aborted, 'the fetch signal was aborted');
+  } finally {
+    sandbox.fetch = orig.fetch; sandbox.AbortController = orig.AC;
+    sandbox.setTimeout = orig.st; sandbox.clearTimeout = orig.ct;
+  }
+});
+
+test('j: preserves a caller-supplied AbortSignal and arms no internal timeout', async () => {
+  const orig = { fetch: sandbox.fetch, AC: sandbox.AbortController, st: sandbox.setTimeout };
+  let armed = false;
+  sandbox.AbortController = AbortController;
+  sandbox.setTimeout = () => { armed = true; return 1; };
+  const ac = new AbortController();
+  sandbox.fetch = async (url, opts) => {
+    assert.equal(opts.signal, ac.signal, 'the caller signal is passed straight through');
+    return { ok: true, status: 200, json: async () => ({ ok: 1 }) };
+  };
+  try {
+    await sandbox.j('/x', { signal: ac.signal });
+    assert.equal(armed, false, 'no internal timeout when the caller owns the signal');
+  } finally {
+    sandbox.fetch = orig.fetch; sandbox.AbortController = orig.AC; sandbox.setTimeout = orig.st;
+  }
+});
+
+test('safeColor: passes hex/keywords through, neutralizes CSS-injection attempts', () => {
+  // legitimate values survive unchanged (so inline style="" output is identical)
+  assert.equal(sandbox.safeColor('#5BC9F0'), '#5BC9F0');
+  assert.equal(sandbox.safeColor('#abc'), '#abc');
+  assert.equal(sandbox.safeColor('red'), 'red');
+  // a value carrying extra CSS declarations (`;`/`:`) can't reach the attribute
+  assert.equal(sandbox.safeColor('red;background:url(x)'), 'transparent');
+  assert.equal(sandbox.safeColor('#fff;position:fixed'), 'transparent');
+  assert.equal(sandbox.safeColor(''), 'transparent');
+  assert.equal(sandbox.safeColor(null), 'transparent');
+});
