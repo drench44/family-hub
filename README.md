@@ -107,8 +107,8 @@ optional and independent — add the pieces you have.
 | `cameras` | go2rtc streams shown as tiles: `{"src","label"}` + optional `"hd"` (higher-res twin used full-screen) |
 | `panels` | Always-on dashboard embeds (see below) |
 | `go2rtc_base` | Your go2rtc URL (browser-reachable), omit if no cameras |
-| `weather_base` | Base URL of a weather JSON feed for the native weather card; empty = card hidden |
-| `climate_base` | Base URL of a per-room climate JSON feed for the native climate card; empty = card hidden |
+| `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
+| `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
 | `theme` | House default display theme — `{"mode","accent","columns"}` (`mode`: light/dark, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines). Applied on a fresh device with no saved override |
 
 ### Calendars: Google

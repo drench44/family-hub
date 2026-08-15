@@ -6,9 +6,28 @@ disk (a regression can corrupt the token and break auth permanently).
 The google libraries are mocked so no network/credentials are needed, but the
 client's own pagination/refresh logic runs for real.
 """
+import logging
 from unittest import mock
 
 from family_hub.calendar_sync import GoogleCalendarClient
+
+
+def test_configured_false_when_token_absent(tmp_path):
+    assert GoogleCalendarClient(str(tmp_path / "nope.json")).configured() is False
+
+
+def test_configured_corrupt_token_warns_once_then_stays_quiet(tmp_path, caplog):
+    """A PRESENT-but-unparseable token must (a) fail closed to unconfigured and
+    (b) log the real cause — but only ONCE, since configured() runs every sync
+    tick and a persistently-corrupt file must not spam a stack trace each cycle."""
+    tok = tmp_path / "token.json"
+    tok.write_text("{ not valid json")
+    client = GoogleCalendarClient(str(tok))
+    with caplog.at_level(logging.WARNING, logger="family_hub.calendar"):
+        assert client.configured() is False   # present but unparseable -> not connected
+        assert client.configured() is False   # a later tick, still broken
+    warns = [r for r in caplog.records if "did not parse" in r.getMessage()]
+    assert len(warns) == 1, "a persistently-corrupt token warns once, not every tick"
 
 
 def _fake_service():

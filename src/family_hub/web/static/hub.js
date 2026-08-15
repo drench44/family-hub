@@ -473,7 +473,10 @@ function todoCardHtml(todos, ok = true) {
   const b = todos || {};
   const nowItems = (b.now || []).slice(0, 5);
   const rows = !ok
-    ? `<div class="cal-empty">couldn’t load the list — is the hub reachable?</div>`
+    // NOT "is the hub reachable?" — /api/hub just answered, so it demonstrably
+    // is; this is an internal read error (logged server-side at ERROR). Don't
+    // send the family to power-cycle a router that's fine.
+    ? `<div class="cal-empty">couldn’t load the list — something went wrong</div>`
     : nowItems.length
       ? nowItems.map((t) => todoRowHtml(t, false)).join('')
       : `<div class="cal-empty">nothing on the list</div>`;
