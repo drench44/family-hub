@@ -96,6 +96,11 @@ body {
   font-size: 15px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  /* Fixed 1920px canvas: a hair of vertical overflow makes a scrollbar appear,
+     which steals width and triggers a phantom horizontal scrollbar. On a
+     kiosk that never scrolls sideways, just clip it — nothing sits past the
+     centered .wrap anyway. */
+  overflow-x: hidden;
 }
 
 .num { font-variant-numeric: tabular-nums; }
@@ -202,7 +207,7 @@ body {
   /* chores lead the wall (operator, 2026-08-12); to-dos moved under the
      calendar and cameras got their own column (operator, 2026-08-14):
      people | calendar+to-dos | cameras | dashboards */
-  grid-template-columns: 380px minmax(0, 1fr) 400px 400px;
+  grid-template-columns: 360px minmax(0, 1fr) 540px 340px;
   /* The 1fr second row only works because .hub-grid's own height stays
      indefinite (the page grows/scrolls to fit it). If an ancestor ever pins
      a definite height or overflow:hidden for a no-scroll kiosk mode, 1fr
@@ -217,7 +222,7 @@ body {
   align-items: start;
 }
 .people-col { grid-area: people; display: flex; flex-direction: column; gap: 12px; }
-.people-list { display: flex; flex-direction: column; gap: 12px; }
+.people-list { display: flex; flex-direction: column; gap: 10px; }
 .todo-slot { grid-area: todo; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .tiles { grid-area: tiles; }
 
@@ -364,10 +369,10 @@ body {
 /* ========================= person cards ====================== */
 /* box lives on .card now; .person-card keeps only its padding (the person color
    rides --pc on the check + name, its section accent) */
-.person-card { padding: 13px 16px; }
+.person-card { padding: 10px 16px; }
 .person-head {
   display: flex; align-items: center; gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .person-name { font-size: 20px; font-weight: 600; }
 .chip-streak {
@@ -388,10 +393,11 @@ body {
 
 .chore-row {
   display: flex; align-items: center; gap: 12px;
-  min-height: 56px;   /* was 64px — compacted (operator, 2026-08-15) to fit
-                         more chores per column; still a comfortable tap */
+  min-height: 48px;   /* compacted for the 1080p wall so the people column
+                         fits with no vertical scroll; 48px is the enforced
+                         touch-target floor (see tests/test_static.py) */
   width: 100%;
-  padding: 4px 2px;
+  padding: 2px 2px;
   background: none; border: 0;
   border-top: 1px solid var(--edge);
   color: inherit; text-align: left;
