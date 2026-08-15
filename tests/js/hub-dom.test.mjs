@@ -1485,6 +1485,22 @@ test('openOverlay("cameras-page") renders the 2x2 grid and probes the streams af
   assert.deepEqual(srcs, ['a', 'b'], 'probeCamera fired for the grid after open');
 });
 
+test('opening an overlay locks page scroll (body.overlay-open); closing unlocks it', () => {
+  const { document, sandbox } = newHub();
+  captureTimers(sandbox);
+  sandbox.fetch = () => new Promise(() => {});   // probe hangs; irrelevant here
+  vm.runInContext(
+    "links = { camera_page: [{ src:'a', label:'A', tile:'/t', full:'/f' }] };", sandbox);
+
+  sandbox.openOverlay('cameras-page');
+  assert.ok(document.body.classList.contains('overlay-open'),
+    'page scroll is locked while the overlay is open (no wall scrollbar behind it)');
+
+  sandbox.closeOverlay();
+  assert.ok(!document.body.classList.contains('overlay-open'),
+    'page scroll is restored when the overlay closes');
+});
+
 test('openOverlay("cameras-page") with an empty camera_page shows a note, not a black grid', () => {
   const { document, sandbox } = newHub();
   captureTimers(sandbox);

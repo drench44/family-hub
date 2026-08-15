@@ -751,8 +751,12 @@ body {
   position: fixed; inset: 0; z-index: 50;
   background: #000;
   display: none;
+  overflow: hidden;   /* the overlay fills the viewport; it never scrolls itself */
 }
 .overlay.open { display: block; }
+/* While an overlay is open, lock the page behind it so the tall wall page's
+   own scrollbar doesn't show beside a full-screen view (e.g. the camera page). */
+body.overlay-open { overflow: hidden; }
 /* The content box must own the full viewport — an auto-height div collapses
    the 100%-height iframe to the ~150px default (bug caught on the wall
    2026-08-12: full-screen views rendered as a strip). */
