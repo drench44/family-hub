@@ -79,12 +79,24 @@ function bucketByDay(evs) {
   return byDay;
 }
 
-function eventRow(ev) {
+function eventRow(ev, day) {
   const color = safeColor(eventColor(ev));
   const ended = eventEnded(ev, Date.now());
-  const timeCell = ev.all_day
-    ? `<span class="cal-allday" style="border-color:${escapeHtml(color)};color:${escapeHtml(color)}">all day</span>`
-    : `<span class="cal-time num">${escapeHtml(fmtTime(ev.start_ts))}</span>`;
+  // On a day after the event's start the start time is stale: show the end
+  // time on the final day (marked "→"), and treat a full middle day of a
+  // multi-day timed span as all-day — never a "→ <final end>" that reads as
+  // if it ended that day.
+  const continuation = !ev.all_day && day && (ev.start_ts || '').slice(0, 10) < day;
+  const endDay = continuation && day === lastVisibleDay(ev);
+  const allDayCell = `<span class="cal-allday" style="border-color:${escapeHtml(color)};color:${escapeHtml(color)}">all day</span>`;
+  let timeCell;
+  if (ev.all_day || (continuation && !endDay)) {
+    timeCell = allDayCell;
+  } else if (continuation) {
+    timeCell = `<span class="cal-time num">→ ${escapeHtml(fmtTime(ev.end_ts))}</span>`;
+  } else {
+    timeCell = `<span class="cal-time num">${escapeHtml(fmtTime(ev.start_ts))}</span>`;
+  }
   return `<div class="cal-ev${ended ? ' ended' : ''}" data-eid="${escapeHtml(ev.id)}" tabindex="0">`
     + `<span class="cal-rail" style="background:${escapeHtml(color)}"></span>`
     + timeCell
@@ -105,7 +117,7 @@ function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
     const isToday = d === todayStr;
     html += `<div class="card cal-day${isToday ? ' is-today' : ''}">`
       + dayHeadHtml(d, todayStr)
-      + (evs.length ? evs.map(eventRow).join('')
+      + (evs.length ? evs.map((ev) => eventRow(ev, d)).join('')
         : `<div class="cal-empty">nothing scheduled</div>`)
       + `</div>`;
   }

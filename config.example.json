@@ -11,7 +11,7 @@
   ],
   "cameras": [
     { "src": "porch", "label": "Front Porch", "hd": "porch_hd" },
-    { "src": "wyze", "label": "Back Yard" }
+    { "src": "wyze", "label": "Back Yard", "hd": "wyze_hd" }
   ],
   "panels": [
     { "id": "weather", "label": "Weather", "url": "http://192.168.1.50:8137/",

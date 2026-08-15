@@ -364,10 +364,10 @@ body {
 /* ========================= person cards ====================== */
 /* box lives on .card now; .person-card keeps only its padding (the person color
    rides --pc on the check + name, its section accent) */
-.person-card { padding: 16px; }
+.person-card { padding: 13px 16px; }
 .person-head {
   display: flex; align-items: center; gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .person-name { font-size: 20px; font-weight: 600; }
 .chip-streak {
@@ -388,7 +388,8 @@ body {
 
 .chore-row {
   display: flex; align-items: center; gap: 12px;
-  min-height: 64px;
+  min-height: 56px;   /* was 64px — compacted (operator, 2026-08-15) to fit
+                         more chores per column; still a comfortable tap */
   width: 100%;
   padding: 4px 2px;
   background: none; border: 0;
@@ -839,6 +840,10 @@ body {
 .confirm-msg {
   font-size: 20px; color: var(--ink); line-height: 1.4;
   word-break: break-word;
+}
+.confirm-sub {
+  margin-top: 8px;
+  font-size: 14px; color: var(--dim); line-height: 1.4;
 }
 .confirm-actions { display: flex; gap: 12px; margin-top: 22px; }
 .confirm-actions button {

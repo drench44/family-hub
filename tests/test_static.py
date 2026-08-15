@@ -108,9 +108,11 @@ def test_no_literal_http_urls_anywhere():
 # ------------------------------------------------- design-spec additions
 
 def test_chore_row_is_a_big_tap_target():
+    # was >= 64; compacted to fit more chores per column (operator,
+    # 2026-08-15). 48px stays the floor — the common touch-target minimum.
     rule = _css_rule(".chore-row")
     m = re.search(r"min-height:\s*(\d+)px", rule)
-    assert m and int(m.group(1)) >= 64, ".chore-row must be >= 64px (wall tap target)"
+    assert m and int(m.group(1)) >= 48, ".chore-row must be >= 48px (tap target)"
 
 
 def test_celebration_is_reduced_motion_guarded():
