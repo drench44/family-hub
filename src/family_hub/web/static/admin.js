@@ -143,6 +143,8 @@ function rebuildAddChore() {
 
 function schedText(ch) {
   if (ch.schedule_kind === 'daily') return 'Daily';
+  // A one-time chore stores its single due date as rotation_epoch.
+  if (ch.schedule_kind === 'once') return `Once · ${ch.rotation_epoch}`;
   return DAY_LABELS.filter((_, i) => (ch.days_mask >> i) & 1).join('·');
 }
 
