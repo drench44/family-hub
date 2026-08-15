@@ -51,16 +51,20 @@ sudo raspi-config nonint do_wayland W1   # W1 = X11, W2 = Wayfire, W3 = Labwc
 
 (Interactively: `sudo raspi-config` → *Advanced Options* → *Wayland* → *X11*.)
 
-## 3. Install the cursor-hider
+## 3. Install the cursor-hider and an emoji font
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y unclutter-xfixes
+sudo apt-get install -y unclutter-xfixes fonts-noto-color-emoji
 ```
 
 `unclutter-xfixes` (the modern fork) supports `--hide-on-touch`, which keeps
 the cursor hidden even when a **touch tap** moves the pointer. Classic
 `unclutter` flashes the arrow on every tap, so prefer the xfixes build.
+
+`fonts-noto-color-emoji` matters because a minimal Pi OS install often ships
+**no color emoji font**, so the dashboard's emoji (the 🔥 streak, chore icons)
+render as blank boxes until you install one.
 
 ## 4. Install the kiosk launcher + autostart
 
@@ -124,6 +128,7 @@ the official Pi supply, and don't power the touchscreen off the Pi.
 | Screen black / "no signal" | Wrong HDMI connector (Pi uses **micro**-HDMI, not mini), or plug into **HDMI0** (nearest USB-C) and reboot with it already connected. |
 | Picture works, touch doesn't | The touch **USB** cable isn't connected to the Pi. HDMI is video only. |
 | Cursor flashes on tap | You're using classic `unclutter`; install `unclutter-xfixes` and use `--hide-on-touch`. |
+| Emoji (🔥, chore icons) are blank boxes | No color emoji font installed — `sudo apt-get install -y fonts-noto-color-emoji`, then reload. |
 | Boots to desktop, no kiosk | Autologin not set (step 1), or the autostart `Exec=` path is wrong (must be your real home dir). |
 | Random glitches / undervoltage | Screen is drawing power from the Pi — give the screen its own supply. |
 | Hub loads on your PC but not the Pi | The Pi can't reach the hub — check they're on networks that route to each other; `curl http://<your-hub>:8138/health` from the Pi should return `200`. |
