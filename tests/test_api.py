@@ -706,6 +706,40 @@ def test_camera_route_happy_and_502(client, monkeypatch):
     assert client.get("/api/tiles/camera.jpg").status_code == 502
 
 
+def test_camera_snapshot_allows_camera_page_only_streams(tmp_path, monkeypatch):
+    """A camera that lives only in camera_page (the grid), not the wall `cameras`
+    column, must still be probe-able — otherwise its grid tile is stuck showing
+    'offline' even though the stream is live (regression: grid-only Mailbox)."""
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({
+        "port": 8138, "go2rtc_base": "http://cam", "calendars": [],
+        "cameras": [{"src": "cam", "label": "Driveway", "hd": "cam_hd"}],
+        "camera_page": [
+            {"src": "cam", "label": "Driveway", "hd": "cam_hd"},
+            {"src": "cam2", "label": "Mailbox", "hd": "cam2_hd"},
+        ],
+        "panels": [],
+    }))
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    monkeypatch.setenv("CONFIG_PATH", str(p))
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    seen = []
+
+    async def ok(hclient, cfg, src="cam"):
+        seen.append(src)
+        return (b"\xff\xd8jpeg", "image/jpeg")
+    monkeypatch.setattr("family_hub.tiles.camera_snapshot", ok)
+    with TestClient(appmod.app) as c:
+        # grid-only camera + its hd twin are allowlisted (both were 404 before the fix)
+        assert c.get("/api/tiles/camera.jpg?src=cam2").status_code == 200
+        assert c.get("/api/tiles/camera.jpg?src=cam2_hd").status_code == 200
+        # a truly unknown src is still refused
+        assert c.get("/api/tiles/camera.jpg?src=evil").status_code == 404
+    assert "cam2" in seen and "cam2_hd" in seen
+
+
 def test_html_is_never_heuristically_cached(client):
     """Phones cached a stale index.html past a deploy (2026-08-13, missing tab
     bar): the HTML must say no-cache so browsers revalidate; busted assets
