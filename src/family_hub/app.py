@@ -111,6 +111,45 @@ def _today() -> dt.date:
     return _now_local().date()
 
 
+def _ensure_history_backfill(conn) -> None:
+    """One-time upgrade for deployments that predate the occurrence log:
+    best-effort reconstruct the last 370 days of chore history from the
+    CURRENT chore/person definitions so streaks survive the upgrade. (Best
+    effort, not exact: a chore edited or a person deactivated between a
+    historical day and the upgrade is reconstructed with today's values —
+    there is no prior record to consult. It's a one-time approximation.)
+
+    Guarded by a kv flag so it never runs twice — a later empty log day must
+    mean 'rest', not 're-derive from live defs'. The write is atomic (rows +
+    flag in one transaction via db.backfill_occurrence_log), so an interrupted
+    run commits nothing and retries whole next boot rather than freezing a
+    streak-inflating partial history. Fresh DBs just set the flag."""
+    if fdb.kv_get(conn, "occlog_backfill_done"):
+        return
+    has_completions = conn.execute(
+        "SELECT 1 FROM completions LIMIT 1").fetchone() is not None
+    has_log = conn.execute(
+        "SELECT 1 FROM occurrence_log LIMIT 1").fetchone() is not None
+    if not (has_completions and not has_log):
+        fdb.kv_set(conn, "occlog_backfill_done", True)   # fresh / already-logged
+        return
+    people = fdb.list_people(conn)
+    chores = fdb.list_chores(conn)
+    today = _today()
+    # Build every day eagerly BEFORE touching the DB: a failure here (bad row)
+    # raises with zero writes done; the atomic helper then commits all days and
+    # the flag together, or nothing.
+    day_rows = []
+    for i in range(370, 0, -1):
+        d = today - dt.timedelta(days=i)
+        rows = chlogic.plan_rows(chores, people, d)
+        if rows:
+            day_rows.append((d.isoformat(), rows))
+    fdb.backfill_occurrence_log(conn, day_rows, "occlog_backfill_done")
+    log.info("occurrence log backfilled from legacy completions (%d days)",
+             len(day_rows))
+
+
 def _db():
     """Module-level SQLite connection with a cheap self-heal ping per use, so a
     corrupted/closed handle recovers instead of erroring forever."""
@@ -119,6 +158,21 @@ def _db():
         if _conn is None:
             _conn = fdb.connect(DB_PATH)
             fdb.ensure_schema(_conn)
+            try:
+                _ensure_history_backfill(_conn)
+            except Exception:
+                # The backfill is atomic (already rolled back). Drop the
+                # half-initialized handle so the NEXT request reconnects and
+                # retries the one-time upgrade, rather than serving zeroed
+                # history forever under a connection whose backfill never ran.
+                log.error("history backfill failed; dropping handle to retry",
+                          exc_info=True)
+                try:
+                    _conn.close()
+                except Exception:
+                    pass
+                _conn = None
+                raise
         else:
             try:
                 _conn.execute("SELECT 1")
@@ -130,6 +184,12 @@ def _db():
                     pass
                 _conn = fdb.connect(DB_PATH)
                 fdb.ensure_schema(_conn)
+                # No drop-handle guard here (unlike the fresh-connect branch):
+                # reaching this reconnect means a handle was already established
+                # once, so the backfill flag is set by now and this call returns
+                # at its kv_get guard without doing — or being able to fail on —
+                # any backfill work.
+                _ensure_history_backfill(_conn)
         return _conn
 
 
@@ -179,7 +239,11 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
         # high bound; the frontend still expands the kept row per-day itself.
         start_day = e["start_ts"][:10]
         end_day = e["end_ts"][:10]
-        if e["all_day"] and end_day > start_day:
+        if end_day > start_day and (
+                e["all_day"] or e["end_ts"][11:16] == "00:00"):
+            # all-day end dates are exclusive; a timed end at exactly midnight
+            # likewise belongs to the previous day (a 8pm–12am show is not
+            # "on" the next morning)
             end_day = (dt.date.fromisoformat(end_day) - dt.timedelta(days=1)).isoformat()
         if end_day < lo or start_day > horizon:
             continue
@@ -249,36 +313,63 @@ def health():
     return {"status": "ok"}
 
 
+def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
+    """Write the day's live-resolved plan into the occurrence log — the moment
+    history becomes frozen. Skips the write when the frozen rows already match,
+    so the wall's constant polling doesn't churn the DB."""
+    def key(r):
+        return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"])
+    if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
+            sorted(key(r) for r in rows):
+        fdb.replace_day_log(c, d_str, rows)
+
+
 def _people_day(c, d: dt.date) -> list[dict]:
     """The per-person chore plan for date ``d`` — done flags, rotation tags,
     and streak/week computed AS OF that day. Shared by the hub home feed
-    (d=today) and the full-screen chores day browser."""
+    (d=today) and the full-screen chores day browser.
+
+    History is FROZEN: past days render from the occurrence log exactly as
+    they were served, so editing or deleting a chore only changes today and
+    the future. Today is resolved live from current definitions and frozen
+    into the log on each serve; future days are resolved live, never logged.
+    A past day the wall never served (server down, pre-install) has no log
+    rows and reads as a rest day — streak-neutral by design."""
+    today = _today()
     d_str = d.isoformat()
     people = fdb.list_people(c)
-    chores = fdb.list_chores(c)
+    if d < today:
+        rows = fdb.day_log(c, d_str)
+    else:
+        rows = chlogic.plan_rows(fdb.list_chores(c), people, d)
+        if d == today:
+            _freeze_day(c, d_str, rows)
 
-    days = fdb.completions_between(c, d_str, d_str)
-    completed_ids = {r["chore_id"] for r in days}
-    plan = chlogic.day_plan(chores, people, d, completed_ids)
-
-    # annotate each chore row with whether it is rotation-assigned, so the wall
-    # can show the ↻ tag (day_plan keeps its minimal tested shape).
-    chore_by_id = {ch["id"]: ch for ch in chores}
-    for entry in plan:
-        for row in entry["chores"]:
-            src = chore_by_id.get(row["id"])
-            row["rot"] = bool(src and src["assign_kind"] == "rotation")
+    completed_ids = {r["chore_id"]
+                     for r in fdb.completions_between(c, d_str, d_str)}
+    plan = chlogic.day_plan(rows, people, completed_ids)
 
     window_from = (d - dt.timedelta(days=370)).isoformat()
+    logs = fdb.logs_between(c, window_from, d_str)
     history = fdb.completions_between(c, window_from, d_str)
     for entry in plan:
         pid = entry["person"]["id"]
+        occ: dict[str, set] = {}
+        for r in logs:
+            if r["person_id"] == pid:
+                occ.setdefault(r["date"], set()).add(r["chore_id"])
+        if d > today:
+            # future days aren't logged; overlay d's live rows so the browser
+            # can show a prospective streak/week for that day
+            live = {r["chore_id"] for r in rows if r["person_id"] == pid}
+            if live:
+                occ[d_str] = live
         cbd: dict[str, set] = {}
         for r in history:
             if r["person_id"] == pid:
                 cbd.setdefault(r["date"], set()).add(r["chore_id"])
-        entry["streak"] = chlogic.streak(pid, chores, cbd, d)
-        entry["week"] = chlogic.week_strip(pid, chores, cbd, d)
+        entry["streak"] = chlogic.streak(occ, cbd, d)
+        entry["week"] = chlogic.week_strip(occ, cbd, d)
     return plan
 
 
@@ -342,19 +433,33 @@ class CompleteBody(BaseModel):
 def complete(chore_id: int, body: CompleteBody | None = None):
     c = _db()
     body = body or CompleteBody()
-    chore = _chore_row(c, chore_id)
     date_str = body.date or _today().isoformat()
     try:
         d = dt.date.fromisoformat(date_str)
     except ValueError:
         raise HTTPException(422, "bad date")
-    if not chlogic.occurs(chore, d):
-        raise HTTPException(422, "chore does not occur on that date")
+    today = _today()
+    if abs((d - today).days) > 366:
+        raise HTTPException(422, "date out of range")
     person_id = body.person_id
-    if person_id is None:
-        person_id = chlogic.assignee_id(chore, d)
-    if person_id is None:
-        raise HTTPException(422, "no resolvable assignee")
+    if d < today:
+        # Frozen day: the occurrence log is the truth about what occurred and
+        # who was assigned — the chore may since have been edited or even
+        # deleted, and its frozen rows must stay toggleable.
+        row = fdb.log_row(c, chore_id, date_str)
+        if row is None:
+            raise HTTPException(422, "chore did not occur on that date")
+        if person_id is None:
+            person_id = row["person_id"]
+    else:
+        chore = _chore_row(c, chore_id)
+        if not chlogic.occurs(chore, d):
+            raise HTTPException(422, "chore does not occur on that date")
+        if person_id is None:
+            active_ids = {p["id"] for p in fdb.list_people(c)}
+            person_id = chlogic.assignee_id(chore, d, active_ids)
+        if person_id is None:
+            raise HTTPException(422, "no resolvable assignee")
     # Validate the (possibly client-supplied) person_id against a real person
     # before writing, so a malformed request can't record an invisible orphan
     # completion. _person_row raises 404 for an unknown id. (Fresh DBs also
@@ -609,6 +714,10 @@ def admin_delete_chore(cid: int):
 
 @app.get("/api/calendar")
 def calendar(days: int = 90, past: int = 45):
+    # Bounded to the order of the sync window; a huge value would otherwise
+    # overflow the date math into a 500.
+    if not (0 <= days <= 366 and 0 <= past <= 366):
+        raise HTTPException(422, "days/past out of range")
     c = _db()
     return _calendar_block(c, _today(), days, past_days=past)
 

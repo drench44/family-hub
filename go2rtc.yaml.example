@@ -23,6 +23,16 @@ streams:
   # and emoji all become underscores. ALWAYS check the bridge WebUI on :5050
   # for the exact slug; it varies by bridge version.
   # wyze: rtsp://wyze-bridge:8554/back_yard#media=video
+  #
+  # BLURRY FULL-SCREEN? A camera full-screens the SAME stream its tile uses
+  # unless you give it a distinct "hd" twin (README > Cameras). Point the tile
+  # at the lighter SUBSTREAM and the "hd" twin at the full-res MAIN stream:
+  #   wyze:    rtsp://wyze-bridge:8554/back_yard?sub#media=video   (tile)
+  #   wyze_hd: rtsp://wyze-bridge:8554/back_yard#media=video       (full-screen)
+  # then set  { "src": "wyze", "hd": "wyze_hd" }  in config.json. Requires
+  # SUBSTREAM enabled on the bridge. NOTE: a Wyze v4 on recent firmware runs
+  # the bridge's WebRTC fallback (see README), whose cloud path is capped at
+  # SD — for those cams the main stream is the sharpest source available.
 
 webrtc:
   # Your box's LAN IP — browsers connect here for the live WebRTC streams.

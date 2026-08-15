@@ -223,6 +223,18 @@ camera's slug in the bridge WebUI on `:5050`, and reference it from
 A camera that's offline shows an honest gray "offline" tile — the hub probes
 each stream every 30s and never fakes a LIVE badge.
 
+> **Blurry full-screen?** A camera full-screens the *same* stream its tile
+> uses — there's no magic upscaler — so a tile-resolution stream stretched to
+> fill the wall looks soft. Give the camera a distinct higher-res twin: add a
+> second go2rtc stream (`porch_hd`, `wyze_hd`) pointing at the camera's main /
+> 4K channel and reference it as `"hd"` in that camera's `config.json` entry.
+> The tile stays on the light stream; full-screen cross-fades up to the twin
+> once it's live. One ceiling to know: a **Wyze v4 on recent firmware** runs
+> the bridge's WebRTC fallback, and Wyze's cloud WebRTC path is capped at SD —
+> for those cameras the main stream is already the sharpest source, so a twin
+> won't help. Older Wyze models and UniFi Protect cams expose a real full-res
+> channel that does.
+
 ## The chores model
 
 **People** are nicknames with a color — the one expressive hue on the wall.
@@ -230,9 +242,15 @@ each stream every 30s and never fakes a LIVE badge.
 (`fixed` to one person, or a `rotation`: an ordered list of people, repeats
 allowed, assigned deterministically — `rotation_order[n mod len]` over the
 chore's occurrence count, so there is no stored "whose turn" state to drift).
-Completion is one tap; past days are read-only. Streaks count consecutive
-completed days (rest days skip, an unfinished today is forgiven). It's all
-managed from `/admin.html`.
+Rotations skip deactivated people — their turns fall to the remaining members.
+Completion is one tap; past days are read-only. **History is frozen:** each
+served day's plan is recorded (the `occurrence_log` table), and past days
+render from that record — so editing a schedule, reshuffling a rotation,
+deactivating, or even deleting a chore changes today and the future only.
+Nobody's streak is rewritten by an edit, and a deleted chore still shows on
+the days it was actually done. Streaks count consecutive completed days (rest
+days skip, an unfinished today is forgiven). It's all managed from
+`/admin.html`.
 
 ## Backup
 
