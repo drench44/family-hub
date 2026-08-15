@@ -1457,6 +1457,8 @@ test('wxTempParts renders exactly one degree, even when the unit already carries
   // a unit without a degree still gets exactly one
   const b = sandbox.wxTempParts(61, 'F');
   assert.equal(b.whole + b.deg, '61.0°F');
+  // a bare-degree unit ("°") stays a single degree (strip then re-add)
+  assert.equal(sandbox.wxTempParts(61, '°').deg, '.0°');
   // non-finite fallback also stays single-degree
   const c = sandbox.wxTempParts(NaN, '°F');
   assert.ok(!c.deg.includes('°°'), 'no doubled degree in the non-finite fallback');
