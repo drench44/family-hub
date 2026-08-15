@@ -312,6 +312,101 @@ def test_completions_migration_survives_stranded_new_table(tmp_path):
     c.close()
 
 
+def test_schema_widens_chore_schedule_check_for_once(tmp_path):
+    """A DB created before one-time chores has a schedule_kind CHECK that only
+    allows daily/days; ensure_schema rebuilds it to also allow 'once', keeping
+    every existing chore row, so the box's live hub.db can store one-time
+    chores after the upgrade."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.executescript("""
+        CREATE TABLE people(
+          id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE chores(
+          id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+          icon TEXT NOT NULL DEFAULT '',
+          schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days')),
+          days_mask INTEGER NOT NULL DEFAULT 0,
+          assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+          fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+          rotation_epoch TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+    """)
+    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Rem', '#5BC9F0')")
+    c.execute("""INSERT INTO chores(id, title, schedule_kind, assign_kind,
+                 fixed_person_id, rotation_epoch)
+                 VALUES(1, 'Trash', 'daily', 'fixed', 7, '2026-08-01')""")
+    c.commit()
+    # a 'once' insert would fail the old CHECK
+    with pytest.raises(sqlite3.IntegrityError):
+        c.execute("""INSERT INTO chores(id, title, schedule_kind, assign_kind,
+                     fixed_person_id, rotation_epoch)
+                     VALUES(2, 'Books', 'once', 'fixed', 7, '2026-08-20')""")
+
+    fdb.ensure_schema(c)
+
+    # the pre-existing chore survived the rebuild
+    rows = fdb.list_chores(c, include_inactive=True)
+    assert [r["id"] for r in rows] == [1]
+    assert rows[0]["title"] == "Trash"
+    # and a one-time chore now inserts cleanly through the widened CHECK
+    cid = fdb.add_chore(c, title="Books", icon="", schedule_kind="once",
+                        days_mask=0, assign_kind="fixed", fixed_person_id=7,
+                        rotation_order=[], rotation_epoch="2026-08-20")
+    assert cid == 2
+    # idempotent: a second ensure_schema leaves the widened table alone
+    fdb.ensure_schema(c)
+    assert len(fdb.list_chores(c, include_inactive=True)) == 2
+    c.close()
+
+
+def test_chore_check_migration_is_atomic_and_recovers(tmp_path):
+    """A crash mid-rebuild of the chores table must leave the ORIGINAL chores
+    intact and no stranded chores_new — then the next boot completes the
+    migration cleanly, never a boot-loop 'table already exists'. Mirrors
+    test_completions_migration_is_atomic_and_recovers for the 'once' CHECK
+    widen. (_legacy_fk_db carries the pre-'once' chores CHECK and a _CrashConn;
+    the completions FK migration runs first and completes — its rename is
+    'RENAME TO completions', which the chores crash hook below does not match.)"""
+    c = _legacy_fk_db(str(tmp_path / "old.db"))
+    c.crash_on = "RENAME TO chores"            # die between DROP and RENAME
+    with pytest.raises(sqlite3.OperationalError):
+        fdb.ensure_schema(c)
+    # the chore row survived the aborted rebuild, and the half-built table is
+    # rolled back rather than stranded
+    rows = fdb.list_chores(c, include_inactive=True)
+    assert [r["id"] for r in rows] == [1] and rows[0]["title"] == "Trash"
+    assert not list(c.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='chores_new'")), \
+        "the half-built table must be rolled back, not stranded"
+    # next boot finishes the job: the CHECK is widened and a 'once' chore inserts
+    c.crash_on = None
+    fdb.ensure_schema(c)
+    cid = fdb.add_chore(c, title="Books", icon="", schedule_kind="once",
+                        days_mask=0, assign_kind="fixed", fixed_person_id=7,
+                        rotation_order=[], rotation_epoch="2026-08-20")
+    assert cid == 2
+    c.close()
+
+
+def test_chore_check_migration_survives_stranded_new_table(tmp_path):
+    """Defense in depth: even if a prior (crashed) run left a stranded
+    chores_new behind, the rebuild drops it first instead of erroring on a
+    duplicate CREATE."""
+    c = _legacy_fk_db(str(tmp_path / "old.db"))
+    c.execute("CREATE TABLE chores_new(x)")    # leftover junk from a crash
+    c.commit()
+    fdb.ensure_schema(c)
+    rows = fdb.list_chores(c, include_inactive=True)
+    assert [r["id"] for r in rows] == [1] and rows[0]["title"] == "Trash"
+    # the widened CHECK is really in place now
+    cid = fdb.add_chore(c, title="Books", icon="", schedule_kind="once",
+                        days_mask=0, assign_kind="fixed", fixed_person_id=7,
+                        rotation_order=[], rotation_epoch="2026-08-20")
+    assert cid == 2
+    c.close()
+
+
 def test_schema_migrates_completions_chore_fk_away(tmp_path):
     """A DB created when completions had a FOREIGN KEY to chores(id) is rebuilt
     without it, keeping its rows — so chore deletion can preserve history on

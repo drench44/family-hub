@@ -538,6 +538,69 @@ test('buildChoreForm is shared via common.js (usable from the hub context)', () 
   assert.match(host.innerHTML, /Add chore/, 'submit button carries the given label');
 });
 
+test('buildChoreForm: a one-time chore shows the date field and hides rotation', () => {
+  const { document, sandbox } = newHub();
+  const people = [{ id: 1, name: 'Sam', color: '#5BC9F0', active: 1 }];
+  const host = document.createElement('div');
+  const model = { ...sandbox.freshChoreModel(), repeat: 'once', date: '2026-08-20' };
+  sandbox.buildChoreForm(host, model, 'Add chore', () => {}, people);
+
+  const dateInput = host.querySelector('.f-date');
+  assert.ok(dateInput, 'the date input rendered');
+  assert.equal(dateInput.value, '2026-08-20', 'seeded with the model date');
+  assert.ok(!dateInput.classList.contains('hidden'), 'date shown for a once chore');
+  assert.ok(host.querySelector('.f-days').classList.contains('hidden'),
+    'weekly day chips hidden for a once chore');
+  const rotBtn = host.querySelector('[data-assign="rotation"]');
+  assert.ok(rotBtn.classList.contains('hidden'),
+    'the Rotation choice is hidden — a one-time chore is one person');
+  assert.ok(!host.querySelector('.f-person').classList.contains('hidden'),
+    'the single-person picker stays visible');
+});
+
+test('buildChoreForm: clicking "Once" from a rotation model coerces to fixed and seeds today', () => {
+  const { document, sandbox } = newHub();
+  const people = [
+    { id: 1, name: 'Sam', color: '#5BC9F0', active: 1 },
+    { id: 2, name: 'Alex', color: '#8AE0AD', active: 1 },
+  ];
+  const host = document.createElement('div');
+  // start rotation-capable, no date — the real add-flow starting point
+  const model = { ...sandbox.freshChoreModel(), repeat: 'weekly', assign: 'rotation', rot: [1, 2] };
+  let captured = null;
+  sandbox.buildChoreForm(host, model, 'Add chore', (body) => { captured = body; }, people);
+
+  // click the "Once" repeat button (the reactive handler, not a pre-seeded
+  // model): fire the .f-repeat onclick with a target that answers .closest()
+  // the way a real tap on that button would.
+  const onceBtn = host.querySelector('[data-repeat="once"]');
+  onceBtn.closest = (s) => (selectorMatches(onceBtn, s) ? onceBtn : null);
+  host.querySelector('.f-repeat').onclick({ target: onceBtn });
+
+  const dateInput = host.querySelector('.f-date');
+  assert.ok(!dateInput.classList.contains('hidden'), 'date shown after switching to Once');
+  assert.match(dateInput.value, /^\d{4}-\d{2}-\d{2}$/, 'date seeded with a valid YYYY-MM-DD (todayISO)');
+  assert.ok(host.querySelector('[data-assign="rotation"]').classList.contains('hidden'),
+    'rotation choice hidden after switching to Once');
+
+  // submitting now yields a once/fixed payload carrying the seeded date
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(captured.schedule_kind, 'once');
+  assert.equal(captured.assign_kind, 'fixed');
+  assert.match(captured.date, /^\d{4}-\d{2}-\d{2}$/, 'payload carries the seeded date, not empty');
+});
+
+test('buildChoreForm: a once model with no date renders the date input seeded to today', () => {
+  const { document, sandbox } = newHub();
+  const people = [{ id: 1, name: 'Sam', color: '#5BC9F0', active: 1 }];
+  const host = document.createElement('div');
+  // repeat:'once' but date:'' — the todayISO() fallback branch on first render
+  const model = { ...sandbox.freshChoreModel(), repeat: 'once', date: '' };
+  sandbox.buildChoreForm(host, model, 'Add chore', () => {}, people);
+  assert.match(host.querySelector('.f-date').value, /^\d{4}-\d{2}-\d{2}$/,
+    'empty once date falls back to a valid todayISO string');
+});
+
 // Build a #chores-full host, seed hub.js's state as if the chores overlay were
 // open on today, render it, and return helpers to inspect + tap the result.
 //

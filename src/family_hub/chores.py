@@ -28,8 +28,14 @@ def occurs(chore: dict, d: dt.date) -> bool:
         return False
     if d < _epoch(chore):
         return False
-    if chore["schedule_kind"] == "daily":
+    kind = chore["schedule_kind"]
+    if kind == "daily":
         return True
+    # A one-time chore reuses rotation_epoch as its single due date: it occurs
+    # on exactly that day and never again. Past days still render from the
+    # frozen occurrence_log, so it stays on the record after it drops off live.
+    if kind == "once":
+        return d == _epoch(chore)
     return bool((chore["days_mask"] >> d.weekday()) & 1)
 
 
@@ -43,6 +49,11 @@ def occurrences_before(chore: dict, d: dt.date) -> int:
     total_days = (d - epoch).days
     if chore["schedule_kind"] == "daily":
         return total_days
+    # No 'once' branch: one-time chores are always assign_kind='fixed', and this
+    # function only drives rotation assignment (assignee_id), so it's never
+    # reached for them. A hypothetical rotating one-time chore would fall through
+    # to the weekly math below (days_mask=0 -> 0) — add an explicit branch first
+    # if that ever becomes a real kind.
     mask = chore["days_mask"]
     full_weeks, rem = divmod(total_days, 7)
     n = full_weeks * mask.bit_count()

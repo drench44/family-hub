@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS people(
   sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS chores(
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
-  schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days')),
+  schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
   days_mask INTEGER NOT NULL DEFAULT 0,
   assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
   fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
@@ -92,6 +92,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
                   for r in conn.execute("PRAGMA foreign_key_list(completions)")}
     if "chores" in fk_parents:
         _drop_completions_chore_fk(conn)
+    # 2026-08-15: one-time chores added 'once' to the schedule_kind CHECK. A DB
+    # created before that keeps its old CHECK (CREATE TABLE IF NOT EXISTS never
+    # rewrites it), so a 'once' insert would fail the constraint. Rebuild the
+    # table with the widened CHECK, preserving every chore row.
+    chores_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chores'"
+    ).fetchone()
+    if chores_sql and "'once'" not in chores_sql["sql"]:
+        _widen_chore_schedule_check(conn)
 
 
 def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
@@ -130,6 +139,52 @@ def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
     finally:
         # always restore FK enforcement and the connection's transaction mode,
         # even if the rebuild raised before/inside the transaction
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
+
+
+def _widen_chore_schedule_check(conn: sqlite3.Connection) -> None:
+    """Rebuild `chores` so its schedule_kind CHECK also allows 'once', keeping
+    every existing row, as ONE atomic transaction. SQLite can't ALTER a CHECK
+    constraint in place, so the table is recreated. Same crash-safety contract
+    as _drop_completions_chore_fk: an interrupted rebuild (crash, power loss)
+    rolls back whole and the next boot retries from a clean slate, and the
+    leading DROP IF EXISTS clears any chores_new stranded by a prior crash.
+
+    FK enforcement is turned OFF around the swap: completions/occurrence_log no
+    longer FK-reference chores(id) (see _drop_completions_chore_fk), but a DB
+    old enough to predate the 'once' CHECK may still carry that legacy FK, and
+    dropping the parent under enforcement would fail."""
+    prior_iso = conn.isolation_level
+    try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute("DROP TABLE IF EXISTS chores_new")
+        conn.execute("""CREATE TABLE chores_new(
+          id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+          icon TEXT NOT NULL DEFAULT '',
+          schedule_kind TEXT NOT NULL
+            CHECK(schedule_kind IN ('daily','days','once')),
+          days_mask INTEGER NOT NULL DEFAULT 0,
+          assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+          fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+          rotation_epoch TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)""")
+        conn.execute("""INSERT INTO chores_new(
+          id, title, icon, schedule_kind, days_mask, assign_kind,
+          fixed_person_id, rotation_order, rotation_epoch, sort, active)
+          SELECT id, title, icon, schedule_kind, days_mask, assign_kind,
+          fixed_person_id, rotation_order, rotation_epoch, sort, active
+          FROM chores""")
+        conn.execute("DROP TABLE chores")
+        conn.execute("ALTER TABLE chores_new RENAME TO chores")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.isolation_level = prior_iso
 

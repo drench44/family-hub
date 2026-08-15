@@ -474,6 +474,116 @@ def test_delete_chore_keeps_past_days_and_clears_today(client, app_mod):
     assert fdb.completions_between(c, yesterday, yesterday) != []
 
 
+def test_admin_once_chore_add_patch_and_validation(client, app_mod):
+    """A one-time chore: its `date` stores as rotation_epoch, it shows only on
+    that day, and its validation rejects a missing/bad date and any rotation."""
+    today = app_mod._today()
+    due = (today + dt.timedelta(days=2)).isoformat()
+    pr = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
+    pid = pr.json()["id"]
+
+    ok = client.post("/api/admin/chores", json={
+        "title": "Return books", "icon": "📚", "schedule_kind": "once",
+        "assign_kind": "fixed", "fixed_person_id": pid, "date": due})
+    assert ok.status_code == 200
+    cid = ok.json()["id"]
+    assert ok.json()["schedule_kind"] == "once"
+    assert ok.json()["rotation_epoch"] == due     # the date is stored as the epoch
+
+    # a one-time chore with no date -> 422
+    assert client.post("/api/admin/chores", json={
+        "title": "X", "schedule_kind": "once", "assign_kind": "fixed",
+        "fixed_person_id": pid}).status_code == 422
+    # a malformed date -> 422
+    assert client.post("/api/admin/chores", json={
+        "title": "X", "schedule_kind": "once", "assign_kind": "fixed",
+        "fixed_person_id": pid, "date": "not-a-date"}).status_code == 422
+    # a one-time chore can't be a rotation -> 422
+    assert client.post("/api/admin/chores", json={
+        "title": "X", "schedule_kind": "once", "assign_kind": "rotation",
+        "rotation_order": [pid], "date": due}).status_code == 422
+
+    # it occurs only on its due date
+    day = client.get(f"/api/chores/day?date={due}").json()
+    assert [x["title"] for x in day["people"][0]["chores"]] == ["Return books"]
+    before = (today + dt.timedelta(days=1)).isoformat()
+    day = client.get(f"/api/chores/day?date={before}").json()
+    assert day["people"][0]["chores"] == []
+
+    # patching the date moves it (still stored as rotation_epoch)
+    moved = (today + dt.timedelta(days=5)).isoformat()
+    r = client.patch(f"/api/admin/chores/{cid}", json={"date": moved})
+    assert r.status_code == 200 and r.json()["rotation_epoch"] == moved
+    day = client.get(f"/api/chores/day?date={moved}").json()
+    assert [x["title"] for x in day["people"][0]["chores"]] == ["Return books"]
+    day = client.get(f"/api/chores/day?date={due}").json()
+    assert day["people"][0]["chores"] == []
+
+
+def test_once_chore_patch_edge_cases(client, app_mod):
+    """The date-translation path's failure modes (found in review): an empty
+    date must not corrupt rotation_epoch, kind conversions must re-anchor
+    correctly, past dates are rejected, and an already-past chore stays
+    editable."""
+    c = app_mod._db()
+    today = app_mod._today()
+    due = (today + dt.timedelta(days=3)).isoformat()
+    pid = client.post("/api/admin/people",
+                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    cid = client.post("/api/admin/chores", json={
+        "title": "Books", "icon": "", "schedule_kind": "once",
+        "assign_kind": "fixed", "fixed_person_id": pid, "date": due}).json()["id"]
+
+    # clearing the date is rejected — must NOT write '' into rotation_epoch and
+    # 500 the wall (the critical bug both reviewers reproduced)
+    assert client.patch(f"/api/admin/chores/{cid}",
+                        json={"date": ""}).status_code == 422
+    assert client.get(f"/api/chores/day?date={due}").status_code == 200  # not corrupted
+    # a past date is rejected on patch
+    yest = (today - dt.timedelta(days=1)).isoformat()
+    assert client.patch(f"/api/admin/chores/{cid}",
+                        json={"date": yest}).status_code == 422
+    # a title-only edit doesn't touch the (still valid) date
+    assert client.patch(f"/api/admin/chores/{cid}",
+                        json={"title": "Library books"}).status_code == 200
+    assert app_mod._chore_row(c, cid)["rotation_epoch"] == due
+
+    # converting the one-time chore to daily re-anchors it to today, so it shows
+    # today rather than staying pinned to its (future) one-time date
+    assert client.patch(f"/api/admin/chores/{cid}",
+                        json={"schedule_kind": "daily"}).status_code == 200
+    assert app_mod._chore_row(c, cid)["rotation_epoch"] == today.isoformat()
+    hub = client.get("/api/hub").json()
+    assert any(ch["title"] == "Library books"
+               for p in hub["people"] for ch in p["chores"])
+
+    # converting a daily chore to once with NO date is rejected (its epoch is a
+    # creation anchor, not a due date) — would otherwise land in the past
+    d2 = client.post("/api/admin/chores", json={
+        "title": "Sweep", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    assert client.patch(f"/api/admin/chores/{d2}",
+                        json={"schedule_kind": "once"}).status_code == 422
+    # ...but with a valid future date it converts cleanly
+    r = client.patch(f"/api/admin/chores/{d2}",
+                     json={"schedule_kind": "once", "date": due})
+    assert r.status_code == 200 and r.json()["rotation_epoch"] == due
+
+
+def test_once_chore_rejects_past_date_on_add(client, app_mod):
+    today = app_mod._today()
+    past = (today - dt.timedelta(days=1)).isoformat()
+    pid = client.post("/api/admin/people",
+                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    assert client.post("/api/admin/chores", json={
+        "title": "X", "schedule_kind": "once", "assign_kind": "fixed",
+        "fixed_person_id": pid, "date": past}).status_code == 422
+    # today is allowed (boundary)
+    assert client.post("/api/admin/chores", json={
+        "title": "X", "schedule_kind": "once", "assign_kind": "fixed",
+        "fixed_person_id": pid, "date": today.isoformat()}).status_code == 200
+
+
 def test_delete_unknown_chore_404(client):
     assert client.delete("/api/admin/chores/999999").status_code == 404
 
