@@ -688,28 +688,54 @@ function initTiles() {
   tilesBuilt = true;
 }
 
+/* Cameras-tab 2x2 live grid (phones/tablets). Same config-driven tiles as the
+   wall column, but from the camera_page list and laid out 2-up by CSS (see
+   .camgrid). Hidden on the wall; shown only under the mobile Cameras tab. */
+let camGridBuilt = false;
+function initCamGrid() {
+  // Guard on links.camera_page like initTiles guards on links.cameras: don't
+  // latch built until the links payload has arrived.
+  if (camGridBuilt || !links.camera_page) return;
+  const el = document.getElementById('camgrid');
+  if (!el) return;
+  el.innerHTML = links.camera_page.map(tileCamera).join('');
+  camGridBuilt = true;
+}
+
 /* Live iframes can't report stream health cross-origin, so a snapshot probe
    per camera toggles each tile's live/offline state (shares the same go2rtc
    producer as the stream — cheap). All cameras probe in PARALLEL: the probes
    are independent, and a serial loop made every tile queue behind the slowest
    probe ahead of it (a cold snapshot is seconds). */
 async function probeCamera() {
-  await Promise.all((links.cameras || []).map(probeOneCamera));
+  // Probe the UNION of the wall column and the Cameras-tab grid, deduped by
+  // src: one camera can appear on both surfaces (its snapshot producer is
+  // shared, so one probe serves every tile of that src — see probeOneCamera).
+  const bySrc = new Map();
+  for (const cam of [...(links.cameras || []), ...(links.camera_page || [])]) {
+    if (!bySrc.has(cam.src)) bySrc.set(cam.src, cam);
+  }
+  await Promise.all([...bySrc.values()].map(probeOneCamera));
 }
 
 async function probeOneCamera(cam) {
   if (cam.demo) return;   // placeholder tile: no stream, nothing to probe
-  const tile = document.querySelector(`.tile-camera[data-cam="${cam.src}"]`);
-  if (!tile) return;
-  const frame = tile.querySelector('.cam-frame');
-  // Start the stream WITH the probe, not after it: both share the same go2rtc
-  // producer, so the WebRTC connect overlaps the probe's round-trip and the
-  // tile paints on the stream's next keyframe instead of queueing behind the
-  // snapshot. The frame stays hidden (offline badge up) until the probe
-  // confirms live — a dead camera never shows a black frame. Never start a
-  // stream into a hidden tile (mobile: cams live behind their tab;
-  // offsetParent is null while display:none).
-  if (!frame.src && tile.offsetParent !== null) frame.src = cam.tile;
+  // A src can render on two surfaces (wall column + Cameras-tab grid); update
+  // EVERY tile for it. One snapshot probe drives them all — the producer is
+  // shared — but each tile owns its own frame/live/offline state.
+  const tiles = document.querySelectorAll(`.tile-camera[data-cam="${cam.src}"]`);
+  if (!tiles.length) return;
+  // Start each VISIBLE tile's stream WITH the probe, not after it: both share
+  // the same go2rtc producer, so the WebRTC connect overlaps the probe's
+  // round-trip and the tile paints on the stream's next keyframe instead of
+  // queueing behind the snapshot. The frame stays hidden (offline badge up)
+  // until the probe confirms live — a dead camera never shows a black frame.
+  // Never start a stream into a hidden tile (mobile: cams live behind their
+  // tab; offsetParent is null while display:none).
+  tiles.forEach((tile) => {
+    const frame = tile.querySelector('.cam-frame');
+    if (frame && !frame.src && tile.offsetParent !== null) frame.src = cam.tile;
+  });
   let ok = false;
   try {
     ok = (await fetch(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
@@ -721,16 +747,20 @@ async function probeOneCamera(cam) {
   // Healthy cycles never touch src (reassigning restarts a live stream), and
   // the reload happens only while the frame is hidden behind the offline
   // badge, so nothing visible ever cold-restarts.
-  if (ok && frame.dataset.reconnect) {
-    delete frame.dataset.reconnect;
-    frame.src = cam.tile;
-  } else if (!ok && frame.src) {
-    frame.dataset.reconnect = '1';
-  }
-  frame.classList.toggle('hidden', !ok);
-  tile.querySelector('.tile-live').classList.toggle('hidden', !ok);
-  tile.querySelector('.tile-offline').classList.toggle('hidden', ok);
-  tile.classList.toggle('is-offline', !ok);
+  tiles.forEach((tile) => {
+    const frame = tile.querySelector('.cam-frame');
+    if (!frame) return;
+    if (ok && frame.dataset.reconnect) {
+      delete frame.dataset.reconnect;
+      frame.src = cam.tile;
+    } else if (!ok && frame.src) {
+      frame.dataset.reconnect = '1';
+    }
+    frame.classList.toggle('hidden', !ok);
+    tile.querySelector('.tile-live').classList.toggle('hidden', !ok);
+    tile.querySelector('.tile-offline').classList.toggle('hidden', ok);
+    tile.classList.toggle('is-offline', !ok);
+  });
 }
 
 /* ------------------------------------------------------------ mobile tabs */
@@ -843,7 +873,12 @@ function openOverlay(view) {
       ? makeFittedIframe(p.full_url || p.url, p.vw, p.vh)
       : makeIframe(p.full_url || p.url));
   } else if (view.indexOf('camera:') === 0) {
-    const cam = (links.cameras || []).find((c) => c.src === view.slice(7));
+    // Resolve a camera tap from either surface. First match wins, so a src on
+    // both lists uses the wall entry — fine because a shared src carries the
+    // same hd/full config in both; grid-only cameras (the ones that can differ)
+    // live only in camera_page and resolve there.
+    const cam = [...(links.cameras || []), ...(links.camera_page || [])]
+      .find((c) => c.src === view.slice(7));
     if (cam) openCameraFull(content, cam, view);
   } else if (view === 'calendar') {
     content.innerHTML = `<div class="overlay-panel"><div id="cal-full"></div></div>`;
@@ -1349,6 +1384,7 @@ async function poll() {
     applyHouseTheme(data.theme);   // house default on a fresh (un-overridden) device
     wirePanels();
     initTiles();      // camera tiles are config-driven; build once links exist
+    initCamGrid();    // Cameras-tab 2x2 grid, also config-driven
     renderCalendar(data);
     renderPeople(data);
     renderTodoSlot(data);

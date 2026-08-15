@@ -242,6 +242,9 @@ def test_hub_shape_end_to_end(client, app_mod):
     assert cams[1]["full"] == "http://cam/stream.html?src=wyze"  # no hd stream
     # no distinct HD twin -> the wall won't run the full-screen upgrade
     assert cams[1]["has_hd"] is False and cams[1]["hd_src"] == "wyze"
+    # camera_page (the Cameras-tab 2x2 grid) is unset in this config, so it
+    # falls back to the wall cameras with the identical link shape.
+    assert hub["links"]["camera_page"] == cams
 
 
 def test_hub_calendar_events_joined(client, app_mod):
@@ -712,6 +715,43 @@ def test_html_is_never_heuristically_cached(client):
         assert r.status_code == 200
         assert r.headers.get("cache-control") == "no-cache", path
     assert "cache-control" not in {k.lower() for k in client.get("/styles.css").headers}
+
+
+def test_camera_page_grid_is_independent_of_wall_cameras(tmp_path, monkeypatch):
+    """The Cameras-tab 2x2 grid (`camera_page`) can list a different set/order
+    than the wall's `cameras` column — e.g. a camera that isn't on the wall —
+    and each entry gets the same tile/full link shape as a wall camera."""
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({
+        "port": 8138, "go2rtc_base": "http://cam", "calendars": [],
+        "cameras": [{"src": "cam", "label": "Driveway", "hd": "cam_hd"}],
+        "camera_page": [
+            {"src": "cam", "label": "Driveway", "hd": "cam_hd"},
+            {"src": "cam2", "label": "Mailbox", "hd": "cam2_hd"},
+            {"src": "wyze_l", "label": "Side Gate"},
+            {"src": "wyze_p", "label": "Garage"},
+        ],
+        "panels": [],
+    }))
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    monkeypatch.setenv("CONFIG_PATH", str(p))
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    with TestClient(appmod.app) as c:
+        links = c.get("/api/hub").json()["links"]
+    # the wall column stays the single Driveway; the grid is the full four, in order
+    assert [x["src"] for x in links["cameras"]] == ["cam"]
+    assert [x["src"] for x in links["camera_page"]] == ["cam", "cam2", "wyze_l", "wyze_p"]
+    # a grid-only camera (Mailbox) carries a distinct HD twin for full-screen
+    assert links["camera_page"][1] == {
+        "src": "cam2", "label": "Mailbox",
+        "tile": "http://cam/stream.html?src=cam2&mode=webrtc",
+        "full": "http://cam/stream.html?src=cam2_hd",
+        "has_hd": True, "hd_src": "cam2_hd"}
+    # a grid cam with no hd twin falls back to its own src for full-screen
+    assert links["camera_page"][2]["has_hd"] is False
+    assert links["camera_page"][2]["hd_src"] == "wyze_l"
 
 
 def test_hub_survives_a_malformed_config_entry(tmp_path, monkeypatch):

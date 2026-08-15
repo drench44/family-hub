@@ -13,6 +13,12 @@
     { "src": "porch", "label": "Front Porch", "hd": "porch_hd" },
     { "src": "wyze", "label": "Back Yard", "hd": "wyze_hd" }
   ],
+  "camera_page": [
+    { "src": "porch", "label": "Front Porch", "hd": "porch_hd" },
+    { "src": "drive", "label": "Driveway", "hd": "drive_hd" },
+    { "src": "wyze", "label": "Back Yard", "hd": "wyze_hd" },
+    { "src": "side", "label": "Side Gate" }
+  ],
   "panels": [
     { "id": "weather", "label": "Weather", "url": "http://192.168.1.50:8137/",
       "vw": 1024, "vh": 600, "full": "fit" },
