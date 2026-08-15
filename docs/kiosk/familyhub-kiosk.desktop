@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Family Hub Kiosk
+Comment=Launch the Family Hub wall dashboard fullscreen
+Exec=/home/YOUR_USER/kiosk.sh
+X-GNOME-Autostart-enabled=true
