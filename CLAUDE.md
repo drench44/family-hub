@@ -39,6 +39,45 @@ bottom tab bar). `.is-night` dims the page from 22:00 to 06:00. Because a CSS
 dim is applied to the body's children, never to `<body>` (a test guards it).
 Test all of: full desktop width, the mobile breakpoint, and night mode.
 
+## Mobile & iOS Safari — required checks for anything phone-facing
+
+The phone reflow (`@media (max-width: 1000px)`: single column + the fixed bottom
+tab bar) and the full-screen overlays are used on a real iPhone. Static and
+fake-DOM tests can't see mobile layout OR iOS Safari behavior, so a batch of
+spacing and tap bugs shipped unnoticed (2026-08-15). For ANY change that touches
+mobile CSS, the tab bar, overlays, modals, or embedded iframes, do all of:
+
+1. **Render at a real phone width** (≤ 400px) and eyeball spacing on every tab
+   (Chores, To-Dos, Calendar, Cameras, Weather) and every modal/overlay. The
+   automation window here won't shrink below ~1000px, so to preview the phone
+   layout temporarily widen the breakpoint in a local copy
+   (`@media (max-width: 2000px)`), screenshot, then revert — never commit that.
+2. **Confirm on a real iPhone before calling a mobile change done.** Several
+   iOS-only bugs (below) are invisible in Chromium and in the test suite; the
+   operator's phone is the real gate. Ask them to verify.
+
+Known iOS Safari traps this repo has already hit (each has a guard test —
+don't reintroduce them):
+
+- **No `backdrop-filter` on a `position: fixed`/`sticky` element.** Taps fall
+  through it intermittently. Use a solid background (put any blur on a
+  non-interactive `::before`). Guard: `test_no_backdrop_filter_on_fixed_elements`.
+- **An element layered over a CSS-transform-scaled iframe needs its own
+  compositing layer** (`transform: translateZ(0)`) or iOS routes taps INTO the
+  iframe. Hit on the overlay ⌂ home pill over "fit" panels. Guards:
+  `test_overlay_home_pill_stays_tappable_over_scaled_iframes`,
+  `test_mobile_tabbar_stays_tappable`.
+- **Scroll resets need every target**, not just `window.scrollTo` — zero the
+  scrolling element and both document roots too (`scrollPageToTop` in hub.js).
+- **Tap targets ≥ ~44px** and clear of the very bottom edge (the iOS home-
+  indicator / swipe zone).
+
+Prefer encoding a new mobile/iOS fix as a static guard in `test_static.py` (or a
+fake-DOM test) so it can't silently regress — the same pattern as the guards
+above. A real WebKit/Playwright suite was considered and deliberately not added:
+it fights this project's no-build, minimal-dependency design and its flakiness
+would cost more than it catches here.
+
 ## After cloning
 
 After cloning, run `scripts/install-hooks.sh` — installs the pre-push

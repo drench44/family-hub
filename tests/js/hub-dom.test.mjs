@@ -296,15 +296,21 @@ function newHub() {
     registry[id] = el;
   });
   document.body = new FakeEl(registry, 'body');
+  // Scroll targets scrollPageToTop() zeroes on iOS (besides window.scrollTo);
+  // seeded non-zero so a test can prove each one gets reset to the top.
+  document.scrollingElement = { scrollTop: 0 };
+  document.documentElement = { scrollTop: 0 };
 
   // Timers are inert: no callback ever fires, so the poll loop and the toast
   // auto-hide don't run — the toast stays put for us to assert on.
+  const scrollCalls = [];
   const sandbox = {
     document,
     window: { addEventListener: () => {}, innerWidth: 1280, innerHeight: 800 },
     innerWidth: 1280,
     innerHeight: 800,
-    scrollTo: () => {},
+    scrollTo: (x, y) => { scrollCalls.push([x, y]); },
+    scrollCalls,
     setTimeout: () => 0,
     setInterval: () => 0,
     clearTimeout: () => {},
@@ -336,6 +342,31 @@ test('showToast builds the .hub-toast element with textContent (no innerHTML/XSS
   // so an event title/description can't inject markup into the toast.
   assert.equal(el.textContent, msg);
   assert.equal(el.innerHTML, '', 'innerHTML never touched');
+});
+
+test('setTab scrolls the page back to the top on every tab tap', () => {
+  const { document, sandbox } = newHub();
+  // Pretend the page is scrolled down on every target scrollPageToTop() resets.
+  sandbox.scrollCalls.length = 0;   // ignore any load-time scroll
+  document.scrollingElement.scrollTop = 900;
+  document.documentElement.scrollTop = 900;
+  document.body.scrollTop = 900;
+  sandbox.setTab('cal');
+  assert.deepEqual(sandbox.scrollCalls.at(-1), [0, 0],
+    'switching tabs must call window.scrollTo(0,0)');
+  // the iOS belt-and-suspenders reset: every scroll target lands at the top,
+  // not just window (window.scrollTo alone is unreliable on iOS Safari)
+  assert.equal(document.scrollingElement.scrollTop, 0, 'scrollingElement reset');
+  assert.equal(document.documentElement.scrollTop, 0, 'documentElement reset');
+  assert.equal(document.body.scrollTop, 0, 'body reset');
+  // tapping the tab you are already on scrolls to the top too (iOS pattern)
+  sandbox.scrollCalls.length = 0;
+  document.scrollingElement.scrollTop = 500;
+  sandbox.setTab('cal');
+  assert.deepEqual(sandbox.scrollCalls.at(-1), [0, 0],
+    're-tapping the active tab must still scroll to the top');
+  assert.equal(document.scrollingElement.scrollTop, 0,
+    're-tap also resets the scrolling element');
 });
 
 test('toggleChore surfaces the "couldn’t save" toast when the write fails', async () => {
@@ -1779,9 +1810,14 @@ test('opening an overlay locks page scroll (body.overlay-open); closing unlocks 
   assert.ok(document.body.classList.contains('overlay-open'),
     'page scroll is locked while the overlay is open (no wall scrollbar behind it)');
 
+  sandbox.scrollCalls.length = 0;
+  document.scrollingElement.scrollTop = 700;
   sandbox.closeOverlay();
   assert.ok(!document.body.classList.contains('overlay-open'),
     'page scroll is restored when the overlay closes');
+  // coming home from an overlay also lands at the top of the page
+  assert.deepEqual(sandbox.scrollCalls.at(-1), [0, 0], 'closeOverlay scrolls to top');
+  assert.equal(document.scrollingElement.scrollTop, 0, 'closeOverlay resets the scroller');
 });
 
 test('openOverlay("cameras-page") with an empty camera_page shows a note, not a black grid', () => {
