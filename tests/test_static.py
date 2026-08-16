@@ -166,6 +166,28 @@ def test_mobile_tabbar_stays_tappable():
         "the tab bar needs its own compositing layer to stay reliably tappable"
 
 
+def test_no_backdrop_filter_on_fixed_elements():
+    """Generalizes the tab-bar fix into a rule for the whole stylesheet: a
+    `backdrop-filter` on ANY position:fixed/sticky element goes intermittently
+    untappable on iOS Safari (taps fall through it). We hit this on the tab bar
+    (2026-08-15); this guard stops it recurring on any future fixed toolbar,
+    banner, or bar. If a translucent-blur effect is truly wanted, put the blur
+    on a non-interactive ::before/::after layer, not the interactive element."""
+    offenders = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS):
+        # drop comments (so prose mentioning the property can't false-trip it)
+        # then strip whitespace so `position:fixed` / `backdrop-filter :` can't
+        # slip past the substring checks
+        body = re.sub(r"/\*.*?\*/", "", m.group(2), flags=re.S)
+        ns = re.sub(r"\s+", "", body)
+        pinned = ("position:fixed" in ns or "position:sticky" in ns
+                  or "position:-webkit-sticky" in ns)
+        if pinned and "backdrop-filter:" in ns:
+            offenders.append(m.group(1).strip().splitlines()[-1].strip())
+    assert offenders == [], \
+        f"backdrop-filter on a fixed/sticky element breaks taps on iOS: {offenders}"
+
+
 def test_one_card_and_section_header_system_styled():
     """Task 2's headline global constraint: a single .card box treatment and a
     single .shead section header (with its tick + expand button) are the source
