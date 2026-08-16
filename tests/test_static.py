@@ -130,6 +130,22 @@ def test_overlay_and_home_pill_styled():
         assert _css_rule(cls).strip(), f"{cls} is unstyled"
 
 
+def test_overlay_home_pill_stays_tappable_over_scaled_iframes():
+    """The ⌂ home pill sits over the overlay content, which for a "fit" panel
+    (weather/climate) is an iframe scaled with a CSS transform. On iOS Safari
+    taps over that scaled iframe fall THROUGH the pill unless it owns its own
+    compositing layer — leaving no way to exit the overlay (operator report,
+    2026-08-15). The fix is a non-obvious one-liner that reads like removable
+    cruft, so pin it: the pill must keep its own layer and sit clearly on top."""
+    rule = _css_rule(".overlay-home")
+    assert "translateZ(0)" in rule or "translate3d" in rule, \
+        "overlay-home needs its own compositing layer or taps fall through the " \
+        "scaled fit-panel iframe on iOS"
+    z = re.search(r"z-index:\s*(\d+)", rule)
+    assert z and int(z.group(1)) >= 10, \
+        "overlay-home must sit above the overlay panel content"
+
+
 def test_one_card_and_section_header_system_styled():
     """Task 2's headline global constraint: a single .card box treatment and a
     single .shead section header (with its tick + expand button) are the source
@@ -210,8 +226,8 @@ MOBILE_TABS = ("chores", "cal", "cams", "weather")
 WALL_SURFACES = {"people-col", "cal", "tiles", "panels"}
 
 # each tab's surface, by the section class it leaves visible. The cams tab shows
-# the 2x2 .camgrid grid and suppresses the wall's .tiles column entirely, so its
-# surface is none of the shared wall sections.
+# the .camgrid (a single stacked column on the phone) and suppresses the wall's
+# .tiles column entirely, so its surface is none of the shared wall sections.
 TAB_SURFACE = {"chores": ".people-col", "cal": ".cal",
                "cams": ".camgrid", "weather": ".panels"}
 
@@ -241,9 +257,12 @@ def test_each_tab_hides_every_other_surface():
         # all four wall sections.
         expect = WALL_SURFACES - {own.lstrip(".")}
         assert hidden == expect, f"{tab} tab hides {hidden}, expected {expect}"
-    # The cams tab must actually reveal the 2x2 grid it suppressed the column for.
-    assert 'body[data-tab="cams"] .camgrid' in mobile, \
-        "cams tab must show the .camgrid 2x2 grid"
+    # The cams tab must actually reveal the camera grid it suppressed the column
+    # for, and stack it one-per-row on the phone (the 2x2 was unreadably small).
+    cams_grid = re.search(r'body\[data-tab="cams"\] \.camgrid\s*\{([^}]*)\}', mobile)
+    assert cams_grid, "cams tab must reveal .camgrid"
+    assert "grid-template-columns: 1fr" in cams_grid.group(1), \
+        "cams tab must stack cameras in a single column on the phone"
 
 
 def test_tab_bar_covers_all_tabs():
