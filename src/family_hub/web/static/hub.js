@@ -831,6 +831,10 @@ function scrollPageToTop() {
   if (se) se.scrollTop = 0;
   if (document.documentElement) document.documentElement.scrollTop = 0;
   if (document.body) document.body.scrollTop = 0;
+  // On the phone the scroller is .wrap (the app-shell content region), not the
+  // window — reset it too so a tab tap lands at the top there as well.
+  const wrap = document.querySelector('.wrap');
+  if (wrap) wrap.scrollTop = 0;
 }
 
 function setTab(tab) {

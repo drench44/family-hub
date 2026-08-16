@@ -41,11 +41,13 @@ Test all of: full desktop width, the mobile breakpoint, and night mode.
 
 ## Mobile & iOS Safari — required checks for anything phone-facing
 
-The phone reflow (`@media (max-width: 1000px)`: single column + the fixed bottom
-tab bar) and the full-screen overlays are used on a real iPhone. Static and
-fake-DOM tests can't see mobile layout OR iOS Safari behavior, so a batch of
-spacing and tap bugs shipped unnoticed (2026-08-15). For ANY change that touches
-mobile CSS, the tab bar, overlays, modals, or embedded iframes, do all of:
+The phone reflow (`@media (max-width: 1000px)`: an app-shell — the body is a
+fixed-height flex column, the content `.wrap` scrolls inside it, and the tab bar
+is the in-flow bottom row) and the full-screen overlays are used on a real
+iPhone. Static and fake-DOM tests can't see mobile layout OR iOS Safari
+behavior, so a batch of spacing and tap bugs shipped unnoticed (2026-08-15). For
+ANY change that touches mobile CSS, the tab bar, overlays, modals, or embedded
+iframes, do all of:
 
 1. **Render at a real phone width** (≤ 400px) and eyeball spacing on every tab
    (Chores, To-Dos, Calendar, Cameras, Weather) and every modal/overlay. The
@@ -59,16 +61,26 @@ mobile CSS, the tab bar, overlays, modals, or embedded iframes, do all of:
 Known iOS Safari traps this repo has already hit (each has a guard test —
 don't reintroduce them):
 
+- **Don't float an interactive `position: fixed` bar over a scrolling body.**
+  A fixed bottom nav over the scrolling page went untappable on iOS when
+  scrolled to the bottom (its hit area misaligns / taps fall through). The fix
+  was the app shell above: content scrolls in its own `.wrap` region and the tab
+  bar is an in-flow row below it, so it's always tappable at any scroll
+  position. Guards: `test_mobile_tabbar_stays_tappable`,
+  `test_mobile_app_shell_scrolls_content_not_the_body`.
 - **No `backdrop-filter` on a `position: fixed`/`sticky` element.** Taps fall
   through it intermittently. Use a solid background (put any blur on a
   non-interactive `::before`). Guard: `test_no_backdrop_filter_on_fixed_elements`.
-- **An element layered over a CSS-transform-scaled iframe needs its own
-  compositing layer** (`transform: translateZ(0)`) or iOS routes taps INTO the
-  iframe. Hit on the overlay ⌂ home pill over "fit" panels. Guards:
-  `test_overlay_home_pill_stays_tappable_over_scaled_iframes`,
-  `test_mobile_tabbar_stays_tappable`.
+- **No `transform` on a `position: fixed` interactive element.** It's often
+  suggested as an iOS "compositing layer" fix, but on a fixed element it
+  misaligns the touch target when the page is scrolled — it CAUSED the tab-bar
+  bug above, don't reach for it. (On an `absolute` element layered over a
+  CSS-transform-scaled iframe, `translateZ(0)` IS the right fix — iOS otherwise
+  routes taps into the iframe; that's the overlay ⌂ home pill over "fit" panels,
+  guarded by `test_overlay_home_pill_stays_tappable_over_scaled_iframes`.)
 - **Scroll resets need every target**, not just `window.scrollTo` — zero the
-  scrolling element and both document roots too (`scrollPageToTop` in hub.js).
+  scrolling element, both document roots, and the `.wrap` app-shell container
+  (`scrollPageToTop` in hub.js).
 - **Tap targets ≥ ~44px** and clear of the very bottom edge (the iOS home-
   indicator / swipe zone).
 

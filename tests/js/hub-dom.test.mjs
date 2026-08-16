@@ -300,6 +300,12 @@ function newHub() {
   // seeded non-zero so a test can prove each one gets reset to the top.
   document.scrollingElement = { scrollTop: 0 };
   document.documentElement = { scrollTop: 0 };
+  // The phone scroll container. scrollPageToTop() resets document.querySelector
+  // ('.wrap'); expose a stand-in so the reset is observable in tests.
+  const wrapEl = new FakeEl(registry, 'div');
+  wrapEl.scrollTop = 0;
+  const _qs = document.querySelector;
+  document.querySelector = (sel) => (sel === '.wrap' ? wrapEl : _qs(sel));
 
   // Timers are inert: no callback ever fires, so the poll loop and the toast
   // auto-hide don't run — the toast stays put for us to assert on.
@@ -351,14 +357,16 @@ test('setTab scrolls the page back to the top on every tab tap', () => {
   document.scrollingElement.scrollTop = 900;
   document.documentElement.scrollTop = 900;
   document.body.scrollTop = 900;
+  document.querySelector('.wrap').scrollTop = 900;
   sandbox.setTab('cal');
   assert.deepEqual(sandbox.scrollCalls.at(-1), [0, 0],
     'switching tabs must call window.scrollTo(0,0)');
-  // the iOS belt-and-suspenders reset: every scroll target lands at the top,
-  // not just window (window.scrollTo alone is unreliable on iOS Safari)
+  // every scroll target lands at the top — window (desktop) AND the .wrap
+  // app-shell content region (phone), plus the iOS belt-and-suspenders roots
   assert.equal(document.scrollingElement.scrollTop, 0, 'scrollingElement reset');
   assert.equal(document.documentElement.scrollTop, 0, 'documentElement reset');
   assert.equal(document.body.scrollTop, 0, 'body reset');
+  assert.equal(document.querySelector('.wrap').scrollTop, 0, '.wrap content region reset');
   // tapping the tab you are already on scrolls to the top too (iOS pattern)
   sandbox.scrollCalls.length = 0;
   document.scrollingElement.scrollTop = 500;
