@@ -796,8 +796,12 @@ body.overlay-open { overflow: hidden; }
   /* top padding clears the fixed ⌂ home pill (16px offset + pill height) */
   padding: 68px 24px 24px; background: var(--ground);
 }
+/* The all-chores overlay stacks the nav row, one .card per person, and (in edit
+   mode) the people-admin section. They're plain blocks with no margin, so space
+   them evenly instead of letting the cards butt together (desktop + phone). */
+#chores-full { display: flex; flex-direction: column; gap: 12px; }
 .overlay-home {
-  position: absolute; top: 16px; left: 16px; z-index: 2;
+  position: absolute; top: 16px; left: 16px; z-index: 10;
   font-family: var(--mono); font-size: 11px; font-weight: 600;
   letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--ink);
@@ -805,6 +809,11 @@ body.overlay-open { overflow: hidden; }
   border: 1px solid var(--edge);
   border-radius: 999px; padding: 8px 14px;
   cursor: pointer;
+  /* A "fit" panel (weather/climate) scales its iframe with a CSS transform;
+     iOS Safari routes taps over that scaled iframe INTO the frame, so the home
+     pill above it stops responding. Promoting the pill to its own compositing
+     layer (translateZ(0)) + a clear z-index keeps its taps on top. */
+  transform: translateZ(0);
 }
 .overlay-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -938,6 +947,11 @@ body.overlay-open { overflow: hidden; }
   border-radius: 16px;
   padding: 52px 26px 26px 26px;
 }
+/* The editor host holds the reusable chore/person form (a stack of .field
+   blocks + the error + submit). Without a container rhythm the fields butt
+   together (each .field only spaces its own label→control by 6px), so give the
+   stack one consistent gap between fields. */
+#chore-editor { display: flex; flex-direction: column; gap: 18px; }
 .chore-close {
   position: absolute; top: 14px; right: 14px;
   width: 40px; height: 40px;
@@ -1240,8 +1254,9 @@ body.overlay-open { overflow: hidden; }
   body[data-tab="cams"] .panels,
   body[data-tab="cams"] .todos-page,
   body[data-tab="cams"] .tiles { display: none; }
-  /* Cameras tab shows the 2x2 grid, not the wall's stacked column. */
-  body[data-tab="cams"] .camgrid { display: grid; }
+  /* Cameras tab: on the phone the 2x2 grid is too small to read — stack the
+     cameras one per row and scroll, with a gap between each. */
+  body[data-tab="cams"] .camgrid { display: grid; grid-template-columns: 1fr; gap: 14px; }
   body[data-tab="weather"] .people-col,
   body[data-tab="weather"] .cal,
   body[data-tab="weather"] .tiles,
@@ -1260,7 +1275,9 @@ body.overlay-open { overflow: hidden; }
   .mg-ev-title { display: none; }   /* dots only — titles are one tap away */
   .ev-card { padding: 20px 18px 22px 24px; }
   .ev-title { font-size: 21px; }
-  .todo-cols { grid-template-columns: 1fr; gap: 0; }
+  /* Now/Soon/Later collapse to one stacked column on the phone; keep a gap so
+     the three cards don't butt together (they carry no margin of their own). */
+  .todo-cols { grid-template-columns: 1fr; gap: 12px; }
   .tab-btn { min-width: 0; }
 }
 
