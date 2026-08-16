@@ -1084,15 +1084,15 @@ body.overlay-open { overflow: hidden; }
 /* Hidden on the wall; the mobile block below turns it on. */
 .tabbar {
   display: none;
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  /* The phone layout (below) makes this an in-flow bar at the bottom of the
+     body flex column — see the app-shell block in the mobile media query. It is
+     deliberately NOT a fixed bar floating over a scrolling page: that kept
+     going untappable on iOS Safari (a `backdrop-filter` blur and/or a transform
+     on a fixed bar make its taps fall through or misalign when scrolled). Solid
+     background, no blur, no transform. */
   padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
-  /* Solid, not a translucent backdrop-filter blur: a `backdrop-filter` fixed
-     bar goes intermittently untappable on iOS Safari (taps fall through it),
-     and it worsens when another layer composites over the page. A solid
-     surface + its own compositing layer keeps every tab reliably tappable. */
   background: var(--surface);
   border-top: 1px solid var(--edge);
-  transform: translateZ(0);
 }
 .tab-btn {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
@@ -1218,7 +1218,27 @@ body.overlay-open { overflow: hidden; }
    Weather. The breakpoint is high on purpose — portrait tablets and half
    -screen windows get the phone layout, the 1920 wall never does. */
 @media (max-width: 1000px) {
-  .wrap { width: auto; max-width: 640px; padding: 0 14px calc(86px + env(safe-area-inset-bottom)); }
+  /* Phone app shell. The body is a fixed-height flex column: the content
+     (.wrap) scrolls in its OWN region and the tab bar sits BELOW it in normal
+     flow, never overlapping. A fixed bar floating over the scrolling body kept
+     going untappable on iOS Safari when scrolled to the bottom (its hit area
+     misaligns / taps fall through); an in-flow bar is reliably tappable at any
+     scroll position, and "scroll to top" is just resetting .wrap. */
+  html, body { height: 100%; }
+  /* min-height:0 REQUIRED here: the base body carries min-height:100vh, and on
+     iOS 100vh (address bar hidden) is TALLER than 100dvh (address bar shown).
+     Left in, that floor forces the body past the visible area and pushes the
+     in-flow tab bar below the fold — the exact untappable-bottom bug. Clear it
+     so height:100dvh (fallback: html/body height:100%) governs. */
+  body { height: 100dvh; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  .wrap {
+    flex: 1; min-height: 0;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    width: auto; max-width: 640px; padding: 0 14px 16px;
+  }
+  /* An open overlay covers the viewport; also stop the content region behind it
+     from touch-scrolling (iOS can bleed scroll through the fixed overlay). */
+  body.overlay-open .wrap { overflow: hidden; }
   .topbar { padding: 14px 2px 12px; }
   .clock .clock-date { display: none; }
   /* the refresh button is a wall/kiosk affordance (no keyboard there); phones
@@ -1237,7 +1257,9 @@ body.overlay-open { overflow: hidden; }
   /* the wall's under-calendar to-do card has no phone equivalent — the
      dedicated To-Dos tab already covers phones (operator, 2026-08-14) */
   .todo-slot { display: none; }
-  .tabbar { display: flex; }
+  /* in-flow (static), not fixed: it's the last row of the body flex column, so
+     it's always pinned below the scrolling .wrap and never overlaps content */
+  .tabbar { display: flex; position: static; flex: none; }
   /* the add row shares one flex line with the Now/Soon/Later segmented
      control and Add button — on narrow phones that squeezes the input to
      a stub, so let it wrap to its own full-width row */
