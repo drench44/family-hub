@@ -821,6 +821,18 @@ async function probeOneCamera(cam) {
 /* The tab bar only renders under the CSS mobile breakpoint; each tab shows a
    slice of the one page. Panels and camera frames were display:none while
    hidden, so entering a tab re-fits panels / starts the paused streams. */
+/* Jump the page back to the top. window.scrollTo alone is unreliable on iOS
+   Safari (it gets ignored right after a tap / during momentum scrolling), so
+   also zero the scrolling element and both document roots — whichever one is
+   actually the scroller then lands at the top. */
+function scrollPageToTop() {
+  scrollTo(0, 0);
+  const se = document.scrollingElement;
+  if (se) se.scrollTop = 0;
+  if (document.documentElement) document.documentElement.scrollTop = 0;
+  if (document.body) document.body.scrollTop = 0;
+}
+
 function setTab(tab) {
   document.body.dataset.tab = tab;
   document.querySelectorAll('.tab-btn').forEach((b) =>
@@ -828,7 +840,7 @@ function setTab(tab) {
   if (tab === 'weather') { wirePanels(); fitPanels(); }  // deferred while hidden
   if (tab === 'cams') probeCamera();
   if (tab === 'todos') renderTodosFull();
-  scrollTo(0, 0);   // land at the top of the tab, not mid-scroll
+  scrollPageToTop();   // every tab tap lands at the top, not mid-scroll
 }
 
 /* --------------------------------------------------------------- overlays */
@@ -980,7 +992,7 @@ function closeOverlay() {
   document.getElementById('overlay-content').innerHTML = '';
   openView = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  scrollTo(0, 0);   // coming home always lands at the top of the page
+  scrollPageToTop();   // coming home always lands at the top of the page
 }
 
 function armIdle() {
