@@ -147,23 +147,71 @@ def test_overlay_home_pill_stays_tappable_over_scaled_iframes():
 
 
 def test_mobile_tabbar_stays_tappable():
-    """The phone tab bar is fixed at the bottom. A `backdrop-filter` blur there
-    goes intermittently untappable on iOS Safari (taps fall through the bar) —
-    worse once another element composites a layer over the page. It was swapped
-    for a solid background + its own compositing layer (operator report,
-    2026-08-15). Pin both so a "restore the blur" edit can't silently break
-    every tab's nav again."""
-    rule = _css_rule(".tabbar")
-    # match the declaration (colon), not the word in the explanatory comment
-    assert "backdrop-filter:" not in rule, \
+    """The phone tab bar must be an IN-FLOW row at the bottom of the body flex
+    column (the app shell), NOT a fixed bar floating over the scrolling page.
+    A fixed bar kept going untappable on iOS Safari — a `backdrop-filter` blur
+    made taps fall through it, and a `transform` made its hit area misalign when
+    scrolled to the bottom (operator reports, 2026-08-15). An in-flow, solid,
+    transform-free bar is reliably tappable at every scroll position. Pin all of
+    that so a regression to the fixed-bar approach can't silently return."""
+    # strip comments (so the rule's prose can't trip the checks) then whitespace
+    # (so `position:fixed` / `position: fixed` and any reformatting both match)
+    ns = re.sub(r"\s+", "", re.sub(r"/\*.*?\*/", "", _css_rule(".tabbar"), flags=re.S))
+    assert "backdrop-filter:" not in ns, \
         "the tab bar must not use backdrop-filter — it breaks taps on iOS Safari"
-    # a solid (opaque) surface is the other half of the fix — a translucent
-    # background is what backdrop-filter was blurring, and reintroducing one
-    # invites the same compositing-dependent tap failure
-    assert "transparent" not in rule, \
+    assert "transparent" not in ns, \
         "the tab bar background must be solid, not translucent"
-    assert "translateZ(0)" in rule or "translate3d" in rule, \
-        "the tab bar needs its own compositing layer to stay reliably tappable"
+    assert "position:fixed" not in ns, \
+        "the tab bar must be in-flow (app shell), not fixed over the scroll area"
+    assert "translateZ" not in ns and "translate3d" not in ns, \
+        "no transform on the bar — it misaligns a fixed bar's taps on iOS"
+    assert "position:static" in ns, \
+        "the phone tab bar must be pinned in-flow (position: static)"
+
+
+def test_mobile_app_shell_scrolls_content_not_the_body():
+    """The phone layout is an app shell: the body is a fixed-height flex column
+    that itself does NOT scroll, the content region (.wrap) scrolls inside it,
+    and the in-flow tab bar is the last row. This is what keeps the tab bar
+    tappable at any scroll position (it never overlaps content) and makes
+    scroll-to-top a single-container reset. Guard the shape so it can't regress
+    to a fixed-bar-over-scrolling-body layout, which failed on iOS."""
+    # bound the scan to the max-width:1000px block (stop at the next @media) so
+    # a future narrower breakpoint's body/.wrap rule can't be matched by mistake
+    start = CSS.index("@media (max-width: 1000px)")
+    nxt = CSS.find("@media", start + 1)
+    mobile = CSS[start:nxt] if nxt != -1 else CSS[start:]
+    # strip comments so an explanatory /* ... */ between rules can't break the
+    # rule-matching regex or trip a substring check
+    mobile = re.sub(r"/\*.*?\*/", "", mobile, flags=re.S)
+    # whitespace-proof: strip spaces so `overflow:hidden` / `overflow: hidden`
+    # (and any future reformatting) both match
+    ns = lambda s: re.sub(r"\s+", "", s)
+    body_rule = re.search(r"(^|})\s*body\s*\{([^}]*)\}", mobile)
+    assert body_rule, "no phone body rule in the mobile block"
+    body = ns(body_rule.group(2))
+    assert "overflow:hidden" in body, \
+        "phone body must not scroll — the .wrap content region does"
+    assert "display:flex" in body and "flex-direction:column" in body, \
+        "phone body must be a flex column app shell"
+    # the body must size to the DYNAMIC viewport (100dvh) AND explicitly clear
+    # the base rule's min-height:100vh floor. That floor lives in the base body
+    # rule and reaches here via the cascade, so the mobile rule MUST override
+    # min-height (to 0 or 100dvh) — otherwise on iOS 100vh > 100dvh forces the
+    # body past the visible area and pushes the in-flow tab bar below the fold.
+    assert "height:100dvh" in body, "phone body must size to the dynamic viewport (100dvh)"
+    assert "min-height:0" in body or "min-height:100dvh" in body, \
+        "phone body must clear the base min-height:100vh floor (min-height:0), " \
+        "or the tab bar drops below the fold on iOS"
+    wrap_rule = re.search(r"\.wrap\s*\{([^}]*)\}", mobile)
+    assert wrap_rule, "no phone .wrap rule in the mobile block"
+    wrap = ns(wrap_rule.group(1))
+    assert "overflow-y:auto" in wrap, ".wrap must be the scrolling content region"
+    # flex:1 + min-height:0 are load-bearing: without min-height:0 a flex item
+    # won't shrink below its content, so overflow-y:auto is inert and .wrap
+    # overflows the fixed-height body, shoving the tab bar off-screen
+    assert "flex:1" in wrap and "min-height:0" in wrap, \
+        ".wrap needs flex:1 + min-height:0 to actually scroll inside the shell"
 
 
 def test_no_backdrop_filter_on_fixed_elements():
