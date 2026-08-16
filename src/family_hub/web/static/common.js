@@ -1,9 +1,10 @@
 'use strict';
 
-/* Family Hub — helpers shared by the hub wall page (hub.js) and the phone
-   admin page (admin.js). Loaded as a classic script BEFORE either; its
-   top-level declarations are visible to the scripts that follow. Pure: no DOM
-   access here, so tests/js can load it into a vm sandbox with no document. */
+/* Family Hub — helpers shared across the wall page (hub.js) and the on-screen
+   keyboard (osk.js). Loaded as a classic script BEFORE them; its top-level
+   declarations are visible to the scripts that follow. Some helpers here build
+   DOM (the reusable chore/person editor forms) — those run only in the browser;
+   the pure helpers load into a vm sandbox for tests/js with no document. */
 
 const J_TIMEOUT_MS = 12000;   // abort a hung request (see j)
 
@@ -350,8 +351,8 @@ function choreToModel(ch) {
 /* 16 vivid, cheerful hues spanning the wheel — the person-color palette. Each
    is dual-legible: WCAG contrast >= 3:1 against BOTH the light-theme card
    (#FFFFFF) and the dark-theme card (#141A26). See
-   tests/test_static.py::test_swatch_hexes_meet_dual_theme_contrast. Shared by
-   the admin page and the Chores-page inline people editor. */
+   tests/test_static.py::test_swatch_hexes_meet_dual_theme_contrast. Used by the
+   Chores-page inline people editor. */
 const SWATCHES = ['#FA4352', '#F64E06', '#BE7A05', '#978B04',
   '#5B9904', '#049F1E', '#049C6A', '#049E8C',
   '#0594C3', '#3587FA', '#717CFB', '#9371FB',
@@ -373,8 +374,8 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // bit 0..
 
 /* One reusable chore form. `model` seeds it; `onsubmit(body, errEl)` fires with
    the assembled request body; `people` is the full people list (active status
-   included) the form needs for the person picker + rotation names. Shared by
-   the admin page (add card + every inline edit) and the hub wall. */
+   included) the form needs for the person picker + rotation names. Opened from
+   the wall's all-chores edit mode (add + every inline edit). */
 function buildChoreForm(host, model, submitLabel, onsubmit, people) {
   host.innerHTML = `
     <div class="field"><label>Title</label>
@@ -511,8 +512,8 @@ function freshPersonModel() {
   return { name: '', color: SWATCHES[0] };
 }
 
-/* One reusable person form (name + color swatches), shared by the admin page
-   and the Chores-page inline people editor. `model` seeds it; `onsubmit(body,
+/* One reusable person form (name + color swatches) for the Chores-page inline
+   people editor. `model` seeds it; `onsubmit(body,
    errEl)` fires with {name, color}. DOM hooks are data-* attributes (not
    classes) so the form needs no styling of its own — it reuses .txt-input /
    .swatches / .form-error / .btn-primary. */

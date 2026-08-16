@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=61">
+  <link rel="stylesheet" href="styles.css?v=62">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
   <script src="theme.js?v=5"></script>
@@ -22,7 +22,8 @@
            or unsticks a stale page) without needing a keyboard or a phone. -->
       <button class="wall-refresh" id="wall-refresh" type="button" aria-label="Refresh" title="Refresh">↻</button>
       <!-- Display gear: re-theme the wall touchscreen without a phone. Opens the
-           popover below; the SAME three controls the admin page carries. -->
+           popover below — the wall's only display controls (theme, accent,
+           columns), since the admin page was retired. -->
       <button class="wall-gear" id="wall-gear" type="button" aria-label="Display settings" aria-haspopup="dialog" aria-expanded="false">⚙</button>
       <div class="theme-pop" id="theme-pop" role="dialog" aria-label="Display settings">
         <div class="theme-ctl">
@@ -129,6 +130,6 @@
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
   <script src="osk.js?v=1"></script>
-  <script src="hub.js?v=60"></script>
+  <script src="hub.js?v=61"></script>
 </body>
 </html>

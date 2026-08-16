@@ -48,8 +48,8 @@ at one URL.
   the wall.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —
-  no phone needed. `/admin.html` from any browser does the same. No app to
-  install.
+  no phone needed. The same page works from any browser on the LAN, so a phone
+  or laptop manages everything too. No app to install.
 
 ## Architecture & trust model
 
@@ -93,8 +93,8 @@ docker compose up -d --build web       # just the hub; cameras come later
 curl -s http://<your-server>:8138/health   # {"status":"ok"}
 ```
 
-Open `http://<your-server>:8138/admin.html`, add your people and chores, and
-the wall at `http://<your-server>:8138/` comes alive. Everything below is
+Open the wall at `http://<your-server>:8138/`, tap **Edit** on the Chores card,
+and add your people and chores — the wall comes alive. Everything below is
 optional and independent — add the pieces you have.
 
 > The frontend is **baked into the image**: after changing anything under
@@ -287,7 +287,8 @@ deactivating, or even deleting a chore changes today and the future only.
 Nobody's streak is rewritten by an edit, and a deleted chore still shows on
 the days it was actually done. Streaks count consecutive completed days (rest
 days skip, an unfinished today is forgiven). People and chores are managed
-right on the wall's Chores page (tap **Edit**) or from `/admin.html`. Deleting
+right on the wall's Chores page (tap **Edit**) — on the touchscreen or from any
+browser on the LAN. Deleting
 a person is history-safe: their frozen past days stay recorded, and they're
 stripped from every chore's rotation or fixed assignment; **Deactivate** is the
 reversible alternative.

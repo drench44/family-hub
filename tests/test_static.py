@@ -21,14 +21,14 @@ ALL_HTML = "\n".join(p.read_text() for p in HTML_FILES)
 ALL_JS = "\n".join(p.read_text() for p in JS_FILES)
 
 # The NEW load-bearing theme tokens (Task 10 finished the migration off the
-# legacy dark-only names). Every one must be defined so the whole wall + admin
-# chrome resolves in BOTH themes.
+# legacy dark-only names). Every one must be defined so the whole wall chrome
+# resolves in BOTH themes.
 PALETTE_TOKENS = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                   "--ink", "--dim", "--faint", "--good", "--warn", "--crit",
                   "--accent", "--accent-ink", "--accent-soft"]
 
 _CLASS_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*$")
-# `f-*` are query hooks for admin.js's reusable chore form — they exist to be
+# `f-*` are query hooks for common.js's reusable chore form — they exist to be
 # selected in JS, never to be styled (the visible styling rides sibling classes
 # like .segmented / .day-chips / .txt-input). Listed here on purpose.
 UNSTYLED_OK = {"f-title", "f-icon", "f-repeat", "f-days", "f-assign",
@@ -77,7 +77,7 @@ def test_common_js_loads_before_page_script(html_path):
     # strip cache-buster queries (?v=N) before comparing names
     scripts = [s.split("?")[0] for s in
                re.findall(r'<script src="([^"]+)"', html_path.read_text())]
-    page = [s for s in scripts if s in ("hub.js", "admin.js")]
+    page = [s for s in scripts if s in ("hub.js",)]
     if page:
         assert "common.js" in scripts
         for p in page:
@@ -191,14 +191,15 @@ def test_favicon_is_local_svg():
     assert (STATIC / "favicon.svg").exists()
 
 
-def test_admin_page_links_back_to_the_wall():
-    """The admin page's only navigation off itself is the "← Family Hub" home
-    link. It's reached from the chores overlay's admin link, so the round-trip
-    has to close — pin the anchor's exact href, not just that .admin-home is
-    styled (an orphaned rule would pass a styled-only check)."""
-    admin = (STATIC / "admin.html").read_text()
-    assert re.search(r'<a class="admin-home" href="/">', admin), \
-        "admin.html must carry a '← Family Hub' link (href=/) back to the wall"
+def test_admin_html_is_retired():
+    """admin.html/admin.js were retired 2026-08-15 — all management now lives on
+    the wall's Chores page (tap Edit). Guard against either file creeping back:
+    the wall must stay the single admin surface, and no page may reference the
+    dead admin route."""
+    assert not (STATIC / "admin.html").exists(), "admin.html should be deleted"
+    assert not (STATIC / "admin.js").exists(), "admin.js should be deleted"
+    assert "admin.html" not in ALL_HTML + ALL_JS, \
+        "no frontend file may still link to the retired /admin.html"
 
 
 MOBILE_TABS = ("chores", "cal", "cams", "weather")
@@ -317,20 +318,19 @@ def test_theme_tokens_base_on_root_no_override_orphans():
         f"tokens defined only in a dark/accent override, not on :root: {orphans}"
 
 
-def test_display_controls_present_on_both_surfaces():
-    """The persisted theme picker ships on the admin page AND in the wall's gear
-    popover: the five theme modes (Light/Soft/Blue=dark/Grey/Black), the four
-    accents, and None/Wells/Lines columns. The blue-navy dark keeps its stored
-    value "dark" (labelled "Blue") so no prefs migrate."""
-    admin = (STATIC / "admin.html").read_text()
+def test_display_controls_present_on_the_wall_gear():
+    """The persisted theme picker ships in the wall's gear popover (the only
+    display-control surface now that the admin page is retired): the five theme
+    modes (Light/Soft/Blue=dark/Grey/Black), the four accents, and
+    None/Wells/Lines columns. The blue-navy dark keeps its stored value "dark"
+    (labelled "Blue") so no prefs migrate."""
     index = (STATIC / "index.html").read_text()
-    for html in (admin, index):
-        for mode in ("light", "soft", "dark", "grey", "black"):
-            assert f'data-theme-set="{mode}"' in html, f"missing the {mode} theme button"
-        for accent in ("cyan", "violet", "amber", "green"):
-            assert f'data-c="{accent}"' in html, f"missing the {accent} accent swatch"
-        assert 'data-cols-set="none"' in html and 'data-cols-set="wells"' in html \
-            and 'data-cols-set="lines"' in html
+    for mode in ("light", "soft", "dark", "grey", "black"):
+        assert f'data-theme-set="{mode}"' in index, f"missing the {mode} theme button"
+    for accent in ("cyan", "violet", "amber", "green"):
+        assert f'data-c="{accent}"' in index, f"missing the {accent} accent swatch"
+    assert 'data-cols-set="none"' in index and 'data-cols-set="wells"' in index \
+        and 'data-cols-set="lines"' in index
     # the wall must be re-themable without a phone: the gear + its popover
     assert 'id="wall-gear"' in index and 'id="theme-pop"' in index
 

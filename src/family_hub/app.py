@@ -1,7 +1,8 @@
 """FastAPI app: hub, chores, admin, calendar and tile routes.
 
-The wall page polls /api/hub; phones drive the /api/admin/* routes; tiles proxy
-the box's other services. A background thread syncs Google Calendar every 5 min
+The wall page polls /api/hub and drives the /api/admin/* routes from its Chores
+edit mode (reachable from a phone too — same page); tiles proxy the box's other
+services. A background thread syncs Google Calendar every 5 min
 (disabled by DISABLE_SYNC=1 in tests). LAN-only, no auth — the established
 trust model for every service on this box.
 """
