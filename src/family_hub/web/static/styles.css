@@ -1086,10 +1086,13 @@ body.overlay-open { overflow: hidden; }
   display: none;
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
   padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  /* Solid, not a translucent backdrop-filter blur: a `backdrop-filter` fixed
+     bar goes intermittently untappable on iOS Safari (taps fall through it),
+     and it worsens when another layer composites over the page. A solid
+     surface + its own compositing layer keeps every tab reliably tappable. */
+  background: var(--surface);
   border-top: 1px solid var(--edge);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  transform: translateZ(0);
 }
 .tab-btn {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;

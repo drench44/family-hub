@@ -146,6 +146,26 @@ def test_overlay_home_pill_stays_tappable_over_scaled_iframes():
         "overlay-home must sit above the overlay panel content"
 
 
+def test_mobile_tabbar_stays_tappable():
+    """The phone tab bar is fixed at the bottom. A `backdrop-filter` blur there
+    goes intermittently untappable on iOS Safari (taps fall through the bar) —
+    worse once another element composites a layer over the page. It was swapped
+    for a solid background + its own compositing layer (operator report,
+    2026-08-15). Pin both so a "restore the blur" edit can't silently break
+    every tab's nav again."""
+    rule = _css_rule(".tabbar")
+    # match the declaration (colon), not the word in the explanatory comment
+    assert "backdrop-filter:" not in rule, \
+        "the tab bar must not use backdrop-filter — it breaks taps on iOS Safari"
+    # a solid (opaque) surface is the other half of the fix — a translucent
+    # background is what backdrop-filter was blurring, and reintroducing one
+    # invites the same compositing-dependent tap failure
+    assert "transparent" not in rule, \
+        "the tab bar background must be solid, not translucent"
+    assert "translateZ(0)" in rule or "translate3d" in rule, \
+        "the tab bar needs its own compositing layer to stay reliably tappable"
+
+
 def test_one_card_and_section_header_system_styled():
     """Task 2's headline global constraint: a single .card box treatment and a
     single .shead section header (with its tick + expand button) are the source
