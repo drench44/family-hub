@@ -415,8 +415,7 @@ async function renderChoresFull(prefetched) {
     + (people.length
       ? people.map((p) => personCardHtml(p, { readonly, editing })).join('')
       : `<div class="cal-empty">no people yet</div>`)
-    + peopleAdmin
-    + manageAdminHtml();
+    + peopleAdmin;
 }
 
 /* Fetch the flat people list, cache it, and repaint the chores view once — but
@@ -437,18 +436,6 @@ async function ensurePeopleThenRerender() {
   if (openView === 'chores' && choreState.editing && choreState.day === data_date) {
     renderChoresFull(hubData ? hubData.people : null);
   }
-}
-
-/* Footer of the all-chores overlay (shown in BOTH view and edit mode): a plain
-   link to the full /admin.html management page. (This was a QR to scan from a
-   phone; dropped 2026-08-14 — a QR is pointless on the very phone that would
-   scan it, and on the wall it just opens the same page. The on-screen keyboard,
-   coming next, makes editing on the wall itself viable.) A same-origin href
-   works everywhere; the admin page carries a "← Family Hub" link back. */
-function manageAdminHtml() {
-  return `<div class="manage-admin">`
-    + `<a class="manage-admin-link" href="/admin.html">Manage chores on the admin page →</a>`
-    + `</div>`;
 }
 
 /* Flat people list (id/name/color/active) for the inline people editor —
@@ -486,7 +473,7 @@ function renderPeople(data) {
   const host = document.getElementById('people');
   if (!data.people.length) {
     host.innerHTML = `<div class="empty-hub">No people yet`
-      + `<div class="empty-sub">add your family at /admin.html</div></div>`;
+      + `<div class="empty-sub">tap All chores, then Edit to add your family</div></div>`;
     lastPeople = [];
     return;
   }
@@ -1531,8 +1518,8 @@ async function toggleChore(id, done) {
    overlay's edit mode. It needs the FLAT people list (with active flags) and,
    to edit, the FULL chore record — neither of which the wall's /api/hub payload
    carries (its chore rows are just {id,title,icon,done,rot}; its people are
-   nested under .person). So the editor pulls /api/admin/state, the same source
-   admin.js feeds buildChoreForm/choreToModel from. */
+   nested under .person). So the editor pulls /api/admin/state, the flat+full
+   source that feeds buildChoreForm/choreToModel. */
 
 function closeChoreEditor() {
   document.getElementById('chore-modal').classList.add('hidden');
