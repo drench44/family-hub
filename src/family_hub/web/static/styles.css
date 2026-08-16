@@ -816,23 +816,6 @@ body.overlay-open { overflow: hidden; }
   color: var(--dim); margin: 8px 0 18px 0;
 }
 
-/* Footer of the all-chores overlay: a quiet link to the full /admin.html page.
-   Sits under the last person card, unobtrusive. */
-.manage-admin {
-  display: flex; justify-content: center;
-  margin: 28px auto 0;
-}
-.manage-admin-link {
-  display: inline-flex; align-items: center; min-height: 48px;
-  font-family: var(--mono); font-size: 14px; font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--dim); text-decoration: none;
-  padding: 0 24px; border-radius: 12px;
-  border: 1px solid var(--edge); background: var(--surface);
-}
-.manage-admin-link:hover { color: var(--ink); border-color: var(--accent); }
-.manage-admin-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 /* Inline people management on the Chores page (edit mode only, under the person
    cards). Keeps the whole household editable from the wall without the separate
    admin page. */
@@ -1300,41 +1283,9 @@ body.overlay-open { overflow: hidden; }
   .confetti-particle { display: none; }
 }
 
-/* =========================== admin =========================== */
-.admin-page { padding: 24px 16px 60px; }
-.admin-wrap { max-width: 560px; margin: 0 auto; }
-.admin-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 6px 2px 20px;
-}
-/* Back to the wall — the admin page's only navigation off the page. */
-.admin-home {
-  margin-left: auto;
-  display: inline-flex; align-items: center; min-height: 44px;
-  font-family: var(--mono); font-size: 12px; font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--dim); text-decoration: none;
-  padding: 0 16px; border-radius: 10px; border: 1px solid var(--edge);
-}
-.admin-home:hover { color: var(--ink); border-color: var(--accent); }
-.admin-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.admin-section { margin-top: 28px; }
-.admin-section > h2 {
-  font-family: var(--mono); font-size: 11px; font-weight: 600;
-  letter-spacing: 0.2em; text-transform: uppercase;
-  color: var(--dim); margin-bottom: 12px;
-}
-.admin-card {
-  background: var(--surface);
-  border: 1px solid var(--edge);
-  border-radius: 12px;
-  padding: 14px;
-  margin-bottom: 10px;
-}
-.admin-card.inactive { opacity: 0.5; }
-.row-between { display: flex; align-items: center; gap: 10px; }
-.grow { flex: 1; }
-.admin-form { display: flex; flex-direction: column; gap: 14px; }
+/* ============= chore / person editor form (shared) =============
+   The reusable add/edit form (common.js buildChoreForm + buildPersonForm),
+   opened from the all-chores overlay's edit mode. */
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field > label {
   font-family: var(--mono); font-size: 12px;
@@ -1366,7 +1317,7 @@ body.overlay-open { overflow: hidden; }
 .seg-btn.active { color: var(--ink); background: var(--accent-soft); }
 /* consistent focus-visible ring for the remaining admin/interactive controls
    that carry no bespoke ring of their own (the file-wide convention) */
-.seg-btn:focus-visible, .day-chip:focus-visible, .btn-quiet:focus-visible,
+.seg-btn:focus-visible, .day-chip:focus-visible,
 .todo-act:focus-visible, .chore-del:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
@@ -1401,30 +1352,9 @@ body.overlay-open { overflow: hidden; }
   border-radius: 10px; cursor: pointer;
 }
 .btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.btn-quiet {
-  font-family: var(--mono); font-size: 11px;
-  letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--faint); background: none; border: 0; cursor: pointer;
-}
-.btn-quiet.arm { color: var(--crit); }
 .form-error { color: var(--crit); font-size: 13px; }
 .hint { color: var(--faint); font-size: 12px; }
 .hidden { display: none; }
-
-/* Chore list rows carry a schedule/assignee subtitle the person list doesn't
-   (person cards are name-only). Giving it its own line — instead of running it
-   inline after the title, where wrap behavior swung on title length — keeps
-   every row's hierarchy the same regardless of how long the title or the
-   rotation chain is. The open inline editor gets the same divider treatment
-   `.chore-row` already uses on the wall (border-top: var(--edge)), so "reading
-   the chore" and "editing the chore" read as two distinct states, not one
-   run-on block. */
-.chore-meta { margin-top: 4px; }
-#chore-list [data-editor]:not(.hidden) {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--edge);
-}
 
 /* Transient failure toast (e.g. a chore check-off that couldn't be saved).
    Bottom-centered, auto-hides; visibility toggled by .hub-toast-visible. */

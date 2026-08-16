@@ -872,11 +872,22 @@ def test_html_is_never_heuristically_cached(client):
     """Phones cached a stale index.html past a deploy (2026-08-13, missing tab
     bar): the HTML must say no-cache so browsers revalidate; busted assets
     (?v=N) and API JSON are left alone."""
-    for path in ("/", "/admin.html"):
-        r = client.get(path)
-        assert r.status_code == 200
-        assert r.headers.get("cache-control") == "no-cache", path
+    r = client.get("/")
+    assert r.status_code == 200
+    assert r.headers.get("cache-control") == "no-cache"
     assert "cache-control" not in {k.lower() for k in client.get("/styles.css").headers}
+
+
+def test_retired_admin_page_route_is_gone(client):
+    """admin.html/admin.js were retired 2026-08-15 (all management moved onto the
+    wall's Chores page). The static file is deleted, so the route 404s — a real
+    "gone", not the wall silently served in its place. The HTTP half of the
+    retirement guard; the filesystem/reference half is
+    test_static.py::test_admin_html_is_retired. The /api/admin/* routes stay —
+    they back the inline editor — so spot-check one still answers."""
+    assert client.get("/admin.html").status_code == 404
+    assert client.get("/admin.js").status_code == 404
+    assert client.get("/api/admin/state").status_code == 200
 
 
 def test_camera_page_grid_is_independent_of_wall_cameras(tmp_path, monkeypatch):

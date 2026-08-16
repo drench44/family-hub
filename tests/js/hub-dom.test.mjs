@@ -1056,20 +1056,28 @@ test('chores overlay: navigating off today clears edit mode (no silent resume be
   assert.equal(read('choreState.editing'), false, 'edit mode is cleared when leaving today');
 });
 
-test('chores overlay: a "Manage on the admin page" link shows in both modes', () => {
+test('chores overlay: no footer link to the retired admin page (all management is inline)', () => {
   const { choresFull, tap } = mountChoresFull(SAMPLE_PEOPLE);
-  // view mode: the footer link to the full admin page is present
-  const link = choresFull.querySelector('.manage-admin-link');
-  assert.ok(link, 'the .manage-admin-link rendered in view mode');
-  assert.equal(link.attrs.href, '/admin.html',
-    'links to the admin page (same-origin href — works on the wall and on a phone)');
-  assert.match(choresFull.innerHTML, /Manage chores on the admin page/);
-  // the QR was dropped — no leftover QR markup or svg
-  assert.ok(!choresFull.innerHTML.includes('<svg'), 'no QR svg (QR removed)');
-  assert.ok(!choresFull.innerHTML.includes('manage-qr'), 'no leftover manage-qr markup');
-  // edit mode: the footer persists (visible in BOTH view and edit mode)
+  // admin.html was retired 2026-08-15 — the "Manage on the admin page" footer is
+  // gone from BOTH modes; the Edit button + inline People section replace it.
+  assert.ok(!choresFull.querySelector('.manage-admin-link'), 'no admin-page link in view mode');
+  assert.ok(!choresFull.innerHTML.includes('admin.html'), 'no /admin.html reference in view mode');
   tap('[data-chedit="1"]');
-  assert.ok(choresFull.querySelector('.manage-admin-link'), 'the link persists in edit mode');
+  assert.ok(!choresFull.querySelector('.manage-admin-link'), 'no admin-page link in edit mode');
+  assert.ok(!choresFull.innerHTML.includes('admin.html'), 'no /admin.html reference in edit mode');
+});
+
+test('renderPeople: the empty-people state points at All chores → Edit, not the retired admin page', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderPeople({ people: [] });
+  const html = document.getElementById('people').innerHTML;
+  // With no household yet, the wall's only on-screen instruction for adding
+  // people must route to the live path (All chores → Edit), never the dead
+  // /admin.html the retirement removed.
+  assert.match(html, /empty-hub/, 'the empty-people tile rendered');
+  assert.match(html, /All chores/, 'directs the user to the All chores overlay');
+  assert.match(html, /Edit/, 'and to its Edit mode, where people are added');
+  assert.ok(!html.includes('admin.html'), 'no reference to the retired admin page');
 });
 
 // --- inline people admin on the Chores page (edit mode) ------------------
