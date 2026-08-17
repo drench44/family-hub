@@ -935,7 +935,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   // hub.js's load-time syncAppHeight() sets --app-h on documentElement.style;
   // give it a documentElement so the module loads (these tests don't assert on
   // the height var — newHub() covers that).
-  document.documentElement = { scrollTop: 0, style: { setProperty() {} } };
+  document.documentElement = { scrollTop: 0, style: { setProperty() {} }, getAttribute() { return null; } };
   // openOverlay('chores') writes #chores-full via innerHTML; our fake parser
   // doesn't register parsed nodes by id, so pre-register a real host FakeEl.
   const choresFull = new FakeEl(registry);
@@ -2028,7 +2028,7 @@ function mountReminders({ surface = 'full', writable = true, lists = [],
   document.body = new FakeEl(registry, 'body');
   // hub.js's load-time syncAppHeight() sets --app-h on documentElement.style;
   // give it a documentElement so the module loads.
-  document.documentElement = { scrollTop: 0, style: { setProperty() {} } };
+  document.documentElement = { scrollTop: 0, style: { setProperty() {} }, getAttribute() { return null; } };
   // The full view paints into #todos-page (not in SEEDED_IDS); the add flow reads
   // #todo-add-input by id (parsed innerHTML nodes aren't id-registered, so seed a
   // real one). Only the full surface needs these.
@@ -2534,7 +2534,11 @@ const CAM_HD_TRIES_FOR_TEST = 14;
 // no-op), so tests can drive the HD-upgrade timers deterministically.
 function captureTimers(sandbox) {
   const timers = [];
+  // setTimeout returns a 1-based id (the new length); clearTimeout marks that
+  // captured timer done, so a cancelled timer is distinguishable from a live one
+  // (production armIdle relies on clearTimeout to defuse a pending return-home).
   sandbox.setTimeout = (fn, ms) => { timers.push({ fn, ms, done: false }); return timers.length; };
+  sandbox.clearTimeout = (id) => { const t = timers[id - 1]; if (t) t.done = true; };
   return timers;
 }
 const nextTimer = (timers, ms) => timers.find((t) => t.ms === ms && !t.done);
@@ -2630,6 +2634,129 @@ test('idle auto-return closes every modal, not just the overlay (a stranded edit
   assert.equal(vm.runInContext('openView', sandbox), null, 'openView cleared');
   assert.ok(!sandbox.wallBusy(),
     'wallBusy() no longer sees a stranded modal, so the deploy auto-reload can proceed');
+});
+
+test('idle-return OFF: an opened overlay does NOT arm the auto-return timer', () => {
+  // A personal phone / TV that opted out (data-idle-return="off") must stay on
+  // the page it opened — armIdle arms no timer, so nothing yanks it home.
+  const { document, sandbox } = newHub();
+  document.documentElement.setAttribute('data-idle-return', 'off');
+  const timers = captureTimers(sandbox);
+
+  sandbox.openOverlay('chores');
+
+  const idleMs = sandbox.idleReturnMs('chores');
+  assert.ok(!nextTimer(timers, idleMs),
+    'no idle auto-return timer is armed when this device has opted out');
+});
+
+test('idle-return default (ON): an opened overlay still arms the auto-return timer', () => {
+  // The shared wall keeps its existing behavior when nothing opted out.
+  const { document, sandbox } = newHub();
+  // no data-idle-return attribute set at all -> defaults to ON
+  const timers = captureTimers(sandbox);
+
+  sandbox.openOverlay('chores');
+
+  assert.ok(nextTimer(timers, sandbox.idleReturnMs('chores')),
+    'the wall still drifts home by default');
+});
+
+test('flipping Auto-return OFF while an overlay is open clears the pending return-home timer', () => {
+  // The exact case this feature exists for: someone is READING a full-screen
+  // view, then opts this device out. The click handler re-runs armIdle, which
+  // must defuse the already-armed timer so it never fires and yanks them home.
+  const { document, sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+  sandbox.openOverlay('chores');                  // ON by default -> timer armed
+  const idleMs = sandbox.idleReturnMs('chores');
+  assert.ok(nextTimer(timers, idleMs), 'a return-home timer is armed while ON');
+
+  document.documentElement.setAttribute('data-idle-return', 'off');
+  sandbox.armIdle();                              // what the toggle's click branch runs
+
+  assert.ok(!nextTimer(timers, idleMs),
+    'the pending timer was cleared and none re-armed once opted out');
+});
+
+function seedThemePopWithIdle(document) {
+  const el = document.createElement('div');
+  el._id = 'theme-pop';
+  el.innerHTML =
+    '<div class="theme-ctl">'
+    + '<button type="button" data-idle-set="on">On</button>'
+    + '<button type="button" data-idle-set="off">Off</button>'
+    + '</div>';
+  return el;
+}
+
+test('reflectThemeControls marks the active idle-return button .on (off)', () => {
+  const { document, sandbox } = newHub();
+  const pop = seedThemePopWithIdle(document);
+  document.body.appendChild(pop);
+  document.documentElement.setAttribute('data-idle-return', 'off');
+
+  sandbox.reflectThemeControls();
+
+  const on = pop.querySelectorAll('[data-idle-set]')
+    .filter((b) => b.classList.contains('on')).map((b) => b.dataset.idleSet);
+  assert.deepEqual(on, ['off'], 'only the Off button is marked on');
+});
+
+test('reflectThemeControls defaults the idle-return control to On when unset', () => {
+  // No data-idle-return stamped (e.g. theme.js absent) -> the control shows the
+  // default ON, never a blank/ambiguous state.
+  const { document, sandbox } = newHub();
+  const pop = seedThemePopWithIdle(document);
+  document.body.appendChild(pop);
+
+  sandbox.reflectThemeControls();
+
+  const on = pop.querySelectorAll('[data-idle-set]')
+    .filter((b) => b.classList.contains('on')).map((b) => b.dataset.idleSet);
+  assert.deepEqual(on, ['on'], 'the default ON is reflected when nothing is stamped');
+});
+
+test('renderSettingsFull includes the Auto-return On/Off control', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+
+  sandbox.renderSettingsFull();
+
+  assert.match(host.innerHTML, /data-idle-set="on"/);
+  assert.match(host.innerHTML, /data-idle-set="off"/);
+});
+
+test('applyHouseTheme stamps the house layout + idle-return on an un-overridden device', () => {
+  // The house config can set a default layout / idle auto-return for fresh
+  // devices; applyHouseTheme must re-stamp them like it does mode/accent/columns
+  // (this was the gap the FH_THEME fallback promised but never delivered).
+  const { sandbox } = newHub();
+  const stamped = {};
+  sandbox.stampLayout = (v) => { stamped.layout = v; };
+  sandbox.stampIdleReturn = (v) => { stamped.idle = v; };
+  // no sandbox.localStorage -> noOverride fails open to "no local choice"
+  sandbox.applyHouseTheme({ layout: 'desktop', idleReturn: 'off' });
+
+  assert.equal(stamped.layout, 'desktop', 'house layout stamped on a fresh device');
+  assert.equal(stamped.idle, 'off', 'house idle-return stamped on a fresh device');
+});
+
+test('applyHouseTheme does NOT override a device that already chose layout/idle-return', () => {
+  const { sandbox } = newHub();
+  const stamped = {};
+  sandbox.stampLayout = (v) => { stamped.layout = v; };
+  sandbox.stampIdleReturn = (v) => { stamped.idle = v; };
+  // this device saved its own choices -> the house default must not clobber them
+  sandbox.localStorage = {
+    getItem: (k) => (k === 'fh.layout' || k === 'fh.idleReturn') ? 'auto' : null,
+  };
+  sandbox.applyHouseTheme({ layout: 'desktop', idleReturn: 'off' });
+
+  assert.equal(stamped.layout, undefined, 'a device layout choice is left alone');
+  assert.equal(stamped.idle, undefined, 'a device idle-return choice is left alone');
 });
 
 test('openOverlay("cameras-page") with an empty camera_page shows a note, not a black grid', () => {
