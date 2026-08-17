@@ -1708,3 +1708,23 @@ def test_caldav_collection_picker_hides_calendar_and_reminders(tmp_path, monkeyp
         # unknown collection -> 404
         assert tc.patch("/api/integrations/icloud_caldav/collections/caldav:nope",
                         json={"enabled": False}).status_code == 404
+
+
+def test_calendar_status_clears_when_icloud_connected_even_if_google_isnt(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendars": [{"id": "g", "kind": "google", "label": "G"}]})
+    with TestClient(appmod.app) as tc:
+        # Google unconfigured (no token), but iCloud synced ok -> no "not connected"
+        appmod.fdb.kv_set(appmod._db(), "caldav_status", {"ok": True})
+        assert tc.get("/api/hub").json()["calendar"]["status"]["ok"] is True
+
+
+def test_calendar_status_not_configured_when_nothing_connected(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})   # no google/ics, no caldav
+    with TestClient(appmod.app) as tc:
+        st = tc.get("/api/hub").json()["calendar"]["status"]
+        assert st["ok"] is False and "not configured" in st.get("error", "")

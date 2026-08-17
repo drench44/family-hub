@@ -280,8 +280,32 @@ GOOGLE_EVENT_COLORS = {
 }
 
 
+def _calendar_status_agg(c) -> dict:
+    """Aggregate calendar health across every ENABLED source (Google/ICS + iCloud
+    CalDAV), so the wall's banner reflects whether ANY calendar is connected, not
+    just Google. Without this, an unused/broken Google config showed "no calendar
+    connected" while iCloud was synced and rendering. ok if any source is ok;
+    else needs_auth if any needs it; else the real error; else not configured."""
+    statuses = []
+    if cfg.calendars and (_integration_on(c, "google_calendar")
+                          or _integration_on(c, "ics_calendar")):
+        statuses.append(fdb.kv_get(c, "calendar_status")
+                        or {"ok": False, "error": "not configured"})
+    if _integration_on(c, "icloud_caldav"):
+        statuses.append(fdb.kv_get(c, "caldav_status") or {"ok": False})
+    if not statuses:
+        return {"ok": False, "error": "not configured"}
+    if any(s.get("ok") for s in statuses):
+        return {"ok": True}
+    if any(s.get("needs_auth") for s in statuses):
+        return {"ok": False, "needs_auth": True}
+    errs = [s.get("error") for s in statuses if s.get("error")
+            and s.get("error") not in ("disabled", "not configured")]
+    return {"ok": False, "error": "; ".join(errs) if errs else "not configured"}
+
+
 def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
-    status = fdb.kv_get(c, "calendar_status") or {"ok": False, "error": "not configured"}
+    status = _calendar_status_agg(c)
     cal_map = {cal["id"]: cal for cal in cfg.calendars}
     # Integration gating: a disabled calendar source's events are hidden (not
     # deleted) — its cache stays, so re-enabling shows them instantly.
