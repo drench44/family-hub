@@ -553,6 +553,96 @@ test('renderCalendar reads calendar.status and shows the auth banner', () => {
   assert.match(html, /sign-in expired/);
 });
 
+/* ------------------------------------------ calendar sync-window marking */
+// issue #37: the month/agenda views can page past the range the backend
+// actually caches (calWin.window); a day out there must read as "not synced",
+// not as a confident empty day. isDayOutsideWindow itself (common.js, pure)
+// is unit-tested in hub.test.mjs; these exercise the markup it drives.
+
+test('monthHtml marks a day past the sync window as not-synced, not falsely-empty', () => {
+  const { sandbox } = newHub();
+  const win = { from: '2026-08-01', to: '2026-08-28' };   // Aug 2026 grid tails into Sept
+  const html = sandbox.monthHtml(2026, 8, [], '2026-08-14', win);
+
+  const cellHtml = (date) => {
+    const m = html.match(new RegExp(`<div class="[^"]*" data-date="${date}"[\\s\\S]*?<\\/div>`));
+    assert.ok(m, `cell for ${date} rendered`);
+    return m[0];
+  };
+
+  const inside = cellHtml('2026-08-14');
+  assert.doesNotMatch(inside, /mg-unsynced/, 'a day inside the synced window is not marked');
+  assert.doesNotMatch(inside, /not synced/);
+
+  const beyond = cellHtml('2026-08-29');   // one day past win.to, still in-month
+  assert.match(beyond, /class="[^"]*\bmg-unsynced\b/, 'a day past the synced window IS marked');
+  assert.match(beyond, /not synced/i, 'a visible caption explains the empty cell');
+});
+
+test('monthHtml marks nothing when no sync window is known yet (boot / fetch-failure race)', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.monthHtml(2026, 8, [], '2026-08-14', undefined);
+  assert.doesNotMatch(html, /mg-unsynced/, 'fails open with no window data, matching isDayOutsideWindow');
+});
+
+test('monthHtml: an event on the day wins over the unsynced marking (defensive, should never co-occur)', () => {
+  const { sandbox } = newHub();
+  const win = { from: '2026-08-01', to: '2026-08-15' };
+  const ev = { id: 'e1', title: 'Somehow cached', all_day: 1,
+    start_ts: '2026-08-29', end_ts: '2026-08-30' };
+  const html = sandbox.monthHtml(2026, 8, [ev], '2026-08-14', win);
+  const cellHtml = html.match(/<div class="[^"]*" data-date="2026-08-29"[\s\S]*?<\/div>/)[0];
+  assert.doesNotMatch(cellHtml, /mg-unsynced/, 'a cell with an event to show is never marked unsynced');
+  assert.match(cellHtml, /Somehow cached/);
+});
+
+test('agendaHtml: a day past the sync window reads "not synced", not "nothing scheduled"', () => {
+  const { sandbox } = newHub();
+  const win = { from: '2026-08-01', to: '2026-08-15' };
+  // A single-day agenda (maxDays=1, as renderCalFull's day-drill view calls it)
+  // landing one day past the window.
+  const beyond = sandbox.agendaHtml([], '2026-08-16', '2026-08-14', 1, null, win);
+  assert.match(beyond, /cal-day-unsynced/);
+  assert.match(beyond, /not synced/i);
+  assert.doesNotMatch(beyond, /nothing scheduled/);
+
+  const inside = sandbox.agendaHtml([], '2026-08-10', '2026-08-14', 1, null, win);
+  assert.doesNotMatch(inside, /cal-day-unsynced/);
+  assert.match(inside, /nothing scheduled/);
+});
+
+test('agendaHtml: an event on the day wins over the unsynced marking (defensive, should never co-occur)', () => {
+  const { sandbox } = newHub();
+  const win = { from: '2026-08-01', to: '2026-08-15' };
+  const ev = { id: 'e1', title: 'Somehow cached', all_day: 0,
+    start_ts: '2026-08-20T10:00:00-07:00', end_ts: '2026-08-20T11:00:00-07:00' };
+  const html = sandbox.agendaHtml([ev], '2026-08-20', '2026-08-14', 1, null, win);
+  assert.doesNotMatch(html, /cal-day-unsynced/, 'a day with an event to show is never marked unsynced');
+  assert.match(html, /Somehow cached/);
+});
+
+test('renderCalFull passes calWin.window through to the month grid', () => {
+  const { document, sandbox } = newHub();
+  // #cal-full is normally created by openOverlay('calendar'); build it
+  // directly so renderCalFull can be driven without the overlay/fetch
+  // machinery, and without depending on the real wall-clock date (which
+  // calGoToday()'s fallback would otherwise pull in via openOverlay).
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  document.body.appendChild(host);
+  vm.runInContext(
+    "data_date = '2026-08-14';"
+    + "calState.mode = 'month'; calState.y = 2026; calState.m = 8;"
+    + "calWin = { status: { ok: true }, events: [], "
+    + "window: { from: '2026-08-01', to: '2026-08-05' } };",
+    sandbox);
+
+  sandbox.renderCalFull();
+
+  const html = document.getElementById('cal-full').innerHTML;
+  assert.match(html, /mg-unsynced/, 'a day beyond the fixture window is marked, via the real render path');
+});
+
 test('buildChoreForm is shared via common.js (usable from the hub context)', () => {
   const { document, sandbox } = newHub();
   assert.equal(typeof sandbox.buildChoreForm, 'function');
@@ -1846,7 +1936,7 @@ test('idle auto-return closes every modal, not just the overlay (a stranded edit
   sandbox.openOverlay('chores');   // arms the idle timer for the 'chores' view
 
   // Simulate an editor / delete-confirm / event-detail modal left open over
-  // the overlay — each is a fixed sibling of #overlay, reachable only while
+  // the overlay: each is a fixed sibling of #overlay, reachable only while
   // an overlay is open (openChoreEditor/openDeleteConfirm/openEventDetail all
   // gate their own armIdle() on `openView`).
   document.getElementById('chore-modal').classList.remove('hidden');

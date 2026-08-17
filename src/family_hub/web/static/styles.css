@@ -911,6 +911,26 @@ body.overlay-open { overflow: hidden; }
 .mg-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
 .mg-ev-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mg-more { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+/* A day past the calendar sync window (issue #37): the month view can page
+   further than the backend actually caches, so mark those cells "not synced"
+   rather than let them read as confident-empty. A faint hatch (not a flat
+   dim, which would read the same as .mg-out's "other month" treatment) plus a
+   small caption keeps it legible without being a decoration for its own sake. */
+.mg-unsynced {
+  background-image: repeating-linear-gradient(135deg,
+    var(--edge) 0, var(--edge) 1px, transparent 1px, transparent 8px);
+}
+.mg-unsynced-mark {
+  margin-top: auto;
+  font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--faint);
+}
+/* Same "not synced" state in the day/week agenda view (a day drilled into, or
+   paged to, past the sync window); the .cal-empty caption text already carries
+   the explanation, this just mutes the card a touch so it scans differently
+   from a genuinely free day at a glance. */
+.cal-day-unsynced { opacity: 0.72; }
 
 /* ==================== event detail card ====================== */
 .ev-modal {
@@ -1298,6 +1318,7 @@ body.overlay-open { overflow: hidden; }
   .mgrid { gap: 3px; }
   .mg-day { min-height: 52px; padding: 4px 5px; border-radius: 7px; }
   .mg-ev-title { display: none; }   /* dots only — titles are one tap away */
+  .mg-unsynced-mark { display: none; }   /* hatch alone at this size; tap the day for the note */
   .ev-card { padding: 20px 18px 22px 24px; }
   .ev-title { font-size: 21px; }
   /* Now/Soon/Later collapse to one stacked column on the phone; keep a gap so

@@ -106,8 +106,13 @@ function eventRow(ev, day) {
 
 /* Agenda list over [startStr, startStr+maxDays). `skipEmptyAfter` keeps the
    home feed compact (empty days beyond tomorrow vanish); the full calendar
-   shows every day. */
-function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
+   shows every day. `win` (optional, the calendar payload's sync window) marks
+   an empty day that falls OUTSIDE it as "not synced" rather than "nothing
+   scheduled": the day browser can page past the synced range (issue #37),
+   and a genuinely free day must stay visually distinct from one Google was
+   never asked about. Omitted `win` behaves exactly as before (used by the
+   compact home feed, which never pages). */
+function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter, win) {
   const byDay = bucketByDay(events);
   let html = '';
   for (let i = 0; i < maxDays; i++) {
@@ -115,10 +120,13 @@ function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
     const evs = byDay[d] || [];
     if (skipEmptyAfter != null && i >= skipEmptyAfter && evs.length === 0) continue;
     const isToday = d === todayStr;
-    html += `<div class="card cal-day${isToday ? ' is-today' : ''}">`
+    const unsynced = evs.length === 0 && isDayOutsideWindow(d, win);
+    html += `<div class="card cal-day${isToday ? ' is-today' : ''}${unsynced ? ' cal-day-unsynced' : ''}">`
       + dayHeadHtml(d, todayStr)
       + (evs.length ? evs.map((ev) => eventRow(ev, d)).join('')
-        : `<div class="cal-empty">nothing scheduled</div>`)
+        : unsynced
+          ? `<div class="cal-empty">not synced yet: Google data doesn’t reach this day</div>`
+          : `<div class="cal-empty">nothing scheduled</div>`)
       + `</div>`;
   }
   return html;
@@ -149,7 +157,7 @@ function renderCalendar(data) {
   document.getElementById('cal').innerHTML =
     sectionHead('Calendar', { overlay: 'calendar', expandLabel: 'Month view' })
     + calStatusNote(data.calendar)
-    + agendaHtml(data.calendar.events, data.date, data.date, 5, 2);
+    + agendaHtml(data.calendar.events, data.date, data.date, 5, 2, data.calendar.window);
 }
 
 /* ---------------------------------------------------- full calendar view */
@@ -174,13 +182,24 @@ async function fetchCalWindow() {
   }
 }
 
-function monthCellHtml(cell, byDay, todayStr) {
+/* `win` (the calendar payload's sync window, optional) marks a cell OUTSIDE it
+   as "not synced" (issue #37): the month view can page arbitrarily far past
+   the range the backend actually caches, and an out-of-window day rendered
+   the same as an in-window free day is a confident-but-wrong "nothing here":
+   the family would trust an empty grid Google actually has events on. Only an
+   EMPTY out-of-window cell is marked (same rule as agendaHtml): the backend
+   never caches events past its own window, so this never fires in practice,
+   but it keeps a stray cached event from rendering under a contradictory
+   "not synced" mark rather than silently overriding it. */
+function monthCellHtml(cell, byDay, todayStr, win) {
   const evs = byDay[cell.date] || [];
   const shown = evs.slice(0, 3);
   const more = evs.length - shown.length;
+  const unsynced = evs.length === 0 && isDayOutsideWindow(cell.date, win);
   const cls = ['mg-day'];
   if (!cell.inMonth) cls.push('mg-out');
   if (cell.date === todayStr) cls.push('mg-today');
+  if (unsynced) cls.push('mg-unsynced');
   const dayNum = Number(cell.date.slice(8, 10));
   return `<div class="${cls.join(' ')}" data-date="${cell.date}" tabindex="0">`
     + `<span class="mg-num num">${dayNum}</span>`
@@ -189,14 +208,15 @@ function monthCellHtml(cell, byDay, todayStr) {
       + `<span class="mg-dot" style="background:${safeColor(eventColor(ev))}"></span>`
       + `<span class="mg-ev-title">${escapeHtml(ev.title)}</span></span>`).join('')
     + (more > 0 ? `<span class="mg-more">+${more} more</span>` : '')
+    + (unsynced ? `<span class="mg-unsynced-mark">not synced</span>` : '')
     + `</div>`;
 }
 
-function monthHtml(y, m, events, todayStr) {
+function monthHtml(y, m, events, todayStr, win) {
   const byDay = bucketByDay(events);
   const heads = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     .map((d) => `<span class="mg-head">${d}</span>`).join('');
-  const cells = monthGrid(y, m).map((c) => monthCellHtml(c, byDay, todayStr)).join('');
+  const cells = monthGrid(y, m).map((c) => monthCellHtml(c, byDay, todayStr, win)).join('');
   return `<div class="mgrid">${heads}${cells}</div>`;
 }
 
@@ -222,18 +242,19 @@ function renderCalFull() {
   if (!host) return;
   const todayStr = data_date || new Date().toISOString().slice(0, 10);
   const events = (calWin && calWin.events) || [];
+  const win = calWin && calWin.window;   // the backend's actual sync range (issue #37)
   let title = '';
   let body = '';
   if (calState.mode === 'day') {
     title = monthName(calState.y, calState.m);
     body = `<button class="cal-back" type="button" data-calback="1">‹ back to month</button>`
-      + agendaHtml(events, calState.day, todayStr, 1, null);
+      + agendaHtml(events, calState.day, todayStr, 1, null, win);
   } else if (calState.mode === 'agenda') {
     title = monthName(calState.y, calState.m);
-    body = agendaHtml(events, calState.weekStart, todayStr, 7, null);
+    body = agendaHtml(events, calState.weekStart, todayStr, 7, null, win);
   } else {
     title = monthName(calState.y, calState.m);
-    body = monthHtml(calState.y, calState.m, events, todayStr);
+    body = monthHtml(calState.y, calState.m, events, todayStr, win);
   }
   host.innerHTML = calStatusNote(calWin || { status: {} })
     + calNavHtml(title) + `<div class="cal-body">${body}</div>`;
@@ -915,11 +936,11 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
     if (openView !== view || !hd.parentNode) return;   // overlay closed / switched
     let live = false;
     try {
-      // fetchTimeout (common.js): same J_TIMEOUT_MS bound as probeOneCamera —
-      // a wedged HD producer must not hang this retry loop indefinitely.
+      // fetchTimeout (common.js): same J_TIMEOUT_MS bound as probeOneCamera,
+      // so a wedged HD producer can't hang this retry loop indefinitely.
       live = (await fetchTimeout(
         `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`)).ok;
-    } catch (e) { /* still connecting, down, or timed out — treated as not-yet-live */ }
+    } catch (e) { /* still connecting, down, or timed out: treated as not-yet-live */ }
     if (openView !== view || !hd.parentNode) return;   // re-check after the await
     if (live) {
       hd.classList.add('ready');   // HD confirmed live — cross-fade it over the warm base
@@ -1007,7 +1028,7 @@ function closeOverlay() {
    #confirm-modal are fixed siblings of #overlay, not children of it, so
    closeOverlay() alone leaves any of them stranded open over the home wall.
    Shared by the #overlay-home tap and the idle auto-return (armIdle) below so
-   the two "go home" paths can't drift apart again — a stranded modal also
+   the two "go home" paths can't drift apart again: a stranded modal also
    wedges wallBusy() (~1446) into deferring the deploy auto-reload forever. */
 function closeAllOverlays() {
   closeDeleteConfirm();

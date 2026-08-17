@@ -20,6 +20,7 @@ const {
   escapeHtml, fmtTime, dayLabel,
   idleReturnMs, nightClass,
   fmtTimeRange, monthName, eventColor, wallZoom,
+  isDayOutsideWindow,
 } = sandbox;
 const panelFit = (...a) => ({ ...sandbox.panelFit(...a) });
 const monthGrid = (...a) => JSON.parse(JSON.stringify(sandbox.monthGrid(...a)));
@@ -88,6 +89,24 @@ test('shiftMonth wraps across years', () => {
 test('monthName', () => {
   assert.equal(monthName(2026, 8), 'August 2026');
   assert.equal(monthName(2027, 1), 'January 2027');
+});
+
+test('isDayOutsideWindow: inclusive bounds, one day past either edge flips it', () => {
+  const win = { from: '2026-07-02', to: '2026-09-13' };
+  assert.equal(isDayOutsideWindow('2026-07-02', win), false, 'the lower bound itself is inside');
+  assert.equal(isDayOutsideWindow('2026-09-13', win), false, 'the upper bound itself is inside');
+  assert.equal(isDayOutsideWindow('2026-08-15', win), false, 'comfortably inside');
+  assert.equal(isDayOutsideWindow('2026-07-01', win), true, 'one day before the window');
+  assert.equal(isDayOutsideWindow('2026-09-14', win), true, 'one day after the window');
+});
+
+test('isDayOutsideWindow: fails open when the window is missing or malformed', () => {
+  // A payload from before /api/calendar carried `window`, or one that dropped
+  // it on a downgraded-status error path, must never mark a day unsynced.
+  assert.equal(isDayOutsideWindow('2026-08-01', undefined), false, 'no window at all');
+  assert.equal(isDayOutsideWindow('2026-08-01', null), false, 'null window');
+  assert.equal(isDayOutsideWindow('2026-08-01', {}), false, 'window missing from/to');
+  assert.equal(isDayOutsideWindow('2026-08-01', { from: '2026-07-01' }), false, 'window missing to');
 });
 
 test('descToText: Google HTML descriptions render as clean text', () => {

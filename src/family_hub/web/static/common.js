@@ -42,7 +42,7 @@ async function j(url, opts) {
 }
 
 /* Same AbortController-timeout guard as j() above, for callers that only need
-   the raw Response (not j()'s JSON-decode + error-detail contract) — the
+   the raw Response (not j()'s JSON-decode + error-detail contract): the
    camera snapshot probes in hub.js. Without this, a raw fetch to a connected-
    but-unresponsive server never resolves, and probes stack up until the
    browser's ~6-connection-per-origin budget is exhausted on a multi-day kiosk
@@ -190,6 +190,21 @@ function fmtTimeRange(ev) {
   if (!t2 || (d1 === d2 && t1 === t2)) return t1;
   if (d1 === d2) return `${t1} – ${t2}`;
   return `${_md(ev.start_ts)} ${t1} – ${_md(ev.end_ts)} ${t2}`;
+}
+
+/* True when `dayISO` ('YYYY-MM-DD') falls outside the calendar sync window
+   `win` ({from, to}, both 'YYYY-MM-DD', inclusive): the actual date range
+   the backend's sync caches (see /api/calendar's `window` field). The month
+   view can page arbitrarily far past that window; a day out here has no
+   cached data to show, so it must not render as a confident empty day (issue
+   #37). Plain string compare: ISO 'YYYY-MM-DD' dates sort lexically, so no
+   Date parsing (and no local-midnight surprises) is needed. A missing or
+   malformed window fails open (never flags a day unsynced): this is a
+   display nicety, not a reason to mark up a payload from before the `window`
+   field existed, or one that dropped it on a fetch error. */
+function isDayOutsideWindow(dayISO, win) {
+  if (!win || !win.from || !win.to) return false;
+  return dayISO < win.from || dayISO > win.to;
 }
 
 /* 42 Sunday-first cells covering `month` (1-12) of `year`, each
