@@ -1699,7 +1699,31 @@ function fitWall() {
 }
 fitWall();
 
+/* Phone-shell height. The shell body is `height: var(--app-h, 100dvh)`; we drive
+   --app-h from window.innerHeight because iOS Safari leaves a STALE 100dvh after
+   a bfcache / app-switch restore (returning to an already-open tab): the in-flow
+   tab bar then floats above a black gap until a full reload (operator report,
+   2026-08-17). Re-measured on the lifecycle events iOS doesn't reliably relayout
+   for — pageshow (incl. bfcache `persisted`), visibilitychange back to visible,
+   resize, orientationchange. Only the mobile-mode body consumes the var, so
+   setting it on the wall/desktop is a harmless no-op. */
+function syncAppHeight() {
+  // iOS Safari can transiently report innerHeight:0 on these very lifecycle
+  // events; a literal --app-h:0px would collapse the shell to a black screen
+  // (0px is a "valid" value, so the 100dvh fallback would NOT save it). Ignore a
+  // non-positive reading and leave the last good height standing.
+  const h = window.innerHeight;
+  if (h > 0) document.documentElement.style.setProperty('--app-h', `${h}px`);
+}
+syncAppHeight();
+window.addEventListener('pageshow', syncAppHeight);
+window.addEventListener('orientationchange', syncAppHeight);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') syncAppHeight();
+});
+
 window.addEventListener('resize', () => {
+  syncAppHeight();
   fitWall();
   clearTimeout(fitDebounce);
   // wirePanels too: growing past the mobile breakpoint reveals panels that
@@ -2229,6 +2253,7 @@ function reflectThemeControls() {
   const mode = el.getAttribute('data-theme');
   const accent = el.getAttribute('data-accent');
   const cols = el.getAttribute('data-cols');
+  const layout = el.getAttribute('data-layout');
   document.querySelectorAll('.theme-ctl').forEach((ctl) => {
     ctl.querySelectorAll('[data-theme-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.themeSet === mode));
@@ -2236,6 +2261,10 @@ function reflectThemeControls() {
       b.classList.toggle('on', b.dataset.c === accent));
     ctl.querySelectorAll('[data-cols-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.colsSet === cols));
+    // Layout marks the active choice (auto/desktop) — the control reflects what
+    // the operator picked (data-layout on <html>, stamped by theme.js).
+    ctl.querySelectorAll('[data-layout-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.layoutSet === layout));
   });
 }
 
@@ -2316,6 +2345,13 @@ function renderSettingsFull() {
     + `<button type="button" data-cols-set="none">None</button>`
     + `<button type="button" data-cols-set="wells">Wells</button>`
     + `<button type="button" data-cols-set="lines">Lines</button>`
+    + `</div></div>`
+    // Auto follows screen width; Desktop forces the full wall at any width
+    // (the escape hatch for a TV that mis-reports a phone-narrow width).
+    + `<div class="settings-row"><span class="settings-k">Layout</span>`
+    + `<div class="seg" role="group" aria-label="Layout mode">`
+    + `<button type="button" data-layout-set="auto">Auto</button>`
+    + `<button type="button" data-layout-set="desktop">Desktop</button>`
     + `</div></div>`
     + `</div></div>`
     + `<div class="card pad settings-card">`
@@ -2561,6 +2597,10 @@ document.addEventListener('click', (e) => {
   if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
   const c = e.target.closest('.theme-ctl [data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
+  // Layout (Auto/Desktop): scoped to '.theme-ctl [...]' like the controls above,
+  // so a tap works in either the gear popover or the Settings overlay's copy.
+  const ly = e.target.closest('.theme-ctl [data-layout-set]');
+  if (ly) { setLayout(ly.dataset.layoutSet); reflectThemeControls(); return; }
   // Integrations switch list: also unscoped now that it only ever renders
   // inside the Settings overlay (#integrations-ctl), never the popover.
   const ig = e.target.closest('[data-integ-toggle]');

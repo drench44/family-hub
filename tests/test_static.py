@@ -202,43 +202,70 @@ def test_mobile_tabbar_stays_tappable():
         "the phone tab bar must be pinned in-flow (position: static)"
 
 
+# The phone-shell rules are bounded by these marker comments in styles.css. They
+# are a width media query (so the phone layout works with NO JS), and every rule
+# is guarded by :root:not([data-layout="desktop"]) so choosing "desktop" in
+# Settings suppresses the whole shell at any width (the Fire-TV escape hatch).
+PHONE_SHELL_START = "/* >>> phone shell"
+PHONE_SHELL_END = "/* <<< phone shell"
+# The guard prefix every phone-shell rule carries.
+SHELL_GUARD = ':root:not([data-layout="desktop"])'
+
+
+def _phone_shell_css():
+    """The phone-shell block, comments stripped. Bounded by the marker comments
+    rather than a media query, since the shell is now attribute-keyed."""
+    start = CSS.index(PHONE_SHELL_START)
+    end = CSS.index(PHONE_SHELL_END)
+    return re.sub(r"/\*.*?\*/", "", CSS[start:end], flags=re.S)
+
+
+def _ns(s):
+    """Whitespace-proof: strip spaces so `overflow:hidden` / `overflow: hidden`
+    (and any future reformatting) both match."""
+    return re.sub(r"\s+", "", s)
+
+
+def _shell_rule(selector):
+    """The declaration block of the phone-shell rule whose selector is EXACTLY
+    `selector` (whitespace-insensitive), or None. Exact match avoids picking the
+    combined `html, body` fallback rule when asked for the single `body` rule."""
+    target = _ns(selector)
+    for m in re.finditer(r"([^{}]+)\{([^}]*)\}", _phone_shell_css()):
+        if _ns(m.group(1)) == target:
+            return _ns(m.group(2))
+    return None
+
+
 def test_mobile_app_shell_scrolls_content_not_the_body():
     """The phone layout is an app shell: the body is a fixed-height flex column
     that itself does NOT scroll, the content region (.wrap) scrolls inside it,
     and the in-flow tab bar is the last row. This is what keeps the tab bar
     tappable at any scroll position (it never overlaps content) and makes
     scroll-to-top a single-container reset. Guard the shape so it can't regress
-    to a fixed-bar-over-scrolling-body layout, which failed on iOS."""
-    # bound the scan to the max-width:1000px block (stop at the next @media) so
-    # a future narrower breakpoint's body/.wrap rule can't be matched by mistake
-    start = CSS.index("@media (max-width: 1000px)")
-    nxt = CSS.find("@media", start + 1)
-    mobile = CSS[start:nxt] if nxt != -1 else CSS[start:]
-    # strip comments so an explanatory /* ... */ between rules can't break the
-    # rule-matching regex or trip a substring check
-    mobile = re.sub(r"/\*.*?\*/", "", mobile, flags=re.S)
-    # whitespace-proof: strip spaces so `overflow:hidden` / `overflow: hidden`
-    # (and any future reformatting) both match
-    ns = lambda s: re.sub(r"\s+", "", s)
-    body_rule = re.search(r"(^|})\s*body\s*\{([^}]*)\}", mobile)
-    assert body_rule, "no phone body rule in the mobile block"
-    body = ns(body_rule.group(2))
+    to a fixed-bar-over-scrolling-body layout, which failed on iOS. The shell is
+    a width media query guarded by :root:not([data-layout="desktop"]) so it
+    needs no JS and a forced-desktop choice suppresses it."""
+    body = _shell_rule(f'{SHELL_GUARD} body')
+    assert body, f'no phone shell body rule keyed on {SHELL_GUARD} body'
     assert "overflow:hidden" in body, \
         "phone body must not scroll — the .wrap content region does"
     assert "display:flex" in body and "flex-direction:column" in body, \
         "phone body must be a flex column app shell"
-    # the body must size to the DYNAMIC viewport (100dvh) AND explicitly clear
-    # the base rule's min-height:100vh floor. That floor lives in the base body
-    # rule and reaches here via the cascade, so the mobile rule MUST override
-    # min-height (to 0 or 100dvh) — otherwise on iOS 100vh > 100dvh forces the
-    # body past the visible area and pushes the in-flow tab bar below the fold.
-    assert "height:100dvh" in body, "phone body must size to the dynamic viewport (100dvh)"
+    # the body must size to the DYNAMIC viewport, driven by an innerHeight-backed
+    # CSS var (--app-h) with a 100dvh fallback — see the tab-bar-gap fix. On iOS
+    # a stale 100dvh after a bfcache restore left the in-flow tab bar floating
+    # above a gap until a reload; the var is refreshed on pageshow/visibility.
+    # It must ALSO clear the base rule's min-height:100vh floor (100vh > 100dvh
+    # on iOS pushes the bar below the fold).
+    assert "100dvh" in body, "phone body must fall back to the dynamic viewport (100dvh)"
+    assert "var(--app-h" in body, \
+        "phone body height must use the innerHeight-backed --app-h var (gap fix)"
     assert "min-height:0" in body or "min-height:100dvh" in body, \
         "phone body must clear the base min-height:100vh floor (min-height:0), " \
         "or the tab bar drops below the fold on iOS"
-    wrap_rule = re.search(r"\.wrap\s*\{([^}]*)\}", mobile)
-    assert wrap_rule, "no phone .wrap rule in the mobile block"
-    wrap = ns(wrap_rule.group(1))
+    wrap = _shell_rule(f'{SHELL_GUARD} .wrap')
+    assert wrap, f'no phone .wrap rule keyed on {SHELL_GUARD} .wrap'
     assert "overflow-y:auto" in wrap, ".wrap must be the scrolling content region"
     # flex:1 + min-height:0 are load-bearing: without min-height:0 a flex item
     # won't shrink below its content, so overflow-y:auto is inert and .wrap
@@ -356,18 +383,30 @@ TAB_SURFACE = {"chores": ".people-col", "cal": ".cal",
 
 
 def test_mobile_reflow_block_present():
-    """Below 1000px the wall page reflows to a phone layout with bottom tabs
-    (operator request 2026-08-13); the fixed 1920 canvas stays above it."""
-    assert "@media (max-width: 1000px)" in CSS, "mobile breakpoint missing"
+    """At phone width the wall page reflows to a phone layout with bottom tabs
+    (operator request 2026-08-13); the fixed 1920 canvas stays above it. The
+    reflow is a pure-CSS width media query (max-width:1000px) so it needs no JS,
+    with every rule carrying the :root:not([data-layout="desktop"]) guard so
+    choosing Desktop suppresses it at any width. Both markers must bound the
+    block."""
+    assert PHONE_SHELL_START in CSS and PHONE_SHELL_END in CSS, \
+        "phone-shell marker comments missing"
+    mobile = _phone_shell_css()
+    # a width media query is the base (works with NO JS), guarded so forced
+    # desktop suppresses it
+    assert "@media (max-width: 1000px)" in mobile, \
+        "phone shell must remain a width media query so it works without JS"
+    assert SHELL_GUARD in mobile, \
+        "phone-shell rules must carry the :root:not([data-layout=\"desktop\"]) guard"
     for tab in MOBILE_TABS:
-        assert f'body[data-tab="{tab}"]' in CSS, \
+        assert f'body[data-tab="{tab}"]' in mobile, \
             f"missing mobile visibility rules for the {tab} tab"
 
 
 def test_each_tab_hides_every_other_surface():
     """Four tabs, one surface each (operator request 2026-08-13): a tab's
     rule must hide the other three sections, and never its own."""
-    mobile = CSS[CSS.index("@media (max-width: 1000px)"):]
+    mobile = _phone_shell_css()
     for tab, own in TAB_SURFACE.items():
         block = re.search(
             rf'body\[data-tab="{tab}"\][^{{}}]*\{{[^}}]*\}}', mobile)
@@ -386,6 +425,36 @@ def test_each_tab_hides_every_other_surface():
     assert cams_grid, "cams tab must reveal .camgrid"
     assert "grid-template-columns: 1fr" in cams_grid.group(1), \
         "cams tab must stack cameras in a single column on the phone"
+
+
+def test_layout_mode_control_present_and_wired():
+    """The Auto/Desktop layout control lives in the display popover, is wired to
+    setLayout in hub.js, and setLayout/stampLayout + the data-layout stamp exist
+    in theme.js. The click wiring uses a descendant-combinator selector the
+    fake-DOM harness can't exercise (gap 1 in hub-dom.test.mjs), so this static
+    guard covers it; the reflection branch is DOM-tested there. Desktop is the
+    escape hatch for a TV that mis-reports a phone width, so it must not silently
+    disappear."""
+    index = (STATIC / "index.html").read_text()
+    theme = (STATIC / "theme.js").read_text()
+    hub = (STATIC / "hub.js").read_text()
+    for v in ("auto", "desktop"):
+        assert f'data-layout-set="{v}"' in index, \
+            f"display popover missing the {v} layout button"
+    # "mobile" was removed as a layout value (Auto/Desktop only) — no dead button
+    assert 'data-layout-set="mobile"' not in index, \
+        "the mobile layout button was intentionally dropped (Auto/Desktop only)"
+    # theme.js: persisted setter + stamp-only applier + the attribute stamp
+    assert "window.setLayout" in theme, "theme.js must expose setLayout"
+    assert "window.stampLayout" in theme, "theme.js must expose stampLayout"
+    assert 'setAttribute("data-layout"' in theme, \
+        "theme.js must stamp the data-layout choice attribute"
+    # hub.js: a [data-layout-set] tap forwards to setLayout, and the control is
+    # reflected (reflectThemeControls reads the data-layout-set buttons)
+    assert re.search(r"data-layout-set\]'\)[\s\S]{0,80}setLayout\(", hub), \
+        "hub.js must wire a [data-layout-set] tap to setLayout()"
+    assert "data-layout-set" in hub, \
+        "reflectThemeControls must reflect the [data-layout-set] buttons"
 
 
 def test_camera_page_shows_four_per_screen_and_scrolls():
