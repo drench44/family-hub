@@ -166,6 +166,54 @@ def test_schema_migrates_pre_detail_events_table(tmp_path):
     c.close()
 
 
+def test_events_same_id_on_two_calendars_coexist(conn):
+    """Regression for issue #30: Google reuses one event's id across every
+    calendar it appears on, so 'Dentist' on both parents' calendars arrives as
+    two rows with the SAME id. The composite PK (calendar_id, id) lets them
+    coexist instead of aborting the whole sync on a duplicate-id INSERT."""
+    fdb.replace_events(conn, [
+        {"id": "shared", "calendar_id": "mom", "title": "Dentist",
+         "start_ts": "2026-08-20T10:00:00-07:00",
+         "end_ts": "2026-08-20T11:00:00-07:00", "all_day": 0},
+        {"id": "shared", "calendar_id": "dad", "title": "Dentist",
+         "start_ts": "2026-08-20T10:00:00-07:00",
+         "end_ts": "2026-08-20T11:00:00-07:00", "all_day": 0}])
+    rows = fdb.list_events(conn)
+    assert len(rows) == 2 and {r["calendar_id"] for r in rows} == {"mom", "dad"}
+    # a same-(calendar_id, id) duplicate within one batch replaces, never crashes
+    fdb.replace_events(conn, [
+        {"id": "dup", "calendar_id": "mom", "title": "A",
+         "start_ts": "2026-08-21", "end_ts": "2026-08-22", "all_day": 1},
+        {"id": "dup", "calendar_id": "mom", "title": "B",
+         "start_ts": "2026-08-21", "end_ts": "2026-08-22", "all_day": 1}])
+    dup = [r for r in fdb.list_events(conn) if r["id"] == "dup"]
+    assert len(dup) == 1 and dup[0]["title"] == "B"
+
+
+def test_schema_migrates_single_id_pk_events_to_composite(tmp_path):
+    """A DB whose events table still has the bare `id` PRIMARY KEY is rebuilt to
+    PRIMARY KEY(calendar_id, id) on ensure_schema, preserving rows, so the
+    cross-calendar duplicate that used to abort sync now stores cleanly."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.execute("""CREATE TABLE events(
+        id TEXT PRIMARY KEY, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
+        start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
+        updated TEXT, location TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '', color_id TEXT)""")
+    c.execute("INSERT INTO events(id, calendar_id, title, start_ts, end_ts, all_day) "
+              "VALUES('e1','mom','Kept','2026-08-01','2026-08-01',1)")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.list_events(c)[0]["title"] == "Kept"            # row preserved
+    fdb.replace_events(c, [
+        {"id": "e1", "calendar_id": "mom", "title": "Kept",
+         "start_ts": "2026-08-01", "end_ts": "2026-08-01", "all_day": 1},
+        {"id": "e1", "calendar_id": "dad", "title": "Kept",
+         "start_ts": "2026-08-01", "end_ts": "2026-08-01", "all_day": 1}])
+    assert len(fdb.list_events(c)) == 2                        # composite PK active
+    c.close()
+
+
 def test_kv(conn):
     assert fdb.kv_get(conn, "calendar_status") is None
     fdb.kv_set(conn, "calendar_status", {"ok": True})

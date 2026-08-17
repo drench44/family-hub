@@ -38,11 +38,12 @@ CREATE TABLE IF NOT EXISTS occurrence_log(
   rot INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(date, chore_id));
 CREATE TABLE IF NOT EXISTS events(
-  id TEXT PRIMARY KEY, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
+  id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
   start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
   updated TEXT,
   location TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
-  color_id TEXT);
+  color_id TEXT,
+  PRIMARY KEY(calendar_id, id));
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS todos(
   id INTEGER PRIMARY KEY,
@@ -89,6 +90,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         if col not in existing:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col} {ddl}")
     conn.commit()
+    # 2026-08-16: events used a bare `id` PRIMARY KEY, but Google reuses one
+    # event's id across every calendar it appears on, so the same event on two
+    # configured family calendars produced a duplicate-id INSERT that aborted
+    # the whole sync (issue #30). Rebuild with PRIMARY KEY(calendar_id, id) so
+    # cross-calendar copies coexist. A DB created before this keeps its old PK
+    # (CREATE TABLE IF NOT EXISTS never rewrites it) -> detect and rebuild.
+    ev_pk = {r["name"]: r["pk"]
+             for r in conn.execute("PRAGMA table_info(events)")}
+    if ev_pk and ev_pk.get("id", 0) > 0 and ev_pk.get("calendar_id", 0) == 0:
+        _rebuild_events_composite_pk(conn)
     # 2026-08-15: completions used to FK-reference chores(id), which made
     # deleting a chore impossible without also purging its history. Frozen
     # history keeps those rows, so rebuild the table without that FK.
@@ -183,6 +194,43 @@ def _widen_chore_schedule_check(conn: sqlite3.Connection) -> None:
           FROM chores""")
         conn.execute("DROP TABLE chores")
         conn.execute("ALTER TABLE chores_new RENAME TO chores")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
+
+
+def _rebuild_events_composite_pk(conn: sqlite3.Connection) -> None:
+    """Rebuild `events` with PRIMARY KEY(calendar_id, id) instead of a bare `id`
+    PK, so the same event id on two configured calendars no longer collides
+    (issue #30). Same atomic-rebuild contract as _drop_completions_chore_fk: an
+    interrupted rebuild rolls back whole and the next boot retries from a clean
+    slate, and the leading DROP IF EXISTS clears any events_new stranded by a
+    prior crash. Old rows carried a globally-unique id, so no dedup is needed."""
+    prior_iso = conn.isolation_level
+    try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute("DROP TABLE IF EXISTS events_new")
+        conn.execute("""CREATE TABLE events_new(
+          id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
+          start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
+          updated TEXT,
+          location TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+          color_id TEXT,
+          PRIMARY KEY(calendar_id, id))""")
+        conn.execute("""INSERT INTO events_new(
+          id, calendar_id, title, start_ts, end_ts, all_day, updated,
+          location, description, color_id)
+          SELECT id, calendar_id, title, start_ts, end_ts, all_day, updated,
+          location, description, color_id FROM events""")
+        conn.execute("DROP TABLE events")
+        conn.execute("ALTER TABLE events_new RENAME TO events")
         conn.execute("COMMIT")
     except Exception:
         if conn.in_transaction:
@@ -441,9 +489,13 @@ def replace_events(conn, events: list[dict], keep_ids: tuple = ()) -> None:
                 tuple(keep_ids))
         else:
             conn.execute("DELETE FROM events")
+        # OR REPLACE: the PK is (calendar_id, id), so cross-calendar copies of
+        # one event coexist; a same-(calendar_id, id) duplicate within a single
+        # batch (e.g. a malformed ICS feed) replaces rather than aborting the
+        # whole sync.
         conn.executemany(
-            "INSERT INTO events(id, calendar_id, title, start_ts, end_ts, "
-            "all_day, updated, location, description, color_id) "
+            "INSERT OR REPLACE INTO events(id, calendar_id, title, start_ts, "
+            "end_ts, all_day, updated, location, description, color_id) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(e["id"], e["calendar_id"], e["title"], e["start_ts"],
               e["end_ts"], e["all_day"], e.get("updated"),
