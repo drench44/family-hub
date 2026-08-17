@@ -156,6 +156,9 @@ def test_is_auth_error_detects_403_and_forbidden():
     assert caldav_sync._is_auth_error(ForbiddenError("nope")) is True
     # a bare id containing 403 must NOT false-positive (word-boundary guard)
     assert caldav_sync._is_auth_error(RuntimeError("event room4030")) is False
+    # other 4xx/5xx are NOT auth — guards the 40[13] class from widening to 4xx
+    assert caldav_sync._is_auth_error(RuntimeError("HTTP 404 Not Found")) is False
+    assert caldav_sync._is_auth_error(RuntimeError("HTTP 500 Server Error")) is False
 
 
 def test_caldav_sync_flags_needs_auth_and_keeps_cache(conn):
@@ -234,6 +237,37 @@ def test_caldav_sync_one_bad_object_does_not_freeze_the_collection(conn):
     # the two good events synced; the collection is NOT marked failed
     assert {r["title"] for r in fdb.list_events(conn)} == {"Before", "After"}
     assert st["ok"] is True
+
+
+def test_caldav_sync_all_objects_unparseable_flags_the_collection(conn):
+    # A SYSTEMATIC parse failure (every object throws) is not a transient blip —
+    # it must NOT report a healthy-but-empty calendar. The collection is flagged
+    # (ok False, cache kept) instead of silently blanking behind a green wall.
+    fdb.replace_events_caldav(conn, [{"id": "old", "calendar_id": "caldav:cal",
+        "title": "Kept", "start_ts": "2026-08-20", "end_ts": "2026-08-21",
+        "all_day": 1}])
+    st = caldav_sync.sync_once(FakeCalDav([
+        {"id": "cal", "name": "Family", "comp": "VEVENT",
+         "ics": ["NOT ICS ONE", "NOT ICS TWO"]},   # every object raises
+    ]), conn, _CFG, _NOW)
+    assert st["ok"] is False and "parsed 0 of 2" in st["error"]
+    assert st.get("needs_auth") is not True        # a parse break is not an auth failure
+    assert [r["title"] for r in fdb.list_events(conn)] == ["Kept"]   # cache kept
+
+
+def test_caldav_sync_one_bad_reminder_does_not_freeze_the_list(conn):
+    # The per-object skip applies to VTODO too: a bad todo between good ones is
+    # skipped, the rest of the list still syncs.
+    st = caldav_sync.sync_once(FakeCalDav([
+        {"id": "rem", "name": "Groceries", "comp": "VTODO", "todos": [
+            _VTODO,                                  # "Buy milk" (good)
+            "THIS IS NOT ICS",                       # raises in parse_vtodo
+            _VTODO.replace("t1", "t2").replace("Buy milk", "Buy eggs"),
+        ]},
+    ]), conn, _CFG, _NOW)
+    assert st["ok"] is True
+    titles = {r["title"] for r in (fdb.kv_get(conn, "caldav_reminders") or [])}
+    assert titles == {"Buy milk", "Buy eggs"}
 
 
 def test_caldav_sync_inner_401_sets_needs_auth(conn):

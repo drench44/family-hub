@@ -36,7 +36,15 @@ def _is_auth_error(exc) -> bool:
     with 401 OR 403 depending on the path, so both must flag needs_auth. Distinct
     from a transient network/throttle error: an auth failure is surfaced as
     needs_auth so the wall shows 'Reconnect iCloud' and keeps serving the cached
-    view, instead of silently going stale."""
+    view, instead of silently going stale.
+
+    Known limitation: 403 is less clean than 401 — WebDAV can also return it for a
+    permission-denied on one shared calendar the account can see but not read, so
+    a single such collection can flip the whole account's banner to 'reconnect'
+    (which reconnecting won't clear). We accept that because iCloud genuinely
+    answers a dead app password with 403 on some paths, and a stuck banner is a
+    better failure than silent staleness; revisit with a live-account error
+    sample if false 'reconnect' prompts show up."""
     e, seen = exc, 0
     while e is not None and seen < 10:
         name = type(e).__name__
@@ -213,8 +221,10 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         for col in (c for c in collections if c.get("comp", "VEVENT") == "VEVENT"):
             cal_id = "caldav:" + col["id"]
             seen_objs: set = set()
+            n_objs = n_skipped = 0
             try:
                 for obj in client.fetch_ics(col, lo_dt.date(), hi_dt.date()):
+                    n_objs += 1
                     _store_object(conn, cal_id, "VEVENT", obj, seen_objs)
                     try:
                         events.extend(ics_events(
@@ -224,8 +234,16 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                         # calendar behind a collection error (which would keep
                         # every other event stale); skip it and log, letting the
                         # rest of the collection sync.
+                        n_skipped += 1
                         log.warning("caldav event parse skipped (%s)", cal_id,
                                     exc_info=True)
+                if n_objs and n_skipped == n_objs:
+                    # EVERY fetched object failed to parse: not a transient blip
+                    # but a systematic break (a parser regression or a wholesale-
+                    # malformed feed). Flag the collection so ok goes False and its
+                    # cache is kept, instead of reporting a healthy-but-empty
+                    # calendar and silently blanking it after the empty-guard TTL.
+                    raise RuntimeError(f"parsed 0 of {n_objs} objects")
                 if seen_objs:   # prune only when the collection returned objects
                     fdb.prune_cal_objects(conn, cal_id, seen_objs)
             except Exception as e:  # isolate one bad collection
@@ -240,8 +258,10 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         for col in (c for c in collections if c.get("comp") == "VTODO"):
             list_id = "caldav:" + col["id"]
             seen_todos: set = set()
+            n_todos = n_skipped = 0
             try:
                 for obj in client.fetch_todos(col):
+                    n_todos += 1
                     _store_object(conn, list_id, "VTODO", obj, seen_todos)
                     try:
                         rem.extend(remlogic.parse_vtodo(
@@ -249,8 +269,13 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                     except Exception:
                         # Skip one unparseable reminder rather than failing the
                         # whole list and freezing the rest behind an error.
+                        n_skipped += 1
                         log.warning("caldav reminder parse skipped (%s)", list_id,
                                     exc_info=True)
+                if n_todos and n_skipped == n_todos:
+                    # Every todo failed to parse -> systematic break; flag the list
+                    # (keeps its cache) rather than report it healthy-but-empty.
+                    raise RuntimeError(f"parsed 0 of {n_todos} todos")
                 if seen_todos:
                     fdb.prune_cal_objects(conn, list_id, seen_todos)
             except Exception as e:

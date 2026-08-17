@@ -1627,6 +1627,49 @@ def test_event_on_two_calendars_renders_once(tmp_path, monkeypatch):
         assert dinners[0]["color"] == "#f00"
 
 
+def test_dedup_a_hidden_first_copy_does_not_claim_the_row(tmp_path, monkeypatch):
+    # The dedup runs AFTER the per-calendar visibility gates, so a copy on a
+    # HIDDEN calendar must neither win the row nor block the visible copy — the
+    # event still renders once, in the VISIBLE calendar's color. (If the dedup
+    # were hoisted above the gates, the hidden copy would claim the key and the
+    # event would vanish entirely.)
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "hol", "kind": "ics", "label": "Holidays", "url": "http://x/h.ics",
+         "color": "#111"},
+        {"id": "gcal", "kind": "google", "label": "Family", "color": "#0f0"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        row = {"id": "shared1", "title": "Parade",
+               "start_ts": f"{soon}T09:00:00", "end_ts": f"{soon}T10:00:00",
+               "all_day": 0}
+        # insert the ICS (soon-to-be-hidden) copy FIRST so it sorts ahead on the
+        # tie, then the visible google copy
+        appmod.fdb.replace_events(c, [{**row, "calendar_id": "hol"},
+                                      {**row, "calendar_id": "gcal"}])
+        tc.patch("/api/integrations/ics_calendar", json={"enabled": False})
+        events = tc.get("/api/calendar").json()["events"]
+        parades = [e for e in events if e["title"] == "Parade"]
+        assert len(parades) == 1                 # still rendered once, not dropped
+        assert parades[0]["color"] == "#0f0"     # the VISIBLE (google) copy won
+
+
+def test_calendar_status_agg_healthy_setup_has_no_reconnect_flag(tmp_path, monkeypatch):
+    # A fully-healthy mixed setup must NOT carry needs_auth, or the wall would
+    # show a spurious "sign-in expired" banner on a perfectly connected calendar.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status", {"ok": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert not status.get("needs_auth")
+
+
 def test_disabling_ics_calendar_hides_its_events(tmp_path, monkeypatch):
     appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
         {"id": "holidays", "kind": "ics", "label": "Holidays", "url": "http://x/h.ics"}]})
