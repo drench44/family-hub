@@ -2090,3 +2090,61 @@ def test_disconnect_resets_icloud_todo_source(tmp_path, monkeypatch):
         appmod.fdb.kv_set(appmod._db(), "todo_source", "icloud")
         assert tc.delete("/api/integrations/icloud_caldav/credentials").status_code == 200
         assert appmod.fdb.kv_get(appmod._db(), "todo_source") == "local"
+
+
+def test_tiles_laundry_route_stamps_and_serves_completion(client, monkeypatch):
+    # The laundry route's completion memory: a machine reading "done" stamps
+    # its finish moment (status_since) into the kv store, and every response
+    # carries the remembered stamp as last_done — so "finished at 2:14"
+    # survives the machine being opened/powered off and server restarts.
+    done_at = "2026-08-17T21:02:00+00:00"
+
+    def fake(machines):
+        async def tile(hclient, cfg, token):
+            return {"available": True, "machines": machines}
+        return tile
+
+    # 1) dryer finishes: phase done -> stamped + echoed back
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", fake([
+        {"id": "washer", "label": "Washer", "kind": "washer", "phase": "idle",
+         "status": "initial", "finishes_at": None, "status_since": None},
+        {"id": "dryer", "label": "Dryer", "kind": "dryer", "phase": "done",
+         "status": "end", "finishes_at": None, "status_since": done_at}]))
+    t = client.get("/api/tiles/laundry").json()
+    w, d = t["machines"]
+    assert d["last_done"] == done_at
+    assert w["last_done"] is None      # washer has never finished
+
+    # 2) dryer later opened/powered off (idle): the stamp survives
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", fake([
+        {"id": "washer", "label": "Washer", "kind": "washer", "phase": "idle",
+         "status": "initial", "finishes_at": None, "status_since": None},
+        {"id": "dryer", "label": "Dryer", "kind": "dryer", "phase": "idle",
+         "status": "power_off", "finishes_at": None, "status_since": None}]))
+    t = client.get("/api/tiles/laundry").json()
+    assert t["machines"][1]["last_done"] == done_at
+
+    # 3) an unavailable tile passes through untouched (no machines key)
+    async def down(hclient, cfg, token):
+        return {"available": False}
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", down)
+    assert client.get("/api/tiles/laundry").json() == {"available": False}
+
+
+def test_integrations_laundry_toggle_roundtrip(client, monkeypatch):
+    # With laundry configured+tokened, the integration lists, toggles off via
+    # PATCH, and /api/hub reflects it — the generic toggle machinery, proven
+    # for the new id.
+    import family_hub.app as appmod
+    from family_hub.config import _clean_laundry
+    monkeypatch.setattr(appmod.cfg, "laundry", _clean_laundry({
+        "ha_base": "http://ha:8123", "machines": [
+            {"id": "washer", "status_entity": "s.a", "remaining_entity": "s.b"}]}))
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    ids = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
+    assert "laundry" in ids and ids["laundry"]["group"] == "integration"
+    r = client.patch("/api/integrations/laundry", json={"enabled": False})
+    assert r.status_code == 200
+    hub = {i["id"]: i for i in client.get("/api/hub").json()["integrations"]}
+    assert hub["laundry"]["enabled"] is False
+    client.patch("/api/integrations/laundry", json={"enabled": True})

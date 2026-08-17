@@ -28,5 +28,16 @@
   "go2rtc_base": "http://192.168.1.50:1984",
   "climate_base": "",
   "weather_base": "",
+  "laundry": {
+    "ha_base": "http://192.168.1.50:8123",
+    "machines": [
+      { "id": "washer", "label": "Washer", "kind": "washer",
+        "status_entity": "sensor.washer_current_status",
+        "remaining_entity": "sensor.washer_remaining_time" },
+      { "id": "dryer", "label": "Dryer", "kind": "dryer",
+        "status_entity": "sensor.dryer_current_status",
+        "remaining_entity": "sensor.dryer_remaining_time" }
+    ]
+  },
   "theme": { "mode": "grey", "accent": "green", "columns": "none" }
 }

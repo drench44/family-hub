@@ -449,7 +449,7 @@ def _available_only():
     tab bar hide the demo's columns."""
     items = fintegrations.available_integrations(
         cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
-    demo_ids = {"cameras", "weather", "climate"} if DEMO else set()
+    demo_ids = {"cameras", "weather", "climate", "laundry"} if DEMO else set()
     return [dict(i, available=True) if (i["id"] in demo_ids and not i["available"])
             else i
             for i in items
@@ -1346,6 +1346,32 @@ async def tile_weather():
     if DEMO:
         return fdemo.demo_weather()   # canned forecast; no feed hit
     return await tiles.weather_tile(_http, cfg)
+
+
+@app.get("/api/tiles/laundry")
+async def tile_laundry():
+    if DEMO:
+        return fdemo.demo_laundry()   # canned machines; no HA hit
+    t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
+    if not t.get("available"):
+        return t
+    # Completion memory: a machine sitting in "end" carries WHEN it finished
+    # (status_since). Stamp that into the kv store so "finished at 2:14"
+    # survives the machine being opened / powered off — and later restarts of
+    # this server — then attach the remembered stamp to every machine. The
+    # tile itself is cached in-process (tiles._laundry_cache), so copy before
+    # annotating: the cached dict must stay un-mutated.
+    c = _db()
+    machines = []
+    for m in t.get("machines", []):
+        m = dict(m)
+        key = f"laundry_done_{m['id']}"
+        if m.get("phase") == "done" and m.get("status_since"):
+            if fdb.kv_get(c, key) != m["status_since"]:   # write once per finish
+                fdb.kv_set(c, key, m["status_since"])
+        m["last_done"] = fdb.kv_get(c, key)
+        machines.append(m)
+    return {**t, "machines": machines}
 
 
 @app.get("/api/tiles/camera.jpg")

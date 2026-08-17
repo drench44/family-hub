@@ -390,3 +390,161 @@ def test_camera_happy_and_error():
     def empty(req):
         return httpx.Response(200, content=b"")
     assert run_tile(tiles.camera_snapshot, empty) is None
+
+
+# ---------------- laundry (washer/dryer via Home Assistant) ----------------
+
+LAUNDRY_CFG = {"ha_base": "http://ha", "machines": [
+    {"id": "washer", "label": "Washer", "kind": "washer",
+     "status_entity": "sensor.w_status", "remaining_entity": "sensor.w_rem"},
+    {"id": "dryer", "label": "Dryer", "kind": "dryer",
+     "status_entity": "sensor.d_status", "remaining_entity": "sensor.d_rem"}]}
+
+FINISH = "2026-08-17T22:45:00+00:00"
+SINCE = "2026-08-17T21:02:00+00:00"
+
+
+def laundry_cfg():
+    return Config(laundry=LAUNDRY_CFG)
+
+
+def run_laundry(handler, token="tok"):
+    async def run():
+        async with make_client(handler) as c:
+            return await tiles.laundry_tile(c, laundry_cfg(), token)
+    return asyncio.run(run())
+
+
+def ha_state(state, last_changed=SINCE):
+    return {"state": state, "last_changed": last_changed, "attributes": {}}
+
+
+def laundry_handler(states):
+    """states: {entity_id: response}. A missing entity 404s (HA's behavior for
+    an unknown entity)."""
+    def handler(req):
+        assert req.headers.get("Authorization") == "Bearer tok"
+        entity = req.url.path.rsplit("/", 1)[-1]
+        if entity in states:
+            body = states[entity]
+            return (body if isinstance(body, httpx.Response)
+                    else httpx.Response(200, json=body))
+        return httpx.Response(404)
+    return handler
+
+
+def test_laundry_happy_two_machines():
+    tiles.reset_caches()
+    t = run_laundry(laundry_handler({
+        "sensor.w_status": ha_state("rinsing"),
+        "sensor.w_rem": ha_state(FINISH),
+        "sensor.d_status": ha_state("end"),
+        "sensor.d_rem": ha_state("unknown"),
+    }))
+    assert t["available"] is True
+    w, d = t["machines"]
+    assert w == {"id": "washer", "label": "Washer", "kind": "washer",
+                 "phase": "running", "status": "rinsing",
+                 "finishes_at": FINISH, "status_since": SINCE}
+    assert d["phase"] == "done" and d["finishes_at"] is None
+    assert d["status_since"] == SINCE   # WHEN it finished (last_changed of end)
+
+
+def test_laundry_phase_mapping():
+    cases = {
+        "running": "running", "spinning": "running", "drying": "running",
+        "cooling": "running", "wrinkle_care": "running", "prewash": "running",
+        "pause": "paused", "rinse_hold": "paused",
+        "end": "done", "error": "error", "reserved": "reserved",
+        "initial": "idle", "power_off": "idle",
+        "unknown": "offline", "unavailable": "offline",
+    }
+    for status, phase in cases.items():
+        assert tiles._laundry_phase(status, None) == phase, status
+    # unrecognized status: active if a finish time exists, idle otherwise —
+    # a firmware vocabulary drift must never hide an active cycle
+    assert tiles._laundry_phase("mystery_new_state", FINISH) == "running"
+    assert tiles._laundry_phase("mystery_new_state", None) == "idle"
+
+
+def test_laundry_unconfigured_or_tokenless_unavailable():
+    tiles.reset_caches()
+    async def run(c, t):
+        async with make_client(lambda req: httpx.Response(500)) as client:
+            return await tiles.laundry_tile(client, c, t)
+    assert asyncio.run(run(Config(), "tok")) == {"available": False}
+    assert asyncio.run(run(laundry_cfg(), "")) == {"available": False}
+
+
+def test_laundry_ha_down_unavailable_and_not_cached():
+    tiles.reset_caches()
+    calls = {"n": 0}
+    def handler(req):
+        calls["n"] += 1
+        return httpx.Response(500)
+    assert run_laundry(handler) == {"available": False}
+    first = calls["n"]
+    # a failure is never cached: the next poll retries the fetch
+    assert run_laundry(handler) == {"available": False}
+    assert calls["n"] == 2 * first
+
+
+def test_laundry_one_machine_offline_other_fine():
+    # one machine's status entity failing marks THAT machine offline; the
+    # other still renders — a flaky sensor can't sink the whole card.
+    tiles.reset_caches()
+    t = run_laundry(laundry_handler({
+        "sensor.w_status": ha_state("running"),
+        "sensor.w_rem": ha_state(FINISH),
+        # dryer entities 404
+    }))
+    assert t["available"] is True
+    w, d = t["machines"]
+    assert w["phase"] == "running"
+    assert d["phase"] == "offline" and d["finishes_at"] is None
+
+
+def test_laundry_remaining_fetch_failure_keeps_status():
+    # the SECONDARY remaining-time read failing only drops finishes_at; the
+    # cycle still shows as running.
+    tiles.reset_caches()
+    t = run_laundry(laundry_handler({
+        "sensor.w_status": ha_state("running"),
+        "sensor.w_rem": httpx.Response(500),
+        "sensor.d_status": ha_state("initial"),
+        "sensor.d_rem": ha_state("unknown"),
+    }))
+    w, d = t["machines"]
+    assert w["phase"] == "running" and w["finishes_at"] is None
+    assert d["phase"] == "idle"
+
+
+def test_laundry_garbage_bodies_and_timestamps_guarded():
+    # valid-but-wrong JSON shapes and unparseable timestamps must degrade,
+    # never throw (the route has no global handler; a raise would 500).
+    tiles.reset_caches()
+    t = run_laundry(laundry_handler({
+        "sensor.w_status": httpx.Response(200, json=[]),      # non-dict body
+        "sensor.w_rem": ha_state("not-a-timestamp"),
+        "sensor.d_status": ha_state("end", last_changed="also-bad"),
+        "sensor.d_rem": ha_state("unknown"),
+    }))
+    assert t["available"] is True    # dryer status still read
+    w, d = t["machines"]
+    assert w["phase"] == "offline" and w["finishes_at"] is None
+    assert d["phase"] == "done" and d["status_since"] is None
+
+
+def test_laundry_success_cached():
+    tiles.reset_caches()
+    calls = {"n": 0}
+    inner = laundry_handler({
+        "sensor.w_status": ha_state("running"), "sensor.w_rem": ha_state(FINISH),
+        "sensor.d_status": ha_state("initial"), "sensor.d_rem": ha_state("unknown")})
+    def handler(req):
+        calls["n"] += 1
+        return inner(req)
+    t1 = run_laundry(handler)
+    n = calls["n"]
+    t2 = run_laundry(handler)
+    assert t2 == t1 and calls["n"] == n   # served from cache, no refetch

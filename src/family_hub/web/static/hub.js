@@ -23,6 +23,8 @@ let weatherData = null;   // last /api/tiles/weather payload (native weather car
 let climateData = null;   // last /api/tiles/climate payload (native climate card)
 let weatherFails = 0;     // consecutive weather fetch failures (see fetchWeather)
 let climateFails = 0;     // consecutive climate fetch failures (see fetchClimate)
+let laundryData = null;   // last /api/tiles/laundry payload (native laundry card)
+let laundryFails = 0;     // consecutive laundry fetch failures (see fetchLaundry)
 let lastIntegrations = [];  // last /api/hub integrations block (settings toggles)
 const TILE_FAIL_LIMIT = 3;   // keep the last good card until this many in a row
 let warnedNoWeatherSlot = false;   // one-time warn: weather_base set, no 'weather' panel
@@ -1098,7 +1100,7 @@ const TAB_FEATURES = {
   todos: ['todos'],
   cal: ['google_calendar', 'ics_calendar', 'icloud_caldav'],
   cams: ['cameras'],
-  weather: ['weather', 'climate'],
+  weather: ['weather', 'climate', 'laundry'],
 };
 
 // A custom dashboard panel (links.panels entry that isn't the weather/climate
@@ -1186,7 +1188,7 @@ function applyWallLayout(list) {
   // buildPanels renders those via panelHtml, and they have no toggle of
   // their own, so the column must survive even with weather+climate both
   // off or an operator's custom panel would silently lose its column).
-  const dash = has('weather', 'climate') || customPanelExists();
+  const dash = has('weather', 'climate', 'laundry') || customPanelExists();
   const setDisp = (sel, show) => {
     const el = document.querySelector(sel);
     if (el) el.style.display = show ? '' : 'none';
@@ -1501,6 +1503,17 @@ function climateSlotHtml() {
   return `<div class="rooms-slot" id="climate-slot"></div>`;
 }
 
+/* Laundry has no links.panels entry (nothing to embed or expand into — the
+   card IS the whole surface), so its slot rides the panels column whenever
+   the integration is available (present in the /api/hub integrations list).
+   The slot exists even while toggled off: body.integ-off-laundry CSS hides
+   it, so flipping the switch back on is instant, matching weather/climate. */
+function laundrySlotHtml() {
+  const avail = ((hubData && hubData.integrations) || [])
+    .some((i) => i.id === 'laundry');
+  return avail ? `<div class="laundry-slot" id="laundry-slot"></div>` : '';
+}
+
 function buildPanels() {
   if (panelsBuilt || !links.panels) return;
   document.getElementById('panels').innerHTML =
@@ -1508,10 +1521,11 @@ function buildPanels() {
       if (p.id === 'weather') return weatherSlotHtml();
       if (p.id === 'climate') return climateSlotHtml();
       return panelHtml(p);
-    }).join('');
+    }).join('') + laundrySlotHtml();
   panelsBuilt = true;
   renderWeather();   // fill the just-built weather slot from cached data (if any)
   renderClimate();   // fill the just-built climate slot from cached data (if any)
+  renderLaundry();   // fill the just-built laundry slot from cached data (if any)
 }
 
 function wirePanels() {
@@ -2054,6 +2068,214 @@ async function fetchClimate() {
     if (!climateData || climateFails >= TILE_FAIL_LIMIT) climateData = { available: false };
   }
   renderClimate();
+}
+
+/* ------------------------------------------------- native laundry card */
+
+/* Times on this card come from HA as UTC instants (unlike calendar events,
+   whose ISO strings are already house-local), so they're converted through the
+   device clock — the household and its devices share one timezone. */
+function lnTime(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return '';
+  const min = d.getMinutes();
+  const ap = d.getHours() < 12 ? 'am' : 'pm';
+  const hh = d.getHours() % 12 || 12;
+  return `${hh}:${String(min).padStart(2, '0')}${ap}`;
+}
+
+/* 'at 2:14pm' for today, 'Sat 2:14pm' further back — the completed-load line
+   stays honest about a load that's been sitting since yesterday. */
+function lnWhen(iso, nowMs = Date.now()) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return '';
+  const now = new Date(nowMs);
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return lnTime(iso);
+  const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  return `${wd} ${lnTime(iso)}`;
+}
+
+/* Whole minutes until an ISO instant; 0 floor (a finish moment that's slipped
+   past reads "any minute", never a negative count). null = no usable time. */
+function lnMinutesLeft(iso, now = Date.now()) {
+  const t = Date.parse(iso);
+  if (!iso || isNaN(t)) return null;
+  return Math.max(0, Math.ceil((t - now) / 60000));
+}
+
+/* The machine's raw status as a plain word: 'wrinkle_care' -> 'Wrinkle care'.
+   Statuses that just restate the phase ('running', 'end', ...) render as the
+   phase's own copy instead (see lnLines). */
+function lnStatusWord(status) {
+  const s = String(status || '').replace(/_/g, ' ').trim();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+}
+
+/* What the two text lines under a porthole say, per phase. Returns
+   {big, unit, sub}: `big` is the glanceable line (a minute count while
+   running — .num mono, like every numeral on the wall), `sub` the quiet
+   detail. All inputs escaped by the caller's builder (lnMachineHtml). */
+function lnLines(m, now = Date.now()) {
+  const mins = lnMinutesLeft(m.finishes_at, now);
+  const done = lnWhen(m.finishes_at, now);
+  const status = lnStatusWord(m.status);
+  switch (m.phase) {
+    case 'running': {
+      // 'Drying' beats 'Running' when the machine says so; the generic
+      // statuses collapse to the phase word.
+      const word = (m.status === 'running' || !status) ? 'Running' : status;
+      if (mins === null) return { big: word, sub: 'time unknown' };
+      if (mins === 0) return { big: 'Any minute', sub: word };
+      return { big: String(mins), unit: 'min', sub: `${word} · done ${done}` };
+    }
+    case 'paused':
+      return { big: 'Paused', sub: mins !== null ? `about ${mins} min left` : '' };
+    case 'reserved':
+      return { big: 'Scheduled', sub: done ? `starts for ${done}` : 'delayed start' };
+    case 'done':
+      return { big: 'Done', sub: m.status_since ? `at ${lnWhen(m.status_since, now)}` : '' };
+    case 'error':
+      return { big: 'Error', sub: 'check the machine' };
+    case 'offline':
+      return { big: '—', sub: 'not reporting' };
+    default:   // idle
+      return { big: 'Idle',
+               sub: m.last_done ? `last load ${lnWhen(m.last_done, now)}` : '' };
+  }
+}
+
+/* The porthole: a front-loader door drawn as SVG. The bezel doubles as a
+   kitchen-timer dial — the arc is the minutes left mapped onto a 60-minute
+   face (a >1h cycle shows a full ring that starts draining inside the final
+   hour). The drum shows the state: tumbling garments while running (CSS
+   rotation on the group, paused for paused-phase and reduced-motion), a
+   check when done, empty when idle. Washer drums run water-cool, dryers
+   warm — set by the ln-washer / ln-dryer class on the machine block. */
+function lnPortholeSvg(m, now = Date.now()) {
+  const R = 44, C = 2 * Math.PI * R;
+  const mins = lnMinutesLeft(m.finishes_at, now);
+  let frac = 0;
+  if (m.phase === 'done') frac = 1;
+  else if ((m.phase === 'running' || m.phase === 'paused') && mins !== null) {
+    frac = Math.min(1, mins / 60);
+  }
+  const arc = frac > 0
+    ? `<circle class="ln-arc" cx="50" cy="50" r="${R}"`
+      + ` stroke-dasharray="${(frac * C).toFixed(1)} ${C.toFixed(1)}"/>`
+    : '';
+  let inner = '';
+  if (m.phase === 'running' || m.phase === 'paused') {
+    // three tumbling garments + two suds bubbles, rotating about the drum
+    // center; the drift animation on each blob keeps the tumble organic
+    inner = `<g class="ln-tumble">`
+      + `<ellipse class="ln-g ln-g1" cx="50" cy="68" rx="13" ry="8"/>`
+      + `<ellipse class="ln-g ln-g2" cx="36" cy="58" rx="9" ry="6"/>`
+      + `<ellipse class="ln-g ln-g3" cx="62" cy="56" rx="8" ry="6"/>`
+      + `<circle class="ln-sud" cx="43" cy="43" r="2.5"/>`
+      + `<circle class="ln-sud" cx="58" cy="47" r="1.8"/>`
+      + `</g>`;
+  } else if (m.phase === 'done') {
+    inner = `<path class="ln-check" d="M36 51 L46 61 L65 40"/>`;
+  } else if (m.phase === 'error') {
+    inner = `<text class="ln-bang" x="50" y="60" text-anchor="middle">!</text>`;
+  }
+  return `<svg class="ln-door" viewBox="0 0 100 100" aria-hidden="true">`
+    + `<circle class="ln-bezel" cx="50" cy="50" r="${R}"/>`
+    + arc
+    + `<circle class="ln-glass" cx="50" cy="50" r="36"/>`
+    + inner
+    + `<path class="ln-glint" d="M30 34 A26 26 0 0 1 46 25" fill="none"/>`
+    + `</svg>`;
+}
+
+function lnBigHtml(lines) {
+  return lines.unit
+    ? `<span class="num">${escapeHtml(lines.big)}</span>`
+      + `<span class="ln-unit">${escapeHtml(lines.unit)}</span>`
+    : escapeHtml(lines.big);
+}
+
+function lnMachineHtml(m, now) {
+  const lines = lnLines(m, now);
+  const kind = m.kind === 'dryer' ? 'dryer' : 'washer';
+  return `<div class="ln-m ln-${kind} ln-ph-${escapeHtml(m.phase)}" id="ln-m-${escapeHtml(m.id)}">`
+    + lnPortholeSvg(m, now)
+    + `<div class="ln-label">${escapeHtml(m.label)}</div>`
+    + `<div class="ln-big">${lnBigHtml(lines)}</div>`
+    + `<div class="ln-sub">${escapeHtml(lines.sub || '')}</div>`
+    + `</div>`;
+}
+
+function laundryCardHtml(ln, now = Date.now()) {
+  const machines = Array.isArray(ln.machines) ? ln.machines : [];
+  if (!machines.length) return `<div class="wx-offline">no machines configured</div>`;
+  return `<article class="card ln"><div class="ln-grid">`
+    + machines.map((m) => lnMachineHtml(m, now)).join('')
+    + `</div></article>`;
+}
+
+/* Paint the native laundry card into its slot (built by buildPanels). Offline
+   (HA unreachable) keeps the header with a slim note, like weather/climate —
+   never a blanked column. */
+function renderLaundry(ln = laundryData, now = Date.now()) {
+  const host = document.getElementById('laundry-slot');
+  if (!host) return;   // integration not available; no slot was built
+  const head = sectionHead('Laundry');
+  const body = ln == null
+    ? `<div class="card wx-loading" aria-hidden="true"></div>`
+    : ln.available
+      ? laundryCardHtml(ln, now)
+      : `<div class="wx-offline">Laundry unavailable</div>`;
+  host.innerHTML = head + body;
+}
+
+/* Between polls the countdown stays live: recompute the changing text + the
+   timer arc IN PLACE (no innerHTML), so the tumble animation never restarts
+   mid-spin. A phase change (running -> done) waits for the next poll — at
+   most one poll interval late, same freshness contract as every tile. */
+function laundryTick(now = Date.now()) {
+  const ln = laundryData;
+  const host = document.getElementById('laundry-slot');
+  if (!ln || !ln.available || !host) return;
+  // machines render in payload order, so the .ln-m blocks align by index —
+  // renderLaundry repaints on every poll, keeping the two lists in step
+  const els = host.querySelectorAll('.ln-m');
+  (ln.machines || []).forEach((m, i) => {
+    const el = els[i];
+    if (!el) return;
+    const lines = lnLines(m, now);
+    const bigEl = el.querySelector('.ln-big');
+    const subEl = el.querySelector('.ln-sub');
+    if (subEl) subEl.textContent = lines.sub || '';
+    if (bigEl) {
+      const numEl = bigEl.querySelector('.num');
+      if (lines.unit && numEl) numEl.textContent = lines.big;
+      else if (!lines.unit && !numEl) bigEl.textContent = lines.big;
+      else bigEl.innerHTML = lnBigHtml(lines);   // count <-> word shape change
+    }
+    const arc = el.querySelector('.ln-arc');
+    const mins = lnMinutesLeft(m.finishes_at, now);
+    if (arc && (m.phase === 'running' || m.phase === 'paused') && mins !== null) {
+      const C = 2 * Math.PI * 44;
+      arc.setAttribute('stroke-dasharray',
+        `${(Math.min(1, mins / 60) * C).toFixed(1)} ${C.toFixed(1)}`);
+    }
+  });
+}
+
+/* Poll the fail-soft laundry endpoint on the hub cadence; same last-good-card
+   discipline as weather/climate. */
+async function fetchLaundry() {
+  try {
+    laundryData = await j('/api/tiles/laundry');
+    laundryFails = 0;
+  } catch (e) {
+    laundryFails += 1;
+    if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) laundryData = { available: false };
+  }
+  renderLaundry();
 }
 
 let fitDebounce = null;
@@ -3040,7 +3262,11 @@ setInterval(tickClock, 1000);
 poll().then(probeCamera);
 fetchWeather();
 fetchClimate();
+fetchLaundry();
 setInterval(scheduledPoll, POLL_MS);
 setInterval(fetchWeather, POLL_MS);
 setInterval(fetchClimate, POLL_MS);
+setInterval(fetchLaundry, POLL_MS);
+// the countdown + timer arc stay live between polls (in-place, no re-render)
+setInterval(laundryTick, 30000);
 setInterval(scheduledProbeCamera, CAM_PROBE_MS);

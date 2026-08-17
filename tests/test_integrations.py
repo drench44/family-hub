@@ -55,3 +55,49 @@ def test_chores_and_todos_are_always_available_features():
     # external services are tagged as integrations
     assert ids["weather"]["group"] == "integration"
     assert ids["cameras"]["group"] == "integration"
+
+
+def test_laundry_available_only_with_config_and_token():
+    # not configured at all
+    assert fi.laundry_configured(_cfg(), {}) is False
+    # configured but no HA token in the env -> inert, not available
+    laundry = {"ha_base": "http://ha:8123", "machines": [
+        {"id": "washer", "label": "Washer", "kind": "washer",
+         "status_entity": "sensor.w_status", "remaining_entity": "sensor.w_rem"}]}
+    cfg = _cfg(laundry=laundry)
+    assert fi.laundry_configured(cfg, {}) is False
+    # configured + token -> available, tagged an integration (not a feature)
+    env = {"HA_TOKEN": "secret"}
+    assert fi.laundry_configured(cfg, env) is True
+    avail = {i["id"]: i for i in fi.available_integrations(cfg, env)}
+    assert avail["laundry"]["available"] is True
+    assert avail["laundry"]["group"] == "integration"
+    assert avail["laundry"]["kind"] == "laundry"
+    # token alone (no config block) is not enough
+    assert fi.laundry_configured(_cfg(), env) is False
+
+
+def test_laundry_config_cleaning():
+    # _clean_laundry drops malformed machines and rejects empty blocks, so a
+    # config typo can't crash the app or leave a half-configured integration.
+    from family_hub.config import _clean_laundry
+    ok = {"ha_base": "http://ha:8123/", "machines": [
+        {"id": "washer", "status_entity": "s.a", "remaining_entity": "s.b"},
+        {"id": "", "status_entity": "s.c", "remaining_entity": "s.d"},   # no id
+        {"id": "x", "status_entity": "", "remaining_entity": "s.e"},     # no status
+        "not-a-dict",
+        {"id": "dryer", "label": "Dryer", "kind": "dryer",
+         "status_entity": "s.f", "remaining_entity": "s.g"}]}
+    cleaned = _clean_laundry(ok)
+    assert cleaned["ha_base"] == "http://ha:8123"          # trailing / stripped
+    assert [m["id"] for m in cleaned["machines"]] == ["washer", "dryer"]
+    assert cleaned["machines"][0]["label"] == "washer"     # label defaults to id
+    assert cleaned["machines"][0]["kind"] == "washer"      # kind defaults
+    assert cleaned["machines"][1]["kind"] == "dryer"
+    # rejected shapes -> None (no laundry integration)
+    assert _clean_laundry(None) is None
+    assert _clean_laundry("nope") is None
+    assert _clean_laundry({"ha_base": ""}) is None
+    assert _clean_laundry({"ha_base": "http://ha", "machines": []}) is None
+    assert _clean_laundry({"ha_base": "http://ha",
+                           "machines": [{"id": "w"}]}) is None

@@ -221,3 +221,22 @@ def test_partial_demo_seed_is_wiped_so_the_next_open_retries(tmp_path, monkeypat
     probe = fdb.connect(str(tmp_path / "hub.db"))
     assert probe.execute("SELECT COUNT(*) FROM people").fetchone()[0] == 0
     probe.close()
+
+
+def test_demo_laundry_tile_is_canned_and_live_shaped(demo_client):
+    """DEMO serves a canned laundry tile with no HA hit: the washer mid-cycle
+    (finishing in the future) and the dryer freshly done — both signature
+    card states for a screenshot. The integration is also forced available so
+    the panel and settings row show."""
+    import datetime as dt
+    t = demo_client.get("/api/tiles/laundry").json()
+    assert t["available"] is True
+    w, d = t["machines"]
+    assert (w["id"], w["kind"], w["phase"]) == ("washer", "washer", "running")
+    assert dt.datetime.fromisoformat(w["finishes_at"]) \
+        > dt.datetime.now(dt.timezone.utc)
+    assert (d["id"], d["kind"], d["phase"]) == ("dryer", "dryer", "done")
+    assert d["last_done"] == d["status_since"]
+    ids = {i["id"]: i for i in
+           demo_client.get("/api/hub").json()["integrations"]}
+    assert "laundry" in ids and ids["laundry"]["enabled"] is True

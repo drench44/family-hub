@@ -4,6 +4,8 @@ on the home screen). Every fetch fails soft: a dead upstream yields an
 ``{"available": False}`` tile, never an exception."""
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
 import logging
 import time
 
@@ -25,12 +27,19 @@ _weather_cache: dict[str, tuple[float, dict]] = {}
 CLIMATE_TTL = 60.0
 _climate_cache: dict[str, tuple[float, dict]] = {}
 
+# Laundry cache, keyed by ha_base. Shorter than the 60s poll so a cycle-done
+# flip reaches the wall within about one poll even with several devices
+# sharing the cache.
+LAUNDRY_TTL = 25.0
+_laundry_cache: dict[str, tuple[float, dict]] = {}
+
 
 def reset_caches() -> None:
     """Clear the in-process tile caches. Tests call this for deterministic
     behavior when they monkeypatch the HTTP client and poll more than once."""
     _weather_cache.clear()
     _climate_cache.clear()
+    _laundry_cache.clear()
 
 
 async def climate_tile(client, cfg) -> dict:
@@ -202,6 +211,132 @@ async def weather_tile(client, cfg) -> dict:
         log.warning("weather tile wx.json unavailable: %s", e)
         return {"available": False}   # not cached: retry on the next poll
     _weather_cache[base] = (time.monotonic() + WEATHER_TTL, result)
+    return result
+
+
+# --- laundry (washer/dryer via Home Assistant) -----------------------------
+#
+# Phase sets for the lg_thinq "Current status" enum, verified live against
+# HA 2026.8.1 + an LG washer/dryer pair (2026-08-17). A state none of these
+# sets has seen (firmware vocabulary drift) fails toward "running" when a
+# finish time exists — never hide an active cycle — and to "idle" otherwise
+# (see _laundry_phase).
+LAUNDRY_DONE = {"end"}
+LAUNDRY_PAUSED = {"pause", "frozen_prevent_pause", "rinse_hold"}
+LAUNDRY_IDLE = {"initial", "power_off", "frozen_prevent_initial"}
+LAUNDRY_ERROR = {"error"}
+# HA's own not-a-reading states (integration lost the appliance / entity gone)
+LAUNDRY_GONE = {"unknown", "unavailable", ""}
+# The in-cycle vocabulary observed on the live pair.
+LAUNDRY_RUNNING = {
+    "running", "spinning", "rinsing", "prewash", "detecting", "drying",
+    "cooling", "wrinkle_care", "refreshing", "add_drain", "detergent_amount",
+    "frozen_prevent_running",
+}
+
+
+def _laundry_phase(status: str | None, finishes_at: str | None) -> str:
+    s = (status or "").strip().lower()
+    if s in LAUNDRY_GONE:
+        return "offline"
+    if s in LAUNDRY_DONE:
+        return "done"
+    if s in LAUNDRY_PAUSED:
+        return "paused"
+    if s in LAUNDRY_ERROR:
+        return "error"
+    if s in LAUNDRY_IDLE:
+        return "idle"
+    if s == "reserved":          # delayed start scheduled, drum not yet moving
+        return "reserved"
+    if s in LAUNDRY_RUNNING:
+        return "running"
+    # An unrecognized status (firmware vocabulary drift) fails toward
+    # "running" when a finish time exists — never hide an active cycle —
+    # and "idle" otherwise.
+    log.warning("laundry: unrecognized status %r (phase from finish time)", s)
+    return "running" if finishes_at else "idle"
+
+
+def _laundry_ts(raw: str | None) -> str | None:
+    """An HA timestamp state, validated: the ISO string as-is when it parses,
+    else None. HA reports 'unknown'/'unavailable' as states too — those are
+    not timestamps."""
+    if not raw or raw in LAUNDRY_GONE:
+        return None
+    try:
+        dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return raw
+
+
+async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
+    """One HA entity state, or None on any failure (auth, LAN, non-dict body).
+    Failures are per-entity so one flaky sensor can't sink the whole card."""
+    try:
+        r = await client.get(f"{base}/api/states/{entity}", timeout=TIMEOUT,
+                             headers={"Authorization": f"Bearer {token}"})
+        r.raise_for_status()
+        body = r.json()
+        return body if isinstance(body, dict) else None
+    except Exception as e:
+        log.warning("laundry: HA state %s unavailable: %s", entity, e)
+        return None
+
+
+async def laundry_tile(client, cfg, token: str) -> dict:
+    """Washer/dryer status proxied from Home Assistant into a trimmed,
+    fail-soft tile: ``{available, machines: [{id, label, kind, phase, status,
+    finishes_at, status_since}]}``.
+
+    Per machine, two entity reads (concurrent across all machines): the
+    Current-status enum drives ``phase`` (running / paused / done / idle /
+    reserved / error / offline) with the raw ``status`` passed through for the
+    label; the Remaining-time timestamp sensor becomes ``finishes_at`` (an
+    absolute ISO "finishes at" moment — the frontend counts down against it
+    live between polls). ``status_since`` is the status entity's
+    ``last_changed``, so a machine sitting in "end" carries WHEN it finished.
+
+    A failed status read marks that machine ``offline``; a failed remaining
+    read only drops ``finishes_at``. Only the whole-HA case — every status
+    read failing at once — returns ``{"available": False}``, and errors are
+    never cached, so a transient blip retries on the next poll."""
+    laundry = getattr(cfg, "laundry", None)
+    if not laundry or not token:
+        return {"available": False}   # not configured; no fetch attempted
+    base = laundry["ha_base"]
+    cached = _laundry_cache.get(base)
+    if cached is not None and cached[0] > time.monotonic():
+        return cached[1]
+    machines = laundry["machines"]
+    fetches = []
+    for m in machines:
+        fetches.append(_ha_state(client, base, token, m["status_entity"]))
+        fetches.append(_ha_state(client, base, token, m["remaining_entity"]))
+    states = await asyncio.gather(*fetches)
+    out = []
+    any_status = False
+    for i, m in enumerate(machines):
+        st, rem = states[2 * i], states[2 * i + 1]
+        status = st.get("state") if st else None
+        finishes = _laundry_ts(rem.get("state") if rem else None)
+        if st is not None:
+            any_status = True
+        phase = _laundry_phase(status, finishes)
+        out.append({
+            "id": m["id"], "label": m["label"], "kind": m["kind"],
+            "phase": phase,
+            "status": (status or "").strip().lower() or None,
+            "finishes_at": finishes,
+            "status_since": _laundry_ts(st.get("last_changed") if st else None),
+        })
+    if not any_status:
+        # HA itself is unreachable (or the token is dead): the whole card is
+        # offline. Not cached, so recovery shows on the next poll.
+        return {"available": False}
+    result = {"available": True, "machines": out}
+    _laundry_cache[base] = (time.monotonic() + LAUNDRY_TTL, result)
     return result
 
 

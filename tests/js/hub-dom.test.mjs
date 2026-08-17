@@ -206,6 +206,16 @@ class QueryNode {
 
   addEventListener() {}
 
+  // Real attribute access backed by the parsed `attrs` bag (FakeEl's
+  // setAttribute is an inert stub; here laundryTick genuinely reads back
+  // what it wrote — the timer arc's stroke-dasharray).
+  getAttribute(name) {
+    const v = this.attrs[String(name).toLowerCase()];
+    return v === undefined ? null : v;
+  }
+
+  setAttribute(name, v) { this.attrs[String(name).toLowerCase()] = String(v); }
+
   querySelector(sel) { return queryFirst(this.children, sel); }
 
   querySelectorAll(sel) { return queryAll(this.children, sel); }
@@ -4641,3 +4651,176 @@ test('toggleCaldavCollection: an unknown id is a no-op (no PATCH, no toast)', as
   assert.equal(fetchCalled, false);
   assert.equal(document.getElementById('toast'), null);
 });
+
+/* ---------------------------------------------------------- laundry card */
+
+// Fixed clock for deterministic copy: mid-afternoon, well clear of midnight.
+const LN_NOW = Date.parse('2026-08-17T14:00:00-07:00');
+const lnIso = (minutes) => new Date(LN_NOW + minutes * 60000).toISOString();
+
+const LN_WASHER_RUNNING = {
+  id: 'washer', label: 'Washer', kind: 'washer', phase: 'running',
+  status: 'rinsing', finishes_at: lnIso(23), status_since: lnIso(-8),
+  last_done: null,
+};
+const LN_DRYER_DONE = {
+  id: 'dryer', label: 'Dryer', kind: 'dryer', phase: 'done',
+  status: 'end', finishes_at: null, status_since: lnIso(-47),
+  last_done: lnIso(-47),
+};
+
+// Same mount trick as renderWeatherHtml: pre-register a real slot host.
+function renderLaundryHtml(payload) {
+  const { document, sandbox } = newHub();
+  const slot = document.createElement('div');
+  slot._id = 'laundry-slot';
+  document.body.appendChild(slot);
+  sandbox.renderLaundry(payload, LN_NOW);   // paint at the fixed clock
+  return { slot, html: slot.innerHTML, document, sandbox };
+}
+
+test('lnLines: the countdown copy per phase', () => {
+  const { sandbox } = newHub();
+  // spread into a local-realm object: assert.deepEqual is strict about
+  // prototypes, and sandbox objects carry the vm realm's Object.prototype
+  const L = (m) => ({ ...sandbox.lnLines(m, LN_NOW) });
+  // running: big minute count + unit, status word + finish time in the sub
+  assert.deepEqual(L(LN_WASHER_RUNNING),
+    { big: '23', unit: 'min', sub: 'Rinsing · done 2:23pm' });
+  // a generic 'running' status collapses to the phase word
+  assert.equal(L({ ...LN_WASHER_RUNNING, status: 'running' }).sub,
+    'Running · done 2:23pm');
+  // 'wrinkle_care' prettifies
+  assert.equal(L({ ...LN_WASHER_RUNNING, status: 'wrinkle_care' }).sub,
+    'Wrinkle care · done 2:23pm');
+  // finish moment slipped past -> 'Any minute', never a negative count
+  assert.deepEqual(L({ ...LN_WASHER_RUNNING, finishes_at: lnIso(-2) }),
+    { big: 'Any minute', sub: 'Rinsing' });
+  // running with no usable finish time stays honest
+  assert.deepEqual(L({ ...LN_WASHER_RUNNING, finishes_at: null }),
+    { big: 'Rinsing', sub: 'time unknown' });
+  // done: WHEN it finished
+  assert.deepEqual(L(LN_DRYER_DONE), { big: 'Done', sub: 'at 1:13pm' });
+  // a done stamp from before today carries its weekday (Sun 8/16 here)
+  assert.equal(L({ ...LN_DRYER_DONE, status_since: lnIso(-24 * 60) }).sub,
+    'at Sun 2:00pm');
+  // idle remembers the last load; offline and error say so plainly
+  assert.equal(L({ id: 'w', phase: 'idle', last_done: lnIso(-47) }).sub,
+    'last load 1:13pm');
+  assert.deepEqual(L({ id: 'w', phase: 'idle', last_done: null }),
+    { big: 'Idle', sub: '' });
+  assert.deepEqual(L({ id: 'w', phase: 'offline' }),
+    { big: '—', sub: 'not reporting' });
+  assert.deepEqual(L({ id: 'w', phase: 'error' }),
+    { big: 'Error', sub: 'check the machine' });
+  assert.equal(L({ id: 'w', phase: 'paused', finishes_at: lnIso(31) }).sub,
+    'about 31 min left');
+});
+
+test('lnMinutesLeft: ceil, zero floor, null on garbage', () => {
+  const { sandbox } = newHub();
+  assert.equal(sandbox.lnMinutesLeft(lnIso(23), LN_NOW), 23);
+  assert.equal(sandbox.lnMinutesLeft(lnIso(0.5), LN_NOW), 1);   // ceil
+  assert.equal(sandbox.lnMinutesLeft(lnIso(-5), LN_NOW), 0);    // floor
+  assert.equal(sandbox.lnMinutesLeft(null, LN_NOW), null);
+  assert.equal(sandbox.lnMinutesLeft('nope', LN_NOW), null);
+});
+
+test('laundry card: portholes render running + done machines with the timer arc', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.laundryCardHtml(
+    { available: true, machines: [LN_WASHER_RUNNING, LN_DRYER_DONE] }, LN_NOW);
+  // washer: running phase class, cool-kind class, tumbling drum, timer arc
+  assert.match(html, /class="ln-m ln-washer ln-ph-running" id="ln-m-washer"/);
+  assert.match(html, /ln-tumble/);
+  // 23 of 60 minutes on the dial: arc length = 23/60 of the circumference
+  const arc = /class="ln-arc"[^>]*stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(html);
+  assert.ok(arc, 'running machine draws the timer arc');
+  assert.ok(Math.abs(arc[1] / arc[2] - 23 / 60) < 0.01, 'arc is minutes-on-the-dial');
+  // dryer: done phase, warm kind, check mark, full ring, no tumble
+  assert.match(html, /class="ln-m ln-dryer ln-ph-done" id="ln-m-dryer"/);
+  assert.match(html, /ln-check/);
+  const dryerHtml = html.slice(html.indexOf('ln-m-dryer'));
+  assert.doesNotMatch(dryerHtml, /ln-tumble/);
+  const full = /class="ln-arc"[^>]*stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(dryerHtml);
+  assert.ok(Math.abs(full[1] / full[2] - 1) < 0.01, 'done ring is full');
+  // the glanceable lines
+  assert.match(html, /<span class="num">23<\/span><span class="ln-unit">min<\/span>/);
+  assert.match(html, /Rinsing · done 2:23pm/);
+  assert.match(html, />Done</);
+  assert.match(html, /at 1:13pm/);
+});
+
+test('renderLaundry: loading placeholder, offline note, and label escaping', () => {
+  // boot (null): neutral placeholder, never a flash of "unavailable"
+  let r = renderLaundryHtml(null);
+  assert.match(r.html, /wx-loading/);
+  assert.doesNotMatch(r.html, /unavailable/i);
+  // offline: header + slim note, column never blanked
+  r = renderLaundryHtml({ available: false });
+  assert.match(r.html, /Laundry/);
+  assert.match(r.html, /Laundry unavailable/);
+  // a hostile config label renders inert
+  r = renderLaundryHtml({ available: true, machines: [
+    { ...LN_WASHER_RUNNING, label: '<img src=x onerror=alert(1)>' }] });
+  assert.doesNotMatch(r.html, /<img/);
+});
+
+test('laundryTick: countdown + arc update in place without rebuilding the drum', async () => {
+  const payload = { available: true, machines: [LN_WASHER_RUNNING, LN_DRYER_DONE] };
+  const { slot, document, sandbox } = renderLaundryHtml(payload);
+  // laundryTick reads the module-scope laundryData binding, which only
+  // fetchLaundry sets — deliver the payload through a stubbed fetch, then
+  // repaint at the fixed clock (fetchLaundry rendered with the real one).
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => payload });
+  await sandbox.fetchLaundry();
+  sandbox.renderLaundry(payload, LN_NOW);
+  // the washer is the first .ln-m block (payload order; the fake DOM does
+  // not register innerHTML-parsed nodes by id, so walk the slot like
+  // laundryTick itself does)
+  const washer = () => slot.querySelectorAll('.ln-m')[0];
+  const before = washer();
+  // five minutes later the tick rewrites the text + arc, not the elements
+  sandbox.laundryTick(LN_NOW + 5 * 60000);
+  const after = washer();
+  assert.equal(after, before, 'machine element identity preserved (no re-render)');
+  assert.equal(after.querySelector('.num').textContent, '18');
+  assert.equal(after.querySelector('.ln-sub').textContent, 'Rinsing · done 2:23pm');
+  const dash = after.querySelector('.ln-arc').getAttribute('stroke-dasharray');
+  const [len, circ] = dash.split(' ').map(Number);
+  assert.ok(Math.abs(len / circ - 18 / 60) < 0.01, 'arc drained to 18 min');
+  // count -> word shape change (finish slips past) rebuilds just the big line
+  sandbox.laundryTick(LN_NOW + 40 * 60000);
+  assert.match(washer().querySelector('.ln-big').innerHTML, /Any minute/);
+});
+
+test('updateTabVisibility + applyWallLayout: laundry alone keeps the weather tab and panels column', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+    { id: 'laundry', enabled: true, group: 'integration' },
+  ] });
+  const weatherTab = document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === 'weather');
+  assert.equal(weatherTab.hidden, false,
+    'weather tab survives on laundry alone (it hosts the laundry card)');
+  const grid = document.querySelector('.hub-grid');
+  assert.match(grid.style.gridTemplateAreas || '', /panels/,
+    'panels column survives on laundry alone');
+  // ...and off drops both (no custom panels in this sandbox)
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+    { id: 'laundry', enabled: false, group: 'integration' },
+  ] });
+  assert.equal(weatherTab.hidden, true);
+  assert.doesNotMatch(grid.style.gridTemplateAreas || '', /panels/);
+  assert.equal(document.body.classList.contains('integ-off-laundry'), true,
+    'the CSS hook that hides #laundry-slot is stamped');
+});
+
