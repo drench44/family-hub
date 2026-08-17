@@ -187,6 +187,10 @@ class QueryNode {
     this._innerHTML = '';
     this.textContent = '';
     this.onclick = null;
+    // Plain style bag (mirrors FakeEl's) so code that mutates parsed-markup
+    // nodes' inline style (e.g. applyWallLayout's grid.style.gridTemplate*
+    // and setDisp's el.style.display) has somewhere real to write/read.
+    this.style = { setProperty() {} };
     // Parsed nodes are VISIBLE by default — the OPPOSITE of FakeEl's
     // hidden-by-default. Tests that need a hidden tile/panel set
     // `offsetParent = null` explicitly (that's how display:none reads).
@@ -451,6 +455,102 @@ test('updateTabVisibility: every feature off -> hub-empty, all tabs hidden', () 
   ] });
   assert.equal(document.body.classList.contains('hub-empty'), true);
   assert.ok(document.querySelectorAll('.tab-btn').every((b) => b.hidden));
+});
+
+// ---- applyWallLayout: reflow the wall grid when a column is off (Task 6) ----
+
+// index.html's `.hub-grid` (and its `.people-col`/`.cal`/`.todo-slot`/`.tiles`/
+// `.panels` children) has no single seeded container id to piggyback on the
+// way seedTabbar reuses #tabbar, and document.querySelector only searches
+// registered elements' PARSED innerHTML children (never a registered element
+// itself) — so a raw SEEDED_IDS entry for 'cal'/'todo-slot'/'tiles'/'panels'
+// is reachable via getElementById but invisible to class selectors. Mirror
+// seedTabbar's approach instead: build the real subtree as markup, register a
+// fresh host via createElement + appendChild (which registers by id), then
+// assign it as innerHTML so the parsed nodes become findable by class — the
+// same nodes applyWallLayout itself will read/mutate via document.querySelector.
+function seedWallGrid(document) {
+  const host = document.createElement('div');
+  host.id = 'wall-grid-fixture';
+  document.body.appendChild(host);
+  host.innerHTML =
+    '<div class="hub-grid">' +
+      '<section class="cal" id="cal" aria-label="Calendar"></section>' +
+      '<section class="todo-slot" id="todo-slot" aria-label="To-dos"></section>' +
+      '<section class="people-col" aria-label="Chores">' +
+        '<div id="people" class="people-list"></div>' +
+      '</section>' +
+      '<div class="tiles" id="tiles"></div>' +
+      '<section class="panels" id="panels" aria-label="Dashboards"></section>' +
+    '</div>';
+  return document.querySelector('.hub-grid');
+}
+
+test('applyWallLayout: chores off drops the leftmost column and reflows left', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'cameras', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // 'people' track and area are gone; the other three columns remain, in order
+  assert.ok(!grid.style.gridTemplateAreas.includes('people'),
+    'people area dropped');
+  assert.equal(grid.style.gridTemplateColumns, 'minmax(0, 1fr) 540px 340px');
+  assert.equal(document.querySelector('.people-col').style.display, 'none',
+    'hidden section removed so it cannot auto-place');
+});
+
+test('applyWallLayout: calendar off, todos on -> to-dos fill the calendar column', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: false, group: 'integration' },
+    { id: 'ics_calendar', enabled: false, group: 'integration' },
+    { id: 'icloud_caldav', enabled: false, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // both rows of the second column are 'todo' (to-dos filled up), no 'cal'
+  assert.ok(grid.style.gridTemplateAreas.includes('todo'), 'todo present');
+  assert.ok(!grid.style.gridTemplateAreas.includes('cal'), 'cal dropped');
+  assert.equal(document.querySelector('.cal').style.display, 'none');
+});
+
+test('applyWallLayout: all on -> the default four-column template', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'cameras', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: true, group: 'integration' },
+    { id: 'climate', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.equal(grid.style.gridTemplateColumns, '360px minmax(0, 1fr) 540px 340px');
+});
+
+test('applyWallLayout + updateTabVisibility: empty list is a no-op (fail-open)', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  seedTabbar(document);                             // helper added in Task 4
+  document.body.dataset.tab = 'chores';
+  const grid = document.querySelector('.hub-grid');
+  grid.style.gridTemplateColumns = 'SENTINEL';      // must be left untouched
+  sandbox.renderIntegrations({ integrations: [] });
+  assert.equal(grid.style.gridTemplateColumns, 'SENTINEL',
+    'empty payload must not rewrite the grid');
+  assert.equal(document.body.classList.contains('hub-empty'), false,
+    'empty payload must not trip hub-empty');
+  assert.ok(document.querySelectorAll('.tab-btn').every((b) => !b.hidden),
+    'empty payload must not hide tabs');
 });
 
 // ---- --app-h: the phone-shell height var (tab-bar gap fix) ----
