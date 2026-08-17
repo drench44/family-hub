@@ -168,10 +168,10 @@ def _ensure_history_backfill(conn) -> None:
 
 def _ensure_demo_seed(conn) -> None:
     """DEMO=1 only: seed the fake sample family into an EMPTY db on first open,
-    so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on there
-    being no people yet, so it never re-seeds or touches a real db (and a plain
-    unset-DEMO run never reaches here at all)."""
-    if conn.execute("SELECT 1 FROM people LIMIT 1").fetchone() is not None:
+    so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on EVERY
+    seeded table being empty (not just people), so it never re-seeds or touches a
+    real db (issue #36) — and a plain unset-DEMO run never reaches here at all."""
+    if not fdemo.is_unseeded(conn):
         return
     try:
         fdemo.seed_demo(conn, _today())
