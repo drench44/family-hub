@@ -387,6 +387,25 @@ test('calStatusMessage: an expired source still warns even when another source i
   assert.doesNotMatch(m, /last events/);
 });
 
+test('calStatusMessage: a sustained non-auth failure warns even when another source is ok', () => {
+  // agg is {ok:true, degraded:true}: a stuck iCloud (network/5xx, not auth) behind
+  // a healthy Google. The wall should say a calendar is having trouble, not stay
+  // silent — but it is NOT a reconnect prompt.
+  const m = sandbox.calStatusMessage({ ok: true, degraded: true });
+  assert.match(m, /trouble syncing/);
+  assert.doesNotMatch(m, /sign-in expired/);
+});
+
+test('calStatusMessage: needs_auth outranks degraded on the same status', () => {
+  const m = sandbox.calStatusMessage({ ok: true, needs_auth: true, degraded: true });
+  assert.match(m, /sign-in expired/);       // reconnect is the louder signal
+  assert.doesNotMatch(m, /trouble syncing/);
+});
+
+test('calStatusMessage: a healthy status shows no banner (no false degraded)', () => {
+  assert.equal(sandbox.calStatusMessage({ ok: true }), '');
+});
+
 test('caldavTestMessage: a successful test reports events + reminders counts', () => {
   assert.equal(caldavTestMessage({ ok: true, events: 12, reminders: 3 }),
     'Connected - 12 events, 3 reminders.');

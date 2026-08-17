@@ -270,6 +270,93 @@ def test_caldav_sync_one_bad_reminder_does_not_freeze_the_list(conn):
     assert titles == {"Buy milk", "Buy eggs"}
 
 
+class _NonAuthFlaky(FakeCalDav):
+    """Every VEVENT fetch raises a NON-auth error (network reset) — ok False,
+    needs_auth False, so it exercises the sustained-error path, not reconnect."""
+    def fetch_ics(self, collection, lo, hi):
+        raise RuntimeError("connection reset")
+
+
+def test_caldav_sync_flags_a_sustained_nonauth_error_after_the_threshold(conn):
+    # A non-auth failure is NOT surfaced on the first tick (would flicker on a
+    # transient blip); only once it has run continuously past the threshold.
+    client = _NonAuthFlaky([{"id": "cal", "name": "F", "comp": "VEVENT", "ics": []}])
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["ok"] is False and not st.get("needs_auth")
+    assert not st.get("sustained")                        # first failure: clock starts
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    assert not st.get("sustained")                        # still under the threshold
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW + dt.timedelta(hours=6))
+    assert st.get("sustained") is True                    # exactly at the threshold (>=)
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW + dt.timedelta(hours=7))
+    assert st.get("sustained") is True                    # persisted past 6h -> surfaced
+
+
+def test_caldav_sync_empty_but_cached_window_never_reads_sustained(conn):
+    # A calendar that simply has no events in the window hits the empty-keep guard
+    # each tick (ok False, "kept last-synced") but is NOT a stuck feed — it must
+    # never surface as sustained/degraded, even past the error threshold. (Guards
+    # against feeding the clock off the protective soft-empty message.)
+    full = FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT",
+                        "ics": [_ics("u1", "Dentist", "20260820", "20260821")]}])
+    caldav_sync.sync_once(full, conn, _CFG, _NOW)                 # seed a cached event
+    empty = FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT", "ics": []}])
+    caldav_sync.sync_once(empty, conn, _CFG, _NOW)               # empty-keep begins
+    st = caldav_sync.sync_once(empty, conn, _CFG, _NOW + dt.timedelta(hours=7))
+    assert "kept last-synced" in st["error"]      # it IS the soft empty state
+    assert not st.get("sustained")                # ...but never a hard error
+
+
+def test_caldav_sync_disable_clears_the_error_clock(conn):
+    # Toggling iCloud off clears the running error clock, so a re-enable doesn't
+    # instantly read sustained from a stale pre-disable timestamp.
+    cols = [{"id": "cal", "name": "F", "comp": "VEVENT", "ics": []}]
+    caldav_sync.sync_once(_NonAuthFlaky(cols), conn, _CFG, _NOW)          # clock starts
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_enabled(conn, "icloud_caldav", False)
+    caldav_sync.sync_once(_NonAuthFlaky(cols), conn, _CFG,
+                          _NOW + dt.timedelta(hours=1))                   # disabled -> clears
+    fdb.set_integration_enabled(conn, "icloud_caldav", True)
+    st = caldav_sync.sync_once(_NonAuthFlaky(cols), conn, _CFG,
+                               _NOW + dt.timedelta(hours=8))
+    assert not st.get("sustained")                # fresh clock after re-enable
+
+
+def test_caldav_sync_recovers_from_a_corrupt_error_clock(conn):
+    # A garbage stored timestamp must not crash or silently pin the clock at ~0h
+    # forever: it's logged, reset to a valid value, and the feed can still surface.
+    cols = [{"id": "cal", "name": "F", "comp": "VEVENT", "ics": []}]
+    fdb.kv_set(conn, "caldav_error_since", "not-a-date")
+    st = caldav_sync.sync_once(_NonAuthFlaky(cols), conn, _CFG, _NOW)
+    assert not st.get("sustained")                # corrupt -> reset, not sustained
+    dt.datetime.fromisoformat(fdb.kv_get(conn, "caldav_error_since"))  # now parses (no raise)
+
+
+def test_caldav_sync_recovery_resets_the_error_clock(conn):
+    cols = [{"id": "cal", "name": "F", "comp": "VEVENT",
+             "ics": [_ics("u1", "X", "20260820", "20260821")]}]
+    caldav_sync.sync_once(_NonAuthFlaky(cols), conn, _CFG, _NOW)         # clock starts
+    caldav_sync.sync_once(FakeCalDav(cols), conn, _CFG,
+                          _NOW + dt.timedelta(hours=1))                  # ok -> clears clock
+    # a NEW error long afterward must start a FRESH clock, not inherit the old one
+    st = caldav_sync.sync_once(_NonAuthFlaky(cols), conn, _CFG,
+                               _NOW + dt.timedelta(hours=8))
+    assert not st.get("sustained")                        # ~0h into the new error
+
+
+def test_caldav_sync_auth_error_is_never_marked_sustained(conn):
+    # An auth failure surfaces immediately (needs_auth) and must not also flow
+    # through the sustained path — reconnect is the louder, correct signal.
+    class AuthFail(FakeCalDav):
+        def discover(self):
+            raise RuntimeError("401 Unauthorized")
+    client = AuthFail([])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW + dt.timedelta(hours=8))
+    assert st.get("needs_auth") is True
+    assert not st.get("sustained")
+
+
 def test_caldav_sync_inner_401_sets_needs_auth(conn):
     class Auth401(FakeCalDav):
         def fetch_ics(self, collection, lo, hi):

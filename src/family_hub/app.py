@@ -305,6 +305,12 @@ def _calendar_status_agg(c) -> dict:
         agg = {"ok": True}
         if any(s.get("needs_auth") for s in statuses):
             agg["needs_auth"] = True
+        elif any(s.get("sustained") for s in statuses):
+            # A source has been failing (non-auth: network/5xx/TLS) long enough to
+            # be genuinely stuck, not a blip. Surface it behind the healthy source
+            # so the family knows that calendar may be behind — needs_auth, when
+            # present, is the louder signal and wins.
+            agg["degraded"] = True
         return agg
     if any(s.get("needs_auth") for s in statuses):
         return {"ok": False, "needs_auth": True}

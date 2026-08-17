@@ -1654,6 +1654,60 @@ def test_dedup_a_hidden_first_copy_does_not_claim_the_row(tmp_path, monkeypatch)
         assert parades[0]["color"] == "#0f0"     # the VISIBLE (google) copy won
 
 
+def test_calendar_status_agg_surfaces_a_sustained_degraded_source(tmp_path, monkeypatch):
+    # Google ok + iCloud stuck on a persistent NON-auth error (already past the
+    # sustained threshold). The aggregate stays ok (Google renders) but carries
+    # degraded so the wall warns the family that calendar may be behind.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status",
+                          {"ok": False, "error": "connection reset", "sustained": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert status.get("degraded") is True
+        assert not status.get("needs_auth")
+
+
+def test_calendar_status_agg_ignores_a_disabled_sustained_source(tmp_path, monkeypatch):
+    # A stale sustained flag on a DISABLED iCloud must not nag the family about a
+    # calendar they turned off — disabling drops it from the aggregated sources.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status",
+                          {"ok": False, "error": "connection reset", "sustained": True})
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": False})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert not status.get("degraded")
+
+
+def test_calendar_status_agg_needs_auth_wins_over_degraded(tmp_path, monkeypatch):
+    # If a source both needs auth AND is sustained, reconnect is the louder,
+    # actionable signal — the banner must not downgrade it to a generic "trouble".
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status",
+                          {"ok": False, "needs_auth": True, "sustained": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status.get("needs_auth") is True
+        assert not status.get("degraded")
+
+
 def test_calendar_status_agg_healthy_setup_has_no_reconnect_flag(tmp_path, monkeypatch):
     # A fully-healthy mixed setup must NOT carry needs_auth, or the wall would
     # show a spurious "sign-in expired" banner on a perfectly connected calendar.
@@ -1668,6 +1722,7 @@ def test_calendar_status_agg_healthy_setup_has_no_reconnect_flag(tmp_path, monke
         status = tc.get("/api/calendar").json()["status"]
         assert status["ok"] is True
         assert not status.get("needs_auth")
+        assert not status.get("degraded")
 
 
 def test_disabling_ics_calendar_hides_its_events(tmp_path, monkeypatch):
