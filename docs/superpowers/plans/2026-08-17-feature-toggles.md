@@ -538,6 +538,189 @@ git commit -m "feat: data-driven mobile tabs + all-off empty state"
 
 ---
 
+### Task 6: Wall grid reflow — drop hidden columns instead of leaving holes (frontend)
+
+> Added mid-execution (operator-surfaced plan defect). The wall `.hub-grid` uses a
+> fixed `grid-template-columns: 360px minmax(0,1fr) 540px 340px` with named areas,
+> so `display:none` on a section (Task 3) leaves a **dead column/hole** — the other
+> columns do not slide over. This task makes the grid reflow by rebuilding its
+> `grid-template-columns`/`grid-template-areas` from the enabled-feature set, so a
+> hidden column is dropped and everything to its right slides left (and to-dos fill
+> up into the calendar's space when the calendar is off). Covers all four wall
+> columns, closing the same latent hole for cameras/weather too.
+
+**Files:**
+- Modify: `src/family_hub/web/static/hub.js` — add `applyWallLayout(list)`; call it from `renderIntegrations` right after `updateTabVisibility(list)`
+- Test: `tests/js/hub-dom.test.mjs`, `tests/test_static.py`
+
+**Interfaces:**
+- Consumes: `data.integrations[]` (`{id, enabled}`); the same enabled-set idea as `updateTabVisibility`. Wall columns map to features:
+  - people (360px) ← `chores`
+  - cal/todo (minmax(0,1fr)) ← calendar sources (`google_calendar`|`ics_calendar`|`icloud_caldav`) in row 1, `todos` in row 2
+  - tiles (540px) ← `cameras`
+  - panels (340px) ← `weather`|`climate`
+- Produces: `applyWallLayout(list)` — sets `.hub-grid` inline `gridTemplateColumns`/`gridTemplateAreas` to only the present columns, and toggles each section's inline `display` so a section whose area is dropped can't be auto-placed into an implicit track. Fail-open: no-op on empty/absent list (leaves the CSS default full grid).
+
+- [ ] **Step 1: Write the failing DOM tests**
+
+In `tests/js/hub-dom.test.mjs`, add (reuse the sandbox-builder idiom the neighbouring tests use — the same one Task 4 used, e.g. `const { sandbox, document } = newHub();` if that is the real name):
+
+```javascript
+test('applyWallLayout: chores off drops the leftmost column and reflows left', () => {
+  const { sandbox, document } = newHub();          // use the real builder name
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'cameras', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // 'people' track and area are gone; the other three columns remain, in order
+  assert.ok(!grid.style.gridTemplateAreas.includes('people'),
+    'people area dropped');
+  assert.equal(grid.style.gridTemplateColumns, 'minmax(0, 1fr) 540px 340px');
+  assert.equal(document.querySelector('.people-col').style.display, 'none',
+    'hidden section removed so it cannot auto-place');
+});
+
+test('applyWallLayout: calendar off, todos on -> to-dos fill the calendar column', () => {
+  const { sandbox, document } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: false, group: 'integration' },
+    { id: 'ics_calendar', enabled: false, group: 'integration' },
+    { id: 'icloud_caldav', enabled: false, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // both rows of the second column are 'todo' (to-dos filled up), no 'cal'
+  assert.ok(grid.style.gridTemplateAreas.includes('todo'), 'todo present');
+  assert.ok(!grid.style.gridTemplateAreas.includes('cal'), 'cal dropped');
+  assert.equal(document.querySelector('.cal').style.display, 'none');
+});
+
+test('applyWallLayout: all on -> the default four-column template', () => {
+  const { sandbox, document } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'cameras', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: true, group: 'integration' },
+    { id: 'climate', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.equal(grid.style.gridTemplateColumns, '360px minmax(0, 1fr) 540px 340px');
+});
+
+test('applyWallLayout + updateTabVisibility: empty list is a no-op (fail-open)', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);                             // helper added in Task 4
+  document.body.dataset.tab = 'chores';
+  const grid = document.querySelector('.hub-grid');
+  grid.style.gridTemplateColumns = 'SENTINEL';      // must be left untouched
+  sandbox.renderIntegrations({ integrations: [] });
+  assert.equal(grid.style.gridTemplateColumns, 'SENTINEL',
+    'empty payload must not rewrite the grid');
+  assert.equal(document.body.classList.contains('hub-empty'), false,
+    'empty payload must not trip hub-empty');
+  assert.ok(document.querySelectorAll('.tab-btn').every((b) => !b.hidden),
+    'empty payload must not hide tabs');
+});
+```
+
+(Confirm the fake DOM has a findable `.hub-grid`, `.people-col`, `.cal` — they are seeded ids/classes; if `.hub-grid` isn't reachable via `document.querySelector`, seed it the same way `seedTabbar` seeds the tab bar. If a section like `.cal`/`.people-col` isn't in the seeded DOM, add it to the seed. Do NOT weaken an assertion to pass — if the harness genuinely can't express one of these, report BLOCKED with specifics.)
+
+- [ ] **Step 2: Run to confirm failure**
+
+Run: `node --test --test-reporter=tap tests/js/hub-dom.test.mjs`
+Expected: FAIL — `applyWallLayout` undefined / grid template never set.
+
+- [ ] **Step 3: Implement `applyWallLayout`**
+
+Add it just below `updateTabVisibility` in `hub.js`:
+
+```javascript
+// Reflow the wall grid to only the columns whose feature(s) are on, so a
+// disabled feature drops its column and the rest slide up/left instead of
+// leaving a hole. Each section's inline display is toggled too: a section
+// whose grid-area is dropped from the template would otherwise auto-place
+// into an implicit track. Fail-open: an empty/absent list leaves the CSS
+// default four-column grid untouched. (On the phone .hub-grid is display:flex
+// via the width media query, so the inline grid-template is simply ignored
+// there, and inline display:'' defers to the tab-visibility stylesheet rules.)
+function applyWallLayout(list) {
+  const grid = document.querySelector('.hub-grid');
+  if (!grid || !list || !list.length) return;
+  const on = new Set(list.filter((i) => i.enabled).map((i) => i.id));
+  const has = (...ids) => ids.some((id) => on.has(id));
+  const chores = has('chores');
+  const calAny = has('google_calendar', 'ics_calendar', 'icloud_caldav');
+  const todos = has('todos');
+  const cameras = has('cameras');
+  const dash = has('weather', 'climate');
+  const setDisp = (sel, show) => {
+    const el = document.querySelector(sel);
+    if (el) el.style.display = show ? '' : 'none';
+  };
+  setDisp('.people-col', chores);
+  setDisp('.cal', calAny);
+  setDisp('.todo-slot', todos);
+  setDisp('.tiles', cameras);
+  setDisp('.panels', dash);
+  const cols = [];
+  if (chores) cols.push({ w: '360px', a1: 'people', a2: 'people' });
+  if (calAny || todos) cols.push({ w: 'minmax(0, 1fr)',
+    a1: calAny ? 'cal' : 'todo', a2: todos ? 'todo' : 'cal' });
+  if (cameras) cols.push({ w: '540px', a1: 'tiles', a2: 'tiles' });
+  if (dash) cols.push({ w: '340px', a1: 'panels', a2: 'panels' });
+  grid.style.gridTemplateColumns = cols.map((c) => c.w).join(' ');
+  grid.style.gridTemplateAreas = cols.length
+    ? `"${cols.map((c) => c.a1).join(' ')}" "${cols.map((c) => c.a2).join(' ')}"`
+    : '';
+}
+```
+
+- [ ] **Step 4: Call it from `renderIntegrations`**
+
+Immediately after the `updateTabVisibility(list);` line (added in Task 4), add:
+
+```javascript
+  updateTabVisibility(list);
+  applyWallLayout(list);                 // <-- add this line
+```
+
+- [ ] **Step 5: Run the DOM tests — expect PASS**
+
+Run: `node --test --test-reporter=tap tests/js/hub-dom.test.mjs`
+Expected: PASS (four new tests + all existing).
+
+- [ ] **Step 6: Add a static guard**
+
+In `tests/test_static.py` add:
+
+```python
+def test_wall_grid_reflows_on_toggle():
+    hub = (STATIC / "hub.js").read_text()
+    assert "applyWallLayout" in hub, "wall grid reflow missing"
+    assert "gridTemplateAreas" in hub, "reflow must rebuild grid-template-areas"
+```
+
+- [ ] **Step 7: Full suite**
+
+Run: `python -m pytest -q`
+Expected: PASS (Python + JS suites). Confirm no existing wall/phone static guard regressed.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/family_hub/web/static/hub.js tests/js/hub-dom.test.mjs tests/test_static.py
+git commit -m "feat: reflow the wall grid when a feature column is off"
+```
+
+---
+
 ### Task 5: Manual verification + review gate
 
 **Files:** none (verification only).
