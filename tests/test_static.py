@@ -688,3 +688,10 @@ def test_settings_has_a_features_group():
     hub = (STATIC / "hub.js").read_text()
     assert "'Features'" in hub or '"Features"' in hub, \
         "renderIntegrations must render a Features group"
+
+
+def test_off_features_hide_their_wall_surface():
+    assert re.search(r"body\.integ-off-chores[^\{]*\.people-col[^\{]*\{[^}]*display:\s*none",
+                     CSS), "chores-off must hide the people column on the wall"
+    assert re.search(r"body\.integ-off-todos[^\{]*\.todo-slot[^\{]*\{[^}]*display:\s*none",
+                     CSS), "todos-off must hide the to-do slot on the wall"
