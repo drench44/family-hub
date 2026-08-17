@@ -179,6 +179,8 @@ WX_OK = {
     "humidity": 55, "dewPoint": 54.0,
     "weatherStale": False,
     "tempSeries": {"temps": [70.0, 71.5, 73.0, 74.0, 72.0], "nowIndex": 2},
+    "sunrise": "06:15", "sunset": "20:15",
+    "moonPhase": "Waxing Crescent", "moonIllum": 29.1,
 }
 
 
@@ -195,6 +197,8 @@ def test_weather_maps_wx_json_to_trimmed_shape():
         "low": 58.0, "high": 81.0, "uv": 6, "uv_desc": "High",
         "aqi": 42, "aqi_cat": "Good", "humidity": 55, "dew_point": 54.0,
         "spark": [70.0, 71.5, 73.0, 74.0, 72.0], "spark_now": 2, "stale": False,
+        "sunrise": "06:15", "sunset": "20:15",
+        "moon_phase": "Waxing Crescent", "moon_illum": 29.1,
     }
 
 
@@ -209,6 +213,10 @@ def test_weather_missing_keys_become_none_not_crash():
     assert t["unit"] is None and t["high"] is None and t["stale"] is None
     assert t["spark"] == []   # no tempSeries -> empty, frontend hides the chart
     assert t["spark_now"] is None
+    # sky-scene fields degrade to None too: the frontend then uses its fixed
+    # phase boundaries and draws a full moon
+    assert t["sunrise"] is None and t["sunset"] is None
+    assert t["moon_phase"] is None and t["moon_illum"] is None
 
 
 def test_weather_non_dict_body_unavailable_not_500():
@@ -245,6 +253,25 @@ def test_weather_spark_handles_tempseries_shapes():
     # absent / non-dict tempSeries (and an empty dict) -> empty, no marker
     for wx in ({}, {"tempSeries": None}, {"tempSeries": [70, 71]}, {"tempSeries": {}}):
         assert tiles._weather_spark(wx) == {"temps": [], "now": None}
+
+
+def test_weather_spark_warns_on_good_temps_with_bad_now_index(caplog):
+    # A valid series whose nowIndex is missing/malformed renders UNANCHORED on
+    # the wall (no time ticks, no "now" marker) — legitimate fail-soft, but a
+    # feed-shape drift (like the hourlyTemps guess before it) must be loud in
+    # the logs, not discovered by squinting at a chart with no clock labels.
+    import logging
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        out = tiles._weather_spark(
+            {"tempSeries": {"temps": [70.0, 71.0, 72.0], "nowIndex": "2"}})
+    assert out == {"temps": [70.0, 71.0, 72.0], "now": None}
+    assert any("nowIndex" in r.message for r in caplog.records)
+    # a fully valid anchor stays quiet
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        tiles._weather_spark(
+            {"tempSeries": {"temps": [70.0, 71.0, 72.0], "nowIndex": 1}})
+    assert not caplog.records
 
 
 def test_weather_warns_when_temp_present_but_no_chart_series(caplog):

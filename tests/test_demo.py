@@ -93,6 +93,10 @@ def test_demo_weather_and_climate_tiles_are_canned(demo_client):
     wj = demo_client.get("/api/tiles/weather").json()
     assert wj["available"] is True and wj["temp"] == 74.8 and wj["uv"] == 6
     assert wj["spark"] and wj["spark_now"] == 8
+    # sky-scene fields ride along (a demo-side rename would silently render
+    # the fallback full moon / fixed phase boundaries in demo screenshots)
+    assert wj["sunrise"] == "06:15" and wj["sunset"] == "20:15"
+    assert wj["moon_phase"] == "Waxing Gibbous" and wj["moon_illum"] == 68
     cj = demo_client.get("/api/tiles/climate").json()
     assert cj["available"] is True
     assert [r["name"] for r in cj["rooms"]] == \
