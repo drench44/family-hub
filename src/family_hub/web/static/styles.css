@@ -763,20 +763,22 @@ body.overlay-open { overflow: hidden; }
 .overlay-content { position: absolute; inset: 0; }
 .overlay-frame { width: 100%; height: 100%; border: 0; }
 /* Full-screen camera grid (the "camera page" opened from the wall's Cameras
-   header). Two columns. The row size is a minmax whose floor is EXACTLY half the
-   height and whose ceiling is 1fr:
-   - FOUR or fewer cameras grow to 1fr and fill the screen (2x2), so a one- or
-     two-camera page is never a half-black void.
-   - MORE than four overflow, so rows sit at the exact-half floor: precisely four
-     cameras fill one screen (no sliver of the next row peeking — operator wants
-     a clean 2x2), and the rest are reached by scrolling. overflow-y scrolls to
-     them. (An earlier version left a peek as a scroll hint; the operator prefers
-     exactly four per screen, so the floor is exactly half.) */
+   header). Two columns. Rows are minmax(floor, 1fr):
+   - FOUR or fewer cameras grow to the 1fr ceiling and fill the screen (2x2), so
+     a one- or two-camera page is never a half-black void.
+   - MORE than four overflow, so rows sit at the floor: precisely four cameras
+     fill one screen (a clean 2x2 with NO sliver of the next row peeking —
+     operator preference), and the rest are reached by scrolling (overflow-y).
+   For the 2x2 to end exactly at the bottom edge with no peek, the bottom padding
+   must equal the row gap: two rows + one gap consume the content box, then the
+   bottom padding (== gap) is the space the next row's gap would occupy, so the
+   third row starts exactly at the fold. Hence padding-bottom 10px == gap 10px
+   and the floor is (content-height - gap)/2. Resolution-independent. */
 .camera-page {
   position: absolute; inset: 0; overflow-y: auto;
   display: grid; grid-template-columns: 1fr 1fr;
   grid-auto-rows: minmax(calc((100% - 10px) / 2), 1fr);
-  gap: 10px; padding: 60px 16px 16px;
+  gap: 10px; padding: 60px 16px 10px;
 }
 .camera-page .tile-camera { grid-column: auto; min-height: 0; padding: 0; }
 .camera-page .cam-frame { aspect-ratio: auto; height: 100%; border-radius: 10px; }

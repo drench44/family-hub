@@ -374,9 +374,16 @@ def test_camera_page_shows_four_per_screen_and_scrolls():
     # The row track must be minmax(calc(... / 2), 1fr): the calc floor sizes the
     # peek, the 1fr ceiling fills the screen when there are four or fewer.
     assert re.search(r"grid-auto-rows:\s*minmax\(\s*calc\([^)]*\)\s*/\s*2\s*\)\s*,\s*1fr\s*\)", body), \
-        "row height must be minmax(calc(... / 2), 1fr) — peek floor + fill-when-few ceiling"
+        "row height must be minmax(calc(... / 2), 1fr) — half-height floor + fill-when-few ceiling"
     assert "grid-auto-rows: 1fr" not in body, \
         "a bare grid-auto-rows: 1fr squashes every camera onto one screen"
+    # No peek: the 2x2 must end exactly at the bottom edge. That requires the
+    # bottom padding to equal the row gap (else the next row poked
+    # padding-bottom - gap above the fold, e.g. a 6px hairline). Lock both.
+    gap = re.search(r"gap:\s*(\d+)px", body)
+    pad = re.search(r"padding:\s*\d+px\s+\d+px\s+(\d+)px", body)
+    assert gap and pad and gap.group(1) == pad.group(1), \
+        "camera-page bottom padding must equal the gap so exactly four fill the screen (no peek)"
 
 
 def test_tab_bar_covers_all_tabs():
