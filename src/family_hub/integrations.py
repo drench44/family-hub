@@ -55,11 +55,3 @@ def available_integrations(cfg, env: dict | None = None) -> list[dict]:
 def available_only(cfg, env: dict | None = None) -> list[dict]:
     """available_integrations() filtered to the ones actually configured."""
     return [i for i in available_integrations(cfg, env) if i["available"]]
-
-
-def calendar_kind_enabled(enabled_ids: set, cal_kind: str) -> bool:
-    """Whether events from a calendar of `cal_kind` ('google' | 'ics') should
-    render, given the set of enabled integration ids. Used to hide a disabled
-    calendar source's events without touching the sync cache."""
-    integ = "google_calendar" if cal_kind == "google" else "ics_calendar"
-    return integ in enabled_ids

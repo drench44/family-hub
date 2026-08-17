@@ -284,8 +284,7 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     cal_ics_on = fdb.integration_enabled(c, "ics_calendar", default=True)
     # CalDAV events gate on availability AND the toggle (same as reminders), so
     # pulling the credentials hides stale cached events instead of showing them.
-    cal_caldav_on = (fintegrations.caldav_configured(os.environ)
-                     and fdb.integration_enabled(c, "icloud_caldav", default=True))
+    cal_caldav_on = _integration_on(c, "icloud_caldav")
     # CalDAV events carry a 'caldav:<slug>' calendar_id; their name/color come
     # from the discovered-collection metadata the caldav sync records, not config.
     caldav_cols = fdb.kv_get(c, "caldav_collections") or {}
@@ -380,6 +379,15 @@ def _links(enabled_ids: set | None = None) -> dict:
         camera_page = _camera_links(cfg.camera_page or cfg.cameras)
     panels = _config_panel_links()
     return {"cameras": cameras, "panels": panels, "camera_page": camera_page}
+
+
+def _integration_on(c, iid: str) -> bool:
+    """One definition of 'this integration is on': available (configured in
+    config/env) AND its toggle enabled. Every render/sync gate goes through here
+    so their notions of 'on' cannot drift (Fable architecture review, rec 4)."""
+    available = any(i["id"] == iid
+                    for i in fintegrations.available_only(cfg, os.environ))
+    return available and fdb.integration_enabled(c, iid, default=True)
 
 
 def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
@@ -759,9 +767,7 @@ def reminders_full():
     """The full grouped iCloud Reminders view. `configured` is False (empty
     buckets) when CalDAV has no credentials or its integration is off."""
     c = _db()
-    on = (fintegrations.caldav_configured(os.environ)
-          and fdb.integration_enabled(c, "icloud_caldav", default=True))
-    if not on:
+    if not _integration_on(c, "icloud_caldav"):
         return {"buckets": {b: [] for b in remlogic.BUCKETS}, "configured": False}
     rem = fdb.kv_get(c, "caldav_reminders") or []
     return {"buckets": remlogic.group(rem, _today()), "configured": True}

@@ -450,3 +450,59 @@ Recurrence editing and cross-calendar moves are explicit follow-ons after M6.
 
 *Next step after sign-off: turn this into a task-by-task TDD plan under
 `docs/superpowers/plans/`, mirroring the to-dos plan, and build M0→M1 first.*
+
+---
+
+## 15. Architecture review follow-ups (Fable, 2026-08-17)
+
+A Fable architecture review of the shipped read-only feature validated the
+load-bearing seams (service boundary, credential-as-flag, source-isolation
+policy, fails-soft posture, the declarative-registry-plus-DB-overlay shape — the
+`TileProvider` class registry from §9 is deliberately NOT adopted; it was for a
+Compose per-tile app, and this server-rendered wall doesn't need render-owning
+provider classes). It flagged real divergences from this spec. Recording them as
+DECISIONS with timing so they are not accidental:
+
+- **APPLIED now (rec 4):** one `_integration_on(conn, id)` gate (availability ∩
+  toggle) used by every render/sync path so "is it on" can't drift; the unused
+  `calendar_kind_enabled` seam was deleted.
+- **`cal_objects` store (rec 1) — deferred to the two-way slice (M4/M5), by
+  design.** The read path stores recurrence-EXPANDED occurrence rows in the
+  shared `events` table and drops UID/ETag/`raw_ics` at parse. That is a
+  read-only cul-de-sac: none of §5.2's outbox prerequisites (per-object identity,
+  `base_etag`, `raw_ics` for C1 round-trip, per-row `sync_state`) survive it.
+  **Decision:** the read-only card MAY ship on the current storage; NOTHING
+  writable may be built on it. M4 lands `cal_objects` FIRST (reminders as the
+  first tenant — the kv `caldav_reminders` blob also has a read-modify-write race
+  under completion toggling), persists `raw_ics`/`uid`/`href`/`etag` from the
+  first pull, and moves the VEVENT read path onto it (keeping `events` as an
+  optional render projection). Planned build-out, not a rewrite.
+- **`caldav_collections` table + change detection (rec 2) — deferred to before
+  two-way / before shortening the poll interval.** Today every 300s tick
+  re-`discover()`s and full-range `search()`es every collection (the §4.3/§5.2
+  throttling risk). **Decision:** acceptable at the idle read-only cadence;
+  land the `caldav_collections` table (ctag/sync-token, `writable`,
+  per-collection `enabled`, `last_error`) with `cal_objects`. It is also the home
+  for the per-collection visibility toggle (§8) and the ctag/sync-token change
+  detection (§5.3).
+- **Registry `sync`/`status_key` descriptors (rec 3) + uniform
+  disabled-integration semantic (rec 5) — deferred to before a 4th synced
+  source.** Note the granularity mismatch: `calendar_sync.sync_once` syncs Google
+  AND ICS together, so a clean per-integration `sync` callable wants the
+  `cal_objects` refactor first. Until then `_sync_tick` stays hardcoded.
+  **Decision on the semantic:** disabling an integration should SKIP its sync
+  (freeze cache) + hide render — the CalDAV behavior; Google/ICS currently only
+  hide at render (still polling). Apply uniformly when rec 3 lands.
+- **Shared valid-but-empty TTL guard (rec 6) — deferred (safe refactor).** The
+  ~40-line empty-keep state machine now lives in both syncs; extract one pure
+  function, reconciling the divergent edge handling (calendar_sync's "all sources
+  down → keep whole cache" vs caldav_sync's "empty discover → keep all") with
+  care, guarded by the existing tests.
+- **`_cal` handle through the service boundary + `LIKE 'caldav:%'` scoping (rec
+  7) — fold into recs 1–2.** Both are contained; no standalone migration for
+  purity.
+- **Frontend seams (rec 8) — with the reminders card slice.** The `/api/hub`
+  reminders block needs the `configured`/`ok` distinction the todos block models
+  with `todos_ok` (the `/api/reminders` endpoint already has it); per-collection
+  children need the collections in the payload (rec 2 provides them). The
+  `body.integ-off-<id>` gating pattern is good — keep it.

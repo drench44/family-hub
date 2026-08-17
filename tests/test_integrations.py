@@ -36,10 +36,3 @@ def test_caldav_available_only_with_credentials():
 def test_available_only_filters_to_configured():
     cfg = _cfg(weather_base="http://w")   # only weather configured
     assert {i["id"] for i in fi.available_only(cfg, {})} == {"weather"}
-
-
-def test_calendar_kind_enabled():
-    assert fi.calendar_kind_enabled({"google_calendar"}, "google") is True
-    assert fi.calendar_kind_enabled({"google_calendar"}, "ics") is False
-    assert fi.calendar_kind_enabled({"ics_calendar"}, "ics") is True
-    assert fi.calendar_kind_enabled(set(), "google") is False
