@@ -664,6 +664,21 @@ class ChorePatch(BaseModel):
     active: int | None = None
 
 
+# An explicit JSON null for a field backed by a NOT NULL column is a bad request
+# (422), not a 500 from the DB write (issue #35). fixed_person_id is the one
+# chore field that legitimately accepts null (clearing a fixed assignee); `date`
+# is an API-only field whose null means "no change".
+_PERSON_NONNULL_PATCH = {"name", "color", "sort", "active"}
+_CHORE_NONNULL_PATCH = {"title", "icon", "schedule_kind", "days_mask",
+                        "assign_kind", "rotation_order", "sort", "active"}
+
+
+def _reject_null_nonnullable(fields: dict, nonnullable: set) -> None:
+    bad = sorted(k for k in fields if k in nonnullable and fields[k] is None)
+    if bad:
+        raise HTTPException(422, f"{', '.join(bad)} may not be null")
+
+
 def _validate_person(name: str, color: str) -> str:
     name = (name or "").strip()
     if not (1 <= len(name) <= 30):
@@ -750,6 +765,7 @@ def admin_patch_person(pid: int, p: PersonPatch):
     c = _db()
     row = _person_row(c, pid)
     fields = p.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _PERSON_NONNULL_PATCH)
     if "name" in fields or "color" in fields:
         name = fields.get("name", row["name"])
         color = fields.get("color", row["color"])
@@ -793,6 +809,7 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
     c = _db()
     row = _chore_row(c, cid)
     fields = ch.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _CHORE_NONNULL_PATCH)
     merged = {**row, **fields}
     kind = merged["schedule_kind"]
     # Converting a daily/weekly chore to one-time needs a real due date. Its

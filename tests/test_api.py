@@ -414,6 +414,25 @@ def test_admin_people_crud_and_validation(client, app_mod):
     assert state["people"][0]["name"] == "Remy2"
 
 
+def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod):
+    """Regression for issue #35: an explicit JSON null for a field backed by a
+    NOT NULL column is a 422, not a 500 from the DB write. fixed_person_id (the
+    one nullable chore field) still accepts null."""
+    pid = client.post("/api/admin/people",
+                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    assert client.patch(f"/api/admin/people/{pid}", json={"sort": None}).status_code == 422
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": None}).status_code == 422
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    assert client.patch(f"/api/admin/chores/{cid}", json={"icon": None}).status_code == 422
+    assert client.patch(f"/api/admin/chores/{cid}", json={"active": None}).status_code == 422
+    # fixed_person_id: null is legitimate (clearing the fixed assignee) -> 200
+    assert client.patch(f"/api/admin/chores/{cid}",
+                        json={"assign_kind": "rotation", "rotation_order": [pid],
+                              "fixed_person_id": None}).status_code == 200
+
+
 def test_admin_delete_person_hard_removes_and_404s(client, app_mod):
     """The hard-delete endpoint removes the person entirely (distinct from the
     PATCH active=0 deactivate path); an unknown id is a 404."""
