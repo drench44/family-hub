@@ -414,6 +414,57 @@ def test_admin_people_crud_and_validation(client, app_mod):
     assert state["people"][0]["name"] == "Remy2"
 
 
+def test_calendar_exposes_synced_window(tmp_path, monkeypatch):
+    """Regression for issue #37: /api/calendar reports the range the sync caches
+    (from config) so the frontend can mark days outside it as not-synced instead
+    of rendering them as free."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendar_window_days": 10, "calendar_past_days": 5})
+    with TestClient(appmod.app) as c:
+        win = c.get("/api/calendar").json()["window"]
+    today = appmod._today()
+    assert win["to"] == (today + dt.timedelta(days=10)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=5)).isoformat()
+
+
+def test_calendar_window_is_intersection_of_fetch_and_sync(tmp_path, monkeypatch):
+    """The window must be the INTERSECTION of the fetch range and the sync
+    coverage. A config window wider than the fixed fetch (frontend uses
+    days=90&past=45) must cap to the fetch, or days the sync caches but this
+    request never fetched would render as falsely-empty instead of not-synced."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendar_window_days": 120, "calendar_past_days": 60})
+    with TestClient(appmod.app) as c:
+        win = c.get("/api/calendar").json()["window"]              # default fetch 90/45
+        win2 = c.get("/api/calendar?days=10&past=5").json()["window"]
+    today = appmod._today()
+    # config 120/60 capped to the fetch 90/45
+    assert win["to"] == (today + dt.timedelta(days=90)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
+    # an explicit narrower fetch caps further
+    assert win2["to"] == (today + dt.timedelta(days=10)).isoformat()
+    assert win2["from"] == (today - dt.timedelta(days=5)).isoformat()
+
+
+def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod):
+    """Regression for issue #35: an explicit JSON null for a field backed by a
+    NOT NULL column is a 422, not a 500 from the DB write. fixed_person_id (the
+    one nullable chore field) still accepts null."""
+    pid = client.post("/api/admin/people",
+                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    assert client.patch(f"/api/admin/people/{pid}", json={"sort": None}).status_code == 422
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": None}).status_code == 422
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    assert client.patch(f"/api/admin/chores/{cid}", json={"icon": None}).status_code == 422
+    assert client.patch(f"/api/admin/chores/{cid}", json={"active": None}).status_code == 422
+    # fixed_person_id: null is legitimate (clearing the fixed assignee) -> 200
+    assert client.patch(f"/api/admin/chores/{cid}",
+                        json={"assign_kind": "rotation", "rotation_order": [pid],
+                              "fixed_person_id": None}).status_code == 200
+
+
 def test_admin_delete_person_hard_removes_and_404s(client, app_mod):
     """The hard-delete endpoint removes the person entirely (distinct from the
     PATCH active=0 deactivate path); an unknown id is a 404."""
@@ -1211,10 +1262,75 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
     # the backfill is one-shot: wiping a day and re-connecting must not
     # resurrect it from live definitions
     fdb.replace_day_log(c, yesterday, [])
-    app_mod._conn = None
+    app_mod._db_initialized = False   # force the one-time backfill path to re-run
     with TestClient(app_mod.app) as tc:
         tc.get("/api/hub")
     assert fdb.day_log(app_mod._db(), yesterday) == []
+
+
+def test_db_connection_is_per_thread(app_mod):
+    """Regression guard for issue #29: request handlers run on a thread pool, so
+    _db() must hand each thread its OWN connection. One shared connection let
+    two threads' transactions interleave (a commit on one committing the other's
+    half-done work). Different threads -> different connection objects."""
+    import threading
+    main_conn = app_mod._db()
+    other = {}
+
+    def grab():
+        other["conn"] = app_mod._db()
+
+    t = threading.Thread(target=grab)
+    t.start()
+    t.join()
+    assert other["conn"] is not main_conn
+    # same thread, same connection (cached, not reconnected every call)
+    assert app_mod._db() is main_conn
+
+
+def test_open_sync_conn_retries_and_flags_failure(app_mod, monkeypatch):
+    """Regression for issue #32: a transient ensure_schema failure at sync
+    startup must not kill the thread; _open_sync_conn retries until it succeeds
+    AND records an unhealthy calendar_status so the wall shows staleness instead
+    of a false-healthy badge."""
+    # Pre-create the schema so the failure path can write calendar_status (the kv
+    # table has to exist for the status write to land, not be swallowed).
+    seed = app_mod.fdb.connect(app_mod.DB_PATH)
+    app_mod.fdb.ensure_schema(seed)
+    seed.close()
+    real_ensure = app_mod.fdb.ensure_schema
+    calls = {"n": 0}
+
+    def flaky(conn):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        return real_ensure(conn)
+
+    monkeypatch.setattr(app_mod.fdb, "ensure_schema", flaky)
+    monkeypatch.setattr(app_mod.time, "sleep", lambda *_: None)   # no real backoff wait
+    conn = app_mod._open_sync_conn()
+    assert conn.execute("SELECT 1").fetchone()[0] == 1
+    assert calls["n"] == 2   # failed once, retried, succeeded
+    # the failure surfaced, not a false-healthy badge
+    status = app_mod.fdb.kv_get(conn, "calendar_status")
+    assert status["ok"] is False and "sync startup" in status["error"]
+
+
+def test_demo_disables_background_sync(tmp_path, monkeypatch):
+    """Regression for issue #38: DEMO mode must not start the sync thread, which
+    would overwrite the seeded calendar_status with 'not configured'."""
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    monkeypatch.setenv("DEMO", "1")
+    monkeypatch.delenv("DISABLE_SYNC", raising=False)
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    assert appmod._sync_enabled() is False        # DEMO -> no sync thread
+    monkeypatch.delenv("DEMO", raising=False)
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    importlib.reload(appmod)
+    assert appmod._sync_enabled() is False         # DISABLE_SYNC -> no sync thread
 
 
 def test_interrupted_backfill_rolls_back_whole_then_retries(app_mod, monkeypatch):
@@ -1332,3 +1448,604 @@ def test_future_day_overlays_live_plan_into_streak_and_week(client, app_mod):
     # future day's occurrence set
     assert sam["week"][-1] == "none"
     assert "streak" in sam
+
+
+def test_integrations_list_toggle_and_hub_block(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "weather_base": "http://w", "go2rtc_base": "http://g",
+        "cameras": [{"src": "cam1", "label": "Front"}],
+        "calendars": [{"id": "fam", "kind": "google", "label": "Fam"}],
+    })
+    with TestClient(appmod.app) as c:
+        ids = {i["id"]: i for i in c.get("/api/integrations").json()["integrations"]}
+        # available ones present, all enabled by default (non-breaking seed)
+        assert ids["weather"]["enabled"] is True
+        assert ids["cameras"]["enabled"] is True
+        assert ids["google_calendar"]["enabled"] is True
+        assert "climate" not in ids            # not configured
+        assert "icloud_caldav" not in ids      # no creds
+        # /api/hub carries the same block
+        hub = c.get("/api/hub").json()
+        assert {i["id"] for i in hub["integrations"]} == set(ids)
+        assert hub["links"]["cameras"][0]["label"] == "Front"
+        # toggle cameras off -> camera links blanked, flag flips
+        assert c.patch("/api/integrations/cameras", json={"enabled": False}).status_code == 200
+        hub2 = c.get("/api/hub").json()
+        assert hub2["links"]["cameras"] == []
+        assert next(i for i in hub2["integrations"] if i["id"] == "cameras")["enabled"] is False
+        # unknown integration -> 404
+        assert c.patch("/api/integrations/nope", json={"enabled": False}).status_code == 404
+
+
+def test_disabling_calendar_integration_hides_its_events(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendars": [{"id": "fam", "kind": "google", "label": "Fam"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        today = appmod._today()
+        soon = (today + dt.timedelta(days=3)).isoformat()
+        appmod.fdb.replace_events(c, [{"id": "e1", "calendar_id": "fam",
+            "title": "Dentist", "start_ts": f"{soon}T10:00:00-07:00",
+            "end_ts": f"{soon}T11:00:00-07:00", "all_day": 0}])
+        assert any(e["title"] == "Dentist"
+                   for e in tc.get("/api/calendar").json()["events"])
+        # disable the Google Calendar integration -> its events are hidden (cache kept)
+        tc.patch("/api/integrations/google_calendar", json={"enabled": False})
+        assert tc.get("/api/calendar").json()["events"] == []
+        # re-enable -> visible again immediately, no re-sync
+        tc.patch("/api/integrations/google_calendar", json={"enabled": True})
+        assert any(e["title"] == "Dentist"
+                   for e in tc.get("/api/calendar").json()["events"])
+
+
+def test_calendar_renders_caldav_events_with_color_and_gating(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})   # no google/ics calendars
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=3)).isoformat()
+        appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:abc",
+            "title": "Dentist", "start_ts": f"{soon}T10:00:00",
+            "end_ts": f"{soon}T11:00:00", "all_day": 0}])
+        appmod.fdb.upsert_caldav_collection(c, "caldav:abc", "VEVENT", "Family",
+                                            "#FF0000", "2026-08-17T00:00:00")
+        ev = next(e for e in tc.get("/api/calendar").json()["events"]
+                  if e["title"] == "Dentist")
+        assert ev["color"] == "#FF0000" and ev["label"] == "Family"
+        # iCloud CalDAV is available (creds set) -> a toggleable integration
+        ids = {i["id"] for i in tc.get("/api/integrations").json()["integrations"]}
+        assert "icloud_caldav" in ids
+        # disabling it hides the CalDAV events (cache kept)
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": False})
+        assert all(e["title"] != "Dentist"
+                   for e in tc.get("/api/calendar").json()["events"])
+
+
+def _seed_reminder_object(appmod, c, list_id, uid, title, due=None, completed=False,
+                          list_name="List", seed_collection=True):
+    """Seed one iCloud reminder as a cal_objects VTODO row — the render source of
+    truth — (and, by default, its collection). `due` is a date or None."""
+    from family_hub import reminders as remlogic
+    now = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    ics = remlogic.build_vtodo(uid, title, now, due=due)
+    if completed:
+        ics = remlogic.set_completed(ics, True, now)
+    if seed_collection:
+        appmod.fdb.upsert_caldav_collection(c, list_id, "VTODO", list_name, None, "t")
+    appmod.fdb.upsert_cal_object_synced(c, {
+        "id": f"{list_id}/{uid}", "collection_id": list_id, "comp_type": "VTODO",
+        "uid": uid, "href": f"h/{uid}", "etag": "e", "summary": title,
+        "raw_ics": ics, "sequence": 0, "last_modified": None})
+
+
+def test_reminders_api_and_hub_block(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        today = appmod._today()
+        _seed_reminder_object(appmod, c, "caldav:x", "r1", "Buy milk",
+                              due=today + dt.timedelta(days=2))
+        _seed_reminder_object(appmod, c, "caldav:x", "r2", "Old thing",
+                              due=today - dt.timedelta(days=1))
+        _seed_reminder_object(appmod, c, "caldav:x", "r3", "Done",
+                              due=today, completed=True)
+        data = tc.get("/api/reminders").json()
+        assert data["configured"] is True
+        assert [r["title"] for r in data["buckets"]["upcoming"]] == ["Buy milk"]
+        assert [r["title"] for r in data["buckets"]["overdue"]] == ["Old thing"]
+        # completed never appears
+        assert all("Done" not in [r["title"] for r in data["buckets"][b]]
+                   for b in ["overdue", "today", "upcoming", "no_date"])
+        # hub carries the grouped block
+        assert [r["title"] for r in tc.get("/api/hub").json()["reminders"]["upcoming"]] \
+            == ["Buy milk"]
+        # disabling iCloud CalDAV empties reminders everywhere
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": False})
+        assert tc.get("/api/reminders").json()["buckets"]["upcoming"] == []
+        assert tc.get("/api/hub").json()["reminders"]["upcoming"] == []
+
+
+def test_reminders_api_not_configured_without_creds(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        data = tc.get("/api/reminders").json()
+        assert data["configured"] is False and data["buckets"]["today"] == []
+
+
+def test_integration_status_surfaces_needs_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        appmod.fdb.kv_set(appmod._db(), "caldav_status",
+                          {"ok": False, "needs_auth": True, "error": "401"})
+        integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert integ["icloud_caldav"]["status"] == "needs_auth"
+
+
+def test_calendar_status_agg_surfaces_needs_auth_even_when_a_source_is_ok(tmp_path, monkeypatch):
+    # Mixed setup: Google/ICS healthy, iCloud app password revoked. The aggregate
+    # is still ok (Google renders), but needs_auth must survive so the wall shows
+    # the reconnect banner — otherwise the iCloud half silently drifts stale
+    # behind a "connected" wall and nobody ever reconnects it.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status", {"ok": False, "needs_auth": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert status.get("needs_auth") is True
+
+
+def test_event_on_two_calendars_renders_once(tmp_path, monkeypatch):
+    # Composite events PK (issue #30) stores an event shared by two calendars as
+    # two rows with the same id; the wall must render it ONCE, not twice.
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "cal_a", "kind": "google", "label": "A", "color": "#f00"},
+        {"id": "cal_b", "kind": "google", "label": "B", "color": "#00f"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        row = {"id": "shared1", "title": "Dinner",
+               "start_ts": f"{soon}T18:00:00", "end_ts": f"{soon}T19:00:00",
+               "all_day": 0}
+        appmod.fdb.replace_events(c, [{**row, "calendar_id": "cal_a"},
+                                      {**row, "calendar_id": "cal_b"}])
+        events = tc.get("/api/calendar").json()["events"]
+        dinners = [e for e in events if e["title"] == "Dinner"]
+        assert len(dinners) == 1
+        # the first visible copy wins its calendar's color
+        assert dinners[0]["color"] == "#f00"
+
+
+def test_dedup_a_hidden_first_copy_does_not_claim_the_row(tmp_path, monkeypatch):
+    # The dedup runs AFTER the per-calendar visibility gates, so a copy on a
+    # HIDDEN calendar must neither win the row nor block the visible copy — the
+    # event still renders once, in the VISIBLE calendar's color. (If the dedup
+    # were hoisted above the gates, the hidden copy would claim the key and the
+    # event would vanish entirely.)
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "hol", "kind": "ics", "label": "Holidays", "url": "http://x/h.ics",
+         "color": "#111"},
+        {"id": "gcal", "kind": "google", "label": "Family", "color": "#0f0"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        row = {"id": "shared1", "title": "Parade",
+               "start_ts": f"{soon}T09:00:00", "end_ts": f"{soon}T10:00:00",
+               "all_day": 0}
+        # insert the ICS (soon-to-be-hidden) copy FIRST so it sorts ahead on the
+        # tie, then the visible google copy
+        appmod.fdb.replace_events(c, [{**row, "calendar_id": "hol"},
+                                      {**row, "calendar_id": "gcal"}])
+        tc.patch("/api/integrations/ics_calendar", json={"enabled": False})
+        events = tc.get("/api/calendar").json()["events"]
+        parades = [e for e in events if e["title"] == "Parade"]
+        assert len(parades) == 1                 # still rendered once, not dropped
+        assert parades[0]["color"] == "#0f0"     # the VISIBLE (google) copy won
+
+
+def test_calendar_status_agg_surfaces_a_sustained_degraded_source(tmp_path, monkeypatch):
+    # Google ok + iCloud stuck on a persistent NON-auth error (already past the
+    # sustained threshold). The aggregate stays ok (Google renders) but carries
+    # degraded so the wall warns the family that calendar may be behind.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status",
+                          {"ok": False, "error": "connection reset", "sustained": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert status.get("degraded") is True
+        assert not status.get("needs_auth")
+
+
+def test_calendar_status_agg_ignores_a_disabled_sustained_source(tmp_path, monkeypatch):
+    # A stale sustained flag on a DISABLED iCloud must not nag the family about a
+    # calendar they turned off — disabling drops it from the aggregated sources.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status",
+                          {"ok": False, "error": "connection reset", "sustained": True})
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": False})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert not status.get("degraded")
+
+
+def test_calendar_status_agg_needs_auth_wins_over_degraded(tmp_path, monkeypatch):
+    # If a source both needs auth AND is sustained, reconnect is the louder,
+    # actionable signal — the banner must not downgrade it to a generic "trouble".
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status",
+                          {"ok": False, "needs_auth": True, "sustained": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status.get("needs_auth") is True
+        assert not status.get("degraded")
+
+
+def test_calendar_status_agg_healthy_setup_has_no_reconnect_flag(tmp_path, monkeypatch):
+    # A fully-healthy mixed setup must NOT carry needs_auth, or the wall would
+    # show a spurious "sign-in expired" banner on a perfectly connected calendar.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status", {"ok": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert not status.get("needs_auth")
+        assert not status.get("degraded")
+
+
+def test_disabling_ics_calendar_hides_its_events(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "holidays", "kind": "ics", "label": "Holidays", "url": "http://x/h.ics"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        appmod.fdb.replace_events(c, [{"id": "e1", "calendar_id": "holidays",
+            "title": "Holiday", "start_ts": f"{soon}T00:00:00",
+            "end_ts": f"{soon}T23:59:00", "all_day": 0}])
+        assert any(e["title"] == "Holiday"
+                   for e in tc.get("/api/calendar").json()["events"])
+        tc.patch("/api/integrations/ics_calendar", json={"enabled": False})
+        assert all(e["title"] != "Holiday"
+                   for e in tc.get("/api/calendar").json()["events"])
+
+
+def test_integration_status_error_and_ics_not_shared(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "g", "kind": "google", "label": "G"},
+        {"id": "i", "kind": "ics", "label": "I", "url": "http://x"}]})
+    with TestClient(appmod.app) as tc:
+        appmod.fdb.kv_set(appmod._db(), "calendar_status", {"ok": False, "error": "boom"})
+        integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert integ["google_calendar"]["status"] == "error"
+        assert integ["ics_calendar"]["status"] is None   # ICS doesn't inherit it
+
+
+def test_caldav_events_hidden_without_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:x",
+            "title": "Stale", "start_ts": f"{soon}T10:00:00",
+            "end_ts": f"{soon}T11:00:00", "all_day": 0}])
+        # no credentials -> cached CalDAV events are hidden, not shown stale
+        assert all(e["title"] != "Stale"
+                   for e in tc.get("/api/calendar").json()["events"])
+
+
+def test_caldav_credentials_endpoints_never_leak_the_password(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        ids = lambda: {i["id"] for i in tc.get("/api/integrations").json()["integrations"]}
+        assert "icloud_caldav" not in ids()                       # not configured yet
+        r = tc.post("/api/integrations/icloud_caldav/credentials",
+                    json={"user": "bot@icloud.com", "app_password": "abcd-efgh"})
+        assert r.status_code == 200 and r.json()["user"] == "bot@icloud.com"
+        assert "abcd-efgh" not in r.text                          # password NEVER returned
+        # now available, account shown, password still never exposed
+        integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert integ["icloud_caldav"]["account"] == "bot@icloud.com"
+        assert "abcd-efgh" not in tc.get("/api/integrations").text
+        assert tc.post("/api/integrations/icloud_caldav/credentials",
+                       json={"user": "x", "app_password": ""}).status_code == 422
+        assert tc.delete("/api/integrations/icloud_caldav/credentials").json()["ok"] is True
+        assert "icloud_caldav" not in ids()                       # disconnected
+
+
+def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        assert tc.post("/api/integrations/icloud_caldav/test").json() \
+            == {"ok": False, "error": "no credentials"}
+
+    class _Fake:
+        def configured(self):
+            return True
+
+        def discover(self):
+            return [{"id": "cal", "name": "F", "comp": "VEVENT", "color": None}]
+
+        def fetch_ics(self, col, lo, hi):
+            return [{"href": "h", "etag": "e", "ics":
+                     "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:u1\r\n"
+                     "SUMMARY:E\r\nDTSTART;VALUE=DATE:20260820\r\n"
+                     "DTEND;VALUE=DATE:20260821\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"}]
+
+        def fetch_todos(self, col):
+            return []
+    monkeypatch.setattr(appmod, "_get_caldav_client", lambda: _Fake())
+    with TestClient(appmod.app) as tc:
+        st = tc.post("/api/integrations/icloud_caldav/test").json()
+        assert st["ok"] is True and st["events"] == 1
+
+
+def test_caldav_readonly_mode_toggle(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        get = lambda: {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert get()["icloud_caldav"]["readonly"] is True         # defaults to 1-way
+        assert tc.patch("/api/integrations/icloud_caldav",
+                        json={"readonly": False}).json()["readonly"] is False
+        assert get()["icloud_caldav"]["readonly"] is False         # 2-way persisted
+        # a plain enable toggle doesn't reset the mode
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": True})
+        assert get()["icloud_caldav"]["readonly"] is False
+
+
+def test_caldav_collection_picker_hides_calendar_and_reminders(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        appmod.fdb.upsert_caldav_collection(c, "caldav:fam", "VEVENT", "Family", "#FF0000", "t")
+        appmod.fdb.upsert_caldav_collection(c, "caldav:groc", "VTODO", "Groceries", None, "t")
+        appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:fam",
+            "title": "Dentist", "start_ts": f"{soon}T10:00:00",
+            "end_ts": f"{soon}T11:00:00", "all_day": 0}])
+        _seed_reminder_object(appmod, c, "caldav:groc", "r1", "Buy milk",
+                              seed_collection=False)   # groc collection seeded above
+        # picker lists both, enabled; event + reminder show
+        cols = {x["id"]: x for x in tc.get(
+            "/api/integrations/icloud_caldav/collections").json()["collections"]}
+        assert cols["caldav:fam"]["name"] == "Family" and cols["caldav:fam"]["enabled"] is True
+        assert cols["caldav:groc"]["comp_type"] == "VTODO"
+        assert any(e["title"] == "Dentist" for e in tc.get("/api/calendar").json()["events"])
+        assert [r["title"] for r in tc.get("/api/reminders").json()["buckets"]["no_date"]] == ["Buy milk"]
+        # uncheck the calendar -> its events hide (cache kept); uncheck the list -> reminders hide
+        assert tc.patch("/api/integrations/icloud_caldav/collections/caldav:fam",
+                        json={"enabled": False}).json()["enabled"] is False
+        tc.patch("/api/integrations/icloud_caldav/collections/caldav:groc", json={"enabled": False})
+        assert all(e["title"] != "Dentist" for e in tc.get("/api/calendar").json()["events"])
+        assert tc.get("/api/reminders").json()["buckets"]["no_date"] == []
+        # unknown collection -> 404
+        assert tc.patch("/api/integrations/icloud_caldav/collections/caldav:nope",
+                        json={"enabled": False}).status_code == 404
+
+
+def test_calendar_status_clears_when_icloud_connected_even_if_google_isnt(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendars": [{"id": "g", "kind": "google", "label": "G"}]})
+    with TestClient(appmod.app) as tc:
+        # Google unconfigured (no token), but iCloud synced ok -> no "not connected"
+        appmod.fdb.kv_set(appmod._db(), "caldav_status", {"ok": True})
+        assert tc.get("/api/hub").json()["calendar"]["status"]["ok"] is True
+
+
+def test_calendar_status_not_configured_when_nothing_connected(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})   # no google/ics, no caldav
+    with TestClient(appmod.app) as tc:
+        st = tc.get("/api/hub").json()["calendar"]["status"]
+        assert st["ok"] is False and "not configured" in st.get("error", "")
+
+
+def test_todo_source_setting(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        assert tc.get("/api/hub").json()["todo_source"] == "local"        # default
+        assert tc.patch("/api/todo-source", json={"source": "icloud"}).json()["source"] == "icloud"
+        assert tc.get("/api/hub").json()["todo_source"] == "icloud"
+        assert tc.patch("/api/todo-source", json={"source": "nope"}).status_code == 422
+        assert tc.patch("/api/todo-source", json={"source": "local"}).json()["source"] == "local"
+
+
+# --- two-way iCloud reminder writes (toggle / add / delete) ---------------
+
+_RVTODO = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t1\r\n"
+           "SUMMARY:Buy milk\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n"
+           "END:VCALENDAR\r\n")
+
+
+def _caldav_env(monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "abcd-efgh")
+
+
+def _seed_reminder(tmp_path, readonly):
+    """Seed the same DB file the app uses: a writable/read-only CalDAV integration,
+    one reminder list, and one open reminder (pulled + cached)."""
+    from family_hub import reminders as remlogic
+    c = fdb.connect(str(tmp_path / "hub.db"))
+    fdb.ensure_schema(c)
+    fdb.seed_integration(c, "icloud_caldav", "caldav")
+    fdb.set_integration_config(c, "icloud_caldav", {"readonly": readonly})
+    fdb.upsert_caldav_collection(c, "caldav:rem", "VTODO", "Groceries", None,
+                                 "2026-08-17T00:00:00")
+    fdb.upsert_cal_object_synced(c, {
+        "id": "caldav:rem/t1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "href": "h/rem/0", "etag": "e0", "summary": "Buy milk",
+        "raw_ics": _RVTODO, "sequence": 0, "last_modified": None})
+    fdb.kv_set(c, "caldav_reminders",
+               remlogic.parse_vtodo(_RVTODO, "caldav:rem", "Groceries"))
+    c.close()
+
+
+def _titles(buckets):
+    return [x["title"] for b in buckets.values() for x in b]
+
+
+def test_reminder_toggle_completes_via_overlay(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        full = tc.get("/api/reminders").json()
+        assert full["writable"] is True and "Buy milk" in _titles(full["buckets"])
+        r = tc.post("/api/reminders/toggle",
+                    json={"id": "caldav:rem/t1", "completed": True})
+        assert r.status_code == 200 and r.json()["completed"] is True
+        # overlay: a completed reminder drops out of the open buckets at once
+        assert "Buy milk" not in _titles(tc.get("/api/reminders").json()["buckets"])
+        # ...and the object is queued for the next push
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:rem/t1")["sync_state"] == "PENDING_UPDATE"
+        c.close()
+
+
+def test_reminder_add_appears_in_overlay_and_queues_create(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/add",
+                    json={"list_id": "caldav:rem", "title": "Eggs"})
+        assert r.status_code == 200
+        oid = r.json()["id"]
+        assert "Eggs" in _titles(tc.get("/api/reminders").json()["buckets"])
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, oid)["sync_state"] == "PENDING_CREATE"
+        c.close()
+
+
+def test_reminder_delete_removes_from_overlay(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/delete", json={"id": "caldav:rem/t1"})
+        assert r.status_code == 200 and r.json()["deleted"] is True
+        assert "Buy milk" not in _titles(tc.get("/api/reminders").json()["buckets"])
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:rem/t1")["sync_state"] == "PENDING_DELETE"
+        c.close()
+
+
+def test_reminder_write_refused_when_readonly(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=True)      # 1-way (default)
+        assert tc.get("/api/reminders").json()["writable"] is False
+        r = tc.post("/api/reminders/toggle",
+                    json={"id": "caldav:rem/t1", "completed": True})
+        assert r.status_code == 409                  # loud refusal, not a no-op
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:rem/t1")["sync_state"] == "SYNCED"
+        c.close()
+
+
+def test_reminder_add_bad_due_is_422(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/add",
+                    json={"list_id": "caldav:rem", "title": "X", "due": "not-a-date"})
+        assert r.status_code == 422
+
+
+def test_reminder_toggle_unknown_id_is_404(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/toggle",
+                    json={"id": "caldav:rem/nope", "completed": True})
+        assert r.status_code == 404
+
+
+def test_hub_exposes_reminder_lists_and_writable(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        body = tc.get("/api/hub").json()
+        assert body["reminders_writable"] is True
+        assert {"id": "caldav:rem", "name": "Groceries"} in body["reminder_lists"]
+        # a disabled list drops out of the add targets
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        fdb.set_caldav_collection_enabled(c, "caldav:rem", False)
+        c.close()
+        assert tc.get("/api/hub").json()["reminder_lists"] == []
+
+
+def test_disabled_list_hides_pulled_and_pending_reminders(tmp_path, monkeypatch):
+    """A reminder list unchecked in the picker hides BOTH its synced reminders and
+    any un-pushed wall edit queued for it (the render filters by collection before
+    parsing, so a PENDING create for a disabled list can't leak into the view)."""
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)                 # caldav:rem, "Buy milk"
+        tc.post("/api/reminders/add", json={"list_id": "caldav:rem", "title": "Eggs"})
+        before = _titles(tc.get("/api/reminders").json()["buckets"])
+        assert "Buy milk" in before and "Eggs" in before         # pulled + PENDING create
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        fdb.set_caldav_collection_enabled(c, "caldav:rem", False)
+        c.close()
+        after = _titles(tc.get("/api/reminders").json()["buckets"])
+        assert "Buy milk" not in after and "Eggs" not in after   # both hidden
+
+
+def test_disconnect_resets_icloud_todo_source(tmp_path, monkeypatch):
+    """Clearing iCloud creds while the To-Do surface points at iCloud resets it to
+    local — otherwise the surface strands on an empty iCloud card with the source
+    picker (its only escape) hidden."""
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        appmod.fdb.kv_set(appmod._db(), "todo_source", "icloud")
+        assert tc.delete("/api/integrations/icloud_caldav/credentials").status_code == 200
+        assert appmod.fdb.kv_get(appmod._db(), "todo_source") == "local"

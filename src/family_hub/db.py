@@ -14,10 +14,10 @@ from typing import Any
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people(
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS chores(
-  id INTEGER PRIMARY KEY, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+  id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
   schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
   days_mask INTEGER NOT NULL DEFAULT 0,
   assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
@@ -38,11 +38,12 @@ CREATE TABLE IF NOT EXISTS occurrence_log(
   rot INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(date, chore_id));
 CREATE TABLE IF NOT EXISTS events(
-  id TEXT PRIMARY KEY, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
+  id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
   start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
   updated TEXT,
   location TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
-  color_id TEXT);
+  color_id TEXT,
+  PRIMARY KEY(calendar_id, id));
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS todos(
   id INTEGER PRIMARY KEY,
@@ -51,6 +52,56 @@ CREATE TABLE IF NOT EXISTS todos(
   created_at TEXT NOT NULL,
   done_at TEXT,
   done_date TEXT);
+-- Integrations registry: the runtime on/off state for each togglable data
+-- source / tile ("extension"). The set of AVAILABLE integrations is computed
+-- from config/env (integrations.available_integrations); this table only holds
+-- the operator's enable/disable overlay, seeded enabled so an existing install
+-- is unchanged. config_json is reserved for per-integration settings.
+CREATE TABLE IF NOT EXISTS integrations(
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL);
+-- CalDAV object store (the two-way foundation, TECHNICAL_DESIGN §5.1 / spec §5.2
+-- / Fable rec 1). One row per iCloud VEVENT/VTODO OBJECT (not per expanded
+-- occurrence), carrying the round-trip essentials writes need: uid + href +
+-- etag/base_etag (optimistic concurrency), raw_ics (C1 fidelity), sequence, and
+-- a sync_state outbox column. The read path still renders from `events`/kv for
+-- now; this store is written from the first pull so a later write slice lands on
+-- data that can already round-trip. sync_state: SYNCED | PENDING_CREATE |
+-- PENDING_UPDATE | PENDING_DELETE.
+CREATE TABLE IF NOT EXISTS cal_objects(
+  id TEXT PRIMARY KEY,               -- collection_id + '/' + uid
+  collection_id TEXT NOT NULL,       -- 'caldav:<slug>'
+  comp_type TEXT NOT NULL,           -- 'VEVENT' | 'VTODO'
+  uid TEXT NOT NULL,
+  href TEXT,                         -- server resource URL (PUT/DELETE target)
+  etag TEXT,                         -- last known server ETag
+  base_etag TEXT,                    -- ETag a local edit was based on (If-Match)
+  summary TEXT NOT NULL DEFAULT '',
+  raw_ics TEXT,                      -- round-trip fidelity (C1)
+  sequence INTEGER NOT NULL DEFAULT 0,
+  last_modified TEXT,
+  sync_state TEXT NOT NULL DEFAULT 'SYNCED',
+  local_modified_at TEXT,
+  sync_attempts INTEGER NOT NULL DEFAULT 0,
+  last_sync_error TEXT);
+-- Discovered CalDAV collections (Fable rec 2). One row per iCloud calendar /
+-- reminders list, so the settings "calendar picker" has a persistent per-
+-- collection visibility toggle (`enabled`) that survives sync, plus the metadata
+-- the wall renders (display_name/color). ctag/sync_token are reserved for future
+-- change detection.
+CREATE TABLE IF NOT EXISTS caldav_collections(
+  id TEXT PRIMARY KEY,               -- 'caldav:<slug>'
+  comp_type TEXT NOT NULL,           -- 'VEVENT' | 'VTODO'
+  display_name TEXT NOT NULL DEFAULT '',
+  color TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  ctag TEXT,
+  sync_token TEXT,
+  last_seen_at TEXT);
 """
 
 # Columns a caller may set through update_person / add_chore validation.
@@ -70,6 +121,10 @@ def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # With per-thread connections (app._db) and the background sync thread, more
+    # than one connection writes the same file. Give SQLite a busy timeout so a
+    # writer waits for the lock instead of failing "database is locked" at once.
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
@@ -85,6 +140,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         if col not in existing:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col} {ddl}")
     conn.commit()
+    # 2026-08-16: events used a bare `id` PRIMARY KEY, but Google reuses one
+    # event's id across every calendar it appears on, so the same event on two
+    # configured family calendars produced a duplicate-id INSERT that aborted
+    # the whole sync (issue #30). Rebuild with PRIMARY KEY(calendar_id, id) so
+    # cross-calendar copies coexist. A DB created before this keeps its old PK
+    # (CREATE TABLE IF NOT EXISTS never rewrites it) -> detect and rebuild.
+    ev_pk = {r["name"]: r["pk"]
+             for r in conn.execute("PRAGMA table_info(events)")}
+    if ev_pk and ev_pk.get("id", 0) > 0 and ev_pk.get("calendar_id", 0) == 0:
+        _rebuild_events_composite_pk(conn)
     # 2026-08-15: completions used to FK-reference chores(id), which made
     # deleting a chore impossible without also purging its history. Frozen
     # history keeps those rows, so rebuild the table without that FK.
@@ -101,6 +166,34 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if chores_sql and "'once'" not in chores_sql["sql"]:
         _widen_chore_schedule_check(conn)
+    # 2026-08-16: people/chores used INTEGER PRIMARY KEY without AUTOINCREMENT,
+    # so SQLite reused a deleted row's id. completions/occurrence_log deliberately
+    # keep frozen-history rows keyed by that id, so a new person/chore silently
+    # inherited a deleted one's history (issue #31). Rebuild with AUTOINCREMENT so
+    # ids are never reused. A DB created before this keeps its old id column, and
+    # so does one the chores-widen rebuild just produced -> detect and rebuild.
+    _people_ai = """CREATE TABLE people_new(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)"""
+    _chores_ai = """CREATE TABLE chores_new(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+      icon TEXT NOT NULL DEFAULT '',
+      schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+      days_mask INTEGER NOT NULL DEFAULT 0,
+      assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+      fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+      rotation_epoch TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)"""
+    for tbl, ddl, cols in (
+            ("people", _people_ai, "id, name, color, sort, active"),
+            ("chores", _chores_ai,
+             "id, title, icon, schedule_kind, days_mask, assign_kind, "
+             "fixed_person_id, rotation_order, rotation_epoch, sort, active")):
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (tbl,)).fetchone()
+        if row and "AUTOINCREMENT" not in row["sql"].upper():
+            _rebuild_with_autoincrement(conn, tbl, ddl, cols)
 
 
 def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
@@ -179,6 +272,77 @@ def _widen_chore_schedule_check(conn: sqlite3.Connection) -> None:
           FROM chores""")
         conn.execute("DROP TABLE chores")
         conn.execute("ALTER TABLE chores_new RENAME TO chores")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
+
+
+def _rebuild_events_composite_pk(conn: sqlite3.Connection) -> None:
+    """Rebuild `events` with PRIMARY KEY(calendar_id, id) instead of a bare `id`
+    PK, so the same event id on two configured calendars no longer collides
+    (issue #30). Same atomic-rebuild contract as _drop_completions_chore_fk: an
+    interrupted rebuild rolls back whole and the next boot retries from a clean
+    slate, and the leading DROP IF EXISTS clears any events_new stranded by a
+    prior crash. Old rows carried a globally-unique id, so no dedup is needed."""
+    prior_iso = conn.isolation_level
+    try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute("DROP TABLE IF EXISTS events_new")
+        conn.execute("""CREATE TABLE events_new(
+          id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
+          start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
+          updated TEXT,
+          location TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+          color_id TEXT,
+          PRIMARY KEY(calendar_id, id))""")
+        conn.execute("""INSERT INTO events_new(
+          id, calendar_id, title, start_ts, end_ts, all_day, updated,
+          location, description, color_id)
+          SELECT id, calendar_id, title, start_ts, end_ts, all_day, updated,
+          location, description, color_id FROM events""")
+        conn.execute("DROP TABLE events")
+        conn.execute("ALTER TABLE events_new RENAME TO events")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
+
+
+def _rebuild_with_autoincrement(conn: sqlite3.Connection, table: str,
+                                create_ddl: str, cols: str) -> None:
+    """Rebuild `table` (people/chores) so its INTEGER PRIMARY KEY is
+    AUTOINCREMENT, preserving every row and its id (issue #31). `create_ddl` must
+    create `<table>_new`; `cols` is the shared column list. Same atomic-rebuild
+    contract as the other helpers. After the swap the AUTOINCREMENT counter
+    (sqlite_sequence) is pinned to the max preserved id, so the next insert is
+    max+1 and never a reused id — independent of whether this SQLite propagates
+    sqlite_sequence across the RENAME."""
+    prior_iso = conn.isolation_level
+    try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute(f"DROP TABLE IF EXISTS {table}_new")
+        conn.execute(create_ddl)                       # creates <table>_new (AUTOINCREMENT)
+        conn.execute(f"INSERT INTO {table}_new({cols}) SELECT {cols} FROM {table}")
+        conn.execute(f"DROP TABLE {table}")
+        conn.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+        conn.execute("DELETE FROM sqlite_sequence WHERE name IN (?, ?)",
+                     (table, f"{table}_new"))
+        conn.execute(
+            "INSERT INTO sqlite_sequence(name, seq) "
+            f"SELECT ?, COALESCE(MAX(id), 0) FROM {table}", (table,))
         conn.execute("COMMIT")
     except Exception:
         if conn.in_transaction:
@@ -425,26 +589,40 @@ def delete_todo(conn, tid: int) -> None:
 
 # --- events ---------------------------------------------------------------
 
-def replace_events(conn, events: list[dict], keep_ids: tuple = ()) -> None:
-    """Replace the cached window. Sources whose fetch failed this round pass
-    their calendar_ids in keep_ids so their last-good events survive; every
-    other row (including calendars removed from config) is replaced."""
+def _replace_events(conn, events: list[dict], scope_sql: str,
+                    keep_ids: tuple) -> None:
+    """Replace the cached events within one SOURCE scope (a WHERE clause on
+    calendar_id) so the Google/ICS sync and the CalDAV sync never delete each
+    other's rows in the shared table. keep_ids preserves a source whose fetch
+    failed this round. OR REPLACE: the PK is (calendar_id, id), so cross-calendar
+    copies coexist and an in-batch duplicate replaces rather than aborting."""
     with conn:  # one transaction
         if keep_ids:
             q = ",".join("?" * len(keep_ids))
             conn.execute(
-                f"DELETE FROM events WHERE calendar_id NOT IN ({q})",
-                tuple(keep_ids))
+                f"DELETE FROM events WHERE ({scope_sql}) "
+                f"AND calendar_id NOT IN ({q})", tuple(keep_ids))
         else:
-            conn.execute("DELETE FROM events")
+            conn.execute(f"DELETE FROM events WHERE {scope_sql}")
         conn.executemany(
-            "INSERT INTO events(id, calendar_id, title, start_ts, end_ts, "
-            "all_day, updated, location, description, color_id) "
+            "INSERT OR REPLACE INTO events(id, calendar_id, title, start_ts, "
+            "end_ts, all_day, updated, location, description, color_id) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(e["id"], e["calendar_id"], e["title"], e["start_ts"],
               e["end_ts"], e["all_day"], e.get("updated"),
               e.get("location", ""), e.get("description", ""),
               e.get("color_id")) for e in events])
+
+
+def replace_events(conn, events: list[dict], keep_ids: tuple = ()) -> None:
+    """Replace the config-sourced (Google/ICS) cached window. CalDAV rows
+    (calendar_id 'caldav:%') are managed separately and left untouched."""
+    _replace_events(conn, events, "calendar_id NOT LIKE 'caldav:%'", keep_ids)
+
+
+def replace_events_caldav(conn, events: list[dict], keep_ids: tuple = ()) -> None:
+    """Replace the CalDAV (iCloud) cached window only; Google/ICS rows survive."""
+    _replace_events(conn, events, "calendar_id LIKE 'caldav:%'", keep_ids)
 
 
 def list_events(conn) -> list[dict]:
@@ -471,3 +649,261 @@ def kv_set(conn, key: str, value: Any) -> None:
     conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
                  (key, json.dumps(value)))
     conn.commit()
+
+
+# --- integrations ---------------------------------------------------------
+
+def seed_integration(conn, iid: str, kind: str, sort: int = 0) -> None:
+    """Insert an integration row if absent (default enabled). Idempotent, so a
+    re-seed on startup never flips an operator's existing toggle."""
+    conn.execute(
+        "INSERT OR IGNORE INTO integrations(id, kind, enabled, config_json, "
+        "sort, created_at) VALUES(?, ?, 1, '{}', ?, ?)",
+        (iid, kind, sort, _now_iso()))
+    conn.commit()
+
+
+def list_integrations(conn) -> list[dict]:
+    rows = conn.execute("SELECT * FROM integrations ORDER BY sort, id")
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["config"] = json.loads(d.pop("config_json") or "{}")
+        except Exception:
+            d["config"] = {}
+        d["enabled"] = bool(d["enabled"])
+        out.append(d)
+    return out
+
+
+def integration_enabled(conn, iid: str, default: bool = True) -> bool:
+    """Enabled state for one integration; `default` when it has no row yet (an
+    unseeded integration reads as enabled, so gating never hides a source the
+    operator has not explicitly turned off)."""
+    row = conn.execute(
+        "SELECT enabled FROM integrations WHERE id = ?", (iid,)).fetchone()
+    return default if row is None else bool(row["enabled"])
+
+
+def set_integration_enabled(conn, iid: str, enabled: bool) -> bool:
+    """Toggle an integration. Returns False if no such row (caller seeds first)."""
+    cur = conn.execute("UPDATE integrations SET enabled = ? WHERE id = ?",
+                       (1 if enabled else 0, iid))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+# --- caldav object store (two-way foundation) -----------------------------
+
+def upsert_cal_object_synced(conn, obj: dict, force: bool = False) -> None:
+    """Store an object pulled from the server as SYNCED. By default NEVER
+    overwrites a row that has un-pushed local changes (sync_state PENDING_*), so
+    a routine pull can't stomp a queued edit. `force=True` is the conflict
+    resolver's server-wins path: a 412 means the server changed under our edit, so
+    we deliberately adopt the server copy over the losing local edit. base_etag is
+    set to the server etag (the base a future edit builds on)."""
+    row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
+                       (obj["id"],)).fetchone()
+    if row is not None and row["sync_state"] != "SYNCED" and not force:
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "
+        "href, etag, base_etag, summary, raw_ics, sequence, last_modified, "
+        "sync_state) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SYNCED')",
+        (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
+         obj.get("href"), obj.get("etag"), obj.get("etag"),
+         obj.get("summary", ""), obj.get("raw_ics"),
+         int(obj.get("sequence") or 0), obj.get("last_modified")))
+    conn.commit()
+
+
+def list_cal_objects(conn, comp_type: str | None = None) -> list[dict]:
+    if comp_type:
+        rows = conn.execute(
+            "SELECT * FROM cal_objects WHERE comp_type = ? ORDER BY id",
+            (comp_type,))
+    else:
+        rows = conn.execute("SELECT * FROM cal_objects ORDER BY id")
+    return [dict(r) for r in rows]
+
+
+def prune_cal_objects(conn, collection_id: str, keep_ids) -> None:
+    """Drop SYNCED objects in a collection not seen this pull (deleted remotely).
+    Keeps PENDING_* rows (un-pushed local work)."""
+    keep = tuple(keep_ids)
+    with conn:
+        if keep:
+            q = ",".join("?" * len(keep))
+            conn.execute(
+                f"DELETE FROM cal_objects WHERE collection_id = ? "
+                f"AND sync_state = 'SYNCED' AND id NOT IN ({q})",
+                (collection_id, *keep))
+        else:
+            conn.execute(
+                "DELETE FROM cal_objects WHERE collection_id = ? "
+                "AND sync_state = 'SYNCED'", (collection_id,))
+
+
+def caldav_pending(conn) -> list[dict]:
+    """The outbox: objects with un-pushed local changes, oldest first (the write
+    slice flushes these to iCloud)."""
+    rows = conn.execute(
+        "SELECT * FROM cal_objects WHERE sync_state != 'SYNCED' "
+        "ORDER BY local_modified_at, id")
+    return [dict(r) for r in rows]
+
+
+def get_cal_object(conn, oid: str) -> dict | None:
+    row = conn.execute("SELECT * FROM cal_objects WHERE id = ?", (oid,)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def queue_cal_object_update(conn, oid: str, raw_ics: str, summary: str,
+                            now_iso: str) -> bool:
+    """Mark an existing pulled object as edited-locally (PENDING_UPDATE) so the
+    next sync PUTs it. Keeps base_etag (the If-Match the push builds on). No-op
+    (returns False) if the row is gone. A row already mid-create (PENDING_CREATE)
+    stays a create — we only overwrite its body — so a quick edit after add
+    doesn't turn into an update against a server object that doesn't exist yet."""
+    row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
+                       (oid,)).fetchone()
+    if row is None:
+        return False
+    state = "PENDING_CREATE" if row["sync_state"] == "PENDING_CREATE" \
+        else "PENDING_UPDATE"
+    conn.execute(
+        "UPDATE cal_objects SET raw_ics = ?, summary = ?, sync_state = ?, "
+        "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL "
+        "WHERE id = ?", (raw_ics, summary, state, now_iso, oid))
+    conn.commit()
+    return True
+
+
+def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
+    """Insert a wall-created object as PENDING_CREATE (no href/etag yet — the push
+    assigns them)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "
+        "href, etag, base_etag, summary, raw_ics, sequence, sync_state, "
+        "local_modified_at) VALUES(?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 0, "
+        "'PENDING_CREATE', ?)",
+        (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
+         obj.get("summary", ""), obj.get("raw_ics"), now_iso))
+    conn.commit()
+
+
+def queue_cal_object_delete(conn, oid: str, now_iso: str) -> bool:
+    """Queue a delete. If the object was never pushed (PENDING_CREATE), just drop
+    the row — there's nothing on the server to DELETE. Otherwise mark
+    PENDING_DELETE so the flush removes it server-side then locally. False if the
+    row is gone already."""
+    row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
+                       (oid,)).fetchone()
+    if row is None:
+        return False
+    if row["sync_state"] == "PENDING_CREATE":
+        conn.execute("DELETE FROM cal_objects WHERE id = ?", (oid,))
+    else:
+        conn.execute(
+            "UPDATE cal_objects SET sync_state = 'PENDING_DELETE', "
+            "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL "
+            "WHERE id = ?", (now_iso, oid))
+    conn.commit()
+    return True
+
+
+def mark_cal_object_pushed(conn, oid: str, href, etag) -> None:
+    """After a successful PUT: adopt the server href/etag and go back to SYNCED
+    (base_etag = etag, the base the next edit builds on)."""
+    conn.execute(
+        "UPDATE cal_objects SET href = ?, etag = ?, base_etag = ?, "
+        "sync_state = 'SYNCED', sync_attempts = 0, last_sync_error = NULL "
+        "WHERE id = ?", (href, etag, etag, oid))
+    conn.commit()
+
+
+def delete_cal_object_row(conn, oid: str) -> None:
+    """Remove a row outright (after a successful server DELETE)."""
+    conn.execute("DELETE FROM cal_objects WHERE id = ?", (oid,))
+    conn.commit()
+
+
+def record_cal_object_error(conn, oid: str, err: str, now_iso: str) -> None:
+    """A push failed: keep the row PENDING, bump the attempt count and record the
+    error so it retries next sync and the operator can see why it's stuck."""
+    conn.execute(
+        "UPDATE cal_objects SET sync_attempts = sync_attempts + 1, "
+        "last_sync_error = ?, local_modified_at = COALESCE(local_modified_at, ?) "
+        "WHERE id = ?", (err[:500], now_iso, oid))
+    conn.commit()
+
+
+def integration_config(conn, iid: str) -> dict:
+    """Per-integration JSON config (e.g. CalDAV's readonly / 1-way vs 2-way)."""
+    row = conn.execute("SELECT config_json FROM integrations WHERE id = ?",
+                       (iid,)).fetchone()
+    if row is None:
+        return {}
+    try:
+        return json.loads(row["config_json"] or "{}")
+    except Exception:
+        return {}
+
+
+def set_integration_config(conn, iid: str, config: dict) -> None:
+    """Persist an integration's JSON config. Raises if the integration has no row
+    (seed it first) rather than silently dropping the write — a swallowed config
+    update is how a 'two-way' toggle would appear to save yet never take effect."""
+    cur = conn.execute("UPDATE integrations SET config_json = ? WHERE id = ?",
+                        (json.dumps(config), iid))
+    conn.commit()
+    if cur.rowcount == 0:
+        raise KeyError(f"no integration row {iid!r} (seed it before set config)")
+
+
+# --- caldav collections (the calendar picker) -----------------------------
+
+def upsert_caldav_collection(conn, cid: str, comp_type: str, name: str,
+                             color, now_iso: str) -> None:
+    """Record a discovered collection. Inserts new ones ENABLED; on re-discovery
+    updates metadata (name/color/last_seen) but NEVER the enabled toggle, so the
+    operator's picker choice survives every sync."""
+    conn.execute(
+        "INSERT OR IGNORE INTO caldav_collections(id, comp_type, display_name, "
+        "color, enabled, last_seen_at) VALUES(?, ?, ?, ?, 1, ?)",
+        (cid, comp_type, name, color, now_iso))
+    conn.execute(
+        "UPDATE caldav_collections SET comp_type = ?, display_name = ?, "
+        "color = ?, last_seen_at = ? WHERE id = ?",
+        (comp_type, name, color, now_iso, cid))
+    conn.commit()
+
+
+def list_caldav_collections(conn, comp_type: str | None = None) -> list[dict]:
+    if comp_type:
+        rows = conn.execute(
+            "SELECT * FROM caldav_collections WHERE comp_type = ? "
+            "ORDER BY display_name, id", (comp_type,))
+    else:
+        rows = conn.execute(
+            "SELECT * FROM caldav_collections ORDER BY display_name, id")
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["enabled"] = bool(d["enabled"])
+        out.append(d)
+    return out
+
+
+def caldav_collection_enabled(conn, cid: str, default: bool = True) -> bool:
+    row = conn.execute(
+        "SELECT enabled FROM caldav_collections WHERE id = ?", (cid,)).fetchone()
+    return default if row is None else bool(row["enabled"])
+
+
+def set_caldav_collection_enabled(conn, cid: str, enabled: bool) -> bool:
+    cur = conn.execute("UPDATE caldav_collections SET enabled = ? WHERE id = ?",
+                       (1 if enabled else 0, cid))
+    conn.commit()
+    return cur.rowcount > 0

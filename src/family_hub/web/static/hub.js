@@ -10,17 +10,46 @@ const CAM_PROBE_MS = 30000;
 const CAM_HD_POLL_MS = 700;   // HD-twin liveness RETRY cadence (first check fires immediately)
 const CAM_HD_TRIES = 12;      // ~8s budget, then give up and keep the warm stream
 const CAM_HD_FADE_MS = 450;   // drop the base after the cross-fade; keep > the .cam-hd-upgrade CSS transition (0.4s)
+// Per-attempt timeout for the HD reveal probe: well under J_TIMEOUT_MS (common.js,
+// 12s) on purpose. revealHdWhenLive's own ~8s give-up budget (CAM_HD_TRIES x
+// CAM_HD_POLL_MS) assumes each attempt resolves quickly; a wedged HD producer
+// hanging every attempt for the full 12s would balloon that to minutes instead
+// of ~8s, so this is deliberately scoped short relative to the retry loop
+// while staying well above the "returns a frame in about a second" happy path.
+const CAM_HD_PROBE_TIMEOUT_MS = 3000;
 
 let links = {};
 let weatherData = null;   // last /api/tiles/weather payload (native weather card)
 let climateData = null;   // last /api/tiles/climate payload (native climate card)
 let weatherFails = 0;     // consecutive weather fetch failures (see fetchWeather)
 let climateFails = 0;     // consecutive climate fetch failures (see fetchClimate)
+let lastIntegrations = [];  // last /api/hub integrations block (settings toggles)
 const TILE_FAIL_LIMIT = 3;   // keep the last good card until this many in a row
 let warnedNoWeatherSlot = false;   // one-time warn: weather_base set, no 'weather' panel
 let warnedNoClimateSlot = false;   // one-time warn: climate_base set, no 'climate' panel
 let lastPeople = [];      // remember done-counts to fire the celebration once
 const celebrated = new Set();
+
+/* Transient iCloud (CalDAV) settings-panel UI state (Settings overlay,
+   Integrations section). Deliberately NEVER the password; that only ever
+   lives in the #caldav-pw-input's own value, read at submit time and sent
+   once. Kept out of poll()'s refresh loop (see renderCaldavPanel) so a
+   Connecting…/Testing… state, a form error, or the last test result doesn't
+   get wiped mid-interaction (or mid-typing) by a background poll tick;
+   it's reset explicitly where that's the right call (disconnect, a fresh
+   Settings-overlay open). `collections` is the Calendars picker's discovered
+   iCloud calendars + reminder lists (fetchCaldavCollections), starting empty
+   until the first fetch resolves - the same empty state a genuinely empty
+   account shows (see caldavCollectionsHtml in common.js), UNLESS
+   `collectionsError` is set: a failed refresh keeps the last list shown
+   (never wipes it to empty on a transient blip) and flags it so the empty
+   state, if the list really is empty, reads as "couldn't load" rather than
+   "you have zero calendars" - same rule fetchCalWindow follows for the main
+   calendar feed. */
+let caldavUi = {
+  connecting: false, testing: false, testResult: null, formError: '',
+  collections: [], collectionsError: false,
+};
 
 /* ----------------------------------------------------------- clock + night */
 
@@ -106,8 +135,16 @@ function eventRow(ev, day) {
 
 /* Agenda list over [startStr, startStr+maxDays). `skipEmptyAfter` keeps the
    home feed compact (empty days beyond tomorrow vanish); the full calendar
-   shows every day. */
-function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
+   shows every day. `win` (optional, the calendar payload's sync window) marks
+   an empty day that falls OUTSIDE it as "not synced" rather than "nothing
+   scheduled": the day browser can page past the synced range (issue #37),
+   and a genuinely free day must stay visually distinct from one Google was
+   never asked about. `win` is optional (not every caller has fetched a
+   calendar payload with a `window` field) and a missing/omitted one simply
+   never marks anything (isDayOutsideWindow fails open): the 5-day home feed
+   passes its own calendar.window too, it just never reaches far enough
+   forward to trip it under the default sync window. */
+function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter, win) {
   const byDay = bucketByDay(events);
   let html = '';
   for (let i = 0; i < maxDays; i++) {
@@ -115,10 +152,13 @@ function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
     const evs = byDay[d] || [];
     if (skipEmptyAfter != null && i >= skipEmptyAfter && evs.length === 0) continue;
     const isToday = d === todayStr;
-    html += `<div class="card cal-day${isToday ? ' is-today' : ''}">`
+    const unsynced = evs.length === 0 && isDayOutsideWindow(d, win);
+    html += `<div class="card cal-day${isToday ? ' is-today' : ''}${unsynced ? ' cal-day-unsynced' : ''}">`
       + dayHeadHtml(d, todayStr)
       + (evs.length ? evs.map((ev) => eventRow(ev, d)).join('')
-        : `<div class="cal-empty">nothing scheduled</div>`)
+        : unsynced
+          ? `<div class="cal-empty">not synced yet — this day is past the synced window</div>`
+          : `<div class="cal-empty">nothing scheduled</div>`)
       + `</div>`;
   }
   return html;
@@ -136,12 +176,13 @@ function calStatusNote(cal) {
    The ⛶ glyph is prepended here, so callers pass clean labels. Every
    config/user-derived value (label, expandLabel, overlay) is escaped — panelHtml
    feeds config-derived p.label / p.id through here. */
-function sectionHead(label, { overlay, expandLabel } = {}) {
+function sectionHead(label, { overlay, expandLabel, chip } = {}) {
+  const chipHtml = chip ? `<span class="shead-chip">${escapeHtml(chip)}</span>` : '';
   const act = (overlay && expandLabel)
     ? `<span class="act"><button class="expand" type="button"`
       + ` data-overlay="${escapeHtml(overlay)}">⛶ ${escapeHtml(expandLabel)}</button></span>`
     : '';
-  return `<div class="shead"><span class="tick"></span><h2>${escapeHtml(label)}</h2>${act}</div>`;
+  return `<div class="shead"><span class="tick"></span><h2>${escapeHtml(label)}</h2>${chipHtml}${act}</div>`;
 }
 
 function renderCalendar(data) {
@@ -149,7 +190,7 @@ function renderCalendar(data) {
   document.getElementById('cal').innerHTML =
     sectionHead('Calendar', { overlay: 'calendar', expandLabel: 'Month view' })
     + calStatusNote(data.calendar)
-    + agendaHtml(data.calendar.events, data.date, data.date, 5, 2);
+    + agendaHtml(data.calendar.events, data.date, data.date, 5, 2, data.calendar.window);
 }
 
 /* ---------------------------------------------------- full calendar view */
@@ -174,13 +215,28 @@ async function fetchCalWindow() {
   }
 }
 
-function monthCellHtml(cell, byDay, todayStr) {
+/* `win` (the calendar payload's sync window, optional) marks a cell OUTSIDE it
+   as "not synced" (issue #37): the month view can page arbitrarily far past
+   the range the backend actually caches, and an out-of-window day rendered
+   the same as an in-window free day is a confident-but-wrong "nothing here":
+   the family would trust an empty grid Google actually has events on. Only an
+   in-month, EMPTY, out-of-window cell is marked: same rule as agendaHtml for
+   "empty" (the backend never caches events past its own window, so a stray
+   cached event on an out-of-window day never happens in practice, but this
+   keeps one from rendering under a contradictory "not synced" mark); and
+   `.mg-out` (adjacent-month padding, already opacity-dimmed) is excluded so
+   the mark is never rendered at .mg-out's low opacity, which would make the
+   hatch and caption nearly illegible right where they're least needed (the
+   grid's own filler cells, not the page the family is actually reading). */
+function monthCellHtml(cell, byDay, todayStr, win) {
   const evs = byDay[cell.date] || [];
   const shown = evs.slice(0, 3);
   const more = evs.length - shown.length;
+  const unsynced = cell.inMonth && evs.length === 0 && isDayOutsideWindow(cell.date, win);
   const cls = ['mg-day'];
   if (!cell.inMonth) cls.push('mg-out');
   if (cell.date === todayStr) cls.push('mg-today');
+  if (unsynced) cls.push('mg-unsynced');
   const dayNum = Number(cell.date.slice(8, 10));
   return `<div class="${cls.join(' ')}" data-date="${cell.date}" tabindex="0">`
     + `<span class="mg-num num">${dayNum}</span>`
@@ -189,14 +245,15 @@ function monthCellHtml(cell, byDay, todayStr) {
       + `<span class="mg-dot" style="background:${safeColor(eventColor(ev))}"></span>`
       + `<span class="mg-ev-title">${escapeHtml(ev.title)}</span></span>`).join('')
     + (more > 0 ? `<span class="mg-more">+${more} more</span>` : '')
+    + (unsynced ? `<span class="mg-unsynced-mark">not synced</span>` : '')
     + `</div>`;
 }
 
-function monthHtml(y, m, events, todayStr) {
+function monthHtml(y, m, events, todayStr, win) {
   const byDay = bucketByDay(events);
   const heads = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     .map((d) => `<span class="mg-head">${d}</span>`).join('');
-  const cells = monthGrid(y, m).map((c) => monthCellHtml(c, byDay, todayStr)).join('');
+  const cells = monthGrid(y, m).map((c) => monthCellHtml(c, byDay, todayStr, win)).join('');
   return `<div class="mgrid">${heads}${cells}</div>`;
 }
 
@@ -222,18 +279,19 @@ function renderCalFull() {
   if (!host) return;
   const todayStr = data_date || new Date().toISOString().slice(0, 10);
   const events = (calWin && calWin.events) || [];
+  const win = calWin && calWin.window;   // the backend's actual sync range (issue #37)
   let title = '';
   let body = '';
   if (calState.mode === 'day') {
     title = monthName(calState.y, calState.m);
     body = `<button class="cal-back" type="button" data-calback="1">‹ back to month</button>`
-      + agendaHtml(events, calState.day, todayStr, 1, null);
+      + agendaHtml(events, calState.day, todayStr, 1, null, win);
   } else if (calState.mode === 'agenda') {
     title = monthName(calState.y, calState.m);
-    body = agendaHtml(events, calState.weekStart, todayStr, 7, null);
+    body = agendaHtml(events, calState.weekStart, todayStr, 7, null, win);
   } else {
     title = monthName(calState.y, calState.m);
-    body = monthHtml(calState.y, calState.m, events, todayStr);
+    body = monthHtml(calState.y, calState.m, events, todayStr, win);
   }
   host.innerHTML = calStatusNote(calWin || { status: {} })
     + calNavHtml(title) + `<div class="cal-body">${body}</div>`;
@@ -488,6 +546,15 @@ function renderPeople(data) {
    (operator, 2026-08-14) — separate from the person cards it used to trail. */
 function renderTodoSlot(data) {
   const host = document.getElementById('todo-slot');
+  // The To-Do surface can be backed by the local whiteboard (default) or by
+  // iCloud Reminders (settings picker). Render whichever the operator chose —
+  // but fall back to local if iCloud is no longer available (e.g. disconnected
+  // out-of-band) so it never strands on a reassuring-but-empty iCloud card.
+  const caldavAvail = (data.integrations || []).some((i) => i.id === 'icloud_caldav');
+  if (data.todo_source === 'icloud' && caldavAvail) {
+    host.innerHTML = reminderCardHtml(data.reminders, !!data.reminders_writable);
+    return;
+  }
   // todos_ok===false means the server's todos read/group threw and it shipped
   // empty buckets as a fail-soft. Render a "couldn't load" note, NOT a
   // reassuring empty card the family would read as "all caught up".
@@ -500,7 +567,7 @@ function renderTodoSlot(data) {
    the hub payload every poll; the full view (overlay on the wall, To-Dos tab
    on phones) fetches /api/todos on entry and after its own writes ONLY, so a
    60s poll can never wipe a half-typed add box. */
-const todoState = { data: null, addBucket: 'now', openId: null };
+const todoState = { data: null, reminders: null, source: 'local', addBucket: 'now', openId: null };
 
 function todoRowHtml(t, full) {
   const done = !!t.done_at;
@@ -556,7 +623,139 @@ function todoCardHtml(todos, ok = true) {
     + `</div>`;
 }
 
+/* ------------------------------------------------- iCloud reminders view */
+
+/* The To-Do surface, backed by iCloud Reminders instead of the local list.
+   Reminders arrive already grouped by due (overdue/today/upcoming/no_date) and
+   with completed ones dropped, so every row shown is open. When two-way is on
+   (`writable`) a row is a tap-to-complete control; when it's read-only the same
+   rows render inert — same information, no controls — matching how read-only
+   chores render (look, don't touch). */
+const REM_BUCKETS = [['overdue', 'Overdue'], ['today', 'Today'],
+  ['upcoming', 'Upcoming'], ['no_date', 'No date']];
+
+/* A high-priority reminder gets a single quiet "!" mark (shape + text, never
+   colour alone) so an urgent item stands out on the wall. RFC 5545 priority is
+   1 (highest) .. 9 (lowest); Apple's "High" is 1. Treat 1-4 as high; medium/low
+   stay unmarked to keep the surface calm. */
+function reminderPriHtml(priority) {
+  const p = Number(priority);
+  if (!Number.isFinite(p) || p < 1 || p > 4) return '';
+  return `<span class="rem-pri" title="High priority" aria-label="High priority">!</span>`;
+}
+
+/* The exact due date, shown only where the bucket alone is ambiguous: "upcoming"
+   spans days to weeks, and "overdue" wants the how-long-ago. Today/no_date carry
+   their date in the bucket label already, so they stay clean. */
+function reminderDueHtml(bucket, due) {
+  if (!due || (bucket !== 'upcoming' && bucket !== 'overdue')) return '';
+  return `<span class="rem-due">${escapeHtml(dayLabel(due.slice(0, 10), data_date))}</span>`;
+}
+
+function reminderRowHtml(r, full, writable) {
+  const title = escapeHtml(r.title);
+  const id = escapeHtml(r.id);
+  // title + due + priority ride together in a .todo-body so the meta sits inline
+  // beside the title (not as separate flex children of the row).
+  const body = `<span class="todo-title">${title}</span>`
+    + reminderDueHtml(r.bucket, r.due) + reminderPriHtml(r.priority);
+  if (!full) {
+    // Home card (wall): a compact tap-to-complete row, or an inert one when
+    // read-only. The inert row carries no data-reminder, so a tap no-ops.
+    if (!writable) {
+      return `<div class="todo-row"><span class="todo-check"></span>`
+        + `<span class="todo-body">${body}</span></div>`;
+    }
+    return `<button class="todo-row" type="button" data-reminder="${id}"`
+      + ` aria-label="mark done: ${title}"><span class="todo-check">✓</span>`
+      + `<span class="todo-body">${body}</span></button>`;
+  }
+  // Full view. Read-only: a plain row, no check button, no delete affordance.
+  if (!writable) {
+    return `<div class="todo-row-full"><span class="todo-check"></span>`
+      + `<span class="todo-body">${body}</span></div>`;
+  }
+  const isOpen = String(todoState.openId) === String(r.id);
+  const actions = isOpen
+    ? `<div class="todo-actions">`
+      + `<button class="todo-act todo-act-del" type="button" data-reminder-del="${id}">delete</button>`
+      + `</div>`
+    : '';
+  return `<div class="todo-row-full">`
+    + `<button class="todo-row-main" type="button" data-reminder="${id}"`
+    + ` aria-label="mark done: ${title}"><span class="todo-check">✓</span></button>`
+    + `<button class="todo-body" type="button" data-reminder-open="${id}">${body}</button>`
+    + actions
+    + `</div>`;
+}
+
+/* Wall home card: the pressing reminders (overdue + today, overdue first, up to
+   five) plus three count chips. Mirrors todoCardHtml's shape so the To-Do slot
+   reads the same whichever source backs it. */
+function reminderCardHtml(buckets, writable) {
+  const b = buckets || {};
+  const tag = (bk) => (b[bk] || []).map((r) => ({ ...r, bucket: bk }));
+  const pressing = [...tag('overdue'), ...tag('today')].slice(0, 5);
+  const rows = pressing.length
+    ? pressing.map((r) => reminderRowHtml(r, false, writable)).join('')
+    : `<div class="cal-empty">nothing on the list</div>`;
+  const chips = [['overdue', true], ['today', false], ['upcoming', false]]
+    .map(([bk, lead]) => `<span class="chip${lead ? ' now' : ''}">`
+      + `${(b[bk] || []).length} ${bk}</span>`).join('');
+  return sectionHead('To-Do', { overlay: 'todos', expandLabel: 'Full list', chip: 'iCloud' })
+    + `<div class="card todo">`
+    + rows
+    + `<div class="foot">${chips}</div>`
+    + `</div>`;
+}
+
+/* The add row for the reminders full view. Zero lists hides it (handled by the
+   caller); one list targets it directly with a naming placeholder; more than one
+   adds a compact list picker so a wall-added reminder lands in the right list. */
+function reminderAddHtml(lists) {
+  const single = lists.length === 1;
+  const placeholder = single ? `Add to ${lists[0].name}…` : 'Add a reminder…';
+  const select = single ? ''
+    : `<select id="todo-list-select" class="todo-list-select" aria-label="Reminder list">`
+      + lists.map((l, i) => `<option value="${escapeHtml(l.id)}"${i === 0 ? ' selected' : ''}>`
+        + `${escapeHtml(l.name)}</option>`).join('')
+      + `</select>`;
+  return `<form id="todo-add-form" class="todo-add">`
+    + `<input id="todo-add-input" maxlength="120" placeholder="${escapeHtml(placeholder)}"`
+    + ` autocomplete="off" aria-label="Add a reminder">`
+    + select
+    + `<button class="cal-nav-btn" type="submit">Add</button>`
+    + `</form>`;
+}
+
+function remindersFullHtml() {
+  const r = todoState.reminders;
+  if (!r) {
+    return `<div class="cal-empty">couldn’t load reminders — is the hub reachable?</div>`;
+  }
+  if (r.configured === false) {
+    return `<div class="cal-empty">iCloud isn’t connected — add it in Settings.</div>`;
+  }
+  const writable = !!r.writable;
+  const buckets = r.buckets || {};
+  const lists = (hubData && hubData.reminder_lists) || [];
+  const total = REM_BUCKETS.reduce((n, [bk]) => n + (buckets[bk] || []).length, 0);
+  const sections = REM_BUCKETS
+    .filter(([bk]) => (buckets[bk] || []).length)
+    .map(([bk, label]) => `<div class="card pad todo-section">`
+      + `<div class="todo-sec-head">${label}</div>`
+      + buckets[bk].map((rm) => reminderRowHtml({ ...rm, bucket: bk }, true, writable)).join('')
+      + `</div>`).join('');
+  const add = (writable && lists.length) ? reminderAddHtml(lists) : '';
+  return `<div class="shead"><span class="shead-chip">iCloud</span></div>`
+    + add
+    + `<div class="rem-list">`
+    + (total ? sections : `<div class="cal-empty">nothing on the list</div>`)
+    + `</div>`;
+}
+
 function todosFullHtml() {
+  if (todoState.source === 'icloud') return remindersFullHtml();
   const d = todoState.data;
   if (!d) {
     return `<div class="cal-empty">couldn’t load the list — is the hub reachable?</div>`;
@@ -612,15 +811,22 @@ function renderTodosPaint() {
 }
 
 async function renderTodosFull() {
+  // The full view follows the same source as the home card. Read it from the
+  // last hub payload so the fetch below hits the right endpoint.
+  const source = (hubData && hubData.todo_source) || 'local';
+  todoState.source = source;
+  const icloud = source === 'icloud';
+  const had = icloud ? todoState.reminders != null : todoState.data != null;
   try {
-    todoState.data = await j('/api/todos');
+    if (icloud) todoState.reminders = await j('/api/reminders');
+    else todoState.data = await j('/api/todos');
   } catch (e) {
     // keep the last data (or null -> unreachable message). But if this was a
     // REFRESH (data already populated from a prior load) a silent catch would
     // let the stale pre-mutation list sit on screen while the conn badge
     // still says live, so surface it instead of hiding a failed post-mutation
     // GET behind reassuring-looking old data.
-    if (todoState.data != null) showToast('Couldn’t refresh the list — check the hub.');
+    if (had) showToast('Couldn’t refresh the list — check the hub.');
   }
   renderTodosPaint();
 }
@@ -661,6 +867,50 @@ async function moveTodo(id, bucket) {
 async function deleteTodo(id) {
   const r = await attemptTodo(`/api/todos/${id}`, 'DELETE');
   if (!r.ok) showToast(todoFailMessage(r.error));
+  todoState.openId = null;
+  await refreshTodos();
+}
+
+/* ------- iCloud reminder writes (two-way; only wired when writable) ------- */
+
+/* Check off / reopen a reminder. The click handler flips the row's .done class
+   first (optimistic), then this writes and refreshes; a completed reminder drops
+   out of the open buckets on the next read, so a checked row simply disappears. */
+async function toggleReminder(id, completed) {
+  const r = await attemptTodo('/api/reminders/toggle', 'POST', { id, completed });
+  if (!r.ok) {
+    showToast(reminderFailMessage(r.error));
+    // The write failed, so UNDO the click handler's optimistic .done flip. Can't
+    // lean on refreshTodos()'s repaint: its poll() only repaints the home card
+    // inside a successful try, so offline (write fails AND the poll fails too)
+    // the flipped row would strand looking "done". Repaint both surfaces from
+    // the UNCHANGED cache instead — same as the chore/todo paths, which show the
+    // unchanged row offline (they just never optimistically flip in the first
+    // place). renderTodosPaint no-ops when no full view is mounted.
+    if (hubData) renderTodoSlot(hubData);
+    renderTodosPaint();
+    return;
+  }
+  await refreshTodos();
+}
+
+async function addReminder() {
+  const input = document.getElementById('todo-add-input');
+  const title = ((input && input.value) || '').trim();
+  if (!title) return;
+  const lists = (hubData && hubData.reminder_lists) || [];
+  if (!lists.length) return;                       // no target list -> nothing to do
+  const sel = document.getElementById('todo-list-select');
+  const listId = sel ? sel.value : lists[0].id;    // single list needs no picker
+  const r = await attemptTodo('/api/reminders/add', 'POST', { list_id: listId, title });
+  if (!r.ok) { showToast(reminderFailMessage(r.error)); return; }
+  if (input) input.value = '';
+  await refreshTodos();
+}
+
+async function deleteReminder(id) {
+  const r = await attemptTodo('/api/reminders/delete', 'POST', { id });
+  if (!r.ok) showToast(reminderFailMessage(r.error));
   todoState.openId = null;
   await refreshTodos();
 }
@@ -791,8 +1041,10 @@ async function probeOneCamera(cam) {
   });
   let ok = false;
   try {
-    ok = (await fetch(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
-  } catch (e) { /* down */ }
+    // fetchTimeout (common.js): bounds the probe with J_TIMEOUT_MS so a
+    // connected-but-unresponsive server can't leave it in flight forever.
+    ok = (await fetchTimeout(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
+  } catch (e) { /* down (or timed out) */ }
   // Offline -> live transition: reload the frame for a deterministic fresh
   // connect. A player that connected against a DEAD producer may never have
   // established its session, and its self-reconnect is go2rtc internals this
@@ -913,9 +1165,13 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
     if (openView !== view || !hd.parentNode) return;   // overlay closed / switched
     let live = false;
     try {
-      live = (await fetch(
-        `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`)).ok;
-    } catch (e) { /* still connecting — treated as not-yet-live */ }
+      // fetchTimeout (common.js), scoped to CAM_HD_PROBE_TIMEOUT_MS (not the
+      // longer default): a wedged HD producer must not hang this retry loop
+      // long enough to blow its own ~8s give-up budget (see the constant above).
+      live = (await fetchTimeout(
+        `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`,
+        CAM_HD_PROBE_TIMEOUT_MS)).ok;
+    } catch (e) { /* still connecting, down, or timed out: treated as not-yet-live */ }
     if (openView !== view || !hd.parentNode) return;   // re-check after the await
     if (live) {
       hd.classList.add('ready');   // HD confirmed live — cross-fade it over the warm base
@@ -976,8 +1232,14 @@ function openOverlay(view) {
     renderChoresFull(hubData ? hubData.people : null);  // instant paint, today
   } else if (view === 'todos') {
     content.innerHTML = `<div class="overlay-panel"><div id="todos-full"></div></div>`;
-    if (todoState.data) renderTodosPaint();  // instant paint from cache
+    todoState.source = (hubData && hubData.todo_source) || 'local';
+    const cache = todoState.source === 'icloud' ? todoState.reminders : todoState.data;
+    if (cache) renderTodosPaint();           // instant paint from cache
     renderTodosFull();                       // then refresh from the API
+  } else if (view === 'settings') {
+    content.innerHTML = `<div class="overlay-panel"><div id="settings-full"></div></div>`;
+    caldavUi.formError = '';   // a stale validation message shouldn't outlive a reopen
+    renderSettingsFull();      // instant paint from cache (hubData / lastIntegrations)
   }
   overlay().classList.add('open');
   // Lock the page behind the overlay: the tall wall page keeps its own
@@ -999,9 +1261,31 @@ function closeOverlay() {
   scrollPageToTop();   // coming home always lands at the top of the page
 }
 
+/* The fixed-position modals that layer above #overlay (siblings, not
+   children): closeAllOverlays (below) and wallBusy (~1500) both need this
+   exact set (one to close them, the other to detect any of them still shown),
+   so it's named once here rather than hardcoded twice, which is exactly how
+   the idle-timer/#overlay-home pair drifted apart in the first place (issue
+   #34: only closeOverlay() knew to close the overlay, nothing closed these). */
+const MODAL_CLOSERS = {
+  'ev-modal': () => closeEventDetail(),
+  'chore-modal': () => closeChoreEditor(),
+  'confirm-modal': () => closeDeleteConfirm(),
+};
+
+/* Close EVERY full-screen surface in one call: the MODAL_CLOSERS modals are
+   fixed siblings of #overlay, not children of it, so closeOverlay() alone
+   leaves any of them stranded open over the home wall. Shared by the
+   #overlay-home tap and the idle auto-return (armIdle) below so the two
+   "go home" paths can't drift apart again. */
+function closeAllOverlays() {
+  Object.values(MODAL_CLOSERS).forEach((close) => close());
+  closeOverlay();
+}
+
 function armIdle() {
   if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(closeOverlay, idleReturnMs(openView));
+  idleTimer = setTimeout(closeAllOverlays, idleReturnMs(openView));
 }
 
 /* --------------------------------------------------------------- polling */
@@ -1477,7 +1761,7 @@ function wallBusy() {
     return !!(el && !el.classList.contains('hidden'));
   };
   return hasClass('overlay', 'open') || hasClass('theme-pop', 'open')
-    || shown('ev-modal') || shown('chore-modal') || shown('confirm-modal')
+    || Object.keys(MODAL_CLOSERS).some(shown)   // same modal set closeAllOverlays closes
     // a direct tap on the bare wall (e.g. a chore toggle) opens no overlay, so
     // defer the reload for a short quiet window after any recent interaction
     || (Date.now() - lastInteraction < INTERACTION_QUIET_MS);
@@ -1503,6 +1787,7 @@ async function poll() {
     renderCalendar(data);
     renderPeople(data);
     renderTodoSlot(data);
+    renderIntegrations(data);
     pruneEvIndex();
     document.body.dataset.conn = 'up';
     document.getElementById('conn-word').textContent = 'live';
@@ -1523,6 +1808,20 @@ function scheduledPoll() {
   if (scheduledPollInFlight) return;
   scheduledPollInFlight = true;
   poll().finally(() => { scheduledPollInFlight = false; });
+}
+
+// Same guard, same reason, for the camera probe interval: probeOneCamera's
+// fetches now carry a J_TIMEOUT_MS bound (see fetchTimeout in common.js), but
+// without this an unguarded CAM_PROBE_MS interval would still keep firing a
+// fresh probeCamera() every 30s on top of one still waiting out that timeout,
+// stacking requests toward the browser's connection budget. Direct
+// probeCamera() calls (tab switch, overlay open) are user-paced and
+// intentionally always run, so the guard lives here, not inside probeCamera().
+let scheduledProbeCameraInFlight = false;
+function scheduledProbeCamera() {
+  if (scheduledProbeCameraInFlight) return;
+  scheduledProbeCameraInFlight = true;
+  probeCamera().finally(() => { scheduledProbeCameraInFlight = false; });
 }
 
 let _toastTimer = null;
@@ -1593,6 +1892,13 @@ async function submitChore(url, method, body) {
 }
 
 async function openChoreEditor(seed) {
+  // data-add-chore/data-edit-chore only render inside the chores overlay's
+  // edit mode, so openView is always truthy ('chores') here. Remember it: if
+  // the idle timer or a home tap runs closeAllOverlays() while this fetch is
+  // in flight, openView goes back to null, and this must NOT reopen a modal
+  // over a wall the user (or the idle return) already left: same stale-async
+  // guard as ensurePeopleThenRerender below.
+  const view = openView;
   let state;
   try {
     state = await j('/api/admin/state');   // {people (flat, active flags), chores (full records)}
@@ -1600,6 +1906,7 @@ async function openChoreEditor(seed) {
     showToast('Couldn’t open the editor — check the hub and try again.');
     return;
   }
+  if (openView !== view) return;   // overlay closed/switched while this was in flight
   const host = document.getElementById('chore-editor');
   let model;
   let label;
@@ -1867,6 +2174,28 @@ document.addEventListener('click', (e) => {
   }
   const tseg = e.target.closest('[data-todo-bucket]');
   if (tseg) { todoState.addBucket = tseg.dataset.todoBucket; renderTodosPaint(); return; }
+  // iCloud reminders (two-way): delete + open-actions before the check row, same
+  // ordering rule as the to-dos above. Read-only rows carry no data-reminder, so
+  // they fall through to nothing — look, don't touch.
+  const remdel = e.target.closest('[data-reminder-del]');
+  if (remdel) { deleteReminder(remdel.dataset.reminderDel); return; }
+  const remopen = e.target.closest('[data-reminder-open]');
+  if (remopen) {
+    const id = remopen.dataset.reminderOpen;
+    todoState.openId = String(todoState.openId) === id ? null : id;
+    renderTodosPaint();
+    return;
+  }
+  const remrow = e.target.closest('[data-reminder]');
+  if (remrow) {
+    // Optimistic: flip the row now so the wall feels instant; the write +
+    // refresh below reconciles (a completed reminder then drops off the list).
+    const rowEl = remrow.closest('.todo-row-full') || remrow.closest('.todo-row') || remrow;
+    const wasDone = rowEl.classList.contains('done');
+    rowEl.classList.toggle('done', !wasDone);
+    toggleReminder(remrow.dataset.reminder, !wasDone);
+    return;
+  }
   // home surfaces (readonly rows carry no data-chore — look, don't touch)
   const chore = e.target.closest('.chore-row');
   if (chore && chore.dataset.chore) {
@@ -1882,12 +2211,16 @@ document.addEventListener('click', (e) => {
   if (head) { openOverlay('chores'); return; }
   const day = e.target.closest('.cal-day');
   if (day && !openView) { openOverlay('calendar'); return; }
-  if (e.target.closest('#overlay-home')) { closeDeleteConfirm(); closeChoreEditor(); closeEventDetail(); closeOverlay(); }
+  if (e.target.closest('#overlay-home')) { closeAllOverlays(); }
 });
 ['pointerdown', 'touchstart', 'keydown'].forEach((evt) =>
   document.addEventListener(evt, () => { noteInteraction(); if (openView) armIdle(); }, { passive: true }));
 document.addEventListener('submit', (e) => {
-  if (e.target && e.target.id === 'todo-add-form') { e.preventDefault(); addTodo(); }
+  if (e.target && e.target.id === 'todo-add-form') {
+    e.preventDefault();
+    // One add form id, two backends: dispatch by the source the view is showing.
+    if (todoState.source === 'icloud') addReminder(); else addTodo();
+  }
 });
 
 /* ------------------- persisted display controls (Task 5) ------------------ */
@@ -1908,25 +2241,317 @@ function applyHouseTheme(theme) {
   reflectThemeControls();
 }
 
-// Mirror the live <html> data-* state onto the popover's control buttons.
+// Mirror the live <html> data-* state onto every Display control on the page:
+// the quick gear popover's AND (when open) the full Settings overlay's own
+// copy, so the two surfaces can never show a stale/conflicting selection.
+// Scoped to .theme-ctl containers (both surfaces wrap their Theme/Accent/
+// Columns controls in one), not a bare document-wide attribute query: a
+// future unrelated element that happened to carry data-theme-set/-c/
+// -cols-set for some other purpose would otherwise silently wire into this.
 function reflectThemeControls() {
-  const pop = document.getElementById('theme-pop');
-  if (!pop) return;
   const el = document.documentElement;
   const mode = el.getAttribute('data-theme');
   const accent = el.getAttribute('data-accent');
   const cols = el.getAttribute('data-cols');
   const layout = el.getAttribute('data-layout');
-  pop.querySelectorAll('[data-theme-set]').forEach((b) =>
-    b.classList.toggle('on', b.dataset.themeSet === mode));
-  pop.querySelectorAll('[data-c]').forEach((b) =>
-    b.classList.toggle('on', b.dataset.c === accent));
-  pop.querySelectorAll('[data-cols-set]').forEach((b) =>
-    b.classList.toggle('on', b.dataset.colsSet === cols));
-  // Layout marks the active choice (auto/desktop) — the control reflects what
-  // the operator picked (data-layout on <html>, stamped by theme.js).
-  pop.querySelectorAll('[data-layout-set]').forEach((b) =>
-    b.classList.toggle('on', b.dataset.layoutSet === layout));
+  document.querySelectorAll('.theme-ctl').forEach((ctl) => {
+    ctl.querySelectorAll('[data-theme-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.themeSet === mode));
+    ctl.querySelectorAll('[data-c]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.c === accent));
+    ctl.querySelectorAll('[data-cols-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.colsSet === cols));
+    // Layout marks the active choice (auto/desktop) — the control reflects what
+    // the operator picked (data-layout on <html>, stamped by theme.js).
+    ctl.querySelectorAll('[data-layout-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.layoutSet === layout));
+  });
+}
+
+/* The settings popover's Integrations section: one on/off switch per available
+   data source / tile. Renders from the /api/hub `integrations` block each poll,
+   and mirrors each disabled one onto a body class so CSS hides its tile. */
+function renderIntegrations(data) {
+  const list = (data && data.integrations) || [];
+  lastIntegrations = list;
+  list.forEach((it) =>
+    document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
+  const host = document.getElementById('integrations-ctl');
+  if (!host) return;
+  host.innerHTML = list.length
+    ? list.map((it) => {
+      // Auth-failure / error is a first-class state: a revoked or expired login
+      // shows "reconnect" so the family knows to fix it (the cached view stays).
+      const warn = it.status === 'needs_auth' ? 'reconnect'
+        : (it.status === 'error' ? 'error' : '');
+      return `<button class="integ-row" type="button" role="switch"`
+        + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
+        + ` data-integ-toggle="${escapeHtml(it.id)}">`
+        + `<span class="integ-name">${escapeHtml(it.name)}`
+        + (warn ? `<span class="integ-warn">${warn}</span>` : '')
+        + `</span>`
+        + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+        + `</button>`;
+    }).join('')
+    : `<div class="integ-empty">none configured</div>`;
+}
+
+async function toggleIntegration(id) {
+  const cur = (lastIntegrations.find((x) => x.id === id) || {}).enabled;
+  // attemptTodo resolves to {ok, error?} and never throws, so the failure
+  // check must read .ok (a bare `!r` is always false: even {ok:false} is a
+  // truthy object). Left unchecked, a failed PATCH silently reverted the
+  // switch on the next poll() with no toast: the exact silent-failure this
+  // repo's review gate calls out. Caught fixing the CalDAV enable switch,
+  // which reuses this same function.
+  const r = await attemptTodo('/api/integrations/' + encodeURIComponent(id),
+    'PATCH', { enabled: !cur });
+  if (!r.ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
+  await poll();   // re-render the toggles + tile gating from fresh state
+}
+
+/* --------------------------------------------- Settings overlay (T: gear) */
+/* The full-screen Settings overlay (openOverlay('settings')): Display (a
+   second copy of the gear popover's Theme/Accent/Columns controls, laid out
+   with room to breathe; reflectThemeControls keeps both copies in sync) and
+   Integrations (the existing switch list, plus the richer iCloud CalDAV panel
+   below it). Built the same way as chores-full/todos-full/cal-full: an
+   instant paint from cached state, wired through the same delegated click
+   listener as the rest of the app. */
+function renderSettingsFull() {
+  const host = document.getElementById('settings-full');
+  if (!host) return;
+  host.innerHTML = `<div class="overlay-title">Settings</div>`
+    + `<div class="card pad settings-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Display</h2></div>`
+    + `<div class="theme-ctl">`
+    + `<div class="settings-row"><span class="settings-k">Theme</span>`
+    + `<div class="seg seg-theme" role="group" aria-label="Theme">`
+    + `<button type="button" data-theme-set="light">Light</button>`
+    + `<button type="button" data-theme-set="soft">Soft</button>`
+    + `<button type="button" data-theme-set="dark">Blue</button>`
+    + `<button type="button" data-theme-set="grey">Grey</button>`
+    + `<button type="button" data-theme-set="black">Black</button>`
+    + `</div></div>`
+    + `<div class="settings-row"><span class="settings-k">Accent</span>`
+    + `<div class="swatches" role="group" aria-label="Accent color">`
+    + `<button class="swatch" type="button" data-c="cyan" aria-label="Cyan accent"></button>`
+    + `<button class="swatch" type="button" data-c="violet" aria-label="Violet accent"></button>`
+    + `<button class="swatch" type="button" data-c="amber" aria-label="Amber accent"></button>`
+    + `<button class="swatch" type="button" data-c="green" aria-label="Green accent"></button>`
+    + `</div></div>`
+    + `<div class="settings-row"><span class="settings-k">Columns</span>`
+    + `<div class="seg" role="group" aria-label="Column separation">`
+    + `<button type="button" data-cols-set="none">None</button>`
+    + `<button type="button" data-cols-set="wells">Wells</button>`
+    + `<button type="button" data-cols-set="lines">Lines</button>`
+    + `</div></div>`
+    // Auto follows screen width; Desktop forces the full wall at any width
+    // (the escape hatch for a TV that mis-reports a phone-narrow width).
+    + `<div class="settings-row"><span class="settings-k">Layout</span>`
+    + `<div class="seg" role="group" aria-label="Layout mode">`
+    + `<button type="button" data-layout-set="auto">Auto</button>`
+    + `<button type="button" data-layout-set="desktop">Desktop</button>`
+    + `</div></div>`
+    + `</div></div>`
+    + `<div class="card pad settings-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Integrations</h2></div>`
+    + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
+    + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
+    + `<div class="caldav-panel" id="caldav-panel"></div>`
+    + `</div>`;
+  reflectThemeControls();
+  renderIntegrations(hubData || { integrations: lastIntegrations });
+  renderTodoSourcePicker();
+  renderCaldavPanel();
+  fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
+}
+
+/* The To-Do source picker inside the Integrations card: choose whether the
+   To-Do surface reads the local whiteboard or iCloud Reminders. Shown only when
+   CalDAV is available at all (an icloud_caldav entry exists) — there's nothing
+   to pick otherwise. Its own host + render fn (like renderIntegrations /
+   renderCaldavPanel) so a source switch can repaint just this row without the
+   collections re-fetch renderSettingsFull does. */
+function renderTodoSourcePicker() {
+  const host = document.getElementById('todo-source-ctl');
+  if (!host) return;
+  const caldav = caldavIntegration();
+  if (!caldav) { host.innerHTML = ''; return; }
+  const source = (hubData && hubData.todo_source) || 'local';
+  const readonly = caldav.readonly !== false;   // server default is 1-way (true)
+  // iCloud chosen but still read-only: reminders show but can't be checked off
+  // until two-way is on. The Sync direction toggle sits just below in this card.
+  const hint = (source === 'icloud' && readonly)
+    ? `<div class="hint">Reminders show read-only until you set Sync direction to 2-way, below.</div>`
+    : '';
+  host.innerHTML = `<div class="settings-row"><span class="settings-k">To-Do list</span>`
+    + `<div class="segmented" role="group" aria-label="To-Do list source">`
+    + `<button class="seg-btn${source === 'local' ? ' active' : ''}" type="button" data-todo-source="local">On this hub</button>`
+    + `<button class="seg-btn${source === 'icloud' ? ' active' : ''}" type="button" data-todo-source="icloud">iCloud</button>`
+    + `</div></div>${hint}`;
+}
+
+async function setTodoSource(source) {
+  if (source === ((hubData && hubData.todo_source) || 'local')) return;   // no-op tap
+  const r = await attemptTodo('/api/todo-source', 'PATCH', { source });
+  if (!r.ok) { showToast('Couldn’t switch the To-Do list — check the hub and tap again.'); return; }
+  await poll();                 // hubData.todo_source updates; the home card repaints
+  renderTodoSourcePicker();     // reflect the new selection + read-only hint
+  if (todosViewActive()) await renderTodosFull();   // repaint the open full view for the new source
+}
+
+/* The live icloud_caldav entry from /api/hub's `integrations` list (or
+   lastIntegrations before the first poll lands), or null when no credentials
+   are stored yet. Shared by renderCaldavPanel and fetchCaldavCollections so
+   both agree on what "connected" means. */
+function caldavIntegration() {
+  const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  return list.find((it) => it.id === 'icloud_caldav') || null;
+}
+
+/* The iCloud (CalDAV) account panel inside the Integrations card. Markup
+   comes from common.js caldavPanelHtml (pure, tested); this just supplies the
+   live integration entry + the transient UI state and writes the result.
+   Deliberately NOT called from poll(): unlike the plain integrations switch
+   list (which is safe to redraw every 60s), the not-connected state holds
+   live text-input fields the operator may be mid-typing into, and refreshing
+   it on a timer would wipe an in-progress Apple ID / password. It's refreshed
+   explicitly instead, after every action that can change what it should show
+   (connect, disconnect, test, the enable switch, the readonly toggle, a
+   Calendars-picker fetch/toggle) and once up front when the Settings overlay
+   opens. */
+function renderCaldavPanel() {
+  const host = document.getElementById('caldav-panel');
+  if (!host) return;
+  host.innerHTML = caldavPanelHtml(caldavIntegration(), caldavUi);
+}
+
+/* GET the discovered iCloud calendars + reminder lists for the connected
+   panel's Calendars picker. Fire-and-forget from renderSettingsFull (panel
+   open) and testCaldavConnection (a test just ran a sync, which can surface
+   new calendars), the same un-awaited "refresh a data source in the
+   background" pattern this file already uses for fetchWeather/fetchClimate,
+   and awaited directly by toggleCaldavCollection, which needs the refreshed
+   list before it re-renders. Guarded: not connected, or any fetch failure,
+   just leaves the list empty, which caldavCollectionsHtml renders as its own
+   empty state - never throws out of a render-triggering call. */
+async function fetchCaldavCollections() {
+  if (!caldavIntegration()) {
+    caldavUi.collections = [];
+    caldavUi.collectionsError = false;
+    renderCaldavPanel();
+    return;
+  }
+  try {
+    const r = await j('/api/integrations/icloud_caldav/collections');
+    caldavUi.collections = (r && Array.isArray(r.collections)) ? r.collections : [];
+    caldavUi.collectionsError = false;
+  } catch (e) {
+    // Same rule fetchCalWindow (above) follows for the calendar feed: keep
+    // whatever list was last shown rather than wiping it to empty, and log +
+    // flag the failure so it can't be confused with a genuinely empty
+    // account. Without this, a transient network blip renders the exact same
+    // "No calendars found yet" copy as zero calendars actually existing -
+    // caldavCollectionsHtml uses collectionsError to tell the two apart.
+    console.warn('caldav collections refresh failed; keeping the last list shown', e);
+    caldavUi.collectionsError = true;
+  }
+  renderCaldavPanel();
+}
+
+/* Show/hide one iCloud calendar or reminder list on the wall. id contains a
+   colon (e.g. "caldav:ab12"), so it's encodeURIComponent'd into the URL path;
+   caldavCollectionsHtml separately escapeHtml's it into the data attribute
+   this reads from - two different sinks, two different encodings. On a
+   failed PATCH the switch must NOT flip (attemptTodo never throws, so the
+   check reads .ok, same fix as toggleIntegration above). */
+async function toggleCaldavCollection(id) {
+  const cur = (caldavUi.collections || []).find((c) => String(c.id) === id);
+  if (!cur) return;
+  const r = await attemptTodo(
+    '/api/integrations/icloud_caldav/collections/' + encodeURIComponent(id),
+    'PATCH', { enabled: !cur.enabled });
+  if (!r.ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
+  await fetchCaldavCollections();
+}
+
+/* Store the operator-entered iCloud credentials (POST, server-side file,
+   never echoed back), then re-poll so the panel flips to the connected view,
+   and auto-run a Test so they immediately see whether they typed the right
+   app-specific password rather than finding out on the next sync. */
+async function connectCaldav() {
+  const userInput = document.getElementById('caldav-user-input');
+  const pwInput = document.getElementById('caldav-pw-input');
+  const user = ((userInput && userInput.value) || '').trim();
+  const pw = (pwInput && pwInput.value) || '';
+  if (!user || !pw) {
+    caldavUi.formError = 'Enter both the Apple ID and the app-specific password.';
+    renderCaldavPanel();
+    return;
+  }
+  caldavUi.formError = '';
+  caldavUi.connecting = true;
+  renderCaldavPanel();
+  try {
+    await j('/api/integrations/icloud_caldav/credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user, app_password: pw }),
+    });
+  } catch (e) {
+    caldavUi.connecting = false;
+    showToast(e.message || 'Couldn’t connect - check the Apple ID and password.');
+    renderCaldavPanel();
+    return;
+  }
+  // The password's only job was to reach that POST body. Blank it the instant
+  // the request succeeds; never rely solely on the next render to clear it.
+  if (pwInput) pwInput.value = '';
+  caldavUi.connecting = false;
+  await poll();   // hubData.integrations now carries icloud_caldav + its account
+  renderCaldavPanel();
+  await testCaldavConnection();
+}
+
+/* POST /api/integrations/icloud_caldav/test never throws on a bad sign-in
+   (it reports needs_auth/error in the 200 body); only a network-level
+   failure lands in the catch, folded into the same {ok:false, error} shape
+   so caldavTestMessage has one contract to format either way. */
+async function testCaldavConnection() {
+  caldavUi.testing = true;
+  renderCaldavPanel();
+  let result;
+  try {
+    result = await j('/api/integrations/icloud_caldav/test', { method: 'POST' });
+  } catch (e) {
+    result = { ok: false, error: e.message || 'Couldn’t reach the hub.' };
+  }
+  caldavUi.testing = false;
+  caldavUi.testResult = result;
+  renderCaldavPanel();
+  // A test just ran (or attempted) a sync server-side, which can surface new
+  // calendars/reminder lists - refresh the Calendars picker independently of
+  // the result text above, which is already showing.
+  fetchCaldavCollections();
+}
+
+async function disconnectCaldav() {
+  const r = await attemptTodo('/api/integrations/icloud_caldav/credentials', 'DELETE');
+  if (!r.ok) { showToast('Couldn’t disconnect - check the hub and try again.'); return; }
+  caldavUi.testResult = null;   // stale "connected" test result would be misleading now
+  caldavUi.formError = '';
+  caldavUi.collections = [];   // stale calendar list would be misleading too
+  caldavUi.collectionsError = false;
+  await poll();
+  renderCaldavPanel();
+}
+
+async function setCaldavReadonly(readonly) {
+  const r = await attemptTodo('/api/integrations/icloud_caldav', 'PATCH', { readonly });
+  if (!r.ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
+  await poll();
+  renderCaldavPanel();
 }
 
 function closeThemePop() {
@@ -1936,7 +2561,10 @@ function closeThemePop() {
   if (gear) gear.setAttribute('aria-expanded', 'false');
 }
 
-// Separate delegated listener (the big one above owns the dashboard surfaces).
+// Separate delegated listener (the big one above owns the dashboard surfaces):
+// the gear popover, the Settings overlay's Display + Integrations controls
+// (same data-* attributes, generalized below to match either surface), and
+// the iCloud CalDAV panel's actions.
 document.addEventListener('click', (e) => {
   const pop = document.getElementById('theme-pop');
   // Refresh button: reload the wall (picks up a new deploy, unsticks a stale page).
@@ -1948,14 +2576,47 @@ document.addEventListener('click', (e) => {
     if (open) reflectThemeControls();
     return;
   }
-  const t = e.target.closest('#theme-pop [data-theme-set]');
+  // The popover's "All settings" row: close the quick popover (it sits at a
+  // higher z-index than the full-screen overlay and would otherwise float
+  // over it) and open the real thing.
+  if (e.target.closest('#theme-pop [data-open-settings]')) {
+    closeThemePop();
+    openOverlay('settings');
+    return;
+  }
+  // Theme/Accent/Columns: scoped to '.theme-ctl [...]', not bare '[...]'.
+  // NOT #theme-pop specifically (the Settings overlay renders its own copy
+  // of these same buttons, see renderSettingsFull), but still narrowed to
+  // "inside a .theme-ctl", the wrapper both surfaces use, so an unrelated
+  // future element elsewhere on the page can't accidentally wire into
+  // setTheme/setAccent/setColumns just by reusing one of these attribute
+  // names for something else.
+  const t = e.target.closest('.theme-ctl [data-theme-set]');
   if (t) { setTheme(t.dataset.themeSet); reflectThemeControls(); return; }
-  const a = e.target.closest('#theme-pop [data-c]');
+  const a = e.target.closest('.theme-ctl [data-c]');
   if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
-  const c = e.target.closest('#theme-pop [data-cols-set]');
+  const c = e.target.closest('.theme-ctl [data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
-  const ly = e.target.closest('#theme-pop [data-layout-set]');
+  // Layout (Auto/Desktop): scoped to '.theme-ctl [...]' like the controls above,
+  // so a tap works in either the gear popover or the Settings overlay's copy.
+  const ly = e.target.closest('.theme-ctl [data-layout-set]');
   if (ly) { setLayout(ly.dataset.layoutSet); reflectThemeControls(); return; }
+  // Integrations switch list: also unscoped now that it only ever renders
+  // inside the Settings overlay (#integrations-ctl), never the popover.
+  const ig = e.target.closest('[data-integ-toggle]');
+  if (ig) { toggleIntegration(ig.dataset.integToggle); return; }
+  // To-Do source picker (local vs iCloud), shown in the Integrations card.
+  const ts = e.target.closest('[data-todo-source]');
+  if (ts) { setTodoSource(ts.dataset.todoSource); return; }
+  // iCloud (CalDAV) panel actions. (No data-caldav-enable-toggle: the panel
+  // deliberately has no second enable switch; see caldavPanelHtml.)
+  if (e.target.closest('[data-caldav-connect]')) { connectCaldav(); return; }
+  if (e.target.closest('[data-caldav-disconnect]')) { disconnectCaldav(); return; }
+  if (e.target.closest('[data-caldav-test]')) { testCaldavConnection(); return; }
+  const ro = e.target.closest('[data-caldav-readonly]');
+  if (ro) { setCaldavReadonly(ro.dataset.caldavReadonly === '1'); return; }
+  const cc = e.target.closest('[data-caldav-collection-toggle]');
+  if (cc) { toggleCaldavCollection(cc.dataset.caldavCollectionToggle); return; }
   // a tap anywhere outside an open popover dismisses it
   if (pop && pop.classList.contains('open') && !e.target.closest('#theme-pop')) {
     closeThemePop();
@@ -1977,4 +2638,4 @@ fetchClimate();
 setInterval(scheduledPoll, POLL_MS);
 setInterval(fetchWeather, POLL_MS);
 setInterval(fetchClimate, POLL_MS);
-setInterval(probeCamera, CAM_PROBE_MS);
+setInterval(scheduledProbeCamera, CAM_PROBE_MS);

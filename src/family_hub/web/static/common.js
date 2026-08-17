@@ -41,6 +41,20 @@ async function j(url, opts) {
   }
 }
 
+/* Same AbortController-timeout guard as j() above, for callers that only need
+   the raw Response (not j()'s JSON-decode + error-detail contract): the
+   camera snapshot probes in hub.js. Without this, a raw fetch to a connected-
+   but-unresponsive server never resolves, and probes stack up until the
+   browser's ~6-connection-per-origin budget is exhausted on a multi-day kiosk
+   uptime. Same platform guard as j(): falls back to a bare fetch when
+   AbortController isn't available (the vm test sandbox). */
+function fetchTimeout(url, ms = J_TIMEOUT_MS) {
+  if (typeof AbortController === 'undefined') return fetch(url);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  return fetch(url, { signal: ac.signal }).finally(() => clearTimeout(timer));
+}
+
 /* Defense in depth for inline style="" sinks: colors reaching the DOM are all
    server-constrained (person colors validated to #rrggbb, Google's own palette,
    a hardcoded event-color map), but escapeHtml neutralizes quotes/<> and NOT
@@ -176,6 +190,21 @@ function fmtTimeRange(ev) {
   if (!t2 || (d1 === d2 && t1 === t2)) return t1;
   if (d1 === d2) return `${t1} – ${t2}`;
   return `${_md(ev.start_ts)} ${t1} – ${_md(ev.end_ts)} ${t2}`;
+}
+
+/* True when `dayISO` ('YYYY-MM-DD') falls outside the calendar sync window
+   `win` ({from, to}, both 'YYYY-MM-DD', inclusive): the actual date range
+   the backend's sync caches (see /api/calendar's `window` field). The month
+   view can page arbitrarily far past that window; a day out here has no
+   cached data to show, so it must not render as a confident empty day (issue
+   #37). Plain string compare: ISO 'YYYY-MM-DD' dates sort lexically, so no
+   Date parsing (and no local-midnight surprises) is needed. A missing or
+   malformed window fails open (never flags a day unsynced): this is a
+   display nicety, not a reason to mark up a payload from before the `window`
+   field existed, or one that dropped it on a fetch error. */
+function isDayOutsideWindow(dayISO, win) {
+  if (!win || !win.from || !win.to) return false;
+  return dayISO < win.from || dayISO > win.to;
 }
 
 /* 42 Sunday-first cells covering `month` (1-12) of `year`, each
@@ -579,19 +608,206 @@ function todoFailMessage(error) {
   return 'Couldn’t save — check the hub and tap again.';
 }
 
+/* Same shape as todoFailMessage, for the iCloud reminder writes. The write
+   endpoints answer 409 when iCloud is off or still read-only, and 404 when the
+   reminder was changed/deleted on another device since the wall last read it —
+   two different diagnoses. Substrings match app.py's own detail strings
+   ('read-only', 'not connected', 'unknown reminder'); pure so each branch is
+   testable without a DOM. */
+function reminderFailMessage(error) {
+  const s = String(error || '');
+  if (s.includes('read-only')) {
+    return 'Reminders are read-only — switch Sync direction to 2-way in Settings.';
+  }
+  if (s.includes('not connected')) {
+    return 'iCloud isn’t connected — add it in Settings.';
+  }
+  // 'unknown reminder list' (a 404 from add when the target list was deleted/
+  // disabled on iCloud) MUST be tested before 'unknown reminder' — the former
+  // contains the latter as a substring, so the order is load-bearing: a bare
+  // 'unknown reminder' check would misread a dead-list add as an edit collision.
+  if (s.includes('unknown reminder list')) {
+    return 'That list is no longer available — pick another in Settings.';
+  }
+  if (s.includes('unknown reminder')) {
+    return 'That reminder was already changed on another device.';
+  }
+  return 'Couldn’t save — check the hub and tap again.';
+}
+
 /* The calendar-status banner message ('' = no banner). Pure so the
    needs_auth / not-connected / generic branches are testable without a DOM;
    hub.js's calStatusNote wraps the result in markup. */
 function calStatusMessage(status) {
   const st = status || {};
-  if (st.ok !== false) return '';
   if (st.needs_auth) {
-    // A revoked/expired Google sign-in needs the owner to re-run setup, unlike
-    // a transient blip (which shows the generic message below).
-    return 'Google sign-in expired — re-run calendar setup to reconnect. Showing the last events we saw.';
+    // A revoked/expired calendar sign-in needs the owner to reconnect it (in the
+    // settings menu), unlike a transient blip (the generic message below). The
+    // hub now has several calendar sources, so this copy stays source-neutral.
+    // This fires even when st.ok is true: on a mixed setup one source can be
+    // healthy while another's sign-in expired, and that expiry must stay visible
+    // rather than hide behind the working source.
+    return st.ok
+      ? 'A calendar sign-in expired — reconnect it in settings.'
+      : 'A calendar sign-in expired — reconnect it in settings. Showing the last events we saw.';
   }
+  if (st.degraded) {
+    // A source has been failing to sync for a while (not an auth problem — a
+    // stuck feed, not a momentary blip). Tell the family their calendar may be
+    // behind, without the flicker of a banner on every transient hiccup. Shown
+    // even when st.ok is true (another source is still healthy and rendering).
+    return 'A calendar is having trouble syncing — showing the last events we saw.';
+  }
+  if (st.ok !== false) return '';
   if (String(st.error || '').includes('not configured')) {
-    return 'Google Calendar isn’t connected yet — once it’s linked, the family’s events show up here.';
+    return 'No calendar is connected yet — add one in settings and the family’s events show up here.';
   }
   return 'Calendar sync hit a snag — showing the last events we saw.';
+}
+
+/* The iCloud CalDAV "Test connection" result, turned into one line of display
+   copy. Pure so the ok / needs_auth / error branches are testable without a
+   DOM; hub.js's renderCaldavPanel escapes and shows the result. Mirrors the
+   POST /api/integrations/icloud_caldav/test contract (caldav_sync.sync_once):
+   {ok:true, events, reminders} | {needs_auth:true, ...} | {ok:false, error}. */
+function caldavTestMessage(result) {
+  const r = result || {};
+  if (r.needs_auth) return 'Sign-in rejected - check the app-specific password.';
+  if (r.ok) {
+    const events = Number.isFinite(r.events) ? r.events : 0;
+    const reminders = Number.isFinite(r.reminders) ? r.reminders : 0;
+    return `Connected - ${events} event${events === 1 ? '' : 's'}, `
+      + `${reminders} reminder${reminders === 1 ? '' : 's'}.`;
+  }
+  if (r.error) return String(r.error);
+  return 'Couldn’t connect - check the hub and try again.';
+}
+
+/* The "Calendars" sub-section inside the connected iCloud (CalDAV) panel: one
+   row per discovered calendar / reminder list, each with its own visibility
+   toggle. Reuses the same .integ-row / .integ-switch / role="switch" /
+   aria-checked markup as the top-level Integrations list above it, so it
+   reads as the same control, not a bespoke one. Pure (no DOM) so it's
+   unit-testable; hub.js's caldavPanelHtml (below) embeds the result, and
+   renderCaldavPanel wires the toggle taps (data-caldav-collection-toggle)
+   through hub.js's delegated click listener.
+   `collections` is the icloud_caldav collections list from GET
+   /api/integrations/icloud_caldav/collections - each {id, name,
+   color(string|null), comp_type('VEVENT'|'VTODO'), enabled} - or
+   null/undefined before the first fetch resolves, which renders the same
+   empty state as a genuinely empty account (this panel has no separate
+   "loading" state of its own). `opts.error` (set when hub.js's
+   fetchCaldavCollections's GET failed) swaps the EMPTY-list message for a
+   distinct "couldn't load" one, so a real fetch failure can never be
+   confused with an account that truly has zero calendars - see
+   fetchCaldavCollections's comment for why that distinction matters. */
+function caldavCollectionsHtml(collections, opts) {
+  const list = Array.isArray(collections) ? collections : [];
+  if (!list.length) {
+    const msg = (opts && opts.error)
+      ? 'Couldn’t load calendars - try Test connection'
+      : 'No calendars found yet - try Test connection';
+    return `<div class="integ-empty">${msg}</div>`;
+  }
+  return list.map((c) => {
+    const kind = c.comp_type === 'VTODO' ? 'Reminders' : 'Calendar';
+    // A null color (some iCloud calendars/lists don't set one) omits the dot
+    // rather than faking a neutral one. safeColor (above) keeps a stray
+    // server value from injecting extra CSS through this style attribute.
+    const dot = c.color
+      ? `<span class="caldav-cal-dot" style="background:${safeColor(c.color)}" aria-hidden="true"></span>`
+      : '';
+    return `<button class="integ-row" type="button" role="switch"`
+      + ` aria-checked="${c.enabled ? 'true' : 'false'}"`
+      + ` data-caldav-collection-toggle="${escapeHtml(String(c.id))}">`
+      + `<span class="integ-name">${dot}${escapeHtml(c.name)}`
+      + `<span class="caldav-cal-kind">${kind}</span>`
+      + `</span>`
+      + `<span class="integ-switch${c.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+      + `</button>`;
+  }).join('');
+}
+
+/* The iCloud (CalDAV) settings panel body, pure (no DOM) so both branches are
+   unit-testable: hub.js's renderCaldavPanel assigns the result to a host's
+   innerHTML and wires the buttons/inputs.
+   `integ` is the icloud_caldav entry from /api/hub's `integrations` list, or
+   null/undefined when no credentials are stored yet (the not-connected form).
+   `ui` is the transient view state hub.js keeps between polls: {connecting,
+   testing, testResult, formError, collections, collectionsError}, NEVER the
+   password itself. The password only ever lives in the password input's own
+   value; it is read at submit time, sent once in the POST body, and never
+   stored in JS state, a DOM attribute/dataset, or a log/toast. */
+function caldavPanelHtml(integ, ui) {
+  const st = ui || {};
+  // A bare HTML "disabled" attribute, not a CSS class fragment. Written as a
+  // helper returning a plain, unspaced word (no leading space inside the
+  // quoted literal) rather than inlined the way the conditional CSS classes
+  // below are (integ-switch's on/off, seg-btn's active/inactive): the static
+  // "every referenced class is styled" scan (tests/test_static.py) treats
+  // any ternary shaped like that inline pattern as a conditional CSS class
+  // needing a matching selector, which is right for those but would be a
+  // false positive for an HTML attribute that merely looks the same shape.
+  const dis = (b) => (b ? 'disabled' : '');
+  if (!integ) {
+    return `<div class="field"><label>Apple ID</label>`
+      + `<input class="txt-input" id="caldav-user-input" type="text" `
+      + `autocomplete="off" autocapitalize="off" spellcheck="false" ${dis(st.connecting)}></div>`
+      + `<div class="field"><label>App-specific password</label>`
+      + `<input class="txt-input" id="caldav-pw-input" type="password" `
+      + `autocomplete="off" ${dis(st.connecting)}></div>`
+      + (st.formError ? `<div class="form-error">${escapeHtml(st.formError)}</div>` : '')
+      + `<button class="btn-primary" type="button" data-caldav-connect ${dis(st.connecting)}>`
+      + `${st.connecting ? 'Connecting…' : 'Connect'}</button>`
+      + `<div class="hint">A dedicated bot Apple ID + an app-specific password `
+      + `(appleid.apple.com). Stored on this device only, never shared.</div>`;
+  }
+  // Same status vocabulary as renderIntegrations: a revoked/expired sign-in
+  // or a sync error is first-class, shown right on the account row.
+  //
+  // Deliberately NO second enable/disable switch here: the generic
+  // Integrations list one section up (#integrations-ctl, renderIntegrations)
+  // already has one for icloud_caldav, wired straight through poll() ->
+  // renderIntegrations(), which redraws on every 60s poll. A second switch
+  // in THIS panel would need its own repaint after every action that can
+  // change it (poll() deliberately never calls renderCaldavPanel; see that
+  // function's comment) and would drift out of sync with the first one the
+  // moment either went stale: two controls for one boolean, able to
+  // disagree, is worse than one. Surface only what the generic row can't:
+  // the account identity and the health badge.
+  const warn = integ.status === 'needs_auth' ? 'reconnect'
+    : (integ.status === 'error' ? 'error' : '');
+  const readonly = integ.readonly !== false;   // server default is 1-way (true)
+  const resultMsg = st.testResult ? caldavTestMessage(st.testResult) : '';
+  const resultCls = st.testResult ? (st.testResult.ok ? ' ok' : ' err') : '';
+  // Wall edits (reminder check-off/add/delete) queue in an outbox and flush on
+  // the next sync. Normally 0; a non-zero count means writes are still waiting
+  // to reach iCloud (a paused sync, a transient outage). Invisible when 0/absent
+  // so the panel stays quiet in the common case.
+  const pending = Number(integ.pending) || 0;
+  const pendingNote = pending > 0
+    ? `<div class="caldav-pending">${pending} change${pending === 1 ? '' : 's'} not yet synced</div>`
+    : '';
+  return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong>`
+    + (warn ? `<span class="integ-warn">${warn}</span>` : '')
+    + `</div>`
+    + pendingNote
+    + `<div class="settings-row">`
+    + `<span class="settings-k">Sync direction</span>`
+    + `<div class="segmented" role="group" aria-label="Sync direction">`
+    + `<button class="seg-btn${readonly ? ' active' : ''}" type="button" data-caldav-readonly="1">1-way (read-only)</button>`
+    + `<button class="seg-btn${readonly ? '' : ' active'}" type="button" data-caldav-readonly="0">2-way (write back)</button>`
+    + `</div></div>`
+    + `<div class="caldav-actions">`
+    + `<button class="padmin-btn" type="button" data-caldav-test ${dis(st.testing)}>`
+    + `${st.testing ? 'Testing…' : 'Test connection'}</button>`
+    + `<button class="padmin-btn padmin-del" type="button" data-caldav-disconnect>Disconnect</button>`
+    + `</div>`
+    + (resultMsg ? `<div class="caldav-test-result${resultCls}">${escapeHtml(resultMsg)}</div>` : '')
+    + `<div class="caldav-collections">`
+    + `<div class="settings-k">Calendars</div>`
+    + `<div class="hint">Pick which iCloud calendars and reminder lists show on the wall.</div>`
+    + `<div class="caldav-collections-list">`
+    + `${caldavCollectionsHtml(st.collections, { error: st.collectionsError })}</div>`
+    + `</div>`;
 }

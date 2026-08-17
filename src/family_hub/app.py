@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -27,8 +28,12 @@ from pydantic import BaseModel
 from . import chores as chlogic
 from . import db as fdb
 from . import demo as fdemo
+from . import integrations as fintegrations
+from . import reminders as remlogic
 from . import tiles
 from . import todos as tdlogic
+from . import caldav_service
+from . import caldav_sync
 from .calendar_sync import GoogleCalendarClient, sync_once
 from .config import load_config
 
@@ -46,6 +51,11 @@ _fetch_cfg = dataclasses.replace(
     cfg, go2rtc_base=os.environ.get("GO2RTC_FETCH_BASE", cfg.go2rtc_base))
 DB_PATH = os.environ.get("DB_PATH", "data/hub.db")
 TOKEN_PATH = os.environ.get("TOKEN_PATH", "data/token.json")
+# Server-side store for UI-entered iCloud CalDAV credentials (default: next to
+# the DB / Google token, in the git-ignored data dir). caldav_service reads it.
+os.environ.setdefault(
+    "CALDAV_CREDS_PATH",
+    os.path.join(os.path.dirname(DB_PATH) or ".", "caldav.json"))
 TZ = ZoneInfo(os.environ.get("TZ", "America/Los_Angeles"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "web", "static")
 
@@ -107,8 +117,16 @@ _db_dir = os.path.dirname(DB_PATH)
 if _db_dir:
     os.makedirs(_db_dir, exist_ok=True)
 
-_conn = None
-_conn_lock = threading.Lock()
+# Per-thread SQLite connections. Request handlers are sync `def`, so FastAPI
+# runs them on a thread pool; one shared connection let their transactions
+# interleave (one thread's commit committing another thread's half-done
+# `with conn:` block). See issue #29. Each thread gets its own connection, and
+# SQLite (WAL + busy_timeout) serializes writers across them. The one-time,
+# whole-DB setup (schema migrations, history backfill, DEMO seed) runs once
+# under a lock so concurrent first-requests can't race the table rebuilds.
+_tls = threading.local()
+_init_lock = threading.Lock()
+_db_initialized = False
 
 
 def _now_local() -> dt.datetime:
@@ -160,10 +178,10 @@ def _ensure_history_backfill(conn) -> None:
 
 def _ensure_demo_seed(conn) -> None:
     """DEMO=1 only: seed the fake sample family into an EMPTY db on first open,
-    so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on there
-    being no people yet, so it never re-seeds or touches a real db (and a plain
-    unset-DEMO run never reaches here at all)."""
-    if conn.execute("SELECT 1 FROM people LIMIT 1").fetchone() is not None:
+    so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on EVERY
+    seeded table being empty (not just people), so it never re-seeds or touches a
+    real db (issue #36) — and a plain unset-DEMO run never reaches here at all."""
+    if not fdemo.is_unseeded(conn):
         return
     try:
         fdemo.seed_demo(conn, _today())
@@ -177,62 +195,63 @@ def _ensure_demo_seed(conn) -> None:
     log.info("DEMO mode: seeded the sample family wall")
 
 
+def _init_db_once(conn) -> None:
+    """Run the one-time, whole-DB setup exactly once per process: schema
+    migrations, the legacy history backfill, and (DEMO only) the sample seed.
+    Serialized under _init_lock so concurrent first-requests can't race the
+    table-rebuild migrations. On failure it leaves _db_initialized False and
+    re-raises, so the next request retries the upgrade rather than serving
+    half-set-up data. (The backfill is atomic and the seed self-wipes a partial
+    write, so a retry starts clean.)"""
+    global _db_initialized
+    with _init_lock:
+        if _db_initialized:
+            return
+        fdb.ensure_schema(conn)
+        # Seed a row (enabled) for each available integration that has none yet.
+        # Idempotent: never flips an existing toggle. This is the non-breaking
+        # hinge — an existing install seeds every configured source ON.
+        for i, integ in enumerate(_available_only()):
+            fdb.seed_integration(conn, integ["id"], integ["kind"], sort=i)
+        _ensure_history_backfill(conn)   # kv-guarded, atomic; raises on failure
+        if DEMO:
+            _ensure_demo_seed(conn)      # people-guarded; raises on failure
+        _db_initialized = True
+
+
 def _db():
-    """Module-level SQLite connection with a cheap self-heal ping per use, so a
-    corrupted/closed handle recovers instead of erroring forever."""
-    global _conn
-    with _conn_lock:
-        if _conn is None:
-            _conn = fdb.connect(DB_PATH)
-            fdb.ensure_schema(_conn)
+    """A per-thread SQLite connection with a cheap self-heal ping per use, so a
+    corrupted/closed handle recovers instead of erroring forever. Per-thread
+    (not one shared handle) so the thread pool's request handlers never
+    interleave each other's transactions (issue #29)."""
+    conn = getattr(_tls, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+        except Exception:
+            log.warning("db handle unhealthy; reconnecting", exc_info=True)
             try:
-                _ensure_history_backfill(_conn)
+                conn.close()
             except Exception:
-                # The backfill is atomic (already rolled back). Drop the
-                # half-initialized handle so the NEXT request reconnects and
-                # retries the one-time upgrade, rather than serving zeroed
-                # history forever under a connection whose backfill never ran.
-                log.error("history backfill failed; dropping handle to retry",
-                          exc_info=True)
-                try:
-                    _conn.close()
-                except Exception:
-                    pass
-                _conn = None
-                raise
-            if DEMO:
-                try:
-                    _ensure_demo_seed(_conn)
-                except Exception:
-                    # Partial seed already wiped (clear_demo). Drop the handle so
-                    # the next request reconnects and retries the seed from empty,
-                    # rather than caching a connection whose seed never completed.
-                    log.error("DEMO seed failed; dropping handle to retry",
-                              exc_info=True)
-                    try:
-                        _conn.close()
-                    except Exception:
-                        pass
-                    _conn = None
-                    raise
-        else:
+                pass
+            conn = None
+            _tls.conn = None
+    if conn is None:
+        conn = fdb.connect(DB_PATH)
+        _tls.conn = conn
+    # Ensure the one-time whole-DB setup has run — retried here if a prior
+    # attempt failed, or if a test reset _db_initialized to force a fresh init.
+    if not _db_initialized:
+        try:
+            _init_db_once(conn)
+        except Exception:
             try:
-                _conn.execute("SELECT 1")
+                conn.close()
             except Exception:
-                log.warning("db handle unhealthy; reconnecting", exc_info=True)
-                try:
-                    _conn.close()
-                except Exception:
-                    pass
-                _conn = fdb.connect(DB_PATH)
-                fdb.ensure_schema(_conn)
-                # No drop-handle guard here (unlike the fresh-connect branch):
-                # reaching this reconnect means a handle was already established
-                # once, so the backfill flag is set by now and this call returns
-                # at its kv_get guard without doing — or being able to fail on —
-                # any backfill work.
-                _ensure_history_backfill(_conn)
-        return _conn
+                pass
+            _tls.conn = None
+            raise
+    return conn
 
 
 # One shared async client for the tile proxies instead of building/tearing
@@ -262,15 +281,70 @@ GOOGLE_EVENT_COLORS = {
 }
 
 
+def _calendar_status_agg(c) -> dict:
+    """Aggregate calendar health across every ENABLED source (Google/ICS + iCloud
+    CalDAV), so the wall's banner reflects whether ANY calendar is connected, not
+    just Google. Without this, an unused/broken Google config showed "no calendar
+    connected" while iCloud was synced and rendering. ok if any source is ok;
+    else needs_auth if any needs it; else the real error; else not configured."""
+    statuses = []
+    if cfg.calendars and (_integration_on(c, "google_calendar")
+                          or _integration_on(c, "ics_calendar")):
+        statuses.append(fdb.kv_get(c, "calendar_status")
+                        or {"ok": False, "error": "not configured"})
+    if _integration_on(c, "icloud_caldav"):
+        statuses.append(fdb.kv_get(c, "caldav_status") or {"ok": False})
+    if not statuses:
+        return {"ok": False, "error": "not configured"}
+    if any(s.get("ok") for s in statuses):
+        # One healthy source must NOT hide another's expired sign-in. On a mixed
+        # setup (Google ok + iCloud's app password revoked) the aggregate is still
+        # ok — Google renders — but needs_auth has to survive so the wall shows the
+        # reconnect banner; otherwise the iCloud half silently drifts stale behind
+        # a "connected" wall and nobody ever reconnects it.
+        agg = {"ok": True}
+        if any(s.get("needs_auth") for s in statuses):
+            agg["needs_auth"] = True
+        elif any(s.get("sustained") for s in statuses):
+            # A source has been failing (non-auth: network/5xx/TLS) long enough to
+            # be genuinely stuck, not a blip. Surface it behind the healthy source
+            # so the family knows that calendar may be behind — needs_auth, when
+            # present, is the louder signal and wins.
+            agg["degraded"] = True
+        return agg
+    if any(s.get("needs_auth") for s in statuses):
+        return {"ok": False, "needs_auth": True}
+    errs = [s.get("error") for s in statuses if s.get("error")
+            and s.get("error") not in ("disabled", "not configured")]
+    return {"ok": False, "error": "; ".join(errs) if errs else "not configured"}
+
+
 def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
-    status = fdb.kv_get(c, "calendar_status") or {"ok": False, "error": "not configured"}
+    status = _calendar_status_agg(c)
     cal_map = {cal["id"]: cal for cal in cfg.calendars}
+    # Integration gating: a disabled calendar source's events are hidden (not
+    # deleted) — its cache stays, so re-enabling shows them instantly.
+    cal_google_on = fdb.integration_enabled(c, "google_calendar", default=True)
+    cal_ics_on = fdb.integration_enabled(c, "ics_calendar", default=True)
+    # CalDAV events gate on availability AND the toggle (same as reminders), so
+    # pulling the credentials hides stale cached events instead of showing them.
+    cal_caldav_on = _integration_on(c, "icloud_caldav")
+    # CalDAV events carry a 'caldav:<slug>' calendar_id; their name/color + the
+    # per-calendar visibility toggle (the settings picker) come from the
+    # caldav_collections table the sync records, not config.
+    caldav_cols = {col["id"]: col for col in fdb.list_caldav_collections(c)}
     # rail color: the user's own Google sidebar color for the calendar wins;
     # config color is the pre-first-sync fallback
     google_colors = fdb.kv_get(c, "calendar_colors") or {}
     lo = (today - dt.timedelta(days=past_days)).isoformat()
     horizon = (today + dt.timedelta(days=days)).isoformat()
     events = []
+    # An event configured on two calendars is stored as two rows sharing the same
+    # event id (composite events PK, issue #30) — render it ONCE. Keyed on
+    # identity (id + span) so genuinely distinct events never collapse; the first
+    # VISIBLE copy wins its calendar's color (a copy hidden by the picker doesn't
+    # claim the row).
+    seen_keys: set = set()
     for e in fdb.list_events(c):
         # Keep an event whose SPAN overlaps [lo, horizon] — not just its start.
         # A multi-day event that began before the window but is still running
@@ -289,17 +363,53 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             end_day = (dt.date.fromisoformat(end_day) - dt.timedelta(days=1)).isoformat()
         if end_day < lo or start_day > horizon:
             continue
-        cal = cal_map.get(e["calendar_id"], {})
+        cid = e["calendar_id"]
+        if cid.startswith("caldav:"):
+            meta = caldav_cols.get(cid)
+            # hidden if the integration is off OR this specific calendar is
+            # unchecked in the picker (a known collection with enabled=0)
+            if not cal_caldav_on or (meta is not None and not meta["enabled"]):
+                continue
+            color = meta.get("color") if meta else None
+            label = meta.get("display_name") if meta else None
+        else:
+            cal = cal_map.get(cid, {})
+            cal_kind = cal.get("kind", "google")
+            if cal_kind == "google" and not cal_google_on:
+                continue
+            if cal_kind == "ics" and not cal_ics_on:
+                continue
+            color = google_colors.get(cid) or cal.get("color")
+            label = cal.get("label")
+        dedup_key = (e["id"], e["start_ts"], e["end_ts"])
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
         events.append({
             **e,
-            "color": google_colors.get(e["calendar_id"]) or cal.get("color"),
-            "label": cal.get("label"),
+            "color": color,
+            "label": label,
             "event_color": GOOGLE_EVENT_COLORS.get(e["color_id"] or ""),
         })
-    return {"status": status, "events": events}
+    # The range for which THIS payload is authoritative (a missing day is really
+    # free): the INTERSECTION of what was fetched (past_days .. days) and what
+    # the sync actually caches (cfg.calendar_past_days .. cfg.calendar_window_days).
+    # Reporting the raw config window would falsely mark a day that the sync
+    # caches but this request never fetched (e.g. calendar_past_days raised above
+    # the frontend's fixed past=45) as free instead of "not synced" (issue #37).
+    synced_back = min(past_days, cfg.calendar_past_days)
+    synced_fwd = min(days, cfg.calendar_window_days)
+    return {
+        "status": status,
+        "events": events,
+        "window": {
+            "from": (today - dt.timedelta(days=synced_back)).isoformat(),
+            "to": (today + dt.timedelta(days=synced_fwd)).isoformat(),
+        },
+    }
 
 
-def _links() -> dict:
+def _links(enabled_ids: set | None = None) -> dict:
     # cameras: config-driven list of go2rtc streams. Each tile embeds the
     # stream's WebRTC player; full-screen prefers a "hd" stream when the
     # config names one (e.g. a Protect cam's 4K twin), else the same src.
@@ -307,7 +417,14 @@ def _links() -> dict:
     # (missing "src"/"id"/"url", or a non-integer vw) must not raise out of
     # /api/hub and blank the ENTIRE wall (chores, calendar, every tile) over one
     # typo. A bad entry is skipped and logged; the good ones still render.
-    if DEMO:
+    # The Cameras integration toggle (enabled_ids) blanks the camera lists when
+    # off; None means "no gating" (older callers / tests). DEMO cameras are a
+    # canned showcase with no real `cameras` integration to seed, so they bypass
+    # the toggle and always render.
+    cameras_on = DEMO or enabled_ids is None or "cameras" in enabled_ids
+    if not cameras_on:
+        cameras = camera_page = []
+    elif DEMO:
         # Placeholder camera tiles (no go2rtc, no liveness probe): the frontend
         # paints a static gradient for each (see hub.js tileCamera). Panels
         # still come from config below (empty is fine in demo).
@@ -320,6 +437,104 @@ def _links() -> dict:
         camera_page = _camera_links(cfg.camera_page or cfg.cameras)
     panels = _config_panel_links()
     return {"cameras": cameras, "panels": panels, "camera_page": camera_page}
+
+
+def _available_only():
+    """The available integrations, with iCloud CalDAV availability reflecting the
+    REAL credential state (env OR the server-side creds file), so UI-entered
+    credentials make the integration appear without an env var or restart."""
+    return fintegrations.available_only(
+        cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
+
+
+def _integration_on(c, iid: str) -> bool:
+    """One definition of 'this integration is on': available (configured in
+    config/env) AND its toggle enabled. Every render/sync gate goes through here
+    so their notions of 'on' cannot drift (Fable architecture review, rec 4)."""
+    available = any(i["id"] == iid
+                    for i in _available_only())
+    return available and fdb.integration_enabled(c, iid, default=True)
+
+
+def _visible_reminders(c) -> list:
+    """iCloud reminders for the wall, rendered from cal_objects — the SINGLE
+    source of truth that holds both the synced server state AND un-pushed wall
+    edits (PENDING_*). Rendering from it (rather than a separate kv snapshot plus
+    an overlay) is what makes a wall edit show instantly AND stay put: there's no
+    stale pulled-snapshot to transiently revert to once the push lands and the row
+    flips back to SYNCED. Respects the calendar picker (a reminder list unchecked
+    in settings is hidden) and skips objects queued for deletion."""
+    cols = fdb.list_caldav_collections(c)
+    names = {col["id"]: col["display_name"] for col in cols}
+    disabled = {col["id"] for col in cols if not col["enabled"]}
+    out = []
+    for o in fdb.list_cal_objects(c, "VTODO"):
+        if o["sync_state"] == "PENDING_DELETE" or o["collection_id"] in disabled:
+            continue
+        if not o.get("raw_ics"):
+            continue
+        try:
+            out.extend(remlogic.parse_vtodo(o["raw_ics"], o["collection_id"],
+                                            names.get(o["collection_id"], "")))
+        except Exception:
+            log.warning("reminder render skipped: %s", o["id"], exc_info=True)
+    return out
+
+
+def _reminder_lists(c) -> list:
+    """Enabled iCloud reminder (VTODO) lists as [{id, name}] — the targets a
+    wall-added reminder can be filed under (the To-Do surface's add control)."""
+    return [{"id": col["id"], "name": col["display_name"]}
+            for col in fdb.list_caldav_collections(c)
+            if col["comp_type"] == "VTODO" and col["enabled"]]
+
+
+def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
+    """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
+    or None for one with no sync (cameras/weather/climate). Drives the settings
+    menu's 'Reconnect iCloud' / warning affordance on auth-failure or error."""
+    # calendar_status is shared by Google + ICS and can't tell them apart, and
+    # needs_auth is a Google-only concept — so only surface it on google_calendar
+    # (ICS gets no status rather than mis-inheriting Google's auth state).
+    src = (caldav_status if iid == "icloud_caldav"
+           else cal_status if iid == "google_calendar" else None)
+    if not src:
+        return None
+    if src.get("needs_auth"):
+        return "needs_auth"
+    err = src.get("error")
+    if src.get("ok") is False and err not in (None, "", "not configured", "disabled"):
+        return "error"
+    return "ok"
+
+
+def _integrations_state(c) -> dict:
+    """The available integrations plus their enable/disable state and health, and
+    the set of enabled ids for render gating. Available comes from config/env
+    (the registry); the enabled flag comes from the integrations table (default
+    True for a not-yet-seeded one, so gating never hides an un-toggled source)."""
+    caldav_status = fdb.kv_get(c, "caldav_status") or {}
+    cal_status = fdb.kv_get(c, "calendar_status") or {}
+    lst = []
+    enabled_ids = set()
+    for integ in _available_only():
+        en = fdb.integration_enabled(c, integ["id"], default=True)
+        if en:
+            enabled_ids.add(integ["id"])
+        entry = {"id": integ["id"], "kind": integ["kind"],
+                 "name": integ["name"], "enabled": en,
+                 "status": _integ_status(integ["id"], caldav_status, cal_status)}
+        if integ["id"] == "icloud_caldav":
+            # the connected Apple ID (not a secret) so settings can show it; the
+            # password is never included. readonly = 1-way (read-only) vs 2-way.
+            entry["account"] = caldav_service.caldav_credentials(os.environ)[0]
+            entry["readonly"] = fdb.integration_config(
+                c, "icloud_caldav").get("readonly", True)
+            # un-pushed wall edits still queued (0 normally); lets settings warn
+            # "N changes not yet synced" instead of the backlog being invisible.
+            entry["pending"] = caldav_status.get("pending", 0)
+        lst.append(entry)
+    return {"list": lst, "enabled_ids": enabled_ids}
 
 
 def _camera_links(entries: list[dict]) -> list[dict]:
@@ -455,13 +670,33 @@ def hub():
         log.error("todos block failed; serving empty buckets", exc_info=True)
         todos_block = {b: [] for b in tdlogic.BUCKETS}
         todos_ok = False
+    istate = _integrations_state(c)
+    # iCloud Reminders, grouped; empty unless the CalDAV integration is available
+    # AND enabled. A separate surface from the local To-Dos; two-way when the
+    # operator has enabled writes (readonly=False).
+    caldav_on = "icloud_caldav" in istate["enabled_ids"]
+    reminders_block = (remlogic.group(_visible_reminders(c), today)
+                       if caldav_on else {b: [] for b in remlogic.BUCKETS})
     return {
         "date": today.isoformat(),
         "people": _people_day(c, today),
         "todos": todos_block,
         "todos_ok": todos_ok,
+        "reminders": reminders_block,
+        # Two-way state for the To-Do surface when it's showing iCloud: whether
+        # writes are on, and the enabled reminder lists a wall-added reminder can
+        # target (empty => read-only or no lists, so the add control hides).
+        "reminders_writable": caldav_on and _reminders_writable(c),
+        "reminder_lists": _reminder_lists(c) if caldav_on else [],
+        # Which source backs the To-Do surface: 'local' (the built-in whiteboard,
+        # default) or 'icloud' (the iCloud Reminders list, two-way). The frontend
+        # renders the todos block or the reminders block accordingly.
+        "todo_source": fdb.kv_get(c, "todo_source") or "local",
         "calendar": _calendar_block(c, today, 14),
-        "links": _links(),
+        "links": _links(istate["enabled_ids"]),
+        # The wall's settings menu reads this; tiles for disabled integrations
+        # (weather/climate/cameras) are hidden client-side from the enabled flags.
+        "integrations": istate["list"],
         # A deploy-changing token: the wall reloads itself when it changes, so a
         # baked frontend update reaches the kiosk without a manual refresh.
         "build": BUILD,
@@ -620,6 +855,232 @@ def todos_delete(tid: int):
     return {"ok": True}
 
 
+class TodoSourceIn(BaseModel):
+    source: str
+
+
+@app.patch("/api/todo-source")   # NOT /api/todos/source: that collides with the
+def todos_set_source(body: TodoSourceIn):   # /api/todos/{tid:int} route (422s)
+    """Choose what backs the To-Do surface: the local whiteboard or iCloud
+    Reminders. Local todos are untouched either way (no migration)."""
+    if body.source not in ("local", "icloud"):
+        raise HTTPException(422, "source must be 'local' or 'icloud'")
+    fdb.kv_set(_db(), "todo_source", body.source)
+    return {"source": body.source}
+
+
+# --- integrations (the settings menu / extension toggles) -----------------
+
+class IntegrationPatch(BaseModel):
+    enabled: bool | None = None
+    readonly: bool | None = None   # CalDAV: 1-way (read-only, True) vs 2-way
+
+
+@app.get("/api/integrations")
+def integrations_list():
+    """Every available integration with its on/off state, for the settings menu."""
+    return {"integrations": _integrations_state(_db())["list"]}
+
+
+@app.patch("/api/integrations/{iid}")
+def integrations_patch(iid: str, body: IntegrationPatch):
+    c = _db()
+    avail = {i["id"]: i for i in _available_only()}
+    if iid not in avail:
+        raise HTTPException(404, "unknown integration")
+    # ensure a row exists (a never-toggled integration has none yet), then set it
+    fdb.seed_integration(c, iid, avail[iid]["kind"])
+    if body.enabled is not None:
+        fdb.set_integration_enabled(c, iid, body.enabled)
+    if body.readonly is not None:
+        conf = fdb.integration_config(c, iid)
+        conf["readonly"] = bool(body.readonly)
+        fdb.set_integration_config(c, iid, conf)
+    return {"id": iid, "enabled": fdb.integration_enabled(c, iid),
+            "readonly": fdb.integration_config(c, iid).get("readonly", True)}
+
+
+# --- iCloud CalDAV credentials (entered in settings, stored server-side) ---
+
+class CalDavCreds(BaseModel):
+    user: str
+    app_password: str
+
+
+@app.post("/api/integrations/icloud_caldav/credentials")
+def caldav_set_credentials(body: CalDavCreds):
+    """Store the iCloud bot credentials the operator types in settings. The
+    app-specific password is written to a server-side file (mode 0600) and is
+    NEVER returned by any endpoint; only its presence is ever reported."""
+    user = (body.user or "").strip()
+    pw = (body.app_password or "").strip()
+    if not (user and pw):
+        raise HTTPException(422, "user and app_password are required")
+    caldav_service.store_credentials(user, pw)
+    global _caldav_client_built
+    _caldav_client_built = False          # next sync/test rebuilds with new creds
+    fdb.seed_integration(_db(), "icloud_caldav", "caldav")
+    return {"ok": True, "user": user}     # the Apple ID is not a secret; no password
+
+
+@app.delete("/api/integrations/icloud_caldav/credentials")
+def caldav_clear_credentials():
+    c = _db()
+    caldav_service.clear_credentials()
+    global _caldav_client_built
+    _caldav_client_built = False
+    # iCloud is gone, so the source picker disappears with it: if the To-Do
+    # surface was pointed at iCloud, fall back to local — otherwise it strands on
+    # an empty iCloud card with no visible control to switch back.
+    if fdb.kv_get(c, "todo_source") == "icloud":
+        fdb.kv_set(c, "todo_source", "local")
+    return {"ok": True}
+
+
+@app.post("/api/integrations/icloud_caldav/test")
+def caldav_test_connection():
+    """Run a CalDAV sync now and report the outcome so credentials can be
+    verified from settings. Returns status only (ok / needs_auth / error /
+    counts) — never the password. Network call is deliberate (a user action)."""
+    global _caldav_client_built
+    _caldav_client_built = False
+    client = _get_caldav_client()
+    if client is None:
+        return {"ok": False, "error": "no credentials"}
+    return caldav_sync.sync_once(client, _db(), cfg, _now_local())
+
+
+@app.get("/api/integrations/icloud_caldav/collections")
+def caldav_collections():
+    """The discovered iCloud calendars + reminder lists for the settings picker:
+    each with name, color, kind (VEVENT/VTODO), and its visibility toggle."""
+    return {"collections": [
+        {"id": col["id"], "name": col["display_name"], "color": col["color"],
+         "comp_type": col["comp_type"], "enabled": col["enabled"]}
+        for col in fdb.list_caldav_collections(_db())]}
+
+
+class CollectionPatch(BaseModel):
+    enabled: bool
+
+
+@app.patch("/api/integrations/icloud_caldav/collections/{cid}")
+def caldav_collection_patch(cid: str, body: CollectionPatch):
+    """Show/hide one iCloud calendar or reminder list on the wall (cache kept)."""
+    if not fdb.set_caldav_collection_enabled(_db(), cid, body.enabled):
+        raise HTTPException(404, "unknown collection")
+    return {"id": cid, "enabled": body.enabled}
+
+
+# --- reminders (read-only iCloud VTODO) -----------------------------------
+
+@app.get("/api/reminders")
+def reminders_full():
+    """The full grouped iCloud Reminders view. `configured` is False (empty
+    buckets) when CalDAV has no credentials or its integration is off."""
+    c = _db()
+    if not _integration_on(c, "icloud_caldav"):
+        return {"buckets": {b: [] for b in remlogic.BUCKETS}, "configured": False}
+    return {"buckets": remlogic.group(_visible_reminders(c), _today()),
+            "configured": True, "writable": _reminders_writable(c)}
+
+
+# --- reminders (two-way iCloud VTODO writes) ------------------------------
+
+class ReminderToggle(BaseModel):
+    id: str
+    completed: bool
+
+
+class ReminderAdd(BaseModel):
+    list_id: str
+    title: str
+    due: str | None = None      # 'YYYY-MM-DD' (all-day) or None
+
+
+class ReminderDelete(BaseModel):
+    id: str
+
+
+def _reminders_writable(c) -> bool:
+    """Two-way is on: CalDAV available+enabled AND the operator has switched it
+    off read-only (readonly=False) in settings."""
+    return (_integration_on(c, "icloud_caldav")
+            and not fdb.integration_config(c, "icloud_caldav").get("readonly", True))
+
+
+def _require_reminders_write(c) -> None:
+    """Guard shared by the write endpoints — a clear 409 (not a silent no-op) when
+    iCloud is off or reminders are still read-only, so the wall can explain why."""
+    if not _integration_on(c, "icloud_caldav"):
+        raise HTTPException(409, "iCloud is not connected")
+    if fdb.integration_config(c, "icloud_caldav").get("readonly", True):
+        raise HTTPException(409, "iCloud reminders are read-only "
+                                 "(enable two-way in settings)")
+
+
+def _parse_due(s: str | None):
+    """An all-day due date from 'YYYY-MM-DD', or None. 422 on a malformed string
+    rather than silently dropping the date."""
+    if not s:
+        return None
+    try:
+        return dt.date.fromisoformat(s[:10])
+    except ValueError:
+        raise HTTPException(422, "due must be YYYY-MM-DD")
+
+
+@app.post("/api/reminders/toggle")
+def reminders_toggle(body: ReminderToggle):
+    """Check off / reopen an iCloud reminder from the wall: mutate the stored
+    VTODO and queue it for the next sync's push. The read overlay reflects it at
+    once, so the wall updates without waiting for the round-trip."""
+    c = _db()
+    _require_reminders_write(c)
+    obj = fdb.get_cal_object(c, body.id)
+    if obj is None or obj["comp_type"] != "VTODO":
+        raise HTTPException(404, "unknown reminder")
+    now = dt.datetime.now(dt.timezone.utc)
+    ics = remlogic.set_completed(obj["raw_ics"], body.completed, now)
+    fdb.queue_cal_object_update(c, body.id, ics, obj["summary"], now.isoformat())
+    return {"id": body.id, "completed": body.completed}
+
+
+@app.post("/api/reminders/add")
+def reminders_add(body: ReminderAdd):
+    """Add a reminder to an iCloud list from the wall (queued, pushed next sync)."""
+    c = _db()
+    _require_reminders_write(c)
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(422, "title required")
+    col = next((x for x in fdb.list_caldav_collections(c)
+                if x["id"] == body.list_id and x["comp_type"] == "VTODO"), None)
+    if col is None:
+        raise HTTPException(404, "unknown reminder list")
+    due = _parse_due(body.due)
+    now = dt.datetime.now(dt.timezone.utc)
+    uid = f"familyhub-{uuid.uuid4()}".upper()
+    oid = f"{body.list_id}/{uid}"
+    ics = remlogic.build_vtodo(uid, title, now, due=due)
+    fdb.queue_cal_object_create(c, {
+        "id": oid, "collection_id": body.list_id, "comp_type": "VTODO",
+        "uid": uid, "summary": title, "raw_ics": ics}, now.isoformat())
+    return {"id": oid, "title": title, "due": due.isoformat() if due else None}
+
+
+@app.post("/api/reminders/delete")
+def reminders_delete(body: ReminderDelete):
+    """Delete an iCloud reminder from the wall (queued, removed server-side next
+    sync)."""
+    c = _db()
+    _require_reminders_write(c)
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    if not fdb.queue_cal_object_delete(c, body.id, now_iso):
+        raise HTTPException(404, "unknown reminder")
+    return {"id": body.id, "deleted": True}
+
+
 # --- admin ----------------------------------------------------------------
 
 class PersonIn(BaseModel):
@@ -658,6 +1119,21 @@ class ChorePatch(BaseModel):
     date: str | None = None
     sort: int | None = None
     active: int | None = None
+
+
+# An explicit JSON null for a field backed by a NOT NULL column is a bad request
+# (422), not a 500 from the DB write (issue #35). fixed_person_id is the one
+# chore field that legitimately accepts null (clearing a fixed assignee); `date`
+# is an API-only field whose null means "no change".
+_PERSON_NONNULL_PATCH = {"name", "color", "sort", "active"}
+_CHORE_NONNULL_PATCH = {"title", "icon", "schedule_kind", "days_mask",
+                        "assign_kind", "rotation_order", "sort", "active"}
+
+
+def _reject_null_nonnullable(fields: dict, nonnullable: set) -> None:
+    bad = sorted(k for k in fields if k in nonnullable and fields[k] is None)
+    if bad:
+        raise HTTPException(422, f"{', '.join(bad)} may not be null")
 
 
 def _validate_person(name: str, color: str) -> str:
@@ -746,6 +1222,7 @@ def admin_patch_person(pid: int, p: PersonPatch):
     c = _db()
     row = _person_row(c, pid)
     fields = p.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _PERSON_NONNULL_PATCH)
     if "name" in fields or "color" in fields:
         name = fields.get("name", row["name"])
         color = fields.get("color", row["color"])
@@ -789,6 +1266,7 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
     c = _db()
     row = _chore_row(c, cid)
     fields = ch.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _CHORE_NONNULL_PATCH)
     merged = {**row, **fields}
     kind = merged["schedule_kind"]
     # Converting a daily/weekly chore to one-time needs a real due date. Its
@@ -887,6 +1365,21 @@ async def tile_camera(src: str = "cam"):
 
 # --- background sync ------------------------------------------------------
 
+_caldav_client = None
+_caldav_client_built = False
+
+
+def _get_caldav_client():
+    """The iCloud CalDAV client from the environment, built once and reused so
+    its principal connection is cached across ticks. None when no credentials are
+    set — the whole CalDAV subsystem is then inert (the feature flag)."""
+    global _caldav_client, _caldav_client_built
+    if not _caldav_client_built:
+        _caldav_client = caldav_service.client_from_env()
+        _caldav_client_built = True
+    return _caldav_client
+
+
 def _sync_tick(client, conn, cfg):
     """One sync iteration: run sync_once; on failure log + self-heal the DB
     connection. Returns the connection to use next tick (a fresh one after a
@@ -896,6 +1389,15 @@ def _sync_tick(client, conn, cfg):
     kv_set can still raise if the DB went unwritable)."""
     try:
         sync_once(client, conn, cfg, _now_local())
+        # CalDAV runs in the same tick but is isolated: it never raises (records
+        # its own caldav_status), and a defensive guard keeps any surprise from
+        # disrupting the Google sync's reconnect logic. Inert without credentials.
+        try:
+            cdav = _get_caldav_client()
+            if cdav is not None:
+                caldav_sync.sync_once(cdav, conn, cfg, _now_local())
+        except Exception:
+            log.exception("caldav sync tick error (non-fatal)")
         return conn
     except Exception:
         log.exception("calendar sync tick error; reconnecting DB")
@@ -911,16 +1413,59 @@ def _sync_tick(client, conn, cfg):
         return conn
 
 
+def _open_sync_conn():
+    """Open the sync thread's own DB connection, retrying with backoff. The old
+    code ran connect/ensure_schema outside any try, so a transient startup
+    failure (e.g. ensure_schema racing a request thread's migration ->
+    'database is locked') killed the daemon thread permanently and froze calendar
+    sync forever behind a still-healthy 'last synced' badge (issue #32). Retry
+    instead, and best-effort flag the failure in calendar_status so the wall
+    shows staleness rather than a false-healthy state."""
+    backoff = 5
+    while True:
+        conn = None
+        try:
+            conn = fdb.connect(DB_PATH)
+            fdb.ensure_schema(conn)
+            return conn
+        except Exception as e:
+            log.exception("sync startup failed; retrying in %ss", backoff)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            try:   # surface the failure; skip silently if the DB is unwritable
+                # closing() guarantees the fd is released even when kv_set raises
+                # on the same lock that triggered this retry — else the infinite
+                # backoff loop would leak one connection per iteration.
+                with contextlib.closing(fdb.connect(DB_PATH)) as sc:
+                    prior = fdb.kv_get(sc, "calendar_status") or {}
+                    fdb.kv_set(sc, "calendar_status",
+                               {"ok": False, "error": f"sync startup: {e}",
+                                "last_sync": prior.get("last_sync")})
+            except Exception:
+                pass
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+
+
 def sync_loop():
-    conn = fdb.connect(DB_PATH)
-    fdb.ensure_schema(conn)
+    conn = _open_sync_conn()
     client = GoogleCalendarClient(TOKEN_PATH)
     while True:
         conn = _sync_tick(client, conn, cfg)
         time.sleep(300)
 
 
-if os.environ.get("DISABLE_SYNC") != "1":
+def _sync_enabled() -> bool:
+    """The background sync thread runs unless disabled for tests (DISABLE_SYNC)
+    or in DEMO mode. DEMO's canned data must not be overwritten by a real sync
+    that would flag the seeded calendar as 'not configured' (issue #38)."""
+    return os.environ.get("DISABLE_SYNC") != "1" and not DEMO
+
+
+if _sync_enabled():
     threading.Thread(target=sync_loop, daemon=True).start()
 
 # HTML must always revalidate (no-cache still allows ETag 304s): the ?v=N
