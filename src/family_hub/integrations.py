@@ -15,6 +15,14 @@ from __future__ import annotations
 CALENDAR_KINDS = ("calendar", "caldav")
 
 
+def laundry_configured(cfg, env: dict) -> bool:
+    """True iff the laundry block is configured (config.py validated it into
+    cfg.laundry) AND the Home Assistant token is present in the environment.
+    Mirrors caldav_configured: without the credential the whole subsystem is
+    inert and the integration simply isn't available."""
+    return bool(getattr(cfg, "laundry", None) and env.get("HA_TOKEN"))
+
+
 def caldav_configured(env: dict) -> bool:
     """True iff the iCloud CalDAV bot credentials are present. This is the
     feature flag: with no credential the whole CalDAV subsystem is inert and the
@@ -60,6 +68,7 @@ def available_integrations(cfg, env: dict | None = None,
         bool(getattr(cfg, "weather_base", "")))
     add("climate", "climate", "Climate",
         bool(getattr(cfg, "climate_base", "")))
+    add("laundry", "laundry", "Laundry", laundry_configured(cfg, env))
     return out
 
 

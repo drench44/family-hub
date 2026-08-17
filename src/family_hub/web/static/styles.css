@@ -601,6 +601,54 @@ body {
 .hdot.st-warn { background: var(--warn); }
 .hdot.st-crit { background: var(--crit); }
 
+/* ------- native laundry card (washer/dryer portholes) ------- */
+/* The signature is the porthole: each machine drawn as its front-loader door.
+   The bezel doubles as a kitchen-timer dial (the .ln-arc is minutes-left on a
+   60-minute face), the drum interior carries the state (tumbling garments
+   while running, a check when done, empty when idle), and the drum contents
+   run water-cool in the washer / warm in the dryer — a physical truth, so it
+   reads without a legend. Everything resolves through theme tokens; the only
+   motion is the tumble, and only while a cycle is actually running. */
+.laundry-slot { display: flex; flex-direction: column; gap: 12px; }
+.ln { padding: 16px 12px 14px; }
+.ln-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ln-m { display: flex; flex-direction: column; align-items: center; text-align: center;
+  min-width: 0; }
+.ln-door { width: 104px; height: 104px; }
+.ln-bezel { fill: var(--surface-2); stroke: var(--edge); stroke-width: 5; }
+/* timer dial: minutes left, drawn from 12 o'clock (the -90° spin) */
+.ln-arc { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 50px 50px; }
+.ln-ph-paused .ln-arc { stroke: var(--warn); }
+.ln-ph-done .ln-arc { stroke: var(--good); }
+.ln-glass { fill: color-mix(in srgb, var(--ground) 55%, var(--surface-2)); }
+.ln-glint { stroke: var(--ink); opacity: .14; stroke-width: 3; stroke-linecap: round; }
+/* drum contents: garments tint by machine (washer cool / dryer warm) */
+.ln-g { fill: var(--p2); }
+.ln-g1 { opacity: .62; } .ln-g2 { opacity: .46; } .ln-g3 { opacity: .36; }
+.ln-dryer .ln-g { fill: var(--p3); }
+.ln-sud { fill: var(--ink); opacity: .25; }
+.ln-dryer .ln-sud { display: none; }   /* suds are a washer thing */
+.ln-tumble { transform-origin: 50px 50px; animation: ln-spin 3.4s linear infinite; }
+.ln-ph-paused .ln-tumble { animation-play-state: paused; }
+@keyframes ln-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ln-tumble { animation: none; } }
+.ln-check { fill: none; stroke: var(--good); stroke-width: 7;
+  stroke-linecap: round; stroke-linejoin: round; }
+.ln-bang { fill: var(--crit); font: 700 34px var(--sans); }
+/* quiet phases quiet the whole machine block */
+.ln-ph-idle .ln-door, .ln-ph-offline .ln-door { opacity: .55; }
+.ln-label { margin-top: 8px; font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--faint); }
+.ln-big { margin-top: 2px; font-size: 25px; font-weight: 650; color: var(--ink);
+  line-height: 1.15; }
+.ln-big .num { font-size: 30px; }
+.ln-unit { margin-left: 4px; font-size: 13px; font-weight: 500; color: var(--dim); }
+.ln-ph-done .ln-big { color: var(--good); }
+.ln-ph-error .ln-big { color: var(--crit); }
+.ln-ph-idle .ln-big, .ln-ph-offline .ln-big { color: var(--dim); font-weight: 550; }
+.ln-sub { margin-top: 1px; font-size: 12px; color: var(--dim); min-height: 15px; }
+
 
 /* ========================== calendar ========================= */
 .cal { grid-area: cal; display: flex; flex-direction: column; gap: 12px; }
@@ -1640,6 +1688,7 @@ body.overlay-open { overflow: hidden; }
    server-side (links), so this is belt-and-suspenders + covers the Cameras tab. */
 body.integ-off-weather #weather-slot { display: none; }
 body.integ-off-climate #climate-slot { display: none; }
+body.integ-off-laundry #laundry-slot { display: none; }
 body.integ-off-cameras .tile-camera,
 body.integ-off-cameras #camgrid { display: none; }
 body.integ-off-chores .people-col { display: none; }

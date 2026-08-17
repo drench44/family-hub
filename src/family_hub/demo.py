@@ -267,3 +267,28 @@ def demo_camera_page() -> list[dict]:
         {"src": "demo-yard", "label": "Back Yard", "demo": True, "tone": "warm"},
         {"src": "demo-side", "label": "Side Gate", "demo": True, "tone": "warm"},
     ]
+
+
+def demo_laundry() -> dict:
+    """A live-shaped laundry tile (matches tiles.laundry_tile plus the route's
+    ``last_done`` annotation): the washer mid-cycle finishing soon and the
+    dryer freshly done, so a demo screenshot shows both signature states.
+    Times are computed relative to now so the countdown always looks live."""
+    now = dt.datetime.now(dt.timezone.utc)
+
+    def iso(minutes: float) -> str:
+        return (now + dt.timedelta(minutes=minutes)).isoformat()
+
+    return {
+        "available": True,
+        "machines": [
+            {"id": "washer", "label": "Washer", "kind": "washer",
+             "phase": "running", "status": "rinsing",
+             "finishes_at": iso(23), "status_since": iso(-8),
+             "last_done": iso(-26 * 60)},
+            {"id": "dryer", "label": "Dryer", "kind": "dryer",
+             "phase": "done", "status": "end",
+             "finishes_at": None, "status_since": iso(-47),
+             "last_done": iso(-47)},
+        ],
+    }
