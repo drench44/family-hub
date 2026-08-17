@@ -4655,7 +4655,10 @@ test('toggleCaldavCollection: an unknown id is a no-op (no PATCH, no toast)', as
 /* ---------------------------------------------------------- laundry card */
 
 // Fixed clock for deterministic copy: mid-afternoon, well clear of midnight.
-const LN_NOW = Date.parse('2026-08-17T14:00:00-07:00');
+// Anchored to LOCAL wall-clock components (not an absolute instant): lnTime/
+// lnWhen render through the runner's clock, so an -07:00 instant would make
+// every "2:23pm" expectation fail on a UTC CI runner.
+const LN_NOW = new Date(2026, 7, 17, 14, 0, 0).getTime();
 const lnIso = (minutes) => new Date(LN_NOW + minutes * 60000).toISOString();
 
 const LN_WASHER_RUNNING = {
@@ -4824,3 +4827,81 @@ test('updateTabVisibility + applyWallLayout: laundry alone keeps the weather tab
     'the CSS hook that hides #laundry-slot is stamped');
 });
 
+
+test('fetchLaundry: keeps the last good card through transient failures, gives up after the limit', async () => {
+  const { document, sandbox } = newHub();
+  await flush();   // let the load-time fetchLaundry() (offline stub) settle first
+  const slot = document.createElement('div');
+  slot._id = 'laundry-slot';
+  document.body.appendChild(slot);
+  const good = { available: true, machines: [LN_WASHER_RUNNING] };
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => good });
+  await sandbox.fetchLaundry();
+  assert.match(slot.innerHTML, /ln-m ln-washer/, 'good card first');
+  // the feed now blips: single failures must NOT blank the card
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchLaundry();   // fail 1
+  assert.match(slot.innerHTML, /ln-m ln-washer/, 'last-good retained after 1 fail');
+  assert.doesNotMatch(slot.innerHTML, /unavailable/i);
+  await sandbox.fetchLaundry();   // fail 2
+  assert.match(slot.innerHTML, /ln-m ln-washer/, 'last-good retained after 2 fails');
+  // only after TILE_FAIL_LIMIT (3) consecutive misses does it fall back
+  await sandbox.fetchLaundry();   // fail 3
+  assert.match(slot.innerHTML, /Laundry unavailable/, 'gives up after the failure limit');
+  // recovery: one good poll restores the card AND resets the counter
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => good });
+  await sandbox.fetchLaundry();
+  assert.match(slot.innerHTML, /ln-m ln-washer/, 'recovers on the next good poll');
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchLaundry();   // a single new blip after recovery
+  assert.match(slot.innerHTML, /ln-m ln-washer/,
+    'counter was reset by the good poll (not a lifetime tally)');
+});
+
+test('lnLines reserved phase + a >60-minute cycle clamps the dial full', () => {
+  const { sandbox } = newHub();
+  const L = (m) => ({ ...sandbox.lnLines(m, LN_NOW) });
+  // reserved (delayed start): no time claim either way — what the remaining
+  // sensor holds during a delayed start is unverified
+  assert.deepEqual(L({ id: 'w', phase: 'reserved', finishes_at: lnIso(90) }),
+    { big: 'Scheduled', sub: 'delayed start' });
+  assert.deepEqual(L({ id: 'w', phase: 'reserved', finishes_at: null }),
+    { big: 'Scheduled', sub: 'delayed start' });
+  // a 90-minute cycle: the 60-minute dial pins at a full ring
+  const html = sandbox.laundryCardHtml({ available: true, machines: [
+    { ...LN_WASHER_RUNNING, finishes_at: lnIso(90) }] }, LN_NOW);
+  const arc = /class="ln-arc"[^>]*stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(html);
+  assert.ok(Math.abs(arc[1] / arc[2] - 1) < 0.01, 'ring clamps full past 60 min');
+  assert.match(html, /<span class="num">90<\/span>/, 'count still shows the real minutes');
+});
+
+test('lnWhen: weekday inside a week, a real date beyond it', () => {
+  const { sandbox } = newHub();
+  // Aug 16 2pm local, one day back -> weekday form (Sunday)
+  assert.equal(sandbox.lnWhen(new Date(2026, 7, 16, 14, 0, 0).toISOString(), LN_NOW),
+    'Sun 2:00pm');
+  // 16 days back -> a date, never a this-week-looking weekday
+  assert.equal(sandbox.lnWhen(new Date(2026, 7, 1, 14, 0, 0).toISOString(), LN_NOW),
+    'Aug 1');
+});
+
+test('fetchLaundry: an unchanged payload does not repaint (tumble never restarts)', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  const slot = document.createElement('div');
+  slot._id = 'laundry-slot';
+  document.body.appendChild(slot);
+  const good = { available: true, machines: [LN_WASHER_RUNNING] };
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(good)) });
+  await sandbox.fetchLaundry();
+  const el1 = slot.querySelectorAll('.ln-m')[0];
+  assert.ok(el1, 'first poll painted the card');
+  await sandbox.fetchLaundry();   // identical payload
+  const el2 = slot.querySelectorAll('.ln-m')[0];
+  assert.equal(el2, el1, 'identical poll skipped the innerHTML rebuild');
+  // a changed payload DOES repaint
+  const done = { available: true, machines: [{ ...LN_WASHER_RUNNING, phase: 'done', status: 'end', finishes_at: null }] };
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => done });
+  await sandbox.fetchLaundry();
+  assert.notEqual(slot.querySelectorAll('.ln-m')[0], el1, 'changed payload repainted');
+});

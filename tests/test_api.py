@@ -2148,3 +2148,86 @@ def test_integrations_laundry_toggle_roundtrip(client, monkeypatch):
     hub = {i["id"]: i for i in client.get("/api/hub").json()["integrations"]}
     assert hub["laundry"]["enabled"] is False
     client.patch("/api/integrations/laundry", json={"enabled": True})
+
+
+def test_tiles_laundry_route_restamps_only_across_a_real_new_cycle(client, monkeypatch):
+    # The stamp moves ONLY across an observed transition into done (a real new
+    # cycle passes through running first). done -> done with a shifted
+    # status_since is what an HA restart / cloud blip looks like (last_changed
+    # resets) — re-stamping there would overwrite the true 9:02pm finish with
+    # the 3am restart time.
+    t1 = "2026-08-17T15:00:00+00:00"
+    t_restart = "2026-08-18T03:07:00+00:00"
+    t2 = "2026-08-18T20:30:00+00:00"
+
+    def tile_with(phase, status, ts):
+        async def tile(hclient, cfg, token):
+            return {"available": True, "machines": [
+                {"id": "dryer", "label": "Dryer", "kind": "dryer",
+                 "phase": phase, "status": status, "finishes_at": None,
+                 "status_since": ts}]}
+        return tile
+
+    last_done = lambda: client.get("/api/tiles/laundry").json()["machines"][0]["last_done"]
+    # first finish observed -> stamped
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", tile_with("done", "end", t1))
+    assert last_done() == t1
+    # HA restart: still done, but last_changed moved -> stamp MUST NOT move
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_restart))
+    assert last_done() == t1
+    # done -> offline -> done (cloud blip) must not move it either
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    assert last_done() == t1
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_restart))
+    assert last_done() == t1
+    # a REAL new cycle: running, then done -> the stamp moves to the new finish
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", None))
+    assert last_done() == t1   # still the old finish while running
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", tile_with("done", "end", t2))
+    assert last_done() == t2
+
+
+def test_tiles_laundry_route_end_to_end_real_tile(client, monkeypatch):
+    # The real wiring, unmocked: route -> tiles.laundry_tile -> (mock HTTP
+    # transport) -> HA-shaped states. Catches an env-var typo or argument
+    # swap that the monkeypatched-tile tests can't see (fail-soft would mask
+    # it as a permanently unavailable card). Also proves the in-process tile
+    # cache serves the SECOND request and that the route's last_done
+    # annotation never leaks into the cached dict.
+    import httpx
+    import family_hub.app as appmod
+    import family_hub.tiles as ftiles
+    from family_hub.config import _clean_laundry
+
+    ftiles.reset_caches()
+    monkeypatch.setattr(appmod.cfg, "laundry", _clean_laundry({
+        "ha_base": "http://ha:8123", "machines": [
+            {"id": "washer", "label": "Washer", "kind": "washer",
+             "status_entity": "sensor.w_status",
+             "remaining_entity": "sensor.w_rem"}]}))
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    done_at = "2026-08-17T21:02:00+00:00"
+
+    def handler(req):
+        assert req.headers.get("Authorization") == "Bearer tok"
+        entity = req.url.path.rsplit("/", 1)[-1]
+        state = {"sensor.w_status": {"state": "end", "last_changed": done_at},
+                 "sensor.w_rem": {"state": "unknown", "last_changed": done_at}}
+        return httpx.Response(200, json=state[entity])
+
+    monkeypatch.setattr(
+        appmod, "_http", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    t = client.get("/api/tiles/laundry").json()
+    assert t["available"] is True
+    m = t["machines"][0]
+    assert m["phase"] == "done" and m["last_done"] == done_at
+    # second request: served from the tile cache, same annotated shape
+    assert client.get("/api/tiles/laundry").json()["machines"][0]["last_done"] == done_at
+    # the cached dict itself stays un-annotated (the route copies)
+    cached = ftiles._laundry_cache["http://ha:8123"][1]
+    assert "last_done" not in cached["machines"][0]
+    ftiles.reset_caches()

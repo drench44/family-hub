@@ -11,7 +11,8 @@ descriptor here — the settings menu, seeding, and gating all read this list.
 from __future__ import annotations
 
 # Kinds group integrations for the UI and for render gating. `calendar` and
-# `caldav` both feed the calendar; `cameras`/`weather`/`climate` are tiles.
+# `caldav` both feed the calendar; `cameras`/`weather`/`climate`/`laundry`
+# are tiles.
 CALENDAR_KINDS = ("calendar", "caldav")
 
 

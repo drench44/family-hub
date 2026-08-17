@@ -101,3 +101,19 @@ def test_laundry_config_cleaning():
     assert _clean_laundry({"ha_base": "http://ha", "machines": []}) is None
     assert _clean_laundry({"ha_base": "http://ha",
                            "machines": [{"id": "w"}]}) is None
+
+
+def test_laundry_config_cleaning_warns_loudly(caplog):
+    # Dropped machines and a dropped-whole-integration must say so in the log
+    # (the operator's only debugging path otherwise is re-reading their JSON
+    # character by character while the card silently never appears).
+    import logging
+    from family_hub.config import _clean_laundry
+    with caplog.at_level(logging.WARNING, logger="family_hub.config"):
+        _clean_laundry({"ha_base": "http://ha", "machines": [
+            {"id": "w", "status_entity": "s.a"},        # missing remaining_entity
+            "not-a-dict"]})
+    msgs = " ".join(r.message for r in caplog.records)
+    assert "dropping machine entry" in msgs
+    assert "dropping non-dict machine entry" in msgs
+    assert "no valid machines survived" in msgs

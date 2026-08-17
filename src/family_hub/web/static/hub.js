@@ -2084,8 +2084,11 @@ function lnTime(iso) {
   return `${hh}:${String(min).padStart(2, '0')}${ap}`;
 }
 
-/* 'at 2:14pm' for today, 'Sat 2:14pm' further back — the completed-load line
-   stays honest about a load that's been sitting since yesterday. */
+/* 'at 2:14pm' for today, 'Sat 2:14pm' inside the past week, 'Aug 1' beyond —
+   the completed-load line stays honest about a load that's been sitting since
+   yesterday, and a weekday name is never used where it would read as THIS
+   week (last_done comes from the persistent kv store and can be arbitrarily
+   old — a two-week-old 'Wed 2:14pm' is actively misleading). */
 function lnWhen(iso, nowMs = Date.now()) {
   const d = new Date(iso);
   if (!iso || isNaN(d)) return '';
@@ -2093,6 +2096,11 @@ function lnWhen(iso, nowMs = Date.now()) {
   const sameDay = d.getFullYear() === now.getFullYear()
     && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
   if (sameDay) return lnTime(iso);
+  if (nowMs - d.getTime() > 6 * 86400000) {
+    const mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
+                'Oct', 'Nov', 'Dec'][d.getMonth()];
+    return `${mo} ${d.getDate()}`;
+  }
   const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
   return `${wd} ${lnTime(iso)}`;
 }
@@ -2133,7 +2141,10 @@ function lnLines(m, now = Date.now()) {
     case 'paused':
       return { big: 'Paused', sub: mins !== null ? `about ${mins} min left` : '' };
     case 'reserved':
-      return { big: 'Scheduled', sub: done ? `starts for ${done}` : 'delayed start' };
+      // No time claim: what lg_thinq's remaining-time sensor holds during a
+      // delayed start (start moment? end moment?) is unverified — say only
+      // what's certain until a real delayed cycle is observed.
+      return { big: 'Scheduled', sub: 'delayed start' };
     case 'done':
       return { big: 'Done', sub: m.status_since ? `at ${lnWhen(m.status_since, now)}` : '' };
     case 'error':
@@ -2266,8 +2277,12 @@ function laundryTick(now = Date.now()) {
 }
 
 /* Poll the fail-soft laundry endpoint on the hub cadence; same last-good-card
-   discipline as weather/climate. */
+   discipline as weather/climate. Re-render ONLY when the payload actually
+   changed — an innerHTML rebuild restarts the tumble animation mid-spin, and
+   an idle pair polls identical for hours. laundryTick keeps the countdown
+   moving between real changes. */
 async function fetchLaundry() {
+  const before = JSON.stringify(laundryData);
   try {
     laundryData = await j('/api/tiles/laundry');
     laundryFails = 0;
@@ -2275,7 +2290,8 @@ async function fetchLaundry() {
     laundryFails += 1;
     if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) laundryData = { available: false };
   }
-  renderLaundry();
+  if (JSON.stringify(laundryData) !== before) renderLaundry();
+  else laundryTick();   // still advance the countdown on the poll beat
 }
 
 let fitDebounce = null;
