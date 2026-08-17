@@ -123,14 +123,17 @@ class CalDavClient:
         return self._principal
 
     def _color(self, cal) -> str | None:
+        # `from caldav.elements import ical` — NOT `import caldav` +
+        # caldav.elements.ical, which raises AttributeError (the submodule isn't
+        # auto-imported) and silently yielded None for every calendar color.
         try:
-            import caldav
-            props = cal.get_properties(
-                [caldav.elements.ical.CalendarColor()])
+            from caldav.elements import ical
+            props = cal.get_properties([ical.CalendarColor()])
             for v in props.values():
                 if v:
-                    return str(v)[:9]   # '#RRGGBBAA' at most
-        except Exception:
+                    return str(v)[:9]   # iCloud returns '#RRGGBBAA'
+        except Exception as e:
+            log.warning("caldav calendar-color fetch failed: %s", e)
             return None
         return None
 
