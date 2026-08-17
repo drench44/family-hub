@@ -1283,8 +1283,19 @@ function closeAllOverlays() {
   closeOverlay();
 }
 
+/* Whether this device drifts back to the home wall after an idle timeout. The
+   shared wall wants it (a public dashboard shouldn't sit on whatever overlay
+   someone left open); a personal phone/TV opts out via Settings -> Display so
+   it stays on the view being read. Default ON: only an explicit "off" (stamped
+   by theme.js from fh.idleReturn) disables it, so a device where theme.js never
+   ran still auto-returns. */
+function idleReturnEnabled() {
+  return document.documentElement.getAttribute('data-idle-return') !== 'off';
+}
+
 function armIdle() {
-  if (idleTimer) clearTimeout(idleTimer);
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (!idleReturnEnabled()) return;   // this device opted out — never yank it home
   idleTimer = setTimeout(closeAllOverlays, idleReturnMs(openView));
 }
 
@@ -2260,6 +2271,11 @@ function applyHouseTheme(theme) {
   if (theme.mode && noOverride('fh.theme')) stampTheme(theme.mode);
   if (theme.accent && noOverride('fh.accent')) stampAccent(theme.accent);
   if (theme.columns && noOverride('fh.cols')) stampColumns(theme.columns);
+  // layout + idle-return are per-device prefs that also accept a house default,
+  // same fresh-device-only semantics as the three above (server sends them only
+  // when configured, so these no-op on a default install).
+  if (theme.layout && noOverride('fh.layout')) stampLayout(theme.layout);
+  if (theme.idleReturn && noOverride('fh.idleReturn')) stampIdleReturn(theme.idleReturn);
   reflectThemeControls();
 }
 
@@ -2276,6 +2292,8 @@ function reflectThemeControls() {
   const accent = el.getAttribute('data-accent');
   const cols = el.getAttribute('data-cols');
   const layout = el.getAttribute('data-layout');
+  // default ON: an unstamped attribute reflects as 'on', never a blank control
+  const idle = el.getAttribute('data-idle-return') === 'off' ? 'off' : 'on';
   document.querySelectorAll('.theme-ctl').forEach((ctl) => {
     ctl.querySelectorAll('[data-theme-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.themeSet === mode));
@@ -2287,6 +2305,9 @@ function reflectThemeControls() {
     // the operator picked (data-layout on <html>, stamped by theme.js).
     ctl.querySelectorAll('[data-layout-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.layoutSet === layout));
+    // Auto-return On/Off (data-idle-return), same reflection shape.
+    ctl.querySelectorAll('[data-idle-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.idleSet === idle));
   });
 }
 
@@ -2374,6 +2395,13 @@ function renderSettingsFull() {
     + `<div class="seg" role="group" aria-label="Layout mode">`
     + `<button type="button" data-layout-set="auto">Auto</button>`
     + `<button type="button" data-layout-set="desktop">Desktop</button>`
+    + `</div></div>`
+    // Auto-return: On = drift back to the home wall after an idle timeout (the
+    // shared-wall default); Off = stay on the page you opened (a personal phone/TV).
+    + `<div class="settings-row"><span class="settings-k">Auto-return</span>`
+    + `<div class="seg" role="group" aria-label="Return to home when idle">`
+    + `<button type="button" data-idle-set="on">On</button>`
+    + `<button type="button" data-idle-set="off">Off</button>`
     + `</div></div>`
     + `</div></div>`
     + `<div class="card pad settings-card">`
@@ -2623,6 +2651,11 @@ document.addEventListener('click', (e) => {
   // so a tap works in either the gear popover or the Settings overlay's copy.
   const ly = e.target.closest('.theme-ctl [data-layout-set]');
   if (ly) { setLayout(ly.dataset.layoutSet); reflectThemeControls(); return; }
+  // Auto-return On/Off. Re-arm on the spot when an overlay is open, so flipping
+  // it OFF clears the pending return-home timer (and ON re-arms it) immediately,
+  // not only on the next interaction.
+  const ir = e.target.closest('.theme-ctl [data-idle-set]');
+  if (ir) { setIdleReturn(ir.dataset.idleSet); reflectThemeControls(); if (openView) armIdle(); return; }
   // Integrations switch list: also unscoped now that it only ever renders
   // inside the Settings overlay (#integrations-ctl), never the popover.
   const ig = e.target.closest('[data-integ-toggle]');

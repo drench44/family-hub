@@ -170,6 +170,24 @@ def test_hub_theme_lines_column_survives(tmp_path, monkeypatch):
     assert theme == {"accent": "cyan", "columns": "lines"}
 
 
+def test_hub_theme_layout_and_idle_return_survive(tmp_path, monkeypatch):
+    """A house can set default layout + idle auto-return for fresh devices, so
+    both must round-trip through config validation (the frontend applyHouseTheme
+    re-stamps them on an un-overridden device). Regression guard: _THEME_AXES
+    omitting either would silently drop it, and the documented house default
+    would never reach any device."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"theme": {"layout": "desktop", "idleReturn": "off"}})
+    with TestClient(appmod.app) as c:
+        theme = c.get("/api/hub").json()["theme"]
+    assert theme == {"layout": "desktop", "idleReturn": "off"}
+    # invalid values are dropped like every other axis (never crash, never leak)
+    appmod2 = _reload_with(tmp_path, monkeypatch,
+                           {"theme": {"layout": "sideways", "idleReturn": "maybe"}})
+    with TestClient(appmod2.app) as c:
+        assert c.get("/api/hub").json()["theme"] is None
+
+
 def test_hub_theme_new_modes_survive(tmp_path, monkeypatch):
     """All five wall modes (light/soft/dark/grey/black) round-trip through config
     validation. Regression: _THEME_AXES['mode'] listed only light/dark, so a
