@@ -350,15 +350,23 @@ test('calStatusMessage: ok status shows no banner', () => {
   assert.equal(sandbox.calStatusMessage({}), '');   // ok undefined != false -> no banner
 });
 
-test('calStatusMessage: revoked token asks to re-run setup', () => {
+test('calStatusMessage: revoked token asks to reconnect', () => {
   const m = sandbox.calStatusMessage({ ok: false, needs_auth: true });
   assert.match(m, /sign-in expired/);
-  assert.match(m, /re-run calendar setup/);
+  assert.match(m, /reconnect it in settings/);
 });
 
 test('calStatusMessage: not-configured vs generic error', () => {
-  assert.match(sandbox.calStatusMessage({ ok: false, error: 'not configured' }), /isn.t connected yet/);
+  assert.match(sandbox.calStatusMessage({ ok: false, error: 'not configured' }), /connected yet/);
   assert.match(sandbox.calStatusMessage({ ok: false, error: 'quota exceeded' }), /hit a snag/);
+});
+
+test('calStatusMessage: copy is source-neutral (no "Google" — the hub has several sources)', () => {
+  for (const st of [{ ok: false, needs_auth: true },
+                    { ok: false, error: 'not configured' },
+                    { ok: false, error: 'quota exceeded' }]) {
+    assert.doesNotMatch(sandbox.calStatusMessage(st), /google/i);
+  }
 });
 
 test('calStatusMessage: needs_auth wins over a not-configured error string', () => {

@@ -136,7 +136,7 @@ function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter, win) {
       + dayHeadHtml(d, todayStr)
       + (evs.length ? evs.map((ev) => eventRow(ev, d)).join('')
         : unsynced
-          ? `<div class="cal-empty">not synced yet: Google data doesn’t reach this day</div>`
+          ? `<div class="cal-empty">not synced yet — this day is past the synced window</div>`
           : `<div class="cal-empty">nothing scheduled</div>`)
       + `</div>`;
   }

@@ -615,12 +615,13 @@ function calStatusMessage(status) {
   const st = status || {};
   if (st.ok !== false) return '';
   if (st.needs_auth) {
-    // A revoked/expired Google sign-in needs the owner to re-run setup, unlike
-    // a transient blip (which shows the generic message below).
-    return 'Google sign-in expired — re-run calendar setup to reconnect. Showing the last events we saw.';
+    // A revoked/expired calendar sign-in needs the owner to reconnect it (in the
+    // settings menu), unlike a transient blip (the generic message below). The
+    // hub now has several calendar sources, so this copy stays source-neutral.
+    return 'A calendar sign-in expired — reconnect it in settings. Showing the last events we saw.';
   }
   if (String(st.error || '').includes('not configured')) {
-    return 'Google Calendar isn’t connected yet — once it’s linked, the family’s events show up here.';
+    return 'No calendar is connected yet — add one in settings and the family’s events show up here.';
   }
   return 'Calendar sync hit a snag — showing the last events we saw.';
 }
