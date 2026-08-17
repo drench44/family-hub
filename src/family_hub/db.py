@@ -551,22 +551,21 @@ def delete_todo(conn, tid: int) -> None:
 
 # --- events ---------------------------------------------------------------
 
-def replace_events(conn, events: list[dict], keep_ids: tuple = ()) -> None:
-    """Replace the cached window. Sources whose fetch failed this round pass
-    their calendar_ids in keep_ids so their last-good events survive; every
-    other row (including calendars removed from config) is replaced."""
+def _replace_events(conn, events: list[dict], scope_sql: str,
+                    keep_ids: tuple) -> None:
+    """Replace the cached events within one SOURCE scope (a WHERE clause on
+    calendar_id) so the Google/ICS sync and the CalDAV sync never delete each
+    other's rows in the shared table. keep_ids preserves a source whose fetch
+    failed this round. OR REPLACE: the PK is (calendar_id, id), so cross-calendar
+    copies coexist and an in-batch duplicate replaces rather than aborting."""
     with conn:  # one transaction
         if keep_ids:
             q = ",".join("?" * len(keep_ids))
             conn.execute(
-                f"DELETE FROM events WHERE calendar_id NOT IN ({q})",
-                tuple(keep_ids))
+                f"DELETE FROM events WHERE ({scope_sql}) "
+                f"AND calendar_id NOT IN ({q})", tuple(keep_ids))
         else:
-            conn.execute("DELETE FROM events")
-        # OR REPLACE: the PK is (calendar_id, id), so cross-calendar copies of
-        # one event coexist; a same-(calendar_id, id) duplicate within a single
-        # batch (e.g. a malformed ICS feed) replaces rather than aborting the
-        # whole sync.
+            conn.execute(f"DELETE FROM events WHERE {scope_sql}")
         conn.executemany(
             "INSERT OR REPLACE INTO events(id, calendar_id, title, start_ts, "
             "end_ts, all_day, updated, location, description, color_id) "
@@ -575,6 +574,17 @@ def replace_events(conn, events: list[dict], keep_ids: tuple = ()) -> None:
               e["end_ts"], e["all_day"], e.get("updated"),
               e.get("location", ""), e.get("description", ""),
               e.get("color_id")) for e in events])
+
+
+def replace_events(conn, events: list[dict], keep_ids: tuple = ()) -> None:
+    """Replace the config-sourced (Google/ICS) cached window. CalDAV rows
+    (calendar_id 'caldav:%') are managed separately and left untouched."""
+    _replace_events(conn, events, "calendar_id NOT LIKE 'caldav:%'", keep_ids)
+
+
+def replace_events_caldav(conn, events: list[dict], keep_ids: tuple = ()) -> None:
+    """Replace the CalDAV (iCloud) cached window only; Google/ICS rows survive."""
+    _replace_events(conn, events, "calendar_id LIKE 'caldav:%'", keep_ids)
 
 
 def list_events(conn) -> list[dict]:

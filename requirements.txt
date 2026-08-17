@@ -7,3 +7,4 @@ google-auth-oauthlib>=1.2
 tzdata>=2024.1
 icalendar>=5.0
 recurring-ical-events>=2.2
+caldav>=1.3

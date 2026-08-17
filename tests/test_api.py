@@ -1496,3 +1496,27 @@ def test_disabling_calendar_integration_hides_its_events(tmp_path, monkeypatch):
         tc.patch("/api/integrations/google_calendar", json={"enabled": True})
         assert any(e["title"] == "Dentist"
                    for e in tc.get("/api/calendar").json()["events"])
+
+
+def test_calendar_renders_caldav_events_with_color_and_gating(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})   # no google/ics calendars
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=3)).isoformat()
+        appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:abc",
+            "title": "Dentist", "start_ts": f"{soon}T10:00:00",
+            "end_ts": f"{soon}T11:00:00", "all_day": 0}])
+        appmod.fdb.kv_set(c, "caldav_collections",
+                          {"caldav:abc": {"name": "Family", "color": "#FF0000"}})
+        ev = next(e for e in tc.get("/api/calendar").json()["events"]
+                  if e["title"] == "Dentist")
+        assert ev["color"] == "#FF0000" and ev["label"] == "Family"
+        # iCloud CalDAV is available (creds set) -> a toggleable integration
+        ids = {i["id"] for i in tc.get("/api/integrations").json()["integrations"]}
+        assert "icloud_caldav" in ids
+        # disabling it hides the CalDAV events (cache kept)
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": False})
+        assert all(e["title"] != "Dentist"
+                   for e in tc.get("/api/calendar").json()["events"])

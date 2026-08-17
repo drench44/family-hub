@@ -30,6 +30,8 @@ from . import demo as fdemo
 from . import integrations as fintegrations
 from . import tiles
 from . import todos as tdlogic
+from . import caldav_service
+from . import caldav_sync
 from .calendar_sync import GoogleCalendarClient, sync_once
 from .config import load_config
 
@@ -279,6 +281,10 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     # deleted) — its cache stays, so re-enabling shows them instantly.
     cal_google_on = fdb.integration_enabled(c, "google_calendar", default=True)
     cal_ics_on = fdb.integration_enabled(c, "ics_calendar", default=True)
+    cal_caldav_on = fdb.integration_enabled(c, "icloud_caldav", default=True)
+    # CalDAV events carry a 'caldav:<slug>' calendar_id; their name/color come
+    # from the discovered-collection metadata the caldav sync records, not config.
+    caldav_cols = fdb.kv_get(c, "caldav_collections") or {}
     # rail color: the user's own Google sidebar color for the calendar wins;
     # config color is the pre-first-sync fallback
     google_colors = fdb.kv_get(c, "calendar_colors") or {}
@@ -303,16 +309,25 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             end_day = (dt.date.fromisoformat(end_day) - dt.timedelta(days=1)).isoformat()
         if end_day < lo or start_day > horizon:
             continue
-        cal = cal_map.get(e["calendar_id"], {})
-        cal_kind = cal.get("kind", "google")
-        if cal_kind == "google" and not cal_google_on:
-            continue
-        if cal_kind == "ics" and not cal_ics_on:
-            continue
+        cid = e["calendar_id"]
+        if cid.startswith("caldav:"):
+            if not cal_caldav_on:
+                continue
+            meta = caldav_cols.get(cid, {})
+            color, label = meta.get("color"), meta.get("name")
+        else:
+            cal = cal_map.get(cid, {})
+            cal_kind = cal.get("kind", "google")
+            if cal_kind == "google" and not cal_google_on:
+                continue
+            if cal_kind == "ics" and not cal_ics_on:
+                continue
+            color = google_colors.get(cid) or cal.get("color")
+            label = cal.get("label")
         events.append({
             **e,
-            "color": google_colors.get(e["calendar_id"]) or cal.get("color"),
-            "label": cal.get("label"),
+            "color": color,
+            "label": label,
             "event_color": GOOGLE_EVENT_COLORS.get(e["color_id"] or ""),
         })
     # The range for which THIS payload is authoritative (a missing day is really
@@ -989,6 +1004,21 @@ async def tile_camera(src: str = "cam"):
 
 # --- background sync ------------------------------------------------------
 
+_caldav_client = None
+_caldav_client_built = False
+
+
+def _get_caldav_client():
+    """The iCloud CalDAV client from the environment, built once and reused so
+    its principal connection is cached across ticks. None when no credentials are
+    set — the whole CalDAV subsystem is then inert (the feature flag)."""
+    global _caldav_client, _caldav_client_built
+    if not _caldav_client_built:
+        _caldav_client = caldav_service.client_from_env()
+        _caldav_client_built = True
+    return _caldav_client
+
+
 def _sync_tick(client, conn, cfg):
     """One sync iteration: run sync_once; on failure log + self-heal the DB
     connection. Returns the connection to use next tick (a fresh one after a
@@ -998,6 +1028,15 @@ def _sync_tick(client, conn, cfg):
     kv_set can still raise if the DB went unwritable)."""
     try:
         sync_once(client, conn, cfg, _now_local())
+        # CalDAV runs in the same tick but is isolated: it never raises (records
+        # its own caldav_status), and a defensive guard keeps any surprise from
+        # disrupting the Google sync's reconnect logic. Inert without credentials.
+        try:
+            cdav = _get_caldav_client()
+            if cdav is not None:
+                caldav_sync.sync_once(cdav, conn, cfg, _now_local())
+        except Exception:
+            log.exception("caldav sync tick error (non-fatal)")
         return conn
     except Exception:
         log.exception("calendar sync tick error; reconnecting DB")
