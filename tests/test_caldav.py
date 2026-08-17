@@ -31,11 +31,13 @@ class FakeCalDav:
 
     def fetch_ics(self, collection, lo, hi):
         col = next(c for c in self._cols if c["id"] == collection["id"])
-        return col.get("ics", [])
+        return [{"href": f"h/{collection['id']}/{i}", "etag": f"e{i}", "ics": s}
+                for i, s in enumerate(col.get("ics", []))]
 
     def fetch_todos(self, collection):
         col = next(c for c in self._cols if c["id"] == collection["id"])
-        return col.get("todos", [])
+        return [{"href": f"h/{collection['id']}/{i}", "etag": f"e{i}", "ics": s}
+                for i, s in enumerate(col.get("todos", []))]
 
 
 _CFG = SimpleNamespace(calendar_window_days=28, calendar_past_days=45)
@@ -249,3 +251,44 @@ def test_is_auth_error_walks_chain_and_class_name_and_no_false_positive():
     assert caldav_sync._is_auth_error(AuthorizationError("denied")) is True
     # an id/text containing 401 as a substring must NOT false-positive
     assert caldav_sync._is_auth_error(RuntimeError("event room4012")) is False
+
+
+def test_caldav_sync_stores_objects_with_round_trip_fields(conn):
+    client = FakeCalDav([
+        {"id": "cal", "name": "F", "comp": "VEVENT",
+         "ics": [_ics("u1", "Dentist", "20260820", "20260821")]},
+        {"id": "rem", "name": "R", "comp": "VTODO", "todos": [_VTODO]},
+    ])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    objs = {o["id"]: o for o in fdb.list_cal_objects(conn)}
+    ev = objs["caldav:cal/u1"]
+    assert ev["comp_type"] == "VEVENT" and ev["uid"] == "u1"
+    assert ev["raw_ics"] and "Dentist" in ev["raw_ics"]          # C1 fidelity
+    assert ev["href"] and ev["etag"] and ev["base_etag"] == ev["etag"]
+    assert ev["sync_state"] == "SYNCED"
+    assert objs["caldav:rem/t1"]["comp_type"] == "VTODO"          # VTODO stored too
+
+
+def test_caldav_sync_prunes_remotely_deleted_objects(conn):
+    caldav_sync.sync_once(FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT",
+        "ics": [_ics("u1", "A", "20260820", "20260821"),
+                _ics("u2", "B", "20260820", "20260821")]}]), conn, _CFG, _NOW)
+    assert len(fdb.list_cal_objects(conn, "VEVENT")) == 2
+    # u2 deleted remotely -> gone from cal_objects after the next pull
+    caldav_sync.sync_once(FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT",
+        "ics": [_ics("u1", "A", "20260820", "20260821")]}]), conn, _CFG, _NOW)
+    assert {o["uid"] for o in fdb.list_cal_objects(conn, "VEVENT")} == {"u1"}
+
+
+def test_upsert_cal_object_synced_never_clobbers_pending(conn):
+    # a local pending edit, as the write slice will create
+    conn.execute("INSERT INTO cal_objects(id, collection_id, comp_type, uid, "
+                 "summary, sync_state) VALUES('caldav:x/u1','caldav:x','VTODO',"
+                 "'u1','local edit','PENDING_UPDATE')")
+    conn.commit()
+    # a server pull must NOT overwrite it
+    fdb.upsert_cal_object_synced(conn, {"id": "caldav:x/u1", "collection_id":
+        "caldav:x", "comp_type": "VTODO", "uid": "u1", "summary": "server", "raw_ics": "X"})
+    row = fdb.list_cal_objects(conn)[0]
+    assert row["summary"] == "local edit" and row["sync_state"] == "PENDING_UPDATE"
+    assert [o["id"] for o in fdb.caldav_pending(conn)] == ["caldav:x/u1"]  # in the outbox

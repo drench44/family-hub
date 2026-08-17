@@ -64,6 +64,30 @@ CREATE TABLE IF NOT EXISTS integrations(
   config_json TEXT NOT NULL DEFAULT '{}',
   sort INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL);
+-- CalDAV object store (the two-way foundation, TECHNICAL_DESIGN §5.1 / spec §5.2
+-- / Fable rec 1). One row per iCloud VEVENT/VTODO OBJECT (not per expanded
+-- occurrence), carrying the round-trip essentials writes need: uid + href +
+-- etag/base_etag (optimistic concurrency), raw_ics (C1 fidelity), sequence, and
+-- a sync_state outbox column. The read path still renders from `events`/kv for
+-- now; this store is written from the first pull so a later write slice lands on
+-- data that can already round-trip. sync_state: SYNCED | PENDING_CREATE |
+-- PENDING_UPDATE | PENDING_DELETE.
+CREATE TABLE IF NOT EXISTS cal_objects(
+  id TEXT PRIMARY KEY,               -- collection_id + '/' + uid
+  collection_id TEXT NOT NULL,       -- 'caldav:<slug>'
+  comp_type TEXT NOT NULL,           -- 'VEVENT' | 'VTODO'
+  uid TEXT NOT NULL,
+  href TEXT,                         -- server resource URL (PUT/DELETE target)
+  etag TEXT,                         -- last known server ETag
+  base_etag TEXT,                    -- ETag a local edit was based on (If-Match)
+  summary TEXT NOT NULL DEFAULT '',
+  raw_ics TEXT,                      -- round-trip fidelity (C1)
+  sequence INTEGER NOT NULL DEFAULT 0,
+  last_modified TEXT,
+  sync_state TEXT NOT NULL DEFAULT 'SYNCED',
+  local_modified_at TEXT,
+  sync_attempts INTEGER NOT NULL DEFAULT 0,
+  last_sync_error TEXT);
 """
 
 # Columns a caller may set through update_person / add_chore validation.
@@ -654,3 +678,61 @@ def set_integration_enabled(conn, iid: str, enabled: bool) -> bool:
                        (1 if enabled else 0, iid))
     conn.commit()
     return cur.rowcount > 0
+
+
+# --- caldav object store (two-way foundation) -----------------------------
+
+def upsert_cal_object_synced(conn, obj: dict) -> None:
+    """Store an object pulled from the server as SYNCED. NEVER overwrites a row
+    that has un-pushed local changes (sync_state PENDING_*) — that is the write
+    slice's conflict path (spec 5.2); today nothing is PENDING so it's a plain
+    upsert. base_etag is set to the server etag (the base a future edit builds on)."""
+    row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
+                       (obj["id"],)).fetchone()
+    if row is not None and row["sync_state"] != "SYNCED":
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "
+        "href, etag, base_etag, summary, raw_ics, sequence, last_modified, "
+        "sync_state) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SYNCED')",
+        (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
+         obj.get("href"), obj.get("etag"), obj.get("etag"),
+         obj.get("summary", ""), obj.get("raw_ics"),
+         int(obj.get("sequence") or 0), obj.get("last_modified")))
+    conn.commit()
+
+
+def list_cal_objects(conn, comp_type: str | None = None) -> list[dict]:
+    if comp_type:
+        rows = conn.execute(
+            "SELECT * FROM cal_objects WHERE comp_type = ? ORDER BY id",
+            (comp_type,))
+    else:
+        rows = conn.execute("SELECT * FROM cal_objects ORDER BY id")
+    return [dict(r) for r in rows]
+
+
+def prune_cal_objects(conn, collection_id: str, keep_ids) -> None:
+    """Drop SYNCED objects in a collection not seen this pull (deleted remotely).
+    Keeps PENDING_* rows (un-pushed local work)."""
+    keep = tuple(keep_ids)
+    with conn:
+        if keep:
+            q = ",".join("?" * len(keep))
+            conn.execute(
+                f"DELETE FROM cal_objects WHERE collection_id = ? "
+                f"AND sync_state = 'SYNCED' AND id NOT IN ({q})",
+                (collection_id, *keep))
+        else:
+            conn.execute(
+                "DELETE FROM cal_objects WHERE collection_id = ? "
+                "AND sync_state = 'SYNCED'", (collection_id,))
+
+
+def caldav_pending(conn) -> list[dict]:
+    """The outbox: objects with un-pushed local changes, oldest first (the write
+    slice flushes these to iCloud)."""
+    rows = conn.execute(
+        "SELECT * FROM cal_objects WHERE sync_state != 'SYNCED' "
+        "ORDER BY local_modified_at, id")
+    return [dict(r) for r in rows]

@@ -46,6 +46,48 @@ def _is_auth_error(exc) -> bool:
     return False
 
 
+def _object_meta(raw_ics: str):
+    """uid/summary/sequence/last_modified from one object's ICS (first VEVENT or
+    VTODO), for the cal_objects store. None if there's no component."""
+    import icalendar
+    cal = icalendar.Calendar.from_ical(raw_ics)
+    for comp in cal.walk():
+        if comp.name in ("VEVENT", "VTODO"):
+            try:
+                seq = int(comp.get("SEQUENCE")) if comp.get("SEQUENCE") is not None else 0
+            except Exception:
+                seq = 0
+            lm = comp.get("LAST-MODIFIED")
+            try:
+                lm_iso = lm.dt.isoformat() if lm is not None else None
+            except Exception:
+                lm_iso = str(lm) if lm else None
+            return {"comp_type": comp.name, "uid": str(comp.get("UID") or ""),
+                    "summary": str(comp.get("SUMMARY") or ""),
+                    "sequence": seq, "last_modified": lm_iso}
+    return None
+
+
+def _store_object(conn, collection_id: str, comp_type: str, obj: dict,
+                  seen: set) -> None:
+    """Persist one CalDAV object into cal_objects (the round-trip store) and note
+    its id in `seen` for the prune. Best-effort: a parse failure here must never
+    break the render path, so it is caught and skipped."""
+    try:
+        meta = _object_meta(obj["ics"])
+        if not (meta and meta["uid"]):
+            return
+        oid = f"{collection_id}/{meta['uid']}"
+        fdb.upsert_cal_object_synced(conn, {
+            "id": oid, "collection_id": collection_id, "comp_type": comp_type,
+            "uid": meta["uid"], "href": obj.get("href"), "etag": obj.get("etag"),
+            "summary": meta["summary"], "raw_ics": obj["ics"],
+            "sequence": meta["sequence"], "last_modified": meta["last_modified"]})
+        seen.add(oid)
+    except Exception:
+        log.warning("caldav object store skipped (%s)", collection_id, exc_info=True)
+
+
 def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
     prior = fdb.kv_get(conn, "caldav_status") or {}
 
@@ -73,10 +115,14 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             cal_id = "caldav:" + col["id"]
             colors[cal_id] = {"name": col.get("name", ""),
                               "color": col.get("color")}
+            seen_objs: set = set()
             try:
-                for ics in client.fetch_ics(col, lo_dt.date(), hi_dt.date()):
+                for obj in client.fetch_ics(col, lo_dt.date(), hi_dt.date()):
+                    _store_object(conn, cal_id, "VEVENT", obj, seen_objs)
                     events.extend(
-                        ics_events(ics, cal_id, lo_dt.date(), hi_dt.date()))
+                        ics_events(obj["ics"], cal_id, lo_dt.date(), hi_dt.date()))
+                if seen_objs:   # prune only when the collection returned objects
+                    fdb.prune_cal_objects(conn, cal_id, seen_objs)
             except Exception as e:  # isolate one bad collection
                 errors.append(f"{col.get('name') or cal_id}: {e}")
                 failed.append(cal_id)
@@ -88,10 +134,14 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         vtodo_failed: list[str] = []
         for col in (c for c in collections if c.get("comp") == "VTODO"):
             list_id = "caldav:" + col["id"]
+            seen_todos: set = set()
             try:
-                for ics in client.fetch_todos(col):
-                    rem.extend(remlogic.parse_vtodo(ics, list_id,
+                for obj in client.fetch_todos(col):
+                    _store_object(conn, list_id, "VTODO", obj, seen_todos)
+                    rem.extend(remlogic.parse_vtodo(obj["ics"], list_id,
                                                     col.get("name", "")))
+                if seen_todos:
+                    fdb.prune_cal_objects(conn, list_id, seen_todos)
             except Exception as e:
                 errors.append(f"{col.get('name') or list_id}: {e}")
                 vtodo_failed.append(list_id)

@@ -113,20 +113,28 @@ class CalDavClient:
                         "color": self._color(cal), "_cal": cal})
         return out
 
-    def fetch_ics(self, collection: dict, lo, hi) -> list[str]:
-        """Raw ICS (one VCALENDAR per object) for a VEVENT collection over
-        [lo, hi]. Recurrence is expanded downstream (ics_events), matching the
-        public-ICS path, so we fetch masters+overrides un-expanded here."""
+    @staticmethod
+    def _obj(o) -> dict:
+        """One CalDAV object as {href, etag, ics} — href/etag are what the write
+        path needs (PUT/DELETE target + If-Match), captured from the first pull."""
+        return {"href": str(getattr(o, "url", "") or "") or None,
+                "etag": getattr(o, "etag", None), "ics": o.data}
+
+    def fetch_ics(self, collection: dict, lo, hi) -> list[dict]:
+        """CalDAV objects (one VCALENDAR per object as {href, etag, ics}) for a
+        VEVENT collection over [lo, hi]. Recurrence is expanded downstream
+        (ics_events), matching the public-ICS path, so masters+overrides are
+        fetched un-expanded here."""
         cal = collection["_cal"]
         import datetime as dt
         start = dt.datetime.combine(lo, dt.time.min)
         end = dt.datetime.combine(hi, dt.time.max)
         objs = cal.search(start=start, end=end, event=True, expand=False)
-        return [o.data for o in objs if getattr(o, "data", None)]
+        return [self._obj(o) for o in objs if getattr(o, "data", None)]
 
-    def fetch_todos(self, collection: dict) -> list[str]:
-        """Raw ICS (one VCALENDAR per VTODO) for a reminders collection,
+    def fetch_todos(self, collection: dict) -> list[dict]:
+        """CalDAV objects ({href, etag, ics}) for a reminders (VTODO) collection,
         including completed ones so grouping can decide what to show."""
         cal = collection["_cal"]
-        return [t.data for t in cal.todos(include_completed=True)
+        return [self._obj(t) for t in cal.todos(include_completed=True)
                 if getattr(t, "data", None)]
