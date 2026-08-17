@@ -602,57 +602,94 @@ body {
 .hdot.st-crit { background: var(--crit); }
 
 /* ------- native laundry card (washer/dryer portholes) ------- */
-/* The signature is the porthole: each machine drawn as its front-loader door.
-   The bezel doubles as a kitchen-timer dial (the .ln-arc is minutes-left on a
-   60-minute face), the drum interior carries the state (tumbling garments
-   while running, a check when done, empty when idle), and the drum contents
-   run water-cool in the washer / warm in the dryer — a physical truth, so it
-   reads without a legend. Everything resolves through theme tokens; the only
-   motion is the tumble, and only while a cycle is actually running. */
+/* The signature is the porthole: each machine drawn as its front-loader door,
+   built as material — a brushed-steel bezel (gradient ring, light from the
+   upper left), genuinely dark curved glass (real machines are dark inside no
+   matter the room, so the interior is fixed-dark on every theme), and the
+   stainless drum you actually see through the door: hub, perforation rings,
+   and three lifter baffles that ride the tumble rotation like the real drum.
+   The thin illuminated halo OUTSIDE the steel is the data ring — minutes left
+   on a 60-minute dial while running, and a full breathing green ring while a
+   finished load waits in the drum (the attention moment; it calms down the
+   instant the door opens and the machine reads idle). Clothes tint by machine
+   — washer water-cool, dryer warm — a physical truth, so it reads without a
+   legend. Motion: the tumble while running, the halo breath while done; both
+   stop under prefers-reduced-motion (the static glow keeps the attention). */
 .laundry-slot { display: flex; flex-direction: column; gap: 12px; }
 .ln { padding: 16px 12px 14px; }
 .ln-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ln-m { display: flex; flex-direction: column; align-items: center; text-align: center;
-  min-width: 0; }
+  min-width: 0; border-radius: 12px; padding: 8px 4px 9px; }
+/* the just-finished machine gets the same wash grammar the climate card uses
+   for warn states — visible across the kitchen, gone once the door opens */
+.ln-m.ln-ph-done { background: color-mix(in srgb, var(--good) 9%, transparent); }
 .ln-door { width: 104px; height: 104px; }
-/* Bezel reads clearly in every state and theme: --edge alone is near-invisible
-   against the card on the dark themes (and the wall panel's gamma crushes it
-   further — operator feedback 2026-08-17: "kind of faint"). */
-.ln-bezel { fill: var(--surface-2);
-  stroke: color-mix(in srgb, var(--faint) 55%, var(--edge)); stroke-width: 5; }
-/* timer dial: minutes left, drawn from 12 o'clock (the -90° spin) */
-.ln-arc { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round;
+/* brushed-steel bezel: light falls from the upper left */
+.ln-bezel { fill: none; stroke-width: 6; }
+.ln-st-bzhi  { stop-color: color-mix(in srgb, var(--ink) 52%, var(--surface-2)); }
+.ln-st-bzmid { stop-color: color-mix(in srgb, var(--ink) 20%, var(--surface-2)); }
+.ln-st-bzlo  { stop-color: color-mix(in srgb, var(--ink) 7%, var(--surface-2)); }
+/* the glass: fixed-dark interior with an off-center depth falloff */
+.ln-st-glhi  { stop-color: #2A3038; }
+.ln-st-glmid { stop-color: #171B21; }
+.ln-st-gllo  { stop-color: #0A0C10; }
+/* the glass fill is the radial gradient set as a presentation attribute in
+   lnPortholeSvg (a CSS fill here would override and flatten it) */
+.ln-glass { stroke: none; }
+/* recess between glass and steel */
+.ln-lip { fill: none; stroke: rgba(0, 0, 0, .55); stroke-width: 2.4; }
+/* glass reflection: a curved specular band, always light like a real glint */
+.ln-glint { fill: #FFFFFF; opacity: .13; }
+/* the drum, in fixed stainless grays (the interior ignores the theme) */
+.ln-hub { fill: none; stroke: #8B95A3; opacity: .15; stroke-width: 5; }
+.ln-perf { fill: none; stroke: #8B95A3; opacity: .24; stroke-width: 1;
+  stroke-dasharray: .9 4.4; stroke-linecap: round; }
+.ln-baffle { fill: #939CAB; opacity: .3; }
+/* data ring: a thin illuminated halo flush outside the steel, minutes on a
+   60-minute dial drawn from 12 o'clock (the -90° spin) */
+.ln-arc { fill: none; stroke: var(--accent); stroke-width: 3.6; stroke-linecap: round;
   transform: rotate(-90deg); transform-origin: 50px 50px; }
 .ln-ph-paused .ln-arc { stroke: var(--warn); }
 .ln-ph-done .ln-arc { stroke: var(--good); }
-.ln-glass { fill: color-mix(in srgb, var(--ground) 85%, var(--surface-2)); }
-.ln-glint { stroke: var(--ink); opacity: .22; stroke-width: 3; stroke-linecap: round; }
-/* drum contents: garments tint by machine (washer cool / dryer warm) */
+/* the finished-load beacon: a fat translucent ring under the data ring that
+   breathes, plus the drum's cycle-complete light */
+.ln-halo { fill: none; stroke: var(--good); stroke-width: 8; opacity: .18;
+  animation: ln-breathe 2.6s ease-in-out infinite; }
+.ln-donewash { fill: var(--good); opacity: .1; }
+@keyframes ln-breathe { 50% { opacity: .42; } }
+/* clothes: cool in the washer, warm in the dryer, with a fabric highlight */
 .ln-g { fill: var(--p2); }
-.ln-g1 { opacity: .8; } .ln-g2 { opacity: .62; } .ln-g3 { opacity: .5; }
+.ln-g1 { opacity: .85; } .ln-g2 { opacity: .68; } .ln-g3 { opacity: .55; }
+.ln-ghi { fill: #FFFFFF; opacity: .14; }
 .ln-dryer .ln-g { fill: var(--p3); }
-.ln-sud { fill: var(--ink); opacity: .38; }
-.ln-dryer .ln-sud { display: none; }   /* suds are a washer thing */
+/* wash water: stays level while the drum spins; foam floats on it */
+.ln-water { fill: var(--p2); opacity: .22; }
+.ln-sud { fill: #E8EEF4; opacity: .55; }
 .ln-tumble { transform-origin: 50px 50px; animation: ln-spin 3.4s linear infinite; }
 .ln-ph-paused .ln-tumble { animation-play-state: paused; }
 @keyframes ln-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .ln-tumble { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .ln-tumble { animation: none; }
+  .ln-halo { animation: none; }   /* the static glow still marks the finish */
+}
 .ln-check { fill: none; stroke: var(--good); stroke-width: 7;
   stroke-linecap: round; stroke-linejoin: round; }
 .ln-bang { fill: var(--crit); font: 700 34px var(--sans); }
-/* quiet phases quiet the whole machine block — gently: below ~.7 the door
-   disappears entirely on the wall panel (operator feedback 2026-08-17) */
-.ln-ph-idle .ln-door, .ln-ph-offline .ln-door { opacity: .75; }
-.ln-label { margin-top: 8px; font-size: 10px; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--faint); }
-.ln-big { margin-top: 2px; font-size: 25px; font-weight: 650; color: var(--ink);
+/* quiet phases quiet the door — gently: below ~.7 it disappears entirely on
+   the wall panel (operator feedback 2026-08-17) */
+.ln-ph-idle .ln-door, .ln-ph-offline .ln-door { opacity: .78; }
+/* text sized for across-the-kitchen reading (operator: "hard to see") */
+.ln-label { margin-top: 7px; font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--dim); font-weight: 600; }
+.ln-big { margin-top: 2px; font-size: 27px; font-weight: 650; color: var(--ink);
   line-height: 1.15; }
-.ln-big .num { font-size: 30px; }
-.ln-unit { margin-left: 4px; font-size: 13px; font-weight: 500; color: var(--dim); }
+.ln-big .num { font-size: 32px; }
+.ln-unit { margin-left: 4px; font-size: 14px; font-weight: 500; color: var(--dim); }
 .ln-ph-done .ln-big { color: var(--good); }
 .ln-ph-error .ln-big { color: var(--crit); }
 .ln-ph-idle .ln-big, .ln-ph-offline .ln-big { color: var(--dim); font-weight: 550; }
-.ln-sub { margin-top: 1px; font-size: 12px; color: var(--dim); min-height: 15px; }
+.ln-sub { margin-top: 1px; font-size: 13.5px; min-height: 17px;
+  color: color-mix(in srgb, var(--ink) 30%, var(--dim)); }
 
 
 /* ========================== calendar ========================= */
