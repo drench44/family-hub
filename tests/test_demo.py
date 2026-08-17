@@ -103,7 +103,7 @@ def test_demo_seed_is_idempotent_across_reopen(demo_app):
     """Re-opening the connection must not double-seed (guarded on no people)."""
     with TestClient(demo_app.app) as c:
         first = len(c.get("/api/hub").json()["people"])
-    demo_app._conn = None   # force a fresh connect on the next open
+    demo_app._db_initialized = False   # force the one-time seed to re-run
     with TestClient(demo_app.app) as c:
         second = len(c.get("/api/hub").json()["people"])
     assert first == 3 and second == 3

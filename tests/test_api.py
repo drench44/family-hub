@@ -1211,10 +1211,30 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
     # the backfill is one-shot: wiping a day and re-connecting must not
     # resurrect it from live definitions
     fdb.replace_day_log(c, yesterday, [])
-    app_mod._conn = None
+    app_mod._db_initialized = False   # force the one-time backfill path to re-run
     with TestClient(app_mod.app) as tc:
         tc.get("/api/hub")
     assert fdb.day_log(app_mod._db(), yesterday) == []
+
+
+def test_db_connection_is_per_thread(app_mod):
+    """Regression guard for issue #29: request handlers run on a thread pool, so
+    _db() must hand each thread its OWN connection. One shared connection let
+    two threads' transactions interleave (a commit on one committing the other's
+    half-done work). Different threads -> different connection objects."""
+    import threading
+    main_conn = app_mod._db()
+    other = {}
+
+    def grab():
+        other["conn"] = app_mod._db()
+
+    t = threading.Thread(target=grab)
+    t.start()
+    t.join()
+    assert other["conn"] is not main_conn
+    # same thread, same connection (cached, not reconnected every call)
+    assert app_mod._db() is main_conn
 
 
 def test_interrupted_backfill_rolls_back_whole_then_retries(app_mod, monkeypatch):

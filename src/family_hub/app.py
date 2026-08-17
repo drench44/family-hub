@@ -107,8 +107,16 @@ _db_dir = os.path.dirname(DB_PATH)
 if _db_dir:
     os.makedirs(_db_dir, exist_ok=True)
 
-_conn = None
-_conn_lock = threading.Lock()
+# Per-thread SQLite connections. Request handlers are sync `def`, so FastAPI
+# runs them on a thread pool; one shared connection let their transactions
+# interleave (one thread's commit committing another thread's half-done
+# `with conn:` block). See issue #29. Each thread gets its own connection, and
+# SQLite (WAL + busy_timeout) serializes writers across them. The one-time,
+# whole-DB setup (schema migrations, history backfill, DEMO seed) runs once
+# under a lock so concurrent first-requests can't race the table rebuilds.
+_tls = threading.local()
+_init_lock = threading.Lock()
+_db_initialized = False
 
 
 def _now_local() -> dt.datetime:
@@ -177,62 +185,58 @@ def _ensure_demo_seed(conn) -> None:
     log.info("DEMO mode: seeded the sample family wall")
 
 
+def _init_db_once(conn) -> None:
+    """Run the one-time, whole-DB setup exactly once per process: schema
+    migrations, the legacy history backfill, and (DEMO only) the sample seed.
+    Serialized under _init_lock so concurrent first-requests can't race the
+    table-rebuild migrations. On failure it leaves _db_initialized False and
+    re-raises, so the next request retries the upgrade rather than serving
+    half-set-up data. (The backfill is atomic and the seed self-wipes a partial
+    write, so a retry starts clean.)"""
+    global _db_initialized
+    with _init_lock:
+        if _db_initialized:
+            return
+        fdb.ensure_schema(conn)
+        _ensure_history_backfill(conn)   # kv-guarded, atomic; raises on failure
+        if DEMO:
+            _ensure_demo_seed(conn)      # people-guarded; raises on failure
+        _db_initialized = True
+
+
 def _db():
-    """Module-level SQLite connection with a cheap self-heal ping per use, so a
-    corrupted/closed handle recovers instead of erroring forever."""
-    global _conn
-    with _conn_lock:
-        if _conn is None:
-            _conn = fdb.connect(DB_PATH)
-            fdb.ensure_schema(_conn)
+    """A per-thread SQLite connection with a cheap self-heal ping per use, so a
+    corrupted/closed handle recovers instead of erroring forever. Per-thread
+    (not one shared handle) so the thread pool's request handlers never
+    interleave each other's transactions (issue #29)."""
+    conn = getattr(_tls, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+        except Exception:
+            log.warning("db handle unhealthy; reconnecting", exc_info=True)
             try:
-                _ensure_history_backfill(_conn)
+                conn.close()
             except Exception:
-                # The backfill is atomic (already rolled back). Drop the
-                # half-initialized handle so the NEXT request reconnects and
-                # retries the one-time upgrade, rather than serving zeroed
-                # history forever under a connection whose backfill never ran.
-                log.error("history backfill failed; dropping handle to retry",
-                          exc_info=True)
-                try:
-                    _conn.close()
-                except Exception:
-                    pass
-                _conn = None
-                raise
-            if DEMO:
-                try:
-                    _ensure_demo_seed(_conn)
-                except Exception:
-                    # Partial seed already wiped (clear_demo). Drop the handle so
-                    # the next request reconnects and retries the seed from empty,
-                    # rather than caching a connection whose seed never completed.
-                    log.error("DEMO seed failed; dropping handle to retry",
-                              exc_info=True)
-                    try:
-                        _conn.close()
-                    except Exception:
-                        pass
-                    _conn = None
-                    raise
-        else:
+                pass
+            conn = None
+            _tls.conn = None
+    if conn is None:
+        conn = fdb.connect(DB_PATH)
+        _tls.conn = conn
+    # Ensure the one-time whole-DB setup has run — retried here if a prior
+    # attempt failed, or if a test reset _db_initialized to force a fresh init.
+    if not _db_initialized:
+        try:
+            _init_db_once(conn)
+        except Exception:
             try:
-                _conn.execute("SELECT 1")
+                conn.close()
             except Exception:
-                log.warning("db handle unhealthy; reconnecting", exc_info=True)
-                try:
-                    _conn.close()
-                except Exception:
-                    pass
-                _conn = fdb.connect(DB_PATH)
-                fdb.ensure_schema(_conn)
-                # No drop-handle guard here (unlike the fresh-connect branch):
-                # reaching this reconnect means a handle was already established
-                # once, so the backfill flag is set by now and this call returns
-                # at its kv_get guard without doing — or being able to fail on —
-                # any backfill work.
-                _ensure_history_backfill(_conn)
-        return _conn
+                pass
+            _tls.conn = None
+            raise
+    return conn
 
 
 # One shared async client for the tile proxies instead of building/tearing

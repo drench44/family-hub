@@ -70,6 +70,10 @@ def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # With per-thread connections (app._db) and the background sync thread, more
+    # than one connection writes the same file. Give SQLite a busy timeout so a
+    # writer waits for the lock instead of failing "database is locked" at once.
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
