@@ -1351,6 +1351,8 @@ body.integ-off-weather #weather-slot { display: none; }
 body.integ-off-climate #climate-slot { display: none; }
 body.integ-off-cameras .tile-camera,
 body.integ-off-cameras #camgrid { display: none; }
+body.integ-off-chores .people-col { display: none; }
+body.integ-off-todos .todo-slot { display: none; }
 
 /* ==================== column separation ==================== */
 /* The Columns control stamps data-cols on <html>. "none" (default) is the flat
