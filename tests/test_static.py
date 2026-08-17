@@ -359,11 +359,11 @@ def test_camera_page_shows_four_per_screen_and_scrolls():
     # The full-screen camera page is two columns with a minmax row height:
     #   grid-auto-rows: minmax(calc((100% - <N>px) / 2), 1fr)
     # The 1fr ceiling lets four-or-fewer cameras fill the screen (no half-black
-    # void); the sub-half calc floor makes >4 collapse so four tiles dominate and
-    # a sliver of the next row peeks (the scroll affordance on a touch wall).
-    # overflow-y makes the rest reachable. Guards the `.camera-page` block only
-    # (not -empty / children). This is a CSS-property guard, not a rendered-pixel
-    # test — the real 4-up-and-peek look is checked on the wall.
+    # void); the exact-half calc floor makes >4 collapse so precisely four
+    # cameras fill one screen (2x2, no peek — operator preference) and the rest
+    # scroll. overflow-y makes them reachable. Guards the `.camera-page` block
+    # only (not -empty / children). CSS-property guard, not a rendered-pixel test
+    # — the real 4-per-screen look is checked on the wall.
     block = re.search(r"\.camera-page\s*\{([^}]*)\}", CSS)
     assert block, "no .camera-page grid block in styles.css"
     body = block.group(1)
@@ -374,9 +374,16 @@ def test_camera_page_shows_four_per_screen_and_scrolls():
     # The row track must be minmax(calc(... / 2), 1fr): the calc floor sizes the
     # peek, the 1fr ceiling fills the screen when there are four or fewer.
     assert re.search(r"grid-auto-rows:\s*minmax\(\s*calc\([^)]*\)\s*/\s*2\s*\)\s*,\s*1fr\s*\)", body), \
-        "row height must be minmax(calc(... / 2), 1fr) — peek floor + fill-when-few ceiling"
+        "row height must be minmax(calc(... / 2), 1fr) — half-height floor + fill-when-few ceiling"
     assert "grid-auto-rows: 1fr" not in body, \
         "a bare grid-auto-rows: 1fr squashes every camera onto one screen"
+    # No peek: the 2x2 must end exactly at the bottom edge. That requires the
+    # bottom padding to equal the row gap (else the next row poked
+    # padding-bottom - gap above the fold, e.g. a 6px hairline). Lock both.
+    gap = re.search(r"gap:\s*(\d+)px", body)
+    pad = re.search(r"padding:\s*\d+px\s+\d+px\s+(\d+)px", body)
+    assert gap and pad and gap.group(1) == pad.group(1), \
+        "camera-page bottom padding must equal the gap so exactly four fill the screen (no peek)"
 
 
 def test_tab_bar_covers_all_tabs():
