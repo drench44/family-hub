@@ -1988,19 +1988,23 @@ function applyHouseTheme(theme) {
 // Mirror the live <html> data-* state onto every Display control on the page:
 // the quick gear popover's AND (when open) the full Settings overlay's own
 // copy, so the two surfaces can never show a stale/conflicting selection.
-// Document-wide (not scoped to one container): only the theme/accent/columns
-// buttons ever carry these data-* attributes, in either surface.
+// Scoped to .theme-ctl containers (both surfaces wrap their Theme/Accent/
+// Columns controls in one), not a bare document-wide attribute query: a
+// future unrelated element that happened to carry data-theme-set/-c/
+// -cols-set for some other purpose would otherwise silently wire into this.
 function reflectThemeControls() {
   const el = document.documentElement;
   const mode = el.getAttribute('data-theme');
   const accent = el.getAttribute('data-accent');
   const cols = el.getAttribute('data-cols');
-  document.querySelectorAll('[data-theme-set]').forEach((b) =>
-    b.classList.toggle('on', b.dataset.themeSet === mode));
-  document.querySelectorAll('[data-c]').forEach((b) =>
-    b.classList.toggle('on', b.dataset.c === accent));
-  document.querySelectorAll('[data-cols-set]').forEach((b) =>
-    b.classList.toggle('on', b.dataset.colsSet === cols));
+  document.querySelectorAll('.theme-ctl').forEach((ctl) => {
+    ctl.querySelectorAll('[data-theme-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.themeSet === mode));
+    ctl.querySelectorAll('[data-c]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.c === accent));
+    ctl.querySelectorAll('[data-cols-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.colsSet === cols));
+  });
 }
 
 /* The settings popover's Integrations section: one on/off switch per available
@@ -2212,25 +2216,28 @@ document.addEventListener('click', (e) => {
     openOverlay('settings');
     return;
   }
-  // Theme/Accent/Columns: NOT scoped to #theme-pop. The Settings overlay
-  // renders its own copy of these same buttons (renderSettingsFull), and only
-  // theme/accent/columns controls ever carry these data-* attributes, in
-  // either surface, so one branch each covers both.
-  const t = e.target.closest('[data-theme-set]');
+  // Theme/Accent/Columns: scoped to '.theme-ctl [...]', not bare '[...]'.
+  // NOT #theme-pop specifically (the Settings overlay renders its own copy
+  // of these same buttons, see renderSettingsFull), but still narrowed to
+  // "inside a .theme-ctl", the wrapper both surfaces use, so an unrelated
+  // future element elsewhere on the page can't accidentally wire into
+  // setTheme/setAccent/setColumns just by reusing one of these attribute
+  // names for something else.
+  const t = e.target.closest('.theme-ctl [data-theme-set]');
   if (t) { setTheme(t.dataset.themeSet); reflectThemeControls(); return; }
-  const a = e.target.closest('[data-c]');
+  const a = e.target.closest('.theme-ctl [data-c]');
   if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
-  const c = e.target.closest('[data-cols-set]');
+  const c = e.target.closest('.theme-ctl [data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
   // Integrations switch list: also unscoped now that it only ever renders
   // inside the Settings overlay (#integrations-ctl), never the popover.
   const ig = e.target.closest('[data-integ-toggle]');
   if (ig) { toggleIntegration(ig.dataset.integToggle); return; }
-  // iCloud (CalDAV) panel actions.
+  // iCloud (CalDAV) panel actions. (No data-caldav-enable-toggle: the panel
+  // deliberately has no second enable switch; see caldavPanelHtml.)
   if (e.target.closest('[data-caldav-connect]')) { connectCaldav(); return; }
   if (e.target.closest('[data-caldav-disconnect]')) { disconnectCaldav(); return; }
   if (e.target.closest('[data-caldav-test]')) { testCaldavConnection(); return; }
-  if (e.target.closest('[data-caldav-enable-toggle]')) { toggleIntegration('icloud_caldav'); return; }
   const ro = e.target.closest('[data-caldav-readonly]');
   if (ro) { setCaldavReadonly(ro.dataset.caldavReadonly === '1'); return; }
   // a tap anywhere outside an open popover dismisses it

@@ -680,17 +680,25 @@ function caldavPanelHtml(integ, ui) {
   }
   // Same status vocabulary as renderIntegrations: a revoked/expired sign-in
   // or a sync error is first-class, shown right on the account row.
+  //
+  // Deliberately NO second enable/disable switch here: the generic
+  // Integrations list one section up (#integrations-ctl, renderIntegrations)
+  // already has one for icloud_caldav, wired straight through poll() ->
+  // renderIntegrations(), which redraws on every 60s poll. A second switch
+  // in THIS panel would need its own repaint after every action that can
+  // change it (poll() deliberately never calls renderCaldavPanel; see that
+  // function's comment) and would drift out of sync with the first one the
+  // moment either went stale: two controls for one boolean, able to
+  // disagree, is worse than one. Surface only what the generic row can't:
+  // the account identity and the health badge.
   const warn = integ.status === 'needs_auth' ? 'reconnect'
     : (integ.status === 'error' ? 'error' : '');
   const readonly = integ.readonly !== false;   // server default is 1-way (true)
   const resultMsg = st.testResult ? caldavTestMessage(st.testResult) : '';
   const resultCls = st.testResult ? (st.testResult.ok ? ' ok' : ' err') : '';
-  return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong></div>`
-    + `<button class="integ-row" type="button" role="switch" `
-    + `aria-checked="${integ.enabled ? 'true' : 'false'}" data-caldav-enable-toggle>`
-    + `<span class="integ-name">Enabled${warn ? `<span class="integ-warn">${warn}</span>` : ''}</span>`
-    + `<span class="integ-switch${integ.enabled ? ' on' : ''}" aria-hidden="true"></span>`
-    + `</button>`
+  return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong>`
+    + (warn ? `<span class="integ-warn">${warn}</span>` : '')
+    + `</div>`
     + `<div class="settings-row">`
     + `<span class="settings-k">Sync direction</span>`
     + `<div class="segmented" role="group" aria-label="Sync direction">`

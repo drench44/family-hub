@@ -2754,16 +2754,20 @@ test('renderSettingsFull: paints Display + Integrations, with the live theme ref
 
 test('reflectThemeControls updates every matching control on the page, not just one surface', () => {
   // Pins the generalization from a single #theme-pop-scoped query to a
-  // document-wide one: both the gear popover's controls AND the Settings
+  // .theme-ctl-scoped one: both the gear popover's controls AND the Settings
   // overlay's own copy (rendered separately, see renderSettingsFull) must
-  // stay in sync, since either can be the one currently visible.
+  // stay in sync, since either can be the one currently visible. Each
+  // fixture wraps its buttons in .theme-ctl, matching the real markup shape
+  // (both surfaces do) that the scoped query now requires.
   const { document, sandbox } = newHub();
   const popHost = document.createElement('div');
-  popHost.innerHTML = '<button data-theme-set="light">Light</button><button data-theme-set="grey">Grey</button>';
+  popHost.innerHTML = '<div class="theme-ctl"><button data-theme-set="light">Light</button>'
+    + '<button data-theme-set="grey">Grey</button></div>';
   popHost._id = 'theme-pop';
   document.body.appendChild(popHost);
   const overlayHost = document.createElement('div');
-  overlayHost.innerHTML = '<button data-theme-set="light">Light</button><button data-theme-set="grey">Grey</button>';
+  overlayHost.innerHTML = '<div class="theme-ctl"><button data-theme-set="light">Light</button>'
+    + '<button data-theme-set="grey">Grey</button></div>';
   overlayHost._id = 'settings-full';
   document.body.appendChild(overlayHost);
   document.documentElement.getAttribute = (k) => (k === 'data-theme' ? 'grey' : null);

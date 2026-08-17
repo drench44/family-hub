@@ -448,13 +448,20 @@ test('caldavPanelHtml: never renders a password value anywhere, on any branch', 
     /hunter2/);
 });
 
-test('caldavPanelHtml: connected shows the account, enable switch, and NO password field', () => {
+test('caldavPanelHtml: connected shows the account, NO password field, and no SECOND enable switch', () => {
+  // The enable switch for icloud_caldav already lives one section up, in the
+  // generic Integrations list (#integrations-ctl, renderIntegrations), wired
+  // straight through poll(), which this panel deliberately is not (see
+  // renderCaldavPanel's comment). A second switch HERE would go stale after
+  // a tap (nothing repaints #caldav-panel on its own) and could disagree with
+  // the first one: two controls for one boolean, silently able to drift out
+  // of sync. Pins that this panel carries none of that switch's markup.
   const html = caldavPanelHtml(
     { id: 'icloud_caldav', account: 'bot@example.com', enabled: true, readonly: true },
     {});
   assert.match(html, /Connected as <strong>bot@example\.com<\/strong>/);
-  assert.match(html, /data-caldav-enable-toggle/);
-  assert.match(html, /integ-switch on/);
+  assert.doesNotMatch(html, /data-caldav-enable-toggle/);
+  assert.doesNotMatch(html, /integ-switch/);
   assert.doesNotMatch(html, /id="caldav-pw-input"/);
   assert.doesNotMatch(html, /type="password"/);
 });

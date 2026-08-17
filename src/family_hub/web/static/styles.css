@@ -1200,7 +1200,7 @@ body.overlay-open { overflow: hidden; }
 .theme-pop-settings-link {
   appearance: none; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600;
   letter-spacing: .04em; color: var(--dim); background: var(--surface); border: 1px solid var(--edge);
-  padding: 8px 12px; border-radius: 9px;
+  padding: 8px 12px; border-radius: 9px; min-height: 44px;
   display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px;
   margin-top: 2px;
 }
