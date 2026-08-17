@@ -1195,6 +1195,13 @@ body.overlay-open { overflow: hidden; }
 .tab-btn .tab-ico { font-size: 20px; line-height: 1; }
 .tab-btn.active { color: var(--accent); }
 .tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* b.hidden (the HTML `hidden` attribute) relies on the UA rule
+   [hidden]{display:none}, but that's beaten by the author rule .tab-btn{
+   display:flex} above (author origin beats UA origin regardless of
+   specificity) — so a "hidden" tab kept rendering flex on a real phone.
+   This author-origin rule at (0,2,0) beats .tab-btn's (0,1,0) and actually
+   hides it. */
+.tab-btn[hidden] { display: none; }
 
 /* ==================== theme / accent / columns control ==================== */
 /* The persisted display picker (Task 5): Light/Dark segmented, four accent
