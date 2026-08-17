@@ -657,11 +657,18 @@ body {
   animation: ln-breathe 2.6s ease-in-out infinite; }
 .ln-donewash { fill: var(--good); opacity: .1; }
 @keyframes ln-breathe { 50% { opacity: .42; } }
-/* clothes: cool in the washer, warm in the dryer, with a fabric highlight */
-.ln-g { fill: var(--p2); }
-.ln-g1 { opacity: .85; } .ln-g2 { opacity: .68; } .ln-g3 { opacity: .55; }
-.ln-ghi { fill: #FFFFFF; opacity: .14; }
-.ln-dryer .ln-g { fill: var(--p3); }
+/* the load, drawn as cloth: a folded heap in two shades (cool in the washer,
+   warm in the dryer), fold shadows inside it, a sheen on the top edge, and a
+   stray piece riding the drum wall */
+.ln-cl1 { fill: color-mix(in srgb, var(--p2) 78%, #10141A); opacity: .95; }
+.ln-cl2 { fill: color-mix(in srgb, var(--p2) 62%, #E8EEF4); opacity: .9; }
+.ln-stray { opacity: .75; }
+.ln-fold { fill: none; stroke: rgba(0, 0, 0, .32); stroke-width: 1.7;
+  stroke-linecap: round; }
+.ln-sheen { fill: none; stroke: #FFFFFF; opacity: .22; stroke-width: 1.6;
+  stroke-linecap: round; }
+.ln-dryer .ln-cl1 { fill: color-mix(in srgb, var(--p3) 78%, #141008); }
+.ln-dryer .ln-cl2 { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
 /* wash water: stays level while the drum spins; foam floats on it */
 .ln-water { fill: var(--p2); opacity: .22; }
 .ln-sud { fill: #E8EEF4; opacity: .55; }

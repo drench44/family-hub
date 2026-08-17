@@ -2192,14 +2192,19 @@ function lnPortholeSvg(m, now = Date.now()) {
       + ` transform="rotate(${a} 50 50)"/>`).join('');
   let inner;
   if (spinning) {
-    // clothes ride the drum; the water line stays LEVEL outside the tumble
-    // group (only the washer has one), with foam floating on it
+    // The load rides the drum; the water line stays LEVEL outside the tumble
+    // group (only the washer has one), with foam floating on it. The load is
+    // drawn as cloth, not shapes: one lumpy folded heap, a lighter garment
+    // tucked into it, a stray piece carried up the drum wall by a baffle,
+    // fold shadows inside the heap, and a sheen along the top edge.
     inner = `<g class="ln-tumble">${drum}`
-      + `<ellipse class="ln-g ln-g1" cx="50" cy="66" rx="14" ry="8.5" transform="rotate(-8 50 66)"/>`
-      + `<ellipse class="ln-g ln-g2" cx="35.5" cy="56" rx="9" ry="6" transform="rotate(24 35.5 56)"/>`
-      + `<ellipse class="ln-g ln-g3" cx="62.5" cy="55" rx="8" ry="5.5" transform="rotate(-18 62.5 55)"/>`
-      + `<ellipse class="ln-ghi" cx="47" cy="61.5" rx="7" ry="1.6" transform="rotate(-10 47 61.5)"/>`
-      + `<ellipse class="ln-ghi" cx="34.5" cy="52.5" rx="4.4" ry="1.1" transform="rotate(22 34.5 52.5)"/>`
+      + `<path class="ln-cl1" d="M30 66 C28 58 34 53 40 55 C43 49 51 48 55 53`
+      +   ` C60 49 68 52 68 59 C72 62 70 69 64 71 C58 75 42 75 36 72 C31 70 29 69 30 66 Z"/>`
+      + `<path class="ln-cl2" d="M52 53 C53 47 61 45 65 49 C69 52 67 58 61 58 C56 59 52 57 52 53 Z"/>`
+      + `<path class="ln-cl2 ln-stray" d="M31 36 C34 32 40 32 42 36 C43 39 40 42 36 41 C33 41 30 39 31 36 Z"/>`
+      + `<path class="ln-fold" d="M36 66 C41 63 46 64 50 68"/>`
+      + `<path class="ln-fold" d="M52 60 C56 58 60 60 63 64"/>`
+      + `<path class="ln-sheen" d="M42 53.5 C46 51 51 51 55 53.5"/>`
       + `</g>`
       + (m.kind !== 'dryer'
         ? `<path class="ln-water" d="M13 66 Q 31 60 50 66 T 87 66 L 87 90 L 13 90 Z"/>`
