@@ -42,7 +42,12 @@ def parse_vtodo(ics_data, list_id: str, list_name: str = "") -> list[dict]:
 
 def group(reminders: list[dict], today: dt.date) -> dict:
     """Incomplete reminders bucketed overdue / today / upcoming / no-date, each
-    sorted by due date then title. Completed ones are dropped."""
+    sorted by due date then title. Completed ones are dropped.
+
+    NOTE: all-day (VALUE=DATE) DUEs — the common iCloud case — bucket exactly.
+    A timed DUE carrying an offset/Z is bucketed by the date prefix of its own
+    encoding, which can differ from the local day near midnight; revisit with a
+    timezone-normalizing compare if timed reminders ever misbucket."""
     out: dict[str, list[dict]] = {b: [] for b in BUCKETS}
     ti = today.isoformat()
     for r in reminders:

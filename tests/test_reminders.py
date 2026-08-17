@@ -55,3 +55,11 @@ def test_parse_vtodo_completed_and_no_due():
            "END:VTODO\r\nEND:VCALENDAR\r\n")
     r = rem.parse_vtodo(ics, "caldav:x")[0]
     assert r["completed"] is True and r["due"] is None
+
+
+def test_parse_vtodo_falls_back_to_dtstart():
+    ics = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:u3\r\n"
+           "SUMMARY:Start dated\r\nDTSTART;VALUE=DATE:20260820\r\n"
+           "END:VTODO\r\nEND:VCALENDAR\r\n")
+    r = rem.parse_vtodo(ics, "caldav:x")[0]
+    assert r["due"].startswith("2026-08-20")   # DUE absent -> DTSTART used

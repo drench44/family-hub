@@ -157,3 +157,95 @@ def test_caldav_sync_flags_needs_auth_and_keeps_cache(conn):
     # cached event survives (read-only degradation), status recorded
     assert [r["title"] for r in fdb.list_events(conn)] == ["Kept"]
     assert fdb.kv_get(conn, "caldav_status")["needs_auth"] is True
+
+
+def test_caldav_sync_keeps_last_good_on_valid_empty_then_wipes_after_ttl(conn):
+    full = FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT",
+                        "ics": [_ics("u1", "Dentist", "20260820", "20260821")]}])
+    caldav_sync.sync_once(full, conn, _CFG, _NOW)
+    assert [r["title"] for r in fdb.list_events(conn)] == ["Dentist"]
+    # same collection now returns 0 events without raising -> KEPT (within TTL)
+    empty = FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT", "ics": []}])
+    st = caldav_sync.sync_once(empty, conn, _CFG, _NOW)
+    assert st["ok"] is False and "kept last-synced" in st["error"]
+    assert [r["title"] for r in fdb.list_events(conn)] == ["Dentist"]
+    # past the TTL, the emptiness is finally accepted
+    st = caldav_sync.sync_once(empty, conn, _CFG, _NOW + dt.timedelta(hours=25))
+    assert fdb.list_events(conn) == []
+
+
+def test_caldav_sync_empty_discover_keeps_cache(conn):
+    caldav_sync.sync_once(
+        FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT",
+                     "ics": [_ics("u1", "Kept", "20260820", "20260821")]}]),
+        conn, _CFG, _NOW)
+    st = caldav_sync.sync_once(FakeCalDav([]), conn, _CFG, _NOW)  # maintenance blip
+    assert st["ok"] is False and "no collections" in st["error"]
+    assert [r["title"] for r in fdb.list_events(conn)] == ["Kept"]
+
+
+def test_caldav_sync_keeps_cache_of_a_failing_collection(conn):
+    fdb.replace_events_caldav(conn, [{"id": "old", "calendar_id": "caldav:bad",
+        "title": "Kept", "start_ts": "2026-08-20", "end_ts": "2026-08-21",
+        "all_day": 1}])
+
+    class Flaky(FakeCalDav):
+        def fetch_ics(self, collection, lo, hi):
+            if collection["id"] == "bad":
+                raise RuntimeError("boom")
+            return super().fetch_ics(collection, lo, hi)
+    caldav_sync.sync_once(Flaky([
+        {"id": "good", "name": "Good", "comp": "VEVENT",
+         "ics": [_ics("u1", "Fresh", "20260820", "20260821")]},
+        {"id": "bad", "name": "Bad", "comp": "VEVENT", "ics": []},
+    ]), conn, _CFG, _NOW)
+    assert {r["title"] for r in fdb.list_events(conn)} == {"Fresh", "Kept"}
+
+
+def test_caldav_sync_inner_401_sets_needs_auth(conn):
+    class Auth401(FakeCalDav):
+        def fetch_ics(self, collection, lo, hi):
+            raise RuntimeError("HTTP 401 Unauthorized")
+    st = caldav_sync.sync_once(
+        Auth401([{"id": "cal", "name": "F", "comp": "VEVENT", "ics": []}]),
+        conn, _CFG, _NOW)
+    assert st.get("needs_auth") is True
+
+
+def test_caldav_sync_vtodo_fetch_failure_is_isolated(conn):
+    class BadTodos(FakeCalDav):
+        def fetch_todos(self, collection):
+            raise RuntimeError("boom")
+    st = caldav_sync.sync_once(BadTodos([
+        {"id": "cal", "name": "F", "comp": "VEVENT",
+         "ics": [_ics("u1", "E", "20260820", "20260821")]},
+        {"id": "rem", "name": "R", "comp": "VTODO", "todos": []},
+    ]), conn, _CFG, _NOW)
+    assert st["events"] == 1 and "R" in st["error"]   # events synced despite VTODO fail
+
+
+def test_caldav_sync_keeps_reminders_of_a_failing_list(conn):
+    caldav_sync.sync_once(
+        FakeCalDav([{"id": "rem", "name": "R", "comp": "VTODO", "todos": [_VTODO]}]),
+        conn, _CFG, _NOW)
+    assert [r["title"] for r in fdb.kv_get(conn, "caldav_reminders")] == ["Buy milk"]
+
+    class BadTodos(FakeCalDav):
+        def fetch_todos(self, collection):
+            raise RuntimeError("boom")
+    caldav_sync.sync_once(
+        BadTodos([{"id": "rem", "name": "R", "comp": "VTODO", "todos": []}]),
+        conn, _CFG, _NOW)
+    assert [r["title"] for r in fdb.kv_get(conn, "caldav_reminders")] == ["Buy milk"]
+
+
+def test_is_auth_error_walks_chain_and_class_name_and_no_false_positive():
+    outer = RuntimeError("sync failed")
+    outer.__cause__ = RuntimeError("HTTP 401")
+    assert caldav_sync._is_auth_error(outer) is True
+
+    class AuthorizationError(Exception):
+        pass
+    assert caldav_sync._is_auth_error(AuthorizationError("denied")) is True
+    # an id/text containing 401 as a substring must NOT false-positive
+    assert caldav_sync._is_auth_error(RuntimeError("event room4012")) is False

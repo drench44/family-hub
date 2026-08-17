@@ -1571,3 +1571,45 @@ def test_integration_status_surfaces_needs_auth(tmp_path, monkeypatch):
                           {"ok": False, "needs_auth": True, "error": "401"})
         integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
         assert integ["icloud_caldav"]["status"] == "needs_auth"
+
+
+def test_disabling_ics_calendar_hides_its_events(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "holidays", "kind": "ics", "label": "Holidays", "url": "http://x/h.ics"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        appmod.fdb.replace_events(c, [{"id": "e1", "calendar_id": "holidays",
+            "title": "Holiday", "start_ts": f"{soon}T00:00:00",
+            "end_ts": f"{soon}T23:59:00", "all_day": 0}])
+        assert any(e["title"] == "Holiday"
+                   for e in tc.get("/api/calendar").json()["events"])
+        tc.patch("/api/integrations/ics_calendar", json={"enabled": False})
+        assert all(e["title"] != "Holiday"
+                   for e in tc.get("/api/calendar").json()["events"])
+
+
+def test_integration_status_error_and_ics_not_shared(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "g", "kind": "google", "label": "G"},
+        {"id": "i", "kind": "ics", "label": "I", "url": "http://x"}]})
+    with TestClient(appmod.app) as tc:
+        appmod.fdb.kv_set(appmod._db(), "calendar_status", {"ok": False, "error": "boom"})
+        integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert integ["google_calendar"]["status"] == "error"
+        assert integ["ics_calendar"]["status"] is None   # ICS doesn't inherit it
+
+
+def test_caldav_events_hidden_without_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:x",
+            "title": "Stale", "start_ts": f"{soon}T10:00:00",
+            "end_ts": f"{soon}T11:00:00", "all_day": 0}])
+        # no credentials -> cached CalDAV events are hidden, not shown stale
+        assert all(e["title"] != "Stale"
+                   for e in tc.get("/api/calendar").json()["events"])

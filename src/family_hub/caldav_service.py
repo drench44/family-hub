@@ -100,6 +100,9 @@ class CalDavClient:
                 comps = list(cal.get_supported_components())
             except Exception:
                 comps = ["VEVENT"]
+            # iCloud's real layout: calendars advertise VEVENT-only and reminder
+            # lists VTODO-only, so treating a both/unknown collection as VEVENT is
+            # correct in practice (and the except above falls back to VEVENT).
             comp = "VTODO" if ("VTODO" in comps and "VEVENT" not in comps) \
                 else "VEVENT"
             try:

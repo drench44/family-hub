@@ -282,7 +282,10 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     # deleted) — its cache stays, so re-enabling shows them instantly.
     cal_google_on = fdb.integration_enabled(c, "google_calendar", default=True)
     cal_ics_on = fdb.integration_enabled(c, "ics_calendar", default=True)
-    cal_caldav_on = fdb.integration_enabled(c, "icloud_caldav", default=True)
+    # CalDAV events gate on availability AND the toggle (same as reminders), so
+    # pulling the credentials hides stale cached events instead of showing them.
+    cal_caldav_on = (fintegrations.caldav_configured(os.environ)
+                     and fdb.integration_enabled(c, "icloud_caldav", default=True))
     # CalDAV events carry a 'caldav:<slug>' calendar_id; their name/color come
     # from the discovered-collection metadata the caldav sync records, not config.
     caldav_cols = fdb.kv_get(c, "caldav_collections") or {}
@@ -383,8 +386,11 @@ def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
     """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
     or None for one with no sync (cameras/weather/climate). Drives the settings
     menu's 'Reconnect iCloud' / warning affordance on auth-failure or error."""
-    src = caldav_status if iid == "icloud_caldav" else (
-        cal_status if iid in ("google_calendar", "ics_calendar") else None)
+    # calendar_status is shared by Google + ICS and can't tell them apart, and
+    # needs_auth is a Google-only concept — so only surface it on google_calendar
+    # (ICS gets no status rather than mis-inheriting Google's auth state).
+    src = (caldav_status if iid == "icloud_caldav"
+           else cal_status if iid == "google_calendar" else None)
     if not src:
         return None
     if src.get("needs_auth"):

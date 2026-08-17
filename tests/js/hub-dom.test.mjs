@@ -2674,3 +2674,14 @@ test('renderIntegrations: shows a reconnect hint when status is needs_auth', () 
   assert.match(host.innerHTML, /integ-warn/);
   assert.match(host.innerHTML, /reconnect/);
 });
+
+test('renderIntegrations: shows an error hint when status is error', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'google_calendar', kind: 'calendar', name: 'Google Calendar',
+      enabled: true, status: 'error' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /integ-warn/);
+  assert.match(host.innerHTML, /error/);
+});
