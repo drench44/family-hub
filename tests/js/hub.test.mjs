@@ -447,6 +447,31 @@ test('j: preserves a caller-supplied AbortSignal and arms no internal timeout', 
   }
 });
 
+test('fetchTimeout: aborts a hung request when the timeout fires (shares j()\'s guard)', async () => {
+  // Same drive-by-hand pattern as the j() timeout test above: inject a real
+  // AbortController + a capturable timer so the abort is provable, not assumed.
+  const orig = { fetch: sandbox.fetch, AC: sandbox.AbortController,
+    st: sandbox.setTimeout, ct: sandbox.clearTimeout };
+  let fireTimeout = null;
+  sandbox.AbortController = AbortController;
+  sandbox.setTimeout = (fn) => { fireTimeout = fn; return 1; };
+  sandbox.clearTimeout = () => {};
+  let aborted = false;
+  sandbox.fetch = (url, opts) => new Promise((_res, rej) => {
+    opts.signal.addEventListener('abort', () => { aborted = true; rej(new Error('aborted')); });
+  });
+  try {
+    const p = sandbox.fetchTimeout('/api/tiles/camera.jpg?src=drive&probe=1');
+    assert.equal(typeof fireTimeout, 'function', 'a timeout was armed');
+    fireTimeout();                       // simulate the timeout elapsing
+    await assert.rejects(p);             // the hang becomes a rejection, not a forever-pending promise
+    assert.ok(aborted, 'the fetch signal was aborted');
+  } finally {
+    sandbox.fetch = orig.fetch; sandbox.AbortController = orig.AC;
+    sandbox.setTimeout = orig.st; sandbox.clearTimeout = orig.ct;
+  }
+});
+
 test('safeColor: passes hex/keywords through, neutralizes CSS-injection attempts', () => {
   // legitimate values survive unchanged (so inline style="" output is identical)
   assert.equal(sandbox.safeColor('#5BC9F0'), '#5BC9F0');

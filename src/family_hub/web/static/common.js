@@ -41,6 +41,20 @@ async function j(url, opts) {
   }
 }
 
+/* Same AbortController-timeout guard as j() above, for callers that only need
+   the raw Response (not j()'s JSON-decode + error-detail contract) — the
+   camera snapshot probes in hub.js. Without this, a raw fetch to a connected-
+   but-unresponsive server never resolves, and probes stack up until the
+   browser's ~6-connection-per-origin budget is exhausted on a multi-day kiosk
+   uptime. Same platform guard as j(): falls back to a bare fetch when
+   AbortController isn't available (the vm test sandbox). */
+function fetchTimeout(url, ms = J_TIMEOUT_MS) {
+  if (typeof AbortController === 'undefined') return fetch(url);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  return fetch(url, { signal: ac.signal }).finally(() => clearTimeout(timer));
+}
+
 /* Defense in depth for inline style="" sinks: colors reaching the DOM are all
    server-constrained (person colors validated to #rrggbb, Google's own palette,
    a hardcoded event-color map), but escapeHtml neutralizes quotes/<> and NOT

@@ -791,8 +791,10 @@ async function probeOneCamera(cam) {
   });
   let ok = false;
   try {
-    ok = (await fetch(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
-  } catch (e) { /* down */ }
+    // fetchTimeout (common.js): bounds the probe with J_TIMEOUT_MS so a
+    // connected-but-unresponsive server can't leave it in flight forever.
+    ok = (await fetchTimeout(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
+  } catch (e) { /* down (or timed out) */ }
   // Offline -> live transition: reload the frame for a deterministic fresh
   // connect. A player that connected against a DEAD producer may never have
   // established its session, and its self-reconnect is go2rtc internals this
@@ -913,9 +915,11 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
     if (openView !== view || !hd.parentNode) return;   // overlay closed / switched
     let live = false;
     try {
-      live = (await fetch(
+      // fetchTimeout (common.js): same J_TIMEOUT_MS bound as probeOneCamera —
+      // a wedged HD producer must not hang this retry loop indefinitely.
+      live = (await fetchTimeout(
         `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`)).ok;
-    } catch (e) { /* still connecting — treated as not-yet-live */ }
+    } catch (e) { /* still connecting, down, or timed out — treated as not-yet-live */ }
     if (openView !== view || !hd.parentNode) return;   // re-check after the await
     if (live) {
       hd.classList.add('ready');   // HD confirmed live — cross-fade it over the warm base
@@ -1501,6 +1505,20 @@ function scheduledPoll() {
   poll().finally(() => { scheduledPollInFlight = false; });
 }
 
+// Same guard, same reason, for the camera probe interval: probeOneCamera's
+// fetches now carry a J_TIMEOUT_MS bound (see fetchTimeout in common.js), but
+// without this an unguarded CAM_PROBE_MS interval would still keep firing a
+// fresh probeCamera() every 30s on top of one still waiting out that timeout,
+// stacking requests toward the browser's connection budget. Direct
+// probeCamera() calls (tab switch, overlay open) are user-paced and
+// intentionally always run, so the guard lives here, not inside probeCamera().
+let scheduledProbeCameraInFlight = false;
+function scheduledProbeCamera() {
+  if (scheduledProbeCameraInFlight) return;
+  scheduledProbeCameraInFlight = true;
+  probeCamera().finally(() => { scheduledProbeCameraInFlight = false; });
+}
+
 let _toastTimer = null;
 function showToast(msg) {
   let el = document.getElementById('toast');
@@ -1946,4 +1964,4 @@ fetchClimate();
 setInterval(scheduledPoll, POLL_MS);
 setInterval(fetchWeather, POLL_MS);
 setInterval(fetchClimate, POLL_MS);
-setInterval(probeCamera, CAM_PROBE_MS);
+setInterval(scheduledProbeCamera, CAM_PROBE_MS);

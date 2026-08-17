@@ -1639,6 +1639,17 @@ function hubWithTiles(cams) {
   return { document, sandbox };
 }
 
+test('scheduledProbeCamera: skips a second tick while a probe run is still in flight (no stacked requests)', async () => {
+  const { sandbox } = hubWithTiles([CAM1]);
+  let probeCalls = 0;
+  sandbox.fetch = (url) => { probeCalls++; return new Promise(() => {}); };   // hangs forever
+  sandbox.scheduledProbeCamera();
+  const afterFirst = probeCalls;
+  assert.ok(afterFirst >= 1, 'the first scheduled tick issued a probe');
+  sandbox.scheduledProbeCamera();   // in-flight -> must NOT start another round
+  assert.equal(probeCalls, afterFirst, 'no second round of probes while one is still in flight');
+});
+
 test('probeCamera probes every camera concurrently — one slow camera never delays the rest', async () => {
   const { document, sandbox } = hubWithTiles([CAM1, CAM2]);
   const started = [];
