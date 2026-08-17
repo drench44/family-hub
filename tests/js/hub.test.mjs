@@ -766,3 +766,112 @@ test('safeColor: passes hex/keywords through, neutralizes CSS-injection attempts
   assert.equal(sandbox.safeColor(''), 'transparent');
   assert.equal(sandbox.safeColor(null), 'transparent');
 });
+
+// --- comfort/air-quality banding (common.js): out-of-range coloring for the
+// House Climate + Weather cards. Pure threshold logic, tested here; the render
+// functions that consume it are covered in hub-dom.test.mjs. Bands: 'ok' (in
+// range), 'warn' (edge of range), 'crit' (out of range), 'good' (actively
+// healthy, for UV/AQI), '' (no reading -> no color).
+test('tempBandF: indoor comfort bands + missing readings', () => {
+  const b = sandbox.tempBandF;
+  assert.equal(b(72), 'ok');            // comfortable
+  assert.equal(b(62), 'ok');            // low edge of ok
+  assert.equal(b(79), 'ok');            // high edge of ok
+  assert.equal(b(60), 'warn');          // chilly
+  assert.equal(b(80), 'warn');          // warm (matches the old HOT_F line)
+  assert.equal(b(84), 'warn');          // still just warn
+  assert.equal(b(57), 'crit');          // cold
+  assert.equal(b(85), 'crit');          // hot
+  assert.equal(b(null), '');            // no reading
+  assert.equal(b(''), '');
+  assert.equal(b('nope'), '');
+});
+
+test('humidityBand: indoor RH bands + missing readings', () => {
+  const b = sandbox.humidityBand;
+  assert.equal(b(45), 'ok');            // ideal
+  assert.equal(b(30), 'ok');            // low edge of ok
+  assert.equal(b(55), 'ok');            // high edge of ok
+  assert.equal(b(28), 'warn');          // a bit dry
+  assert.equal(b(58), 'warn');          // a bit humid
+  assert.equal(b(24), 'crit');          // too dry
+  assert.equal(b(61), 'crit');          // mold risk
+  assert.equal(b(null), '');
+  assert.equal(b(''), '');
+});
+
+test('uvBand: EPA UV Index bands', () => {
+  const b = sandbox.uvBand;
+  assert.equal(b(0), 'good');           // low
+  assert.equal(b(2), 'good');
+  assert.equal(b(3), 'ok');             // moderate
+  assert.equal(b(5), 'ok');
+  assert.equal(b(6), 'warn');           // high
+  assert.equal(b(7), 'warn');
+  assert.equal(b(8), 'crit');           // very high
+  assert.equal(b(11), 'crit');          // extreme
+  assert.equal(b(null), '');
+  assert.equal(b(''), '');
+});
+
+test('aqiBand: US AQI bands', () => {
+  const b = sandbox.aqiBand;
+  assert.equal(b(0), 'good');
+  assert.equal(b(50), 'good');          // top of good
+  assert.equal(b(51), 'warn');          // moderate
+  assert.equal(b(100), 'warn');
+  assert.equal(b(101), 'crit');         // unhealthy
+  assert.equal(b(180), 'crit');
+  assert.equal(b(null), '');
+  assert.equal(b(''), '');
+});
+
+test('uvBandText: category fallback used when the UV number is missing', () => {
+  const b = sandbox.uvBandText;
+  assert.equal(b('Low'), 'good');
+  assert.equal(b('Moderate'), 'ok');
+  assert.equal(b('High'), 'warn');
+  assert.equal(b('Very High'), 'crit');   // "very high" out-ranks the bare "high"
+  assert.equal(b('Extreme'), 'crit');
+  assert.equal(b('Severe'), 'crit');
+  assert.equal(b(''), '');
+  assert.equal(b(null), '');
+  assert.equal(b('Gibberish'), '');       // unrecognized -> no color, never a false good
+});
+
+test('aqiBandText: category fallback used when the AQI number is missing', () => {
+  const b = sandbox.aqiBandText;
+  assert.equal(b('Good'), 'good');
+  assert.equal(b('Moderate'), 'warn');
+  assert.equal(b('Unhealthy for Sensitive Groups'), 'crit');
+  assert.equal(b('Unhealthy'), 'crit');
+  assert.equal(b('Very Unhealthy'), 'crit');
+  assert.equal(b('Hazardous'), 'crit');
+  assert.equal(b(''), '');
+  assert.equal(b(null), '');
+  assert.equal(b('Gibberish'), '');
+});
+
+test('tempBandF: lower crit/warn boundaries are exact (58 warn, not crit)', () => {
+  const b = sandbox.tempBandF;
+  assert.equal(b(58), 'warn');   // the <58 crit line: 58 is warn, not crit
+  assert.equal(b(85), 'crit');   // the >=85 crit line (upper, already pinned)
+});
+
+test('humidityBand: exact edge boundaries (25 warn, 60 warn)', () => {
+  const b = sandbox.humidityBand;
+  assert.equal(b(25), 'warn');   // the <25 crit line: 25 is warn
+  assert.equal(b(60), 'warn');   // the >60 mold-risk crit line: 60 is warn, not crit
+});
+
+test('clampFrac: bounded 0..1 fill fraction for the meters', () => {
+  const f = sandbox.clampFrac;
+  assert.equal(f(0, 11), 0);
+  assert.equal(f(11, 11), 1);
+  assert.equal(f(22, 11), 1);           // over max clamps to full
+  assert.equal(f(-3, 11), 0);           // negative clamps to empty
+  assert.equal(f(5.5, 11), 0.5);
+  assert.equal(f(null, 11), 0);         // no reading -> empty bar
+  assert.equal(f('', 200), 0);
+  assert.equal(f(50, 0), 0);            // guard divide-by-zero
+});

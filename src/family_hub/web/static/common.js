@@ -132,6 +132,92 @@ function idleReturnMs(view) {
   return 90000;
 }
 
+/* ---- comfort / air-quality banding -------------------------------------- */
+/* Shared out-of-range coloring for the House Climate + Weather cards. Each
+   returns a status band the CSS colors: 'ok' (in range, neutral ink), 'warn'
+   (edge of range, amber), 'crit' (out of range, red), plus 'good' (actively
+   healthy green, UV/AQI only). A missing / non-finite reading returns '' so the
+   value shows a dash and carries no color — never a false "in range" green.
+   Thresholds are the single source of truth; tune them here.
+
+   A tiny reused guard: is this a real, finite reading? */
+function _reading(v) {
+  if (v == null || String(v).trim() === '') return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
+/* Indoor temperature (°F). Comfortable 62–79; the warm edge (80–84) matches the
+   old HOT_F=80 line the room grid already warned at. */
+function tempBandF(t) {
+  const n = _reading(t);
+  if (n === null) return '';
+  if (n < 58 || n >= 85) return 'crit';
+  if (n < 62 || n >= 80) return 'warn';
+  return 'ok';
+}
+
+/* Indoor relative humidity (%). Ideal 30–55; >60 flags mold risk, <25 too dry. */
+function humidityBand(h) {
+  const n = _reading(h);
+  if (n === null) return '';
+  if (n < 25 || n > 60) return 'crit';
+  if (n < 30 || n > 55) return 'warn';
+  return 'ok';
+}
+
+/* EPA UV Index bands: 0–2 low, 3–5 moderate, 6–7 high, 8+ very high/extreme. */
+function uvBand(uv) {
+  const n = _reading(uv);
+  if (n === null) return '';
+  if (n >= 8) return 'crit';
+  if (n >= 6) return 'warn';
+  if (n >= 3) return 'ok';
+  return 'good';
+}
+
+/* US AQI bands: 0–50 good, 51–100 moderate, 101+ unhealthy. */
+function aqiBand(aqi) {
+  const n = _reading(aqi);
+  if (n === null) return '';
+  if (n > 100) return 'crit';
+  if (n > 50) return 'warn';
+  return 'good';
+}
+
+/* Category-text fallbacks. The weather feed sends the number and the category
+   as INDEPENDENT fields, so it can label a hazard ("Extreme" / "Unhealthy")
+   while omitting the number. The number is authoritative WHEN PRESENT; these
+   derive a band from the text so a danger category still colors when the number
+   is missing (callers use `uvBand(n) || uvBandText(desc)`). Unrecognized text
+   returns '' — never a false 'good'. */
+function uvBandText(desc) {
+  const s = String(desc == null ? '' : desc).toLowerCase();
+  if (!s.trim()) return '';
+  if (/extreme|very high|severe/.test(s)) return 'crit';
+  if (/high/.test(s)) return 'warn';
+  if (/moderate/.test(s)) return 'ok';
+  if (/low/.test(s)) return 'good';
+  return '';
+}
+function aqiBandText(cat) {
+  const s = String(cat == null ? '' : cat).toLowerCase();
+  if (!s.trim()) return '';
+  if (/hazardous|unhealthy/.test(s)) return 'crit';   // incl. "very unhealthy", "…sensitive groups"
+  if (/moderate/.test(s)) return 'warn';
+  if (/good/.test(s)) return 'good';
+  return '';
+}
+
+/* Fill fraction (0..1) for a severity meter, clamped so an over-max or negative
+   reading (or a zero/absent max) can't overflow or divide-by-zero the bar. A
+   missing reading fills nothing. */
+function clampFrac(v, max) {
+  const n = _reading(v);
+  if (n === null || !(max > 0)) return 0;
+  return Math.max(0, Math.min(1, n / max));
+}
+
 /* The wall dims itself overnight (CSS state); the display's own power is a
    Pi-side schedule in Phase 2. Night = 22:00 through 05:59. */
 function nightClass(hour) { return (hour >= 22 || hour < 6) ? 'is-night' : ''; }

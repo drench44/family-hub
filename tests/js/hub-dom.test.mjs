@@ -1652,36 +1652,8 @@ test('sectionHead escapes label, expandLabel, and the overlay attribute', () => 
   assert.match(html, /Z&lt;i&gt;/, 'expand label is escaped');
 });
 
-test('weatherCardHtml chips: when the category and the number DISAGREE, each OR operand that wins is pinned', () => {
-  // Pins the CURRENT implemented behavior so a regression that drops one operand
-  // of either OR is caught (this asserts behavior; it does not change hub.js).
-  //   aqiGood = /good/i.test(aqi_cat) || (aqi != null && Number(aqi) <= 50)
-  //   uvWarn  = Number(uv) >= 6      || /high|extreme|severe|very/.test(uv_desc)
-  const { sandbox } = newHub();
-
-  // Case A — the CATEGORY/DESC text disagrees with the number:
-  //   AQI category says "Good" while the number (200) is bad -> the category
-  //   operand wins, chip is GOOD. UV number (7) is high while the desc
-  //   ("Moderate") is mild -> the number operand wins, chip is WARN.
-  const a = sandbox.weatherCardHtml({
-    temp: 70, unit: 'F', aqi: 200, aqi_cat: 'Good', uv: 7, uv_desc: 'Moderate',
-  });
-  assert.match(a, /<span class="q good">Good<\/span>/,
-    'aqi_cat "Good" wins over the bad number 200 (category operand of the OR)');
-  assert.match(a, /<span class="q warn">Moderate<\/span>/,
-    'uv number 7 (>=6) wins over the mild desc "Moderate" (number operand of the OR)');
-
-  // Case B — the OTHER operand of each OR wins, so both operands are pinned:
-  //   AQI has no category but a good number (40) -> number operand -> GOOD.
-  //   UV number (3) is low but the desc ("Extreme") is severe -> desc -> WARN.
-  const b = sandbox.weatherCardHtml({
-    temp: 70, unit: 'F', aqi: 40, aqi_cat: 'Unhealthy', uv: 3, uv_desc: 'Extreme',
-  });
-  assert.match(b, /<span class="q good">Unhealthy<\/span>/,
-    'aqi number 40 <= 50 wins the GOOD class (number operand); label is the category text');
-  assert.match(b, /<span class="q warn">Extreme<\/span>/,
-    'uv desc "Extreme" wins over the low number 3 (desc operand of the OR)');
-});
+// (The UV/AQI banding contract — color follows the number, category is a label
+// — is covered by the weather-card meter tests near the WX_GOOD/WX_WARN fixtures.)
 
 test('renderPeople puts an "All chores" expand button in the #people header', () => {
   const { document, sandbox } = newHub();
@@ -2752,12 +2724,13 @@ function renderWeatherHtml(payload) {
 
 const WX_GOOD = {
   available: true, temp: 74.8, unit: 'F', conditions: 'Clear & sunny', feels: 78,
-  low: 59, high: 81, uv: 3, uv_desc: 'Low', aqi: 42, aqi_cat: 'Good',
+  low: 59, high: 81, uv: 2, uv_desc: 'Low', aqi: 42, aqi_cat: 'Good',
   humidity: 57, dew_point: 58.5, spark: [70, 71, 73, 75, 78, 80, 79, 77], spark_now: 4, stale: false,
 };
+// UV 6 (high) + AQI 75 (moderate) both land in the amber 'warn' band.
 const WX_WARN = {
   available: true, temp: 90, unit: 'F', conditions: 'Hazy', feels: 98,
-  low: 75, high: 95, uv: 9, uv_desc: 'Very High', aqi: 151, aqi_cat: 'Unhealthy',
+  low: 75, high: 95, uv: 6, uv_desc: 'High', aqi: 75, aqi_cat: 'Moderate',
   humidity: 70, dew_point: 74, spark: [], stale: true,
 };
 
@@ -2796,8 +2769,12 @@ test('weather card renders temp, condition/feels, UV, AQI, humidity and dew', ()
   // stats
   assert.match(html, /High<\/div><div class="v num">81°/);
   assert.match(html, /Low<\/div><div class="v num">59°/);
-  assert.match(html, /UV Index<\/div><div class="v num">3 /);
-  assert.match(html, /Air Quality<\/div><div class="v num">42 /);
+  // UV + AQI are the two "air" metrics: the value is tinted to its band, the
+  // feed's category shows as a label, and a proportional severity meter renders.
+  assert.match(html, /UV Index<\/div><div class="v num st-good">2<span class="wx-band">Low<\/span><\/div>/);
+  assert.match(html, /<i class="bar-fill st-good" style="width:18%"><\/i>/);   // uv 2 of 11
+  assert.match(html, /Air Quality<\/div><div class="v num st-good">42<span class="wx-band">Good<\/span><\/div>/);
+  assert.match(html, /<i class="bar-fill st-good" style="width:21%"><\/i>/);   // aqi 42 of 200
   assert.match(html, /Humidity<\/div><div class="v num">57%/);
   assert.match(html, /Dew point<\/div><div class="v num">58.5°/);
 });
@@ -2831,18 +2808,76 @@ test('weather card escapes string fields (conditions markup is inert)', () => {
   assert.match(html, /Sun &lt;script&gt;x&lt;\/script&gt;/, 'conditions rendered escaped');
 });
 
-test('weather card AQI + UV chips pick .good when air is good / UV is low', () => {
+test('weather card tints UV + AQI green (st-good) when air is good / UV is low', () => {
   const { html } = renderWeatherHtml(WX_GOOD);
-  // AQI "Good" category -> .q.good; UV "Low"/3 -> .q.good
-  assert.match(html, /<span class="q good">Good<\/span>/);
-  assert.match(html, /<span class="q good">Low<\/span>/);
+  // AQI 42 (good) + UV 2 (low) -> st-good value AND st-good meter fill
+  assert.match(html, /<div class="v num st-good">2<span class="wx-band">Low<\/span>/);
+  assert.match(html, /<div class="v num st-good">42<span class="wx-band">Good<\/span>/);
+  assert.match(html, /class="bar-fill st-good"/);
 });
 
-test('weather card AQI + UV chips pick .warn by category / high UV', () => {
+test('weather card tints UV + AQI amber (st-warn) in the moderate/high band', () => {
   const { html } = renderWeatherHtml(WX_WARN);
-  // AQI "Unhealthy" (aqi 151) -> .q.warn; UV "Very High" (uv 9) -> .q.warn
-  assert.match(html, /<span class="q warn">Unhealthy<\/span>/);
-  assert.match(html, /<span class="q warn">Very High<\/span>/);
+  // UV 6 (high) + AQI 75 (moderate) -> amber st-warn on value + meter
+  assert.match(html, /<div class="v num st-warn">6<span class="wx-band">High<\/span>/);
+  assert.match(html, /<div class="v num st-warn">75<span class="wx-band">Moderate<\/span>/);
+  assert.match(html, /<i class="bar-fill st-warn" style="width:55%"><\/i>/);   // uv 6 of 11
+});
+
+test('weather card tints UV + AQI red (st-crit) when out of range', () => {
+  // UV 9 (very high) -> crit; AQI 151 (unhealthy) -> crit.
+  const { html } = renderWeatherHtml({
+    ...WX_GOOD, uv: 9, uv_desc: 'Very High', aqi: 151, aqi_cat: 'Unhealthy',
+  });
+  assert.match(html, /<div class="v num st-crit">9<span class="wx-band">Very High<\/span>/);
+  assert.match(html, /<div class="v num st-crit">151<span class="wx-band">Unhealthy<\/span>/);
+  assert.match(html, /class="bar-fill st-crit"/);
+});
+
+test('weather card: an off-scale UV/AQI fills the meter to 100%, never past it', () => {
+  // UV 13 (> 11 full-scale) and AQI 260 (> 200) both clamp to a full bar via
+  // clampFrac — the render-level proof that the meter width can't overflow.
+  const { html } = renderWeatherHtml({
+    ...WX_GOOD, uv: 13, uv_desc: 'Extreme', aqi: 260, aqi_cat: 'Hazardous',
+  });
+  assert.equal((html.match(/style="width:100%"/g) || []).length, 2,
+    'both the UV and AQI meters cap at 100% width');
+  // no meter overflows past 100% (a width of 101%+ would be 3 digits > 100)
+  const widths = [...html.matchAll(/style="width:(\d+)%"/g)].map((m) => Number(m[1]));
+  assert.ok(widths.every((w) => w <= 100), `all meter widths <= 100 (saw ${widths})`);
+});
+
+test('weather card: UV/AQI color follow the NUMBER, not the category text', () => {
+  // The band (color + meter) is driven by the numeric reading — the standard EPA/
+  // AQI scale — while the category string is shown only as the label. So a feed
+  // whose text disagrees with its number is colored by the number.
+  const { html } = renderWeatherHtml({
+    ...WX_GOOD, aqi: 200, aqi_cat: 'Good', uv: 3, uv_desc: 'Extreme',
+  });
+  // aqi 200 is unhealthy -> red, even though the category says "Good"
+  assert.match(html, /<div class="v num st-crit">200<span class="wx-band">Good<\/span>/);
+  // uv 3 is moderate -> neutral (no st- tint), even though the desc says "Extreme"
+  assert.match(html, /<div class="v num">3<span class="wx-band">Extreme<\/span>/);
+});
+
+test('weather card: a fully missing UV/AQI reading shows a dash, no color, an empty meter', () => {
+  const { html } = renderWeatherHtml({ ...WX_GOOD, uv: null, uv_desc: '', aqi: null, aqi_cat: '' });
+  // no number AND no category -> en-dash, no st- class, zero-width meter
+  assert.match(html, /UV Index<\/div><div class="v num">–<\/div>/);
+  assert.match(html, /Air Quality<\/div><div class="v num">–<\/div>/);
+  assert.match(html, /<i class="bar-fill" style="width:0%"><\/i>/);
+});
+
+test('weather card: a danger CATEGORY with a missing number still colors (regression guard)', () => {
+  // The feed sends four independent fields; it can label the air "Unhealthy" /
+  // UV "Extreme" but omit the number. The number is authoritative WHEN PRESENT,
+  // but when it is missing the category drives the band, so the card never shows
+  // a calm grey "Unhealthy" — the value AND its label carry the red tint.
+  const { html } = renderWeatherHtml({
+    ...WX_GOOD, uv: null, uv_desc: 'Extreme', aqi: null, aqi_cat: 'Unhealthy',
+  });
+  assert.match(html, /UV Index<\/div><div class="v num st-crit">–<span class="wx-band st-crit">Extreme<\/span>/);
+  assert.match(html, /Air Quality<\/div><div class="v num st-crit">–<span class="wx-band st-crit">Unhealthy<\/span>/);
 });
 
 test('weather card draws the temp chart with an observed/forecast split and a "now" marker', () => {
@@ -2946,7 +2981,9 @@ const CLIMATE = {
     { name: 'Living Room', channel: 'ch1', temp_f: 72, humidity: 45, stale: false },
     { name: 'Bedroom', channel: 'ch2', temp_f: 74.4, humidity: 50, stale: false },
     { name: 'Garage', channel: 'ch3', temp_f: 82, humidity: 55, stale: false },
-    { name: 'Attic', channel: 'ch4', temp_f: 70, humidity: 60, stale: true },
+    // Attic is fully comfortable (70°, 45% RH) — ONLY its stale flag warns, so
+    // the stale test isolates the stale->warn contribution to roomBand.
+    { name: 'Attic', channel: 'ch4', temp_f: 70, humidity: 45, stale: true },
     { name: 'Outside', channel: 'ch0', temp_f: 91, humidity: 30, stale: false },
   ],
   indoor_rh: 48, indoor_dp: 55,
@@ -3007,17 +3044,36 @@ test('climate card KEEPS a real room whose CHANNEL is outdoor (only NAME filters
   assert.ok(!html.includes('91°'), 'and its redundant outdoor temperature is gone');
 });
 
-test('climate card marks a HOT room warn (temp_f >= HOT_F)', () => {
+test('climate card marks a HOT room warn with an amber dot + tinted temp cell', () => {
   const { html } = renderClimateHtml(CLIMATE);
-  assert.match(html, /<div class="room warn"><span class="rk">Garage<\/span>/);
-  // a comfortable room is NOT warned
-  assert.match(html, /<div class="room"><span class="rk">Living Room<\/span>/);
+  // Garage 82° is in the warm band -> row warn, amber status dot, amber temp cell
+  assert.match(html, /<div class="room warn"><span class="dot st-warn"><\/span><span class="rk">Garage<\/span>/);
+  assert.match(html, /Garage<\/span><span class="rv num st-warn">82°<\/span>/);
+  // a comfortable room is NOT warned and gets a calm green (st-good) dot, untinted cells
+  assert.match(html, /<div class="room"><span class="dot st-good"><\/span><span class="rk">Living Room<\/span>/);
+  assert.match(html, /Living Room<\/span><span class="rv num">72°<\/span><span class="rh num">45%<\/span>/);
+});
+
+test('climate card tints a HUMID room red on the humidity cell (mold risk)', () => {
+  // 68% RH is over the 60% ceiling -> crit; temp 70 is comfortable -> only the
+  // humidity cell reddens, and the worst-of drives a red row/dot.
+  const { html } = renderClimateHtml({ available: true, rooms: [
+    { name: 'Bathroom', channel: 'ch1', temp_f: 70, humidity: 68, stale: false }] });
+  assert.match(html, /<div class="room crit"><span class="dot st-crit"><\/span><span class="rk">Bathroom<\/span>/);
+  assert.match(html, /<span class="rv num">70°<\/span><span class="rh num st-crit">68%<\/span>/);
+});
+
+test('climate card tints a COLD room red on the temp cell', () => {
+  const { html } = renderClimateHtml({ available: true, rooms: [
+    { name: 'Basement', channel: 'ch1', temp_f: 55, humidity: 45, stale: false }] });
+  assert.match(html, /<div class="room crit">/);
+  assert.match(html, /<span class="rv num st-crit">55°<\/span>/);
 });
 
 test('climate card marks a STALE room warn (regardless of temperature)', () => {
   const { html } = renderClimateHtml(CLIMATE);
-  // Attic is only 70° but its sensor is stale -> warn
-  assert.match(html, /<div class="room warn"><span class="rk">Attic<\/span>/);
+  // Attic is only 70° but its sensor is stale -> warn, amber dot
+  assert.match(html, /<div class="room warn"><span class="dot st-warn"><\/span><span class="rk">Attic<\/span>/);
 });
 
 test('climate card handles missing temp/humidity gracefully (-- / —), never warns on non-finite temp', () => {
@@ -3027,6 +3083,9 @@ test('climate card handles missing temp/humidity gracefully (-- / —), never wa
   const { html } = renderClimateHtml(payload);
   assert.match(html, /Nursery<\/span><span class="rv num">--<\/span><span class="rh num">—<\/span>/);
   assert.ok(!html.includes('room warn'), 'a missing (non-finite) temp never triggers the hot warn');
+  // a room with NO readings gets a neutral, classless dot — never a false
+  // st-good "all fine" green, which would misread as a healthy sensor.
+  assert.match(html, /<span class="dot"><\/span><span class="rk">Nursery/);
 });
 
 test('climate card escapes room names (markup is inert)', () => {
