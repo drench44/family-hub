@@ -3324,6 +3324,32 @@ test('renderIntegrations: shows an error hint when status is error', () => {
   assert.match(host.innerHTML, /error/);
 });
 
+test('renderIntegrations: splits into a Features group and an Integrations group', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', name: 'Chores', enabled: true, group: 'feature' },
+    { id: 'todos', name: 'To-Dos', enabled: true, group: 'feature' },
+    { id: 'weather', name: 'Weather', enabled: true, group: 'integration' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  // NOTE: the fake DOM's parseFragment (top of this file) never populates
+  // QueryNode.textContent from parsed markup — every existing textContent
+  // assertion in this suite reads a value hub.js set via direct property
+  // assignment, not text pulled out of an HTML string. So group titles are
+  // asserted via innerHTML (same idiom as the sibling renderIntegrations
+  // tests above, e.g. `assert.match(host.innerHTML, /Weather/)`), which
+  // verifies the identical thing — both titles present, in order — without
+  // depending on that unsupported path.
+  assert.equal(host.querySelectorAll('.integ-group-title').length, 2,
+    'a header for each non-empty group');
+  const featuresAt = host.innerHTML.indexOf('integ-group-title">Features<');
+  const integrationsAt = host.innerHTML.indexOf('integ-group-title">Integrations<');
+  assert.ok(featuresAt >= 0 && integrationsAt > featuresAt,
+    'Features group renders before the Integrations group');
+  // every integration still gets its switch row
+  assert.equal(host.querySelectorAll('.integ-row').length, 3);
+});
+
 test('toggleIntegration: a failed PATCH surfaces a toast (regression: the check used to be a no-op)', async () => {
   // attemptTodo never throws — it resolves to {ok:false, error}, a truthy
   // object — so a bare `if (!ok)` on that result is always false. Pins the
@@ -3382,7 +3408,7 @@ test('renderSettingsFull: paints Display + Integrations, with the live theme ref
 
   const html = document.getElementById('settings-full').innerHTML;
   assert.match(html, /<h2>Display<\/h2>/);
-  assert.match(html, /<h2>Integrations<\/h2>/);
+  assert.match(html, /<h2>Features &amp; integrations<\/h2>/);
   assert.match(html, /id="integrations-ctl"/, 'the Integrations switch list mounts here');
   assert.match(html, /id="caldav-panel"/, 'the iCloud CalDAV panel mounts here');
   const greyBtn = host.querySelector('[data-theme-set="grey"]');
