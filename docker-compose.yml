@@ -12,6 +12,9 @@ services:
       # camera fetches go over the compose network — a container can't hairpin
       # its own stack's published LAN port (browser links stay on the LAN IP)
       - GO2RTC_FETCH_BASE=http://go2rtc:1984
+      # iCloud CalDAV bot credentials (optional; see .env). Empty = off.
+      - ICLOUD_CALDAV_USER=${ICLOUD_CALDAV_USER:-}
+      - ICLOUD_CALDAV_APP_PASSWORD=${ICLOUD_CALDAV_APP_PASSWORD:-}
     # HUB_BIND (in .env) pins every published port to one LAN interface.
     # The hub has NO auth — never expose it beyond your LAN. See README.
     ports: [ "${HUB_BIND:-0.0.0.0}:8138:8138" ]

@@ -34,7 +34,7 @@ const hubSrc = readFileSync(join(staticDir, 'hub.js'), 'utf8');
 // for real — that's the whole point of the showToast assertions below.
 const SEEDED_IDS = [
   'conn-word', 'clock-date', 'clock-time', 'cal', 'people', 'todo-slot', 'tiles',
-  'camgrid',
+  'camgrid', 'integrations-ctl',
   'panels', 'tabbar', 'overlay', 'overlay-home', 'overlay-content', 'ev-modal',
   'ev-card',
   'chore-modal', 'chore-card', 'chore-editor',
@@ -495,6 +495,12 @@ test('safeColor is applied at the color sinks: a hostile color can NOT inject ex
     { readonly: true });
   assert.doesNotMatch(card, /background:url/, 'no injected declaration at the person color sink');
   assert.match(card, /--pc:transparent/);
+  // CalDAV Calendars-picker swatch sink: `color` comes straight from the
+  // iCloud server's response, an untrusted-input sink like the two above.
+  const picker = sandbox.caldavCollectionsHtml(
+    [{ id: 'a', name: 'Hostile', color: hostile, comp_type: 'VEVENT', enabled: true }]);
+  assert.doesNotMatch(picker, /background:url/, 'no injected declaration at the caldav-cal-dot color sink');
+  assert.match(picker, /caldav-cal-dot" style="background:transparent"/);
 });
 
 test('scheduledPoll: skips a second tick while a poll is still in flight (no stacked requests)', async () => {
@@ -1608,6 +1614,25 @@ test('renderTodoSlot: a genuinely empty list (todos_ok omitted) still reads "not
   assert.doesNotMatch(html, /couldn.t load the list/);
 });
 
+test('renderTodoSlot: source=iCloud but iCloud unavailable falls back to the local card', () => {
+  const { document, sandbox } = newHub();
+  const buckets = { overdue: [], today: [], upcoming: [], no_date: [] };
+  // todo_source says iCloud, but no icloud_caldav integration (disconnected
+  // out-of-band): must render the LOCAL card, not a reassuring-empty iCloud one.
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders: buckets,
+    todos: { now: [], soon: [], later: [] }, integrations: [] });
+  let html = document.getElementById('todo-slot').innerHTML;
+  assert.doesNotMatch(html, /shead-chip/);          // no "iCloud" chip -> local card
+  assert.doesNotMatch(html, /data-reminder/);
+
+  // with iCloud available it renders the reminder surface (the iCloud chip)
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders: buckets,
+    reminders_writable: true, todos: { now: [], soon: [], later: [] },
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
+  html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /shead-chip">iCloud/);
+});
+
 test('todosFullHtml: full-screen buckets are boxed like every other section, rows untouched', () => {
   const { sandbox } = newHub();
   vm.runInContext(
@@ -1630,6 +1655,447 @@ test('todosFullHtml: full-screen buckets are boxed like every other section, row
   assert.match(html,
     /<button class="todo-row-main" type="button" data-todo="1" aria-label="mark done: Call dentist">/);
   assert.match(html, /data-todo-open="1"/);
+});
+
+// ---- iCloud reminders as the To-Do source -------------------------------
+
+const REMINDERS = {
+  overdue: [{ id: 'caldav:g/1', title: 'Renew tags', due: '2026-08-11', priority: 1 }],
+  today: [{ id: 'caldav:g/2', title: 'Call the vet', due: '2026-08-17' }],
+  upcoming: [{ id: 'caldav:g/3', title: 'Book flights', due: '2026-09-01' }],
+  no_date: [{ id: 'caldav:g/4', title: 'Someday project' }],
+};
+
+test('renderTodoSlot: iCloud source renders the reminders card with a source chip, pressing rows, and count chips', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: true, reminders: REMINDERS,
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
+  const html = document.getElementById('todo-slot').innerHTML;
+
+  // Header still reads "To-Do", now carrying the quiet iCloud source chip.
+  assert.match(html, /<h2>To-Do<\/h2>/);
+  assert.match(html, /class="shead-chip">iCloud</);
+  // Pressing = overdue + today; a writable row is a tap-to-complete button.
+  assert.match(html, /data-reminder="caldav:g\/1"/);
+  assert.match(html, /Renew tags/);
+  assert.match(html, /Call the vet/);
+  // Overdue row shows its date; the high-priority one gets the "!" mark.
+  assert.match(html, /class="rem-due">Tue 8\/11</);
+  assert.match(html, /class="rem-pri"[^>]*>!</);
+  // Three counts: overdue leads (accent chip), then today, then upcoming.
+  assert.match(html, /<span class="chip now">1 overdue<\/span>/);
+  assert.match(html, /<span class="chip">1 today<\/span>/);
+  assert.match(html, /<span class="chip">1 upcoming<\/span>/);
+});
+
+test('renderTodoSlot: iCloud read-only renders inert rows — same items, no data-reminder to tap', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: false, reminders: REMINDERS,
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /Renew tags/);                 // the information is still shown
+  assert.doesNotMatch(html, /data-reminder=/);      // but nothing is tappable
+});
+
+test('renderTodoSlot: iCloud with no reminders reads "nothing on the list", not a broken card', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: true,
+    reminders: { overdue: [], today: [], upcoming: [], no_date: [] },
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /nothing on the list/);
+  assert.match(html, /class="shead-chip">iCloud</);   // the iCloud card, not the local fallback
+});
+
+function mountRemindersFull(reminders, { writable = true, lists = [] } = {}) {
+  const { document, sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  vm.runInContext(`todoState.source = 'icloud';
+    todoState.reminders = ${JSON.stringify({ buckets: reminders, configured: true, writable })};
+    hubData = { reminder_lists: ${JSON.stringify(lists)} };`, sandbox);
+  return { document, sandbox, html: sandbox.todosFullHtml() };
+}
+
+test('todosFullHtml (iCloud): buckets stack overdue-first, empty buckets are dropped, rows are writable', () => {
+  const { html } = mountRemindersFull({
+    overdue: REMINDERS.overdue, today: [], upcoming: REMINDERS.upcoming, no_date: [],
+  }, { writable: true, lists: [{ id: 'caldav:g', name: 'Groceries' }] });
+
+  // Only the non-empty buckets render, and Overdue comes before Upcoming.
+  assert.match(html, /todo-sec-head">Overdue<\/div>/);
+  assert.match(html, /todo-sec-head">Upcoming<\/div>/);
+  assert.doesNotMatch(html, /todo-sec-head">Today<\/div>/);
+  assert.doesNotMatch(html, /todo-sec-head">No date<\/div>/);
+  assert.ok(html.indexOf('Overdue') < html.indexOf('Upcoming'), 'overdue leads');
+  // Writable => check button + open/delete affordance.
+  assert.match(html, /data-reminder="caldav:g\/1"/);
+  assert.match(html, /data-reminder-open="caldav:g\/1"/);
+  // Single enabled list => a naming placeholder and NO list picker.
+  assert.match(html, /placeholder="Add to Groceries…"/);
+  assert.doesNotMatch(html, /id="todo-list-select"/);
+});
+
+test('todosFullHtml (iCloud): more than one list adds a compact list picker defaulting to the first', () => {
+  const { html } = mountRemindersFull(
+    { overdue: [], today: REMINDERS.today, upcoming: [], no_date: [] },
+    { writable: true, lists: [{ id: 'caldav:g', name: 'Groceries' }, { id: 'caldav:h', name: 'Home' }] });
+  assert.match(html, /placeholder="Add a reminder…"/);
+  assert.match(html, /id="todo-list-select"/);
+  assert.match(html, /<option value="caldav:g" selected>Groceries<\/option>/);
+  assert.match(html, /<option value="caldav:h">Home<\/option>/);
+});
+
+test('todosFullHtml (iCloud): read-only shows the reminders but no add form and no check controls', () => {
+  const { html } = mountRemindersFull(
+    { overdue: [], today: REMINDERS.today, upcoming: [], no_date: [] },
+    { writable: false, lists: [{ id: 'caldav:g', name: 'Groceries' }] });
+  assert.match(html, /Call the vet/);                 // information is present
+  assert.doesNotMatch(html, /id="todo-add-form"/);    // no add control
+  assert.doesNotMatch(html, /data-reminder=/);        // no tap-to-complete
+  assert.doesNotMatch(html, /data-reminder-open=/);   // no delete affordance
+});
+
+test('todosFullHtml (iCloud): an unconfigured account points at Settings rather than faking an empty list', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("todoState.source = 'icloud'; todoState.reminders = { configured: false, buckets: {} };", sandbox);
+  assert.match(sandbox.todosFullHtml(), /iCloud isn’t connected — add it in Settings/);
+});
+
+test('toggleReminder: POSTs the id + completed flag to /api/reminders/toggle', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: opts && opts.method, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/toggle') return okResp({ id: 'caldav:g/2', completed: true });
+    throw new Error('offline in test');   // the refresh's poll/reminders GET — irrelevant here
+  };
+  await sandbox.toggleReminder('caldav:g/2', true);
+  const post = calls.find((c) => c.url === '/api/reminders/toggle');
+  assert.equal(post.method, 'POST');
+  assert.deepEqual(post.body, { id: 'caldav:g/2', completed: true });
+});
+
+test('addReminder: targets the single list directly, and the picked list when there are several', async () => {
+  const { document, sandbox } = newHub();
+  const input = document.createElement('input'); input._id = 'todo-add-input'; input.value = 'Buy eggs';
+  document.body.appendChild(input);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/add') return okResp({ id: 'caldav:g/new', title: 'Buy eggs', due: null });
+    throw new Error('offline in test');
+  };
+
+  // one list, no picker: uses it directly
+  vm.runInContext("hubData = { reminder_lists: [{ id: 'caldav:g', name: 'Groceries' }] };", sandbox);
+  await sandbox.addReminder();
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/add').body,
+    { list_id: 'caldav:g', title: 'Buy eggs' });
+  assert.equal(input.value, '', 'the input clears on success');
+
+  // several lists + a picker: honours the selected list
+  calls.length = 0; input.value = 'Fix gate';
+  const sel = document.createElement('select'); sel._id = 'todo-list-select'; sel.value = 'caldav:h';
+  document.body.appendChild(sel);
+  vm.runInContext("hubData = { reminder_lists: [{ id: 'caldav:g', name: 'Groceries' }, { id: 'caldav:h', name: 'Home' }] };", sandbox);
+  await sandbox.addReminder();
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/add').body,
+    { list_id: 'caldav:h', title: 'Fix gate' });
+});
+
+test('deleteReminder: POSTs the id to /api/reminders/delete', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/delete') return okResp({ id: 'caldav:g/2', deleted: true });
+    throw new Error('offline in test');
+  };
+  await sandbox.deleteReminder('caldav:g/2');
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/delete').body, { id: 'caldav:g/2' });
+});
+
+test('a failed reminder write surfaces the right toast: read-only vs already-changed', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.fetch = async (url) => {
+    if (url === '/api/reminders/toggle') return failResp(409, 'iCloud reminders are read-only (enable two-way in settings)');
+    throw new Error('offline in test');
+  };
+  await sandbox.toggleReminder('caldav:g/2', true);
+  assert.match(document.getElementById('toast').textContent, /read-only/);
+
+  sandbox.fetch = async (url) => {
+    if (url === '/api/reminders/delete') return failResp(404, 'unknown reminder');
+    throw new Error('offline in test');
+  };
+  await sandbox.deleteReminder('caldav:g/2');
+  assert.match(document.getElementById('toast').textContent, /already changed on another device/);
+});
+
+test('setTodoSource: PATCHes /api/todo-source and no-ops when the source is unchanged', async () => {
+  const { sandbox } = newHub();
+  vm.runInContext("hubData = { todo_source: 'local' };", sandbox);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: opts && opts.method, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/todo-source') return okResp({ source: 'icloud' });
+    throw new Error('offline in test');   // the follow-up poll() — caught, irrelevant here
+  };
+  await sandbox.setTodoSource('icloud');
+  const patch = calls.find((c) => c.url === '/api/todo-source');
+  assert.equal(patch.method, 'PATCH');
+  assert.deepEqual(patch.body, { source: 'icloud' });
+
+  // Tapping the already-active source writes nothing.
+  calls.length = 0;
+  await sandbox.setTodoSource('local');
+  assert.equal(calls.length, 0, 'no PATCH when the source is unchanged');
+});
+
+test('renderTodoSourcePicker: hidden without CalDAV; shown with a read-only hint once iCloud is chosen but still 1-way', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div'); host._id = 'todo-source-ctl';
+  document.body.appendChild(host);
+
+  // No icloud_caldav integration => nothing to pick, so the picker stays empty.
+  vm.runInContext("hubData = { integrations: [], todo_source: 'local' };", sandbox);
+  sandbox.renderTodoSourcePicker();
+  assert.equal(host.innerHTML, '');
+
+  // CalDAV present, iCloud chosen, still read-only => the picker shows and warns.
+  vm.runInContext("hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, readonly: true }], todo_source: 'icloud' };", sandbox);
+  sandbox.renderTodoSourcePicker();
+  assert.match(host.innerHTML, /data-todo-source="local"/);
+  assert.match(host.innerHTML, /data-todo-source="icloud"/);
+  assert.match(host.innerHTML, /seg-btn active" type="button" data-todo-source="icloud"/);
+  assert.match(host.innerHTML, /read-only until you set Sync direction to 2-way/);
+
+  // Two-way on => no hint.
+  vm.runInContext("hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, readonly: false }], todo_source: 'icloud' };", sandbox);
+  sandbox.renderTodoSourcePicker();
+  assert.doesNotMatch(host.innerHTML, /read-only until/);
+});
+
+// ---- reminders driven through the REAL delegated click/submit handlers ----
+// The tests above call toggleReminder/addReminder/deleteReminder directly, which
+// skips the optimistic .done flip, the revert-on-failure, and the submit
+// routing. This harness captures hub.js's delegated listeners (same pattern as
+// mountChoresFull) and taps rendered nodes so those paths run for real.
+function mountReminders({ surface = 'full', writable = true, lists = [],
+  reminders = REMINDERS, fetch } = {}) {
+  const registry = {};
+  const clickHandlers = [];
+  const submitHandlers = [];
+  const document = {
+    getElementById: (id) => registry[id] || null,
+    createElement: (tag) => new FakeEl(registry, tag),
+    addEventListener: (type, fn) => {
+      if (type === 'click') clickHandlers.push(fn);
+      if (type === 'submit') submitHandlers.push(fn);
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  SEEDED_IDS.forEach((id) => { const el = new FakeEl(registry); el._id = id; registry[id] = el; });
+  document.body = new FakeEl(registry, 'body');
+  // The full view paints into #todos-page (not in SEEDED_IDS); the add flow reads
+  // #todo-add-input by id (parsed innerHTML nodes aren't id-registered, so seed a
+  // real one). Only the full surface needs these.
+  if (surface === 'full') {
+    const page = new FakeEl(registry); page._id = 'todos-page'; registry['todos-page'] = page;
+    const inp = new FakeEl(registry, 'input'); inp._id = 'todo-add-input'; registry['todo-add-input'] = inp;
+  }
+  const sandbox = {
+    document,
+    window: { addEventListener: () => {}, innerWidth: 1280, innerHeight: 800 },
+    innerWidth: 1280, innerHeight: 800,
+    location: { host: 'hub.example:8138', protocol: 'http:' },
+    scrollTo: () => {}, setTimeout: () => 0, setInterval: () => 0,
+    clearTimeout: () => {}, clearInterval: () => {},
+    fetch: fetch || (async () => { throw new Error('offline in test'); }),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(commonSrc, sandbox);
+  vm.runInContext(hubSrc, sandbox);
+
+  const hub = {
+    todo_source: 'icloud', reminders_writable: writable, reminders,
+    reminder_lists: lists,
+    integrations: [{ id: 'icloud_caldav', enabled: true, readonly: !writable }],
+  };
+  vm.runInContext(
+    "data_date = '2026-08-17';"
+    + ` hubData = ${JSON.stringify(hub)};`
+    + " todoState.source = 'icloud';"
+    + ` todoState.reminders = ${JSON.stringify({ buckets: reminders, configured: true, writable })};`
+    + " openView = 'todos'; document.body.dataset.tab = 'todos';",
+    sandbox);
+
+  if (surface === 'home') sandbox.renderTodoSlot(hub);
+  else sandbox.renderTodosPaint();
+
+  const host = registry[surface === 'home' ? 'todo-slot' : 'todos-page'];
+  const fireClick = (target) => clickHandlers.forEach((fn) => fn({ target }));
+  const fireSubmit = (target) =>
+    submitHandlers.forEach((fn) => fn({ target, preventDefault: () => {} }));
+  const tap = (sel) => {
+    const node = queryFirst(host._queryChildren, sel);
+    assert.ok(node, `a node matching ${sel} exists to tap`);
+    node.closest = (s) => (selectorMatches(node, s) ? node : null);
+    fireClick(node);
+    return node;
+  };
+  const read = (expr) => vm.runInContext(expr, sandbox);
+  return { sandbox, document, registry, host, tap, fireSubmit, read };
+}
+
+test('reminder tap (home): the row flips to .done immediately and the write carries completed:true', () => {
+  const calls = [];
+  const { tap } = mountReminders({ surface: 'home', fetch: async (url, opts) => {
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/toggle') return okResp({ id: 'caldav:g/1', completed: true });
+    throw new Error('offline in test');
+  } });
+  const row = tap('[data-reminder]');                 // the overdue "Renew car tags" row
+  assert.ok(row.classList.contains('done'), 'the tapped row is optimistically marked done');
+  const post = calls.find((c) => c.url === '/api/reminders/toggle');
+  assert.deepEqual(post.body, { id: 'caldav:g/1', completed: true });
+});
+
+test('reminder tap (home): a FAILED toggle reverts the optimistic .done and toasts (no strand offline)', async () => {
+  const { tap, host, document } = mountReminders({ surface: 'home', fetch: async (url) => {
+    if (url === '/api/reminders/toggle') return failResp(500, 'boom');
+    throw new Error('offline in test');   // the follow-up isn't reached — we revert and return
+  } });
+  const row = tap('[data-reminder]');
+  assert.ok(row.classList.contains('done'), 'optimistic flip happens first');
+  await flush();                                       // let toggleReminder settle
+  // The home card must repaint from the UNCHANGED cache: re-query the LIVE row
+  // (the optimistic flip mutated the node's classList, not the innerHTML string,
+  // so a string check wouldn't catch a strand). Without the revert, this is the
+  // same stranded node still carrying .done; with it, it's a fresh open row.
+  const after = queryFirst(host._queryChildren, '[data-reminder]');
+  assert.ok(after && !after.classList.contains('done'), 'the stranded .done is reverted');
+  assert.match(document.getElementById('toast').textContent, /Couldn.t save/);
+});
+
+test('reminder open (full): tapping the body flips openId and reveals the delete affordance', () => {
+  const { tap, host, read } = mountReminders({ surface: 'full',
+    lists: [{ id: 'caldav:g', name: 'Groceries' }] });
+  assert.doesNotMatch(host.innerHTML, /data-reminder-del=/, 'no delete button until opened');
+  tap('[data-reminder-open]');
+  assert.equal(read('todoState.openId'), 'caldav:g/1');
+  assert.match(host.innerHTML, /data-reminder-del="caldav:g\/1"/, 'delete affordance now shown');
+});
+
+test('reminder add (full): submitting #todo-add-form in iCloud mode routes to addReminder, not addTodo', async () => {
+  const calls = [];
+  const { fireSubmit, registry } = mountReminders({ surface: 'full',
+    lists: [{ id: 'caldav:g', name: 'Groceries' }],
+    fetch: async (url, opts) => {
+      calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+      if (url === '/api/reminders/add') return okResp({ id: 'caldav:g/new', title: 'Buy milk', due: null });
+      throw new Error('offline in test');
+    } });
+  registry['todo-add-input'].value = 'Buy milk';
+  fireSubmit({ id: 'todo-add-form' });
+  await flush();
+  assert.ok(calls.some((c) => c.url === '/api/reminders/add'), 'routed to the reminders endpoint');
+  assert.ok(!calls.some((c) => c.url === '/api/todos'), 'the local todo endpoint is never hit');
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/add').body,
+    { list_id: 'caldav:g', title: 'Buy milk' });
+});
+
+test('renderTodosFull: fetches the endpoint that matches the active source', async () => {
+  const { sandbox } = newHub();
+  const urls = [];
+  sandbox.fetch = async (url) => {
+    urls.push(url);
+    return okResp(url === '/api/reminders'
+      ? { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true }
+      : { now: [], soon: [], later: [] });
+  };
+  vm.runInContext("hubData = { todo_source: 'icloud' };", sandbox);
+  await sandbox.renderTodosFull();
+  assert.ok(urls.includes('/api/reminders') && !urls.includes('/api/todos'), 'iCloud -> /api/reminders');
+  urls.length = 0;
+  vm.runInContext("hubData = { todo_source: 'local' };", sandbox);
+  await sandbox.renderTodosFull();
+  assert.ok(urls.includes('/api/todos') && !urls.includes('/api/reminders'), 'local -> /api/todos');
+});
+
+test('renderTodosFull: a failed refresh toasts only when data was already loaded (not on first load)', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.fetch = async () => { throw new Error('down'); };
+  vm.runInContext("hubData = { todo_source: 'icloud' }; todoState.reminders = null;", sandbox);
+  await sandbox.renderTodosFull();
+  assert.equal(document.getElementById('toast'), null, 'no toast on the first, empty load');
+  vm.runInContext("todoState.reminders = { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true };", sandbox);
+  await sandbox.renderTodosFull();
+  assert.match(document.getElementById('toast').textContent, /Couldn.t refresh/, 'a failed REFRESH surfaces');
+});
+
+test('setTodoSource: re-polls, repaints the picker to the new source, and refreshes the open view on the new endpoint', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div'); host._id = 'todo-source-ctl';
+  document.body.appendChild(host);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, readonly: false }], todo_source: 'local' }; openView = 'todos';",
+    sandbox);
+  const urls = [];
+  sandbox.fetch = async (url) => {
+    urls.push(url);
+    if (url === '/api/todo-source') return okResp({ source: 'icloud' });
+    if (url === '/api/hub') {
+      return okResp({
+        date: '2026-08-17', people: [], todos: { now: [], soon: [], later: [] }, todos_ok: true,
+        reminders: { overdue: [], today: [], upcoming: [], no_date: [] },
+        reminders_writable: true, reminder_lists: [], todo_source: 'icloud',
+        calendar: { status: { ok: true }, events: [] }, links: {},
+        integrations: [{ id: 'icloud_caldav', enabled: true, readonly: false }],
+      });
+    }
+    if (url === '/api/reminders') return okResp({ buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true });
+    throw new Error('offline in test');
+  };
+  await sandbox.setTodoSource('icloud');
+  assert.ok(urls.includes('/api/todo-source'), 'the source was PATCHed');
+  assert.ok(urls.includes('/api/reminders'), 'the open view refreshed against the iCloud endpoint');
+  assert.match(host.innerHTML, /seg-btn active" type="button" data-todo-source="icloud"/, 'picker repainted to iCloud');
+});
+
+test('reminders (full): zero enabled lists hides the add form AND addReminder posts nothing', async () => {
+  const { host, sandbox, registry } = mountReminders({ surface: 'full', writable: true, lists: [] });
+  assert.doesNotMatch(host.innerHTML, /id="todo-add-form"/, 'no add form without a target list');
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp({}); };
+  registry['todo-add-input'].value = 'Orphan';
+  await sandbox.addReminder();
+  assert.equal(urls.length, 0, 'addReminder early-returns with no POST when there are no lists');
+});
+
+test('reminders (full): iCloud-supplied title and list name are escaped, never live markup', () => {
+  const { host } = mountReminders({ surface: 'full', writable: true,
+    lists: [{ id: 'caldav:g', name: 'Home <script>' }],
+    reminders: { overdue: [], today: [{ id: 'caldav:g/x', title: 'A <b>x</b>', due: '2026-08-17' }], upcoming: [], no_date: [] } });
+  assert.match(host.innerHTML, /A &lt;b&gt;x&lt;\/b&gt;/, 'title markup is escaped');
+  assert.ok(!host.innerHTML.includes('<b>x</b>'), 'no live <b> tag');
+  assert.match(host.innerHTML, /Add to Home &lt;script&gt;/, 'list name in the placeholder is escaped');
+  assert.ok(!host.innerHTML.includes('<script>'), 'no live <script> tag');
+});
+
+test('reminderPriHtml / reminderDueHtml: the "!" is high-only, the due date is upcoming/overdue-only', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  assert.match(sandbox.reminderPriHtml(4), /rem-pri/, 'priority 1-4 marks high');
+  assert.equal(sandbox.reminderPriHtml(5), '', 'priority 5 (medium) is unmarked');
+  assert.equal(sandbox.reminderPriHtml(null), '', 'no priority is unmarked');
+  assert.match(sandbox.reminderDueHtml('upcoming', '2026-09-01'), /rem-due/, 'upcoming shows the date');
+  assert.match(sandbox.reminderDueHtml('overdue', '2026-08-10'), /rem-due/, 'overdue shows the date');
+  assert.equal(sandbox.reminderDueHtml('today', '2026-08-17'), '', 'today suppresses the redundant date');
+  assert.equal(sandbox.reminderDueHtml('no_date', null), '', 'no_date has nothing to show');
 });
 
 // links is module-level `let` state in hub.js, set for real by poll() from
@@ -2640,4 +3106,580 @@ test('camera HD reveal probe arms a short bounded timeout (CAM_HD_PROBE_TIMEOUT_
     'the HD probe arms a 3000ms (CAM_HD_PROBE_TIMEOUT_MS) abort timeout');
   assert.ok(!timers.some((t) => t.ms === 12000),
     'never the long J_TIMEOUT_MS default for this probe');
+});
+
+test('renderIntegrations: a switch per integration, and gates disabled tiles', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'weather', kind: 'weather', name: 'Weather', enabled: true },
+    { id: 'cameras', kind: 'cameras', name: 'Cameras', enabled: false },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /Weather/);
+  assert.match(host.innerHTML, /data-integ-toggle="cameras"/);
+  assert.match(host.innerHTML, /integ-switch on/);                 // weather is on
+  assert.match(host.innerHTML, /aria-checked="false"/);            // cameras is off
+  // a disabled integration stamps a body gating class; an enabled one does not
+  assert.ok(sandbox.document.body.classList.contains('integ-off-cameras'));
+  assert.ok(!sandbox.document.body.classList.contains('integ-off-weather'));
+  // toggling flips: re-render with cameras enabled clears the gate
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', kind: 'cameras', name: 'Cameras', enabled: true },
+  ] });
+  assert.ok(!sandbox.document.body.classList.contains('integ-off-cameras'));
+});
+
+test('toggleIntegration: PATCHes the opposite of the current state', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: opts.method, body: JSON.parse(opts.body) });
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'weather', kind: 'weather', name: 'Weather', enabled: true },
+  ] });
+  await sandbox.toggleIntegration('weather');
+  assert.equal(calls[0].url, '/api/integrations/weather');
+  assert.equal(calls[0].method, 'PATCH');
+  assert.deepEqual(calls[0].body, { enabled: false });   // was on -> turn off
+});
+
+test('renderIntegrations: shows a reconnect hint when status is needs_auth', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)',
+      enabled: true, status: 'needs_auth' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /integ-warn/);
+  assert.match(host.innerHTML, /reconnect/);
+});
+
+test('renderIntegrations: shows an error hint when status is error', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'google_calendar', kind: 'calendar', name: 'Google Calendar',
+      enabled: true, status: 'error' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /integ-warn/);
+  assert.match(host.innerHTML, /error/);
+});
+
+test('toggleIntegration: a failed PATCH surfaces a toast (regression: the check used to be a no-op)', async () => {
+  // attemptTodo never throws — it resolves to {ok:false, error}, a truthy
+  // object — so a bare `if (!ok)` on that result is always false. Pins the
+  // fix: toggleIntegration must check `.ok`, or a failed write silently
+  // reverts the switch on the next poll() with no explanation at all.
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'weather', kind: 'weather', name: 'Weather', enabled: true },
+  ] });
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.toggleIntegration('weather');
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'),
+    'the failure toast fired');
+});
+
+/* ------------------------------------------- Settings overlay + CalDAV panel */
+// hub.js keeps caldavUi/hubData as module-lexical `let` bindings (same trick
+// used throughout this file for choreState/data_date/etc.): a follow-up
+// vm.runInContext in the SAME sandbox context shares that lexical scope, so
+// it can seed/read them directly.
+
+test('openOverlay("settings") opens the overlay, builds the settings-full skeleton, and clears a stale form error', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("caldavUi.formError = 'stale error from a previous session';", sandbox);
+
+  sandbox.openOverlay('settings');
+
+  const content = document.getElementById('overlay-content');
+  assert.match(content.innerHTML, /id="settings-full"/);
+  assert.ok(document.getElementById('overlay').classList.contains('open'));
+  assert.equal(vm.runInContext('caldavUi.formError', sandbox), '');
+});
+
+test('renderSettingsFull: paints Display + Integrations, with the live theme reflected onto its own controls', () => {
+  const { document, sandbox } = newHub();
+  // openOverlay('settings') writes #settings-full via innerHTML; the fake
+  // parser doesn't register parsed nodes by id (same limitation the cal-full/
+  // chores-full tests work around), so pre-register a real host FakeEl.
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  // reflectThemeControls reads document.documentElement.getAttribute; newHub's
+  // stub documentElement only carries scrollTop (for scrollPageToTop), so give
+  // it a working getAttribute for this test.
+  document.documentElement.getAttribute = (k) => ({
+    'data-theme': 'grey', 'data-accent': 'green', 'data-cols': 'none',
+  }[k]);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'weather', kind: 'weather', name: 'Weather', enabled: true }] };",
+    sandbox);
+
+  sandbox.renderSettingsFull();
+
+  const html = document.getElementById('settings-full').innerHTML;
+  assert.match(html, /<h2>Display<\/h2>/);
+  assert.match(html, /<h2>Integrations<\/h2>/);
+  assert.match(html, /id="integrations-ctl"/, 'the Integrations switch list mounts here');
+  assert.match(html, /id="caldav-panel"/, 'the iCloud CalDAV panel mounts here');
+  const greyBtn = host.querySelector('[data-theme-set="grey"]');
+  assert.ok(greyBtn && greyBtn.classList.contains('on'),
+    'reflectThemeControls marks the live theme on the overlay\'s own copy of the controls');
+});
+
+test('reflectThemeControls updates every matching control on the page, not just one surface', () => {
+  // Pins the generalization from a single #theme-pop-scoped query to a
+  // .theme-ctl-scoped one: both the gear popover's controls AND the Settings
+  // overlay's own copy (rendered separately, see renderSettingsFull) must
+  // stay in sync, since either can be the one currently visible. Each
+  // fixture wraps its buttons in .theme-ctl, matching the real markup shape
+  // (both surfaces do) that the scoped query now requires.
+  const { document, sandbox } = newHub();
+  const popHost = document.createElement('div');
+  popHost.innerHTML = '<div class="theme-ctl"><button data-theme-set="light">Light</button>'
+    + '<button data-theme-set="grey">Grey</button></div>';
+  popHost._id = 'theme-pop';
+  document.body.appendChild(popHost);
+  const overlayHost = document.createElement('div');
+  overlayHost.innerHTML = '<div class="theme-ctl"><button data-theme-set="light">Light</button>'
+    + '<button data-theme-set="grey">Grey</button></div>';
+  overlayHost._id = 'settings-full';
+  document.body.appendChild(overlayHost);
+  document.documentElement.getAttribute = (k) => (k === 'data-theme' ? 'grey' : null);
+
+  sandbox.reflectThemeControls();
+
+  for (const host of [popHost, overlayHost]) {
+    assert.ok(host.querySelector('[data-theme-set="grey"]').classList.contains('on'));
+    assert.ok(!host.querySelector('[data-theme-set="light"]').classList.contains('on'));
+  }
+});
+
+function seedCaldavPanel(document) {
+  const host = document.createElement('div');
+  host._id = 'caldav-panel';
+  document.body.appendChild(host);
+  return host;
+}
+
+test('renderCaldavPanel: not connected shows the connect form; connected shows the account', () => {
+  const { document, sandbox } = newHub();
+  const host = seedCaldavPanel(document);
+
+  vm.runInContext("hubData = { integrations: [] };", sandbox);
+  sandbox.renderCaldavPanel();
+  assert.match(host.innerHTML, /data-caldav-connect/);
+
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)', "
+    + "enabled: true, status: null, account: 'bot@example.com', readonly: true }] };",
+    sandbox);
+  sandbox.renderCaldavPanel();
+  assert.match(host.innerHTML, /Connected as <strong>bot@example\.com/);
+});
+
+test('renderCaldavPanel: falls back to lastIntegrations when hubData has not loaded yet', () => {
+  const { document, sandbox } = newHub();
+  const host = seedCaldavPanel(document);
+  // lastIntegrations is set by renderIntegrations, independent of hubData —
+  // e.g. the very first paint before poll()'s first /api/hub response lands.
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)',
+      enabled: true, status: null, account: 'first@example.com', readonly: true },
+  ] });
+
+  sandbox.renderCaldavPanel();
+
+  assert.match(host.innerHTML, /Connected as <strong>first@example\.com/);
+});
+
+test('connectCaldav: empty fields show an inline form error and never call the API', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = '';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = '';
+  document.body.appendChild(p);
+  let fetchCalled = false;
+  sandbox.fetch = async () => { fetchCalled = true; return { ok: true, status: 200, json: async () => ({}) }; };
+
+  await sandbox.connectCaldav();
+
+  assert.equal(fetchCalled, false, 'no network call when fields are empty');
+  assert.match(document.getElementById('caldav-panel').innerHTML,
+    /Enter both the Apple ID and the app-specific password/);
+});
+
+test('connectCaldav: success clears the password field, re-polls, and auto-runs a test', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = 'bot@example.com';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = 'app-specific-pw';
+  document.body.appendChild(p);
+
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: opts && opts.method,
+      body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (String(url).includes('/credentials')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, user: 'bot@example.com' }) };
+    }
+    if (String(url) === '/api/hub') {
+      return { ok: true, status: 200, json: async () => ({ integrations: [
+        { id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)',
+          enabled: true, status: null, account: 'bot@example.com', readonly: true },
+      ] }) };
+    }
+    if (String(url).includes('/test')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, events: 5, reminders: 1 }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  await sandbox.connectCaldav();
+
+  assert.equal(p.value, '', 'the password input is blanked the instant the POST succeeds');
+  const credCall = calls.find((c) => c.url.includes('/credentials'));
+  assert.equal(credCall.method, 'POST');
+  assert.deepEqual(credCall.body, { user: 'bot@example.com', app_password: 'app-specific-pw' });
+  // never leak the password anywhere else, e.g. into a later call's URL/body
+  assert.ok(!calls.some((c) => JSON.stringify(c).includes('app-specific-pw') && c !== credCall));
+  assert.ok(calls.some((c) => c.url === '/api/hub'), 'poll() re-fetched /api/hub');
+  assert.ok(calls.some((c) => c.url.includes('/test')), 'a Test ran automatically after connecting');
+  const html = document.getElementById('caldav-panel').innerHTML;
+  assert.match(html, /Connected as <strong>bot@example\.com/);
+  assert.match(html, /caldav-test-result ok">Connected - 5 events, 1 reminder\./);
+});
+
+test('connectCaldav: a rejected POST shows a toast, leaves the password field alone, and stays on the form', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = 'bot@example.com';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = 'wrong-pw';
+  document.body.appendChild(p);
+  sandbox.fetch = async () => { throw new Error('422: user and app_password are required'); };
+
+  await sandbox.connectCaldav();
+
+  assert.equal(p.value, 'wrong-pw', 'a failed attempt does not blank what the operator typed');
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+  assert.match(document.getElementById('caldav-panel').innerHTML, /data-caldav-connect/,
+    'still showing the connect form, not stuck on a permanent "Connecting…"');
+});
+
+test('testCaldavConnection: shows a testing state in flight, then the formatted result', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)', "
+    + "enabled: true, status: null, account: 'bot@example.com', readonly: true }] };",
+    sandbox);
+  let sawTesting = false;
+  sandbox.fetch = async (url) => {
+    // Only the /test call itself proves the in-flight "Testing…" state; the
+    // Calendars-picker refresh testCaldavConnection fires afterward (see
+    // below) reuses this same mock and must not overwrite the capture.
+    if (String(url).includes('/test')) {
+      sawTesting = /Testing…/.test(document.getElementById('caldav-panel').innerHTML);
+      return { ok: true, status: 200, json: async () => ({ needs_auth: true }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ collections: [] }) };
+  };
+
+  await sandbox.testCaldavConnection();
+
+  assert.ok(sawTesting, 'the panel showed the testing state before the request resolved');
+  assert.match(document.getElementById('caldav-panel').innerHTML, /Sign-in rejected/);
+});
+
+test('testCaldavConnection: a network failure folds into the same {ok:false,error} shape', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('network down'); };
+
+  await sandbox.testCaldavConnection();
+
+  assert.match(document.getElementById('caldav-panel').innerHTML, /caldav-test-result err">network down/);
+});
+
+test('disconnectCaldav: DELETEs credentials, clears the stale test result + Calendars picker, and re-polls back to the form',
+  async () => {
+    const { document, sandbox } = newHub();
+    seedCaldavPanel(document);
+    vm.runInContext("caldavUi.testResult = { ok: true, events: 1, reminders: 0 };", sandbox);
+    vm.runInContext(
+      "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+      + "comp_type: 'VEVENT', enabled: true }]; caldavUi.collectionsError = true;",
+      sandbox);
+    const calls = [];
+    sandbox.fetch = async (url, opts) => {
+      calls.push({ url: String(url), method: opts && opts.method });
+      if (String(url).includes('/credentials')) return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      if (String(url) === '/api/hub') return { ok: true, status: 200, json: async () => ({ integrations: [] }) };
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    await sandbox.disconnectCaldav();
+
+    const del = calls.find((c) => c.url.includes('/credentials'));
+    assert.equal(del.method, 'DELETE');
+    assert.equal(vm.runInContext('caldavUi.testResult', sandbox), null,
+      'a stale "connected" result would be misleading now');
+    // vm.runInContext values live in a different realm, so a plain deepEqual
+    // against a main-realm [] fails on prototype identity alone (same
+    // JSON-round-trip workaround hub.test.mjs's monthGrid/panelFit use) -
+    // .length is realm-agnostic and just as conclusive here.
+    assert.equal(vm.runInContext('caldavUi.collections.length', sandbox), 0,
+      'a stale calendar list would be misleading too');
+    assert.equal(vm.runInContext('caldavUi.collectionsError', sandbox), false);
+    assert.match(document.getElementById('caldav-panel').innerHTML, /data-caldav-connect/,
+      'back to the not-connected form');
+  });
+
+test('disconnectCaldav: a failed DELETE shows a toast and does not touch the state', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.disconnectCaldav();
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+});
+
+test('setCaldavReadonly: PATCHes {readonly} and re-renders the sync-direction control', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: opts && opts.method,
+      body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (String(url) === '/api/hub') {
+      return { ok: true, status: 200, json: async () => ({ integrations: [
+        { id: 'icloud_caldav', enabled: true, account: 'bot@example.com', readonly: false },
+      ] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  await sandbox.setCaldavReadonly(false);
+
+  const patch = calls.find((c) => c.method === 'PATCH');
+  assert.deepEqual(patch.body, { readonly: false });
+  assert.match(document.getElementById('caldav-panel').innerHTML, /2-way \(write back\)/);
+});
+
+test('setCaldavReadonly: a failed PATCH shows a toast', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.setCaldavReadonly(true);
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+});
+
+/* ------------------------------------- Calendars picker (caldav collections) */
+
+test('renderSettingsFull: refreshes the Calendars picker every time the Settings overlay opens', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.getAttribute = () => null;
+  let called = false;
+  // Same "swap the sandbox global for a spy" trick used throughout this file
+  // (e.g. sandbox.attemptToggle above) - hub.js's functions are plain global
+  // bindings in the vm context, so renderSettingsFull's internal call to
+  // fetchCaldavCollections resolves to this override.
+  sandbox.fetchCaldavCollections = () => { called = true; };
+
+  sandbox.renderSettingsFull();
+
+  assert.ok(called, 'new calendars/reminder lists can appear between visits - always refetch on open');
+});
+
+test('testCaldavConnection: refreshes the Calendars picker after a test runs (a sync can surface new calendars)', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  sandbox.fetch = async () => (
+    { ok: true, status: 200, json: async () => ({ ok: true, events: 0, reminders: 0 }) });
+  let called = false;
+  sandbox.fetchCaldavCollections = () => { called = true; };
+
+  await sandbox.testCaldavConnection();
+
+  assert.ok(called);
+});
+
+test('fetchCaldavCollections: GETs the collections when connected and paints the picker', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  const calls = [];
+  sandbox.fetch = async (url) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ collections: [
+      { id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+    ] }) };
+  };
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.deepEqual(calls, ['/api/integrations/icloud_caldav/collections']);
+  assert.match(document.getElementById('caldav-panel').innerHTML,
+    /data-caldav-collection-toggle="caldav:ab12"/);
+});
+
+test('fetchCaldavCollections: not connected never calls the API and the picker stays empty', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext("hubData = { integrations: [] };", sandbox);
+  let fetchCalled = false;
+  sandbox.fetch = async () => { fetchCalled = true; return { ok: true, status: 200, json: async () => ({}) }; };
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.equal(fetchCalled, false, 'no network call when icloud_caldav has no stored credentials');
+});
+
+test('fetchCaldavCollections: a failed GET never throws and shows a distinct "couldn\'t load" message, ' +
+  'NOT the same copy a genuinely empty account gets', async () => {
+  // Regression pin: a silent-failure-hunter review caught the original
+  // implementation folding "GET failed" into the exact same "No calendars
+  // found yet" text a truly empty account renders - an operator with a real
+  // connection problem would conclude they simply have zero calendars.
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.fetchCaldavCollections();   // must not throw
+
+  const html = document.getElementById('caldav-panel').innerHTML;
+  assert.match(html, /Couldn.t load calendars - try Test connection/);
+  assert.doesNotMatch(html, /No calendars found yet/,
+    'a fetch failure must never be confused with a genuinely empty account');
+});
+
+test('fetchCaldavCollections: a failed GET keeps the last good list on screen instead of wiping it', async () => {
+  // Same "keep cached data, don't paint a real problem as an empty state"
+  // rule fetchCalWindow already follows for the main calendar feed.
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext(
+    "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+    + "comp_type: 'VEVENT', enabled: true }];",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.match(document.getElementById('caldav-panel').innerHTML,
+    /data-caldav-collection-toggle="caldav:ab12"/, 'the previously-fetched row is still shown');
+});
+
+test('fetchCaldavCollections: a successful fetch clears a prior error flag', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext('caldavUi.collectionsError = true;', sandbox);
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ collections: [] }) });
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.equal(vm.runInContext('caldavUi.collectionsError', sandbox), false);
+  assert.match(document.getElementById('caldav-panel').innerHTML, /No calendars found yet - try Test connection/);
+});
+
+test('toggleCaldavCollection: PATCHes the opposite of the current state (id is URI-encoded) and refetches', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext(
+    "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+    + "comp_type: 'VEVENT', enabled: true }];",
+    sandbox);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: opts && opts.method,
+      body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (String(url).includes('/collections/')) {
+      return { ok: true, status: 200, json: async () => ({ id: 'caldav:ab12', enabled: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ collections: [
+      { id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: false },
+    ] }) };
+  };
+
+  await sandbox.toggleCaldavCollection('caldav:ab12');
+
+  const patch = calls.find((c) => c.method === 'PATCH');
+  assert.equal(patch.url, '/api/integrations/icloud_caldav/collections/caldav%3Aab12',
+    'the colon in the id is encodeURIComponent\'d into the URL');
+  assert.deepEqual(patch.body, { enabled: false });   // was on -> turn off
+  assert.ok(calls.some((c) => c.url === '/api/integrations/icloud_caldav/collections' && c.method === undefined),
+    'refetched the collections list afterward, same as toggleIntegration/setCaldavReadonly do');
+  assert.match(document.getElementById('caldav-panel').innerHTML, /integ-switch" aria-hidden/,
+    'the picker repainted with the refreshed (now off) state');
+});
+
+test('toggleCaldavCollection: a failed PATCH shows a toast and does not flip or refetch', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext(
+    "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+    + "comp_type: 'VEVENT', enabled: true }];",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.toggleCaldavCollection('caldav:ab12');
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+  assert.equal(vm.runInContext('caldavUi.collections[0].enabled', sandbox), true,
+    'a failed write must not flip the cached state - the next repaint would show the wrong thing');
+});
+
+test('toggleCaldavCollection: an unknown id is a no-op (no PATCH, no toast)', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext('caldavUi.collections = [];', sandbox);
+  let fetchCalled = false;
+  sandbox.fetch = async () => { fetchCalled = true; return { ok: true, status: 200, json: async () => ({}) }; };
+
+  await sandbox.toggleCaldavCollection('missing');
+
+  assert.equal(fetchCalled, false);
+  assert.equal(document.getElementById('toast'), null);
 });

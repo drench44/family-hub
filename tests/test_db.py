@@ -593,3 +593,18 @@ def test_schema_migrates_completions_chore_fk_away(tmp_path):
     fdb.ensure_schema(c)
     assert fdb.completions_between(c, "2026-08-12", "2026-08-12") != []
     c.close()
+
+
+def test_integrations_seed_toggle_and_default(conn):
+    # unseeded integration reads as enabled (default), and can't be toggled yet
+    assert fdb.integration_enabled(conn, "weather") is True
+    assert fdb.set_integration_enabled(conn, "weather", False) is False   # no row
+    # seed (enabled), idempotent, doesn't reset an existing toggle
+    fdb.seed_integration(conn, "weather", "weather")
+    assert fdb.integration_enabled(conn, "weather") is True
+    assert fdb.set_integration_enabled(conn, "weather", False) is True
+    fdb.seed_integration(conn, "weather", "weather")                     # re-seed
+    assert fdb.integration_enabled(conn, "weather") is False             # kept off
+    rows = {r["id"]: r for r in fdb.list_integrations(conn)}
+    assert rows["weather"]["enabled"] is False and rows["weather"]["kind"] == "weather"
+    assert rows["weather"]["config"] == {}
