@@ -773,3 +773,53 @@ def test_theme_js_is_first_script(html_path):
                re.findall(r'<script src="([^"]+)"', html_path.read_text())]
     assert scripts and scripts[0] == "theme.js", \
         f"{html_path.name}: theme.js must be the first script (got {scripts[:1]})"
+
+
+def test_settings_has_a_features_group():
+    assert ".integ-group-title" in CSS, "features/integrations sub-headers unstyled"
+    hub = (STATIC / "hub.js").read_text()
+    assert "'Features'" in hub or '"Features"' in hub, \
+        "renderIntegrations must render a Features group"
+
+
+def test_off_features_hide_their_wall_surface():
+    assert re.search(r"body\.integ-off-chores[^\{]*\.people-col[^\{]*\{[^}]*display:\s*none",
+                     CSS), "chores-off must hide the people column on the wall"
+    assert re.search(r"body\.integ-off-todos[^\{]*\.todo-slot[^\{]*\{[^}]*display:\s*none",
+                     CSS), "todos-off must hide the to-do slot on the wall"
+
+
+def test_all_off_empty_state_present_and_wired():
+    index = (STATIC / "index.html").read_text()
+    assert 'id="hub-empty-msg"' in index, "missing all-off empty-state element"
+    # Both load-bearing rules, not just the substring "body.hub-empty": the
+    # grid/tabbar must actually hide AND the empty-state message must actually
+    # show, or the page silently renders blank instead of the intended panel.
+    assert re.search(
+        r"body\.hub-empty\s+\.hub-grid\s*,\s*\n?\s*body\.hub-empty\s+\.tabbar\s*\{"
+        r"[^}]*display:\s*none",
+        CSS,
+    ), "body.hub-empty must hide .hub-grid and .tabbar"
+    assert re.search(
+        r"body\.hub-empty\s+\.hub-empty-state\s*\{[^}]*display:\s*flex",
+        CSS,
+    ), "body.hub-empty must show .hub-empty-state"
+    hub = (STATIC / "hub.js").read_text()
+    assert "updateTabVisibility" in hub and "TAB_FEATURES" in hub, \
+        "data-driven tab visibility missing"
+
+
+def test_hidden_tab_button_is_actually_hidden():
+    # b.hidden (the HTML `hidden` attribute) relies on the UA rule
+    # [hidden]{display:none}, but that's beaten by the author rule
+    # .tab-btn{display:flex} regardless of specificity (author origin beats
+    # UA origin) — a "hidden" tab kept rendering flex on a real phone unless
+    # an author-origin rule at >= .tab-btn's specificity wins it back.
+    assert re.search(r"\.tab-btn\[hidden\][^\{]*\{[^}]*display:\s*none", CSS), \
+        "hidden tab buttons must be display:none (author rule beats UA [hidden])"
+
+
+def test_wall_grid_reflows_on_toggle():
+    hub = (STATIC / "hub.js").read_text()
+    assert "applyWallLayout" in hub, "wall grid reflow missing"
+    assert "gridTemplateAreas" in hub, "reflow must rebuild grid-template-areas"

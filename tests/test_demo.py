@@ -152,6 +152,21 @@ def test_no_demo_env_seeds_nothing(tmp_path, monkeypatch):
     assert cj.get("available") is not True
 
 
+def test_demo_integrations_list_includes_cameras_weather_climate(demo_client):
+    """DEMO serves placeholder cameras and canned weather/climate (see
+    test_demo_links_are_placeholder_cameras and
+    test_demo_weather_and_climate_tiles_are_canned) even though the demo config
+    leaves go2rtc_base/weather_base/climate_base unset (_write_cfg above sets
+    none of them). The registry must reflect that reality: /api/hub's
+    integrations list needs cameras/weather/climate present and enabled, or the
+    layout engine and tab bar (which key off this list) hide the demo's own
+    columns/tabs."""
+    ids = {i["id"]: i for i in demo_client.get("/api/hub").json()["integrations"]}
+    for iid in ("cameras", "weather", "climate"):
+        assert iid in ids, f"{iid} missing from demo /api/hub integrations"
+        assert ids[iid]["enabled"] is True, f"{iid} not enabled in demo"
+
+
 def test_demo_calendar_dates_are_relative_to_today(demo_client):
     """The demo must always look current: events are dated off today, not a
     hardcoded/stale date that would fall out of the calendar window over time."""

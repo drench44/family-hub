@@ -1089,6 +1089,125 @@ function scrollPageToTop() {
   if (wrap) wrap.scrollTop = 0;
 }
 
+// Which integration(s) back each phone tab. A tab shows when ANY backing
+// feature is enabled, so the calendar tab survives on any one calendar source
+// and the weather tab survives on either weather or climate. Chores/To-Dos are
+// always-available features, so their tabs track their single toggle.
+const TAB_FEATURES = {
+  chores: ['chores'],
+  todos: ['todos'],
+  cal: ['google_calendar', 'ics_calendar', 'icloud_caldav'],
+  cams: ['cameras'],
+  weather: ['weather', 'climate'],
+};
+
+// A custom dashboard panel (links.panels entry that isn't the weather/climate
+// slot) has no toggle of its own: it keeps the panels column, the phone's
+// Weather tab, and the not-empty state alive even with weather+climate off.
+function customPanelExists() {
+  return ((links && links.panels) || [])
+    .some((p) => p.id !== 'weather' && p.id !== 'climate');
+}
+
+// True unless the integration is present AND disabled. Fail-open: an id absent
+// from the payload (older server, transient gap) is treated as on, never
+// blanking a surface on a hiccup.
+function featureEnabled(id) {
+  const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  const e = list.find((x) => x.id === id);
+  return e ? !!e.enabled : true;
+}
+
+// Always-available features (never configurable off the registry the way the
+// integrations are): an id ABSENT from a non-empty payload must fail OPEN
+// (featureEnabled), same as an id that's simply missing from an older/partial
+// server response — never treated as "off" the way an absent, genuinely-
+// configurable integration (calendar/cameras/weather/climate) legitimately is.
+const ALWAYS_ON_FEATURES = new Set(['chores', 'todos']);
+
+// Reconcile the phone tab bar with the enabled feature set: hide tabs with no
+// enabled backing feature, move off a hidden active tab, and flag the all-off
+// state so the empty panel can show. No-ops (fail-open) on an empty list.
+function updateTabVisibility(list) {
+  if (!list || !list.length) return;
+  const on = new Set(list.filter((i) => i.enabled).map((i) => i.id));
+  // Per-feature membership: always-on features fail OPEN via featureEnabled
+  // (absent => shown); configurable integrations keep the on.has membership
+  // test (absent => legitimately unconfigured => reflow away).
+  const featureOn = (id) => ALWAYS_ON_FEATURES.has(id) ? featureEnabled(id) : on.has(id);
+  // A tab with no TAB_FEATURES mapping (e.g. a future tab shipped before its
+  // mapping lands) fails OPEN too, consistent with the fail-open posture —
+  // never silently hide a tab nobody told this function about. The weather
+  // tab gets the same custom-panel rescue as applyWallLayout's `dash` column
+  // below: it's the tab that shows .panels, so a live custom panel (no
+  // toggle of its own) must keep it reachable on the phone even with
+  // weather+climate both off — and keeping it visible also keeps `any` true,
+  // so hub-empty doesn't hide a live custom panel behind "all features off".
+  const visible = (tab) => !(tab in TAB_FEATURES) ? true
+    : TAB_FEATURES[tab].some(featureOn) || (tab === 'weather' && customPanelExists());
+  const btns = [...document.querySelectorAll('.tab-btn')];
+  let any = false;
+  btns.forEach((b) => {
+    const vis = visible(b.dataset.tab);
+    b.hidden = !vis;
+    if (vis) any = true;
+  });
+  document.body.classList.toggle('hub-empty', !any);
+  const active = document.body.dataset.tab;
+  if (any && (!active || !visible(active))) {
+    const first = btns.find((b) => !b.hidden);
+    if (first) setTab(first.dataset.tab);
+  }
+}
+
+// Reflow the wall grid to only the columns whose feature(s) are on, so a
+// disabled feature drops its column and the rest slide up/left instead of
+// leaving a hole. Each section's inline display is toggled too: a section
+// whose grid-area is dropped from the template would otherwise auto-place
+// into an implicit track. Fail-open: an empty/absent list leaves the CSS
+// default four-column grid untouched. (On the phone .hub-grid is display:flex
+// via the width media query, so the inline grid-template is simply ignored
+// there, and inline display:'' defers to the tab-visibility stylesheet rules.)
+function applyWallLayout(list) {
+  const grid = document.querySelector('.hub-grid');
+  if (!grid || !list || !list.length) return;
+  const on = new Set(list.filter((i) => i.enabled).map((i) => i.id));
+  const has = (...ids) => ids.some((id) => on.has(id));
+  // Always-on features fail OPEN via featureEnabled (absent => shown, same
+  // fail-open contract as updateTabVisibility above), never the plain on.has
+  // membership test — an id absent from a non-empty payload otherwise reads
+  // as "off" and silently drops an always-available surface on version skew.
+  const chores = featureEnabled('chores');
+  const todos = featureEnabled('todos');
+  const calAny = has('google_calendar', 'ics_calendar', 'icloud_caldav');
+  const cameras = has('cameras');
+  // panels column: weather/climate integrations OR any always-on custom
+  // dashboard panel (a links.panels entry whose id isn't weather/climate —
+  // buildPanels renders those via panelHtml, and they have no toggle of
+  // their own, so the column must survive even with weather+climate both
+  // off or an operator's custom panel would silently lose its column).
+  const dash = has('weather', 'climate') || customPanelExists();
+  const setDisp = (sel, show) => {
+    const el = document.querySelector(sel);
+    if (el) el.style.display = show ? '' : 'none';
+  };
+  setDisp('.people-col', chores);
+  setDisp('.cal', calAny);
+  setDisp('.todo-slot', todos);
+  setDisp('.tiles', cameras);
+  setDisp('.panels', dash);
+  const cols = [];
+  if (chores) cols.push({ w: '360px', a1: 'people', a2: 'people' });
+  if (calAny || todos) cols.push({ w: 'minmax(0, 1fr)',
+    a1: calAny ? 'cal' : 'todo', a2: todos ? 'todo' : 'cal' });
+  if (cameras) cols.push({ w: '540px', a1: 'tiles', a2: 'tiles' });
+  if (dash) cols.push({ w: '340px', a1: 'panels', a2: 'panels' });
+  grid.style.gridTemplateColumns = cols.map((c) => c.w).join(' ');
+  grid.style.gridTemplateAreas = cols.length
+    ? `"${cols.map((c) => c.a1).join(' ')}" "${cols.map((c) => c.a2).join(' ')}"`
+    : '';
+}
+
 function setTab(tab) {
   document.body.dataset.tab = tab;
   document.querySelectorAll('.tab-btn').forEach((b) =>
@@ -1187,6 +1306,11 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
 }
 
 function openOverlay(view) {
+  // Feature-off guards run BEFORE any state mutation below: a guarded return
+  // must leave openView/#overlay-content untouched, or a later refresh path
+  // (e.g. openView === 'chores') fires against a host that was never opened.
+  if (view === 'chores' && !featureEnabled('chores')) return;
+  if (view === 'todos' && !featureEnabled('todos')) return;
   const content = document.getElementById('overlay-content');
   content.innerHTML = '';
   openView = view;
@@ -2534,24 +2658,34 @@ function renderIntegrations(data) {
   lastIntegrations = list;
   list.forEach((it) =>
     document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
+  updateTabVisibility(list);
+  applyWallLayout(list);
   const host = document.getElementById('integrations-ctl');
   if (!host) return;
-  host.innerHTML = list.length
-    ? list.map((it) => {
-      // Auth-failure / error is a first-class state: a revoked or expired login
-      // shows "reconnect" so the family knows to fix it (the cached view stays).
-      const warn = it.status === 'needs_auth' ? 'reconnect'
-        : (it.status === 'error' ? 'error' : '');
-      return `<button class="integ-row" type="button" role="switch"`
-        + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
-        + ` data-integ-toggle="${escapeHtml(it.id)}">`
-        + `<span class="integ-name">${escapeHtml(it.name)}`
-        + (warn ? `<span class="integ-warn">${warn}</span>` : '')
-        + `</span>`
-        + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
-        + `</button>`;
-    }).join('')
-    : `<div class="integ-empty">none configured</div>`;
+  const row = (it) => {
+    // Auth-failure / error is a first-class state: a revoked or expired login
+    // shows "reconnect" so the family knows to fix it (the cached view stays).
+    const warn = it.status === 'needs_auth' ? 'reconnect'
+      : (it.status === 'error' ? 'error' : '');
+    return `<button class="integ-row" type="button" role="switch"`
+      + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
+      + ` data-integ-toggle="${escapeHtml(it.id)}">`
+      + `<span class="integ-name">${escapeHtml(it.name)}`
+      + (warn ? `<span class="integ-warn">${warn}</span>` : '')
+      + `</span>`
+      + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+      + `</button>`;
+  };
+  // Chores/To-Dos (group: 'feature') get their own header ahead of the
+  // external services, so the switch list reads as "things this hub does"
+  // vs "things it talks to" instead of one flat undifferentiated list.
+  const group = (title, items) => items.length
+    ? `<div class="integ-group-title">${title}</div>` + items.map(row).join('')
+    : '';
+  const features = list.filter((it) => it.group === 'feature');
+  const services = list.filter((it) => it.group !== 'feature');
+  const html = group('Features', features) + group('Integrations', services);
+  host.innerHTML = html || `<div class="integ-empty">none configured</div>`;
 }
 
 async function toggleIntegration(id) {
@@ -2620,7 +2754,7 @@ function renderSettingsFull() {
     + `</div></div>`
     + `</div></div>`
     + `<div class="card pad settings-card">`
-    + `<div class="shead"><span class="tick"></span><h2>Integrations</h2></div>`
+    + `<div class="shead"><span class="tick"></span><h2>Features &amp; integrations</h2></div>`
     + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
@@ -2841,10 +2975,11 @@ document.addEventListener('click', (e) => {
     if (open) reflectThemeControls();
     return;
   }
-  // The popover's "All settings" row: close the quick popover (it sits at a
-  // higher z-index than the full-screen overlay and would otherwise float
-  // over it) and open the real thing.
-  if (e.target.closest('#theme-pop [data-open-settings]')) {
+  // Any [data-open-settings] control: the popover's "All settings" row (close
+  // the quick popover first — it sits at a higher z-index than the full-screen
+  // overlay and would otherwise float over it) AND the all-off empty-state's
+  // "Open Settings" button (no popover open there, closeThemePop is a no-op).
+  if (e.target.closest('[data-open-settings]')) {
     closeThemePop();
     openOverlay('settings');
     return;

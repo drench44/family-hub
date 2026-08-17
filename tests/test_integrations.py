@@ -35,4 +35,23 @@ def test_caldav_available_only_with_credentials():
 
 def test_available_only_filters_to_configured():
     cfg = _cfg(weather_base="http://w")   # only weather configured
-    assert {i["id"] for i in fi.available_only(cfg, {})} == {"weather"}
+    # chores/todos are always-on core features, so they're included alongside
+    # whatever's actually configured (weather here)
+    assert {i["id"] for i in fi.available_only(cfg, {})} == \
+        {"weather", "chores", "todos"}
+
+
+def test_chores_and_todos_are_always_available_features():
+    class Cfg:  # nothing configured: no calendars, cameras, weather, climate
+        calendars = []
+    ids = {i["id"]: i for i in fi.available_integrations(Cfg(), {})}
+    # core features are available regardless of config
+    assert ids["chores"]["available"] is True
+    assert ids["todos"]["available"] is True
+    assert ids["chores"]["group"] == "feature"
+    assert ids["todos"]["group"] == "feature"
+    assert ids["chores"]["kind"] == "chores"
+    assert ids["todos"]["kind"] == "todos"
+    # external services are tagged as integrations
+    assert ids["weather"]["group"] == "integration"
+    assert ids["cameras"]["group"] == "integration"

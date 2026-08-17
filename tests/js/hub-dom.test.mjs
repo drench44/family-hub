@@ -187,6 +187,10 @@ class QueryNode {
     this._innerHTML = '';
     this.textContent = '';
     this.onclick = null;
+    // Plain style bag (mirrors FakeEl's) so code that mutates parsed-markup
+    // nodes' inline style (e.g. applyWallLayout's grid.style.gridTemplate*
+    // and setDisp's el.style.display) has somewhere real to write/read.
+    this.style = { setProperty() {} };
     // Parsed nodes are VISIBLE by default — the OPPOSITE of FakeEl's
     // hidden-by-default. Tests that need a hidden tile/panel set
     // `offsetParent = null` explicitly (that's how display:none reads).
@@ -405,6 +409,319 @@ test('setTab scrolls the page back to the top on every tab tap', () => {
     're-tapping the active tab must still scroll to the top');
   assert.equal(document.scrollingElement.scrollTop, 0,
     're-tap also resets the scrolling element');
+});
+
+// ---- updateTabVisibility: hide/fall-back/all-off empty state (Task 4) ----
+
+// Injects the real tab bar markup into the already-registered #tabbar element
+// (document.querySelectorAll('.tab-btn') below finds these through the
+// registry-wide search over each element's parsed _queryChildren — the same
+// pattern seedThemePopWithLayout uses for '[data-layout-set]').
+function seedTabbar(document) {
+  const bar = document.getElementById('tabbar');
+  bar.innerHTML =
+    '<button class="tab-btn active" data-tab="chores">Chores</button>' +
+    '<button class="tab-btn" data-tab="todos">To-Dos</button>' +
+    '<button class="tab-btn" data-tab="cal">Calendar</button>' +
+    '<button class="tab-btn" data-tab="cams">Cameras</button>' +
+    '<button class="tab-btn" data-tab="weather">Weather</button>';
+  return bar;
+}
+
+test('updateTabVisibility: an off feature hides its tab', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  document.body.dataset.tab = 'todos';
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'weather', enabled: true, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('todos').hidden, true, 'todos tab hidden when off');
+  assert.equal(byTab('chores').hidden, false, 'chores tab stays');
+  // active tab (todos) was hidden -> fell back to the first visible tab
+  assert.equal(document.body.dataset.tab, 'chores');
+  assert.equal(document.body.classList.contains('hub-empty'), false);
+});
+
+test('updateTabVisibility: every feature off -> hub-empty, all tabs hidden', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+  ] });
+  assert.equal(document.body.classList.contains('hub-empty'), true);
+  assert.ok(document.querySelectorAll('.tab-btn').every((b) => b.hidden));
+});
+
+test('updateTabVisibility: chores/todos ABSENT from a non-empty payload fail OPEN (stay visible), a configurable integration ABSENT fails CLOSED', () => {
+  // A non-empty payload that omits the always-on features must not read as
+  // "chores/todos are off" — only a genuinely-configurable integration
+  // (calendar here, absent entirely from this payload) legitimately reflows
+  // away when absent. Both contracts are exercised in the same scenario so
+  // the asymmetry between them (fail-open ids vs. on.has-membership ids) is
+  // pinned in one place: this test must fail if either `cal` were changed to
+  // fail-open (it would stop being hidden) or chores/todos were changed to
+  // plain on.has membership (they'd start being hidden).
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  document.body.dataset.tab = 'chores';
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', enabled: true, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('chores').hidden, false, 'chores tab stays visible (fail-open)');
+  assert.equal(byTab('todos').hidden, false, 'todos tab stays visible (fail-open)');
+  assert.equal(byTab('cams').hidden, false, 'cameras tab visible (explicitly on)');
+  assert.equal(byTab('cal').hidden, true,
+    'calendar tab hidden: absent + configurable => fail CLOSED (unconfigured => reflow away)');
+  assert.equal(document.body.classList.contains('hub-empty'), false,
+    'must not stamp hub-empty when the always-on tabs are actually showing');
+});
+
+test('updateTabVisibility + applyWallLayout: off -> on round-trip restores the tab and the wall column', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  seedWallGrid(document);
+  document.body.dataset.tab = 'chores';
+  // Flip todos off: tab hides, wall column drops.
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+  ] });
+  const todosTab = () => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === 'todos');
+  assert.equal(todosTab().hidden, true, 'todos tab hidden while off');
+  assert.equal(document.querySelector('.todo-slot').style.display, 'none',
+    'wall column dropped while off');
+  // Flip todos back on: both surfaces must return.
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+  ] });
+  assert.equal(todosTab().hidden, false, 'todos tab restored on re-enable');
+  assert.equal(document.querySelector('.todo-slot').style.display, '',
+    'wall column restored on re-enable');
+});
+
+test('updateTabVisibility: weather+climate OFF but a custom dashboard panel exists -> weather tab stays visible, hub-empty NOT stamped', () => {
+  // Mirrors the applyWallLayout custom-panel rescue below (finding L): a
+  // links.panels entry whose id isn't weather/climate has no toggle of its
+  // own, so the phone's Weather tab (which shows the .panels column) must
+  // stay reachable, and the wall's live panel must not be hidden behind the
+  // hub-empty "all features off" state.
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  // Pre-select the weather tab so updateTabVisibility's "active tab got
+  // hidden, fall back to the first visible one" branch doesn't fire setTab
+  // (which would run fitPanels against panel DOM this fixture doesn't seed —
+  // irrelevant to what this test is pinning).
+  document.body.dataset.tab = 'weather';
+  vm.runInContext("links = { panels: [{ id: 'custom1' }] };", sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('weather').hidden, false,
+    'weather tab stays visible so the custom panel is reachable on the phone');
+  assert.equal(document.body.classList.contains('hub-empty'), false,
+    'hub-empty must not hide a live custom panel');
+});
+
+test('updateTabVisibility: weather+climate OFF and no custom panels -> weather tab hidden', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  vm.runInContext('links = { panels: [] };', sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('weather').hidden, true,
+    'weather tab hidden: both backing features off and no custom panel to rescue it');
+});
+
+// ---- applyWallLayout: reflow the wall grid when a column is off (Task 6) ----
+
+// index.html's `.hub-grid` (and its `.people-col`/`.cal`/`.todo-slot`/`.tiles`/
+// `.panels` children) has no single seeded container id to piggyback on the
+// way seedTabbar reuses #tabbar, and document.querySelector only searches
+// registered elements' PARSED innerHTML children (never a registered element
+// itself) — so a raw SEEDED_IDS entry for 'cal'/'todo-slot'/'tiles'/'panels'
+// is reachable via getElementById but invisible to class selectors. Mirror
+// seedTabbar's approach instead: build the real subtree as markup, register a
+// fresh host via createElement + appendChild (which registers by id), then
+// assign it as innerHTML so the parsed nodes become findable by class — the
+// same nodes applyWallLayout itself will read/mutate via document.querySelector.
+function seedWallGrid(document) {
+  const host = document.createElement('div');
+  host.id = 'wall-grid-fixture';
+  document.body.appendChild(host);
+  host.innerHTML =
+    '<div class="hub-grid">' +
+      '<section class="cal" id="cal" aria-label="Calendar"></section>' +
+      '<section class="todo-slot" id="todo-slot" aria-label="To-dos"></section>' +
+      '<section class="people-col" aria-label="Chores">' +
+        '<div id="people" class="people-list"></div>' +
+      '</section>' +
+      '<div class="tiles" id="tiles"></div>' +
+      '<section class="panels" id="panels" aria-label="Dashboards"></section>' +
+    '</div>';
+  return document.querySelector('.hub-grid');
+}
+
+test('applyWallLayout: chores off drops the leftmost column and reflows left', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'cameras', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // 'people' track and area are gone; the other three columns remain, in order
+  assert.ok(!grid.style.gridTemplateAreas.includes('people'),
+    'people area dropped');
+  assert.equal(grid.style.gridTemplateColumns, 'minmax(0, 1fr) 540px 340px');
+  assert.equal(document.querySelector('.people-col').style.display, 'none',
+    'hidden section removed so it cannot auto-place');
+});
+
+test('applyWallLayout: calendar off, todos on -> to-dos fill the calendar column', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: false, group: 'integration' },
+    { id: 'ics_calendar', enabled: false, group: 'integration' },
+    { id: 'icloud_caldav', enabled: false, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // both rows of the second column are 'todo' (to-dos filled up), no 'cal'
+  assert.ok(grid.style.gridTemplateAreas.includes('todo'), 'todo present');
+  assert.ok(!grid.style.gridTemplateAreas.includes('cal'), 'cal dropped');
+  assert.equal(document.querySelector('.cal').style.display, 'none');
+});
+
+test('applyWallLayout: todos off, calendar on -> calendar fills BOTH rows (symmetric to the todos case above)', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // both rows of the middle column are 'cal' (calendar filled up), no 'todo'
+  assert.ok(grid.style.gridTemplateAreas.includes('cal'), 'cal present');
+  assert.ok(!grid.style.gridTemplateAreas.includes('todo'), 'todo dropped');
+  // both template rows literally read 'cal' in the middle slot
+  const rows = grid.style.gridTemplateAreas.split('" "').map((r) => r.replace(/"/g, ''));
+  assert.equal(rows.length, 2);
+  rows.forEach((r) => assert.ok(r.split(' ').includes('cal'),
+    `row "${r}" should include the cal area (both rows filled by calendar)`));
+  assert.equal(document.querySelector('.todo-slot').style.display, 'none');
+});
+
+test('applyWallLayout: chores/todos ABSENT from a non-empty payload fail OPEN (columns stay shown)', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.equal(document.querySelector('.people-col').style.display, '',
+    'chores column stays shown (fail-open)');
+  assert.equal(document.querySelector('.todo-slot').style.display, '',
+    'todo-slot stays shown (fail-open)');
+  assert.ok(grid.style.gridTemplateAreas.includes('people'), 'people area present');
+  assert.ok(grid.style.gridTemplateAreas.includes('todo'), 'todo area present');
+});
+
+test('applyWallLayout: weather+climate OFF but a custom dashboard panel exists -> panels column stays', () => {
+  // buildPanels renders any links.panels entry whose id isn't weather/climate
+  // as an always-on custom panel (no toggle of its own) — the .panels column
+  // must survive even with both weather and climate off, or a custom panel
+  // silently loses its column.
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  vm.runInContext("links = { panels: [{ id: 'custom1' }] };", sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.ok(grid.style.gridTemplateAreas.includes('panels'),
+    'panels area kept for the custom panel');
+  assert.equal(document.querySelector('.panels').style.display, '',
+    'panels column stays shown');
+});
+
+test('applyWallLayout: weather+climate OFF and no custom panels -> panels column drops', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  vm.runInContext('links = { panels: [] };', sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.ok(!grid.style.gridTemplateAreas.includes('panels'),
+    'panels area dropped with no custom panel to keep it alive');
+  assert.equal(document.querySelector('.panels').style.display, 'none',
+    'panels column hidden');
+});
+
+test('applyWallLayout: all on -> the default four-column template', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'cameras', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: true, group: 'integration' },
+    { id: 'climate', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.equal(grid.style.gridTemplateColumns, '360px minmax(0, 1fr) 540px 340px');
+});
+
+test('applyWallLayout + updateTabVisibility: empty list is a no-op (fail-open)', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  seedTabbar(document);                             // helper added in Task 4
+  document.body.dataset.tab = 'chores';
+  const grid = document.querySelector('.hub-grid');
+  grid.style.gridTemplateColumns = 'SENTINEL';      // must be left untouched
+  sandbox.renderIntegrations({ integrations: [] });
+  assert.equal(grid.style.gridTemplateColumns, 'SENTINEL',
+    'empty payload must not rewrite the grid');
+  assert.equal(document.body.classList.contains('hub-empty'), false,
+    'empty payload must not trip hub-empty');
+  assert.ok(document.querySelectorAll('.tab-btn').every((b) => !b.hidden),
+    'empty payload must not hide tabs');
 });
 
 // ---- --app-h: the phone-shell height var (tab-bar gap fix) ----
@@ -2586,6 +2903,57 @@ test('openOverlay("cameras-page") renders the 2x2 grid and probes the streams af
   assert.deepEqual(srcs, ['a', 'b'], 'probeCamera fired for the grid after open');
 });
 
+// ---- openOverlay feature-off guards (Task: chores/todos toggle) ----
+
+test('openOverlay("chores"): feature OFF -> overlay does not open, no half-init state', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+  ] });
+
+  sandbox.openOverlay('chores');
+
+  const content = document.getElementById('overlay-content');
+  assert.equal(content.innerHTML, '', '#overlay-content left untouched');
+  assert.ok(!document.getElementById('overlay').classList.contains('open'),
+    'overlay never opened');
+  assert.ok(!document.body.classList.contains('overlay-open'));
+  assert.equal(vm.runInContext('openView', sandbox), null,
+    'openView must stay null on a guarded return, or a later refresh path ' +
+    '(e.g. openView === "chores") fires against a host that was never opened');
+});
+
+test('openOverlay("todos"): feature OFF -> overlay does not open, no half-init state', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+  ] });
+
+  sandbox.openOverlay('todos');
+
+  const content = document.getElementById('overlay-content');
+  assert.equal(content.innerHTML, '', '#overlay-content left untouched');
+  assert.ok(!document.getElementById('overlay').classList.contains('open'),
+    'overlay never opened');
+  assert.equal(vm.runInContext('openView', sandbox), null);
+});
+
+test('openOverlay("chores"): feature ABSENT from a non-empty payload fails OPEN (does open)', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', enabled: true, group: 'integration' },
+  ] });
+
+  sandbox.openOverlay('chores');
+
+  const content = document.getElementById('overlay-content');
+  assert.match(content.innerHTML, /id="chores-full"/, 'overlay content painted');
+  assert.ok(document.getElementById('overlay').classList.contains('open'), 'overlay opened');
+  assert.equal(vm.runInContext('openView', sandbox), 'chores');
+});
+
 test('opening an overlay locks page scroll (body.overlay-open); closing unlocks it', () => {
   const { document, sandbox } = newHub();
   captureTimers(sandbox);
@@ -3731,6 +4099,32 @@ test('renderIntegrations: shows an error hint when status is error', () => {
   assert.match(host.innerHTML, /error/);
 });
 
+test('renderIntegrations: splits into a Features group and an Integrations group', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', name: 'Chores', enabled: true, group: 'feature' },
+    { id: 'todos', name: 'To-Dos', enabled: true, group: 'feature' },
+    { id: 'weather', name: 'Weather', enabled: true, group: 'integration' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  // NOTE: the fake DOM's parseFragment (top of this file) never populates
+  // QueryNode.textContent from parsed markup — every existing textContent
+  // assertion in this suite reads a value hub.js set via direct property
+  // assignment, not text pulled out of an HTML string. So group titles are
+  // asserted via innerHTML (same idiom as the sibling renderIntegrations
+  // tests above, e.g. `assert.match(host.innerHTML, /Weather/)`), which
+  // verifies the identical thing — both titles present, in order — without
+  // depending on that unsupported path.
+  assert.equal(host.querySelectorAll('.integ-group-title').length, 2,
+    'a header for each non-empty group');
+  const featuresAt = host.innerHTML.indexOf('integ-group-title">Features<');
+  const integrationsAt = host.innerHTML.indexOf('integ-group-title">Integrations<');
+  assert.ok(featuresAt >= 0 && integrationsAt > featuresAt,
+    'Features group renders before the Integrations group');
+  // every integration still gets its switch row
+  assert.equal(host.querySelectorAll('.integ-row').length, 3);
+});
+
 test('toggleIntegration: a failed PATCH surfaces a toast (regression: the check used to be a no-op)', async () => {
   // attemptTodo never throws — it resolves to {ok:false, error}, a truthy
   // object — so a bare `if (!ok)` on that result is always false. Pins the
@@ -3789,7 +4183,7 @@ test('renderSettingsFull: paints Display + Integrations, with the live theme ref
 
   const html = document.getElementById('settings-full').innerHTML;
   assert.match(html, /<h2>Display<\/h2>/);
-  assert.match(html, /<h2>Integrations<\/h2>/);
+  assert.match(html, /<h2>Features &amp; integrations<\/h2>/);
   assert.match(html, /id="integrations-ctl"/, 'the Integrations switch list mounts here');
   assert.match(html, /id="caldav-panel"/, 'the iCloud CalDAV panel mounts here');
   const greyBtn = host.querySelector('[data-theme-set="grey"]');

@@ -117,6 +117,12 @@
            same view through the To-Do card's full-screen overlay). -->
       <section class="todos-page" id="todos-page" aria-label="To-dos"></section>
     </div>
+    <!-- Shown only when every feature is turned off (body.hub-empty): the
+         wall/phone would otherwise be blank. Reuses the settings hook. -->
+    <div class="hub-empty-state" id="hub-empty-msg">
+      <div>All features are turned off.</div>
+      <button class="btn" type="button" data-open-settings>Open Settings</button>
+    </div>
   </div>
 
   <!-- Phone/tablet bottom tabs (hidden on the wall by CSS): each big surface
