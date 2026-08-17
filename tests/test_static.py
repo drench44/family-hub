@@ -252,15 +252,16 @@ def test_mobile_app_shell_scrolls_content_not_the_body():
         "phone body must not scroll — the .wrap content region does"
     assert "display:flex" in body and "flex-direction:column" in body, \
         "phone body must be a flex column app shell"
-    # the body must size to the DYNAMIC viewport, driven by an innerHeight-backed
-    # CSS var (--app-h) with a 100dvh fallback — see the tab-bar-gap fix. On iOS
-    # a stale 100dvh after a bfcache restore left the in-flow tab bar floating
-    # above a gap until a reload; the var is refreshed on pageshow/visibility.
+    # the body must size to the DYNAMIC viewport, driven by a measured CSS var
+    # (--app-h, from innerHeight + visualViewport) with a 100dvh fallback — see
+    # the tab-bar-gap fix. On iOS a stale 100dvh after a bfcache restore left
+    # the in-flow tab bar floating above a gap until a reload; the var is
+    # refreshed on pageshow/visibility/vv-resize plus settle re-measures.
     # It must ALSO clear the base rule's min-height:100vh floor (100vh > 100dvh
     # on iOS pushes the bar below the fold).
     assert "100dvh" in body, "phone body must fall back to the dynamic viewport (100dvh)"
     assert "var(--app-h" in body, \
-        "phone body height must use the innerHeight-backed --app-h var (gap fix)"
+        "phone body height must use the measured --app-h var (gap fix)"
     assert "min-height:0" in body or "min-height:100dvh" in body, \
         "phone body must clear the base min-height:100vh floor (min-height:0), " \
         "or the tab bar drops below the fold on iOS"
