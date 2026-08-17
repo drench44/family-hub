@@ -1414,6 +1414,11 @@ function wxCondKey(conditions) {
   return 'partly';
 }
 
+/* The local clock as fractional hours (14:30 -> 14.5) from ONE Date — two
+   separate Date calls could straddle an hour rollover and read a whole hour
+   early for that render. */
+function fracHour(d = new Date()) { return d.getHours() + d.getMinutes() / 60; }
+
 /* "HH:MM" (the feed's local sunrise/sunset shape) -> fractional hours
    (6.25); anything else -> null, never NaN. */
 function parseHmm(s) {
@@ -1434,6 +1439,10 @@ function skyPhase(hour, sunrise, sunset) {
   const sr = (typeof sunrise === 'number' && isFinite(sunrise)) ? sunrise : null;
   const ss = (typeof sunset === 'number' && isFinite(sunset)) ? sunset : null;
   if (sr !== null && ss !== null && sr < ss) {
+    // Known clip, not an oversight: the windows don't wrap midnight, so a
+    // sunset later than 23:20 loses the sliver of its dusk window past
+    // 00:00 (extreme-latitude-only, cosmetic). A sunset AFTER midnight
+    // parses smaller than sunrise and already routes to the fallback.
     const W = 40 / 60;
     if (hour >= sr - W && hour < sr + W) return 'dawn';
     if (hour >= ss - W && hour < ss + W) return 'dusk';
@@ -1446,18 +1455,29 @@ function skyPhase(hour, sunrise, sunset) {
   return 'night';
 }
 
-/* The moon, shaped by the feed: moon_illum (lit %) sets how far the shadow
-   disc slides off the face, and the moon_phase name picks which limb is lit
-   (waxing lights the right, waning the left — the northern-sky view). The
-   shadow's translateX is --m-shift; its CSS default (100%, fully off) makes
-   a missing/unusable illum render the pre-feed full disc. */
+/* The moon, drawn with the standard two-part phase construction: a shadow
+   half-disc on the dark side (waxing lights the right limb, waning the
+   left — the northern-sky view) plus a centered terminator ellipse of width
+   34·|1−2f| (f = lit fraction from moon_illum, a 0–100 percentage per the
+   live feed): shadow-colored below half (crescents bow inward), moon-colored
+   above half (gibbous bows outward), zero at the quarters for the straight
+   terminator a real quarter moon has. The bare span (no phase classes)
+   renders the full disc — the fallback for a missing/unusable illum AND for
+   a phase name outside the waxing/waning vocabulary, because an
+   unrecognized name (or a feed switching to the numeric 0..1 phase
+   convention) must never confidently light the wrong limb. "Full Moon"
+   matches neither family and lands on the full disc, which is what it is. */
 function moonHtml(wx) {
   const ill = _reading(wx.moon_illum);
   if (ill === null) return '<span class="sky-moon"></span>';
+  const name = String(wx.moon_phase == null ? '' : wx.moon_phase);
+  const waning = /wan|last|third/i.test(name);
+  const waxing = /wax|first|new/i.test(name);
+  if (!waning && !waxing) return '<span class="sky-moon"></span>';
   const frac = Math.max(0, Math.min(1, ill / 100));
-  const waning = /wan|last|third/i.test(String(wx.moon_phase == null ? '' : wx.moon_phase));
-  const shift = Math.round(34 * frac) * (waning ? 1 : -1);   // 34 = moon diameter px
-  return `<span class="sky-moon" style="--m-shift:${shift}px"></span>`;
+  const term = Math.round(34 * Math.abs(1 - 2 * frac));   // 34 = moon diameter px
+  const cls = (waning ? 'm-waning' : 'm-waxing') + (frac > 0.5 ? ' m-gibbous' : '');
+  return `<span class="sky-moon ${cls}" style="--m-term:${term}px"></span>`;
 }
 
 /* The living sky: a full-bleed drawn scene at the top of the weather card.
@@ -1654,7 +1674,7 @@ function sparkSvg(spark, nowIndex, hour = new Date().getHours()) {
     + `</svg>`;
 }
 
-function weatherCardHtml(wx, hour = new Date().getHours() + new Date().getMinutes() / 60) {
+function weatherCardHtml(wx, hour = fracHour()) {
   // UV + AQI get a colored ring gauge (wxGauge). Color follows the NUMBER
   // (uvBand/aqiBand); the feed's category text is only the label. Ring fill:
   // UV against a full-scale 11 (EPA extreme), AQI against 200 (its "very

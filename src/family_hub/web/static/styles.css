@@ -336,17 +336,27 @@ body {
 @keyframes sun-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 
 /* the moon + a field of twinkling stars (night, clear/partly). The real
-   phase: a same-size shadow disc slides off the face by --m-shift (set from
-   the feed's illumination in moonHtml — waxing exits left so the right limb
-   is lit, waning the mirror). The 100% default = shadow fully off = the full
-   disc, so a feed without moon data renders exactly as before. */
+   phase (moonHtml) is the standard two-part construction: ::after is the
+   shadow half-disc on the dark side (m-waxing shades the left so the right
+   limb is lit; m-waning mirrors), and ::before is the centered terminator
+   ellipse, --m-term wide — shadow-colored for crescents, moon-colored
+   (m-gibbous) past half, zero at the quarters so their terminator is
+   straight. A bare .sky-moon (no phase classes — feed data missing or not
+   understood) draws neither and stays the full disc. */
 .sky-moon { position: absolute; z-index: 1; top: 20px; right: 28px;
   width: 34px; height: 34px; border-radius: 50%; overflow: hidden;
   background: radial-gradient(circle at 36% 34%, #F7F9FD, #C7D2E8 70%, #AAB8D4);
   box-shadow: 0 0 22px 6px rgba(214,226,255,.35); }
-.sky-moon::after { content: ""; position: absolute; inset: -1px;
-  border-radius: 50%; background: rgba(12,18,38,.95);
-  transform: translateX(var(--m-shift, 100%)); }
+.sky-moon.m-waxing::after, .sky-moon.m-waning::after { content: "";
+  position: absolute; top: 0; bottom: 0; width: 50%;
+  background: rgba(12,18,38,.95); }
+.sky-moon.m-waxing::after { left: 0; }
+.sky-moon.m-waning::after { right: 0; }
+.sky-moon.m-waxing::before, .sky-moon.m-waning::before { content: "";
+  position: absolute; z-index: 1; top: 0; bottom: 0; left: 50%;
+  width: var(--m-term, 0px); transform: translateX(-50%);
+  border-radius: 50%; background: rgba(12,18,38,.95); }
+.sky-moon.m-gibbous::before { background: #DDE4F1; }
 .sky-stars { position: absolute; inset: 0; z-index: 1;
   background-image:
     radial-gradient(1.7px 1.7px at 12% 26%, rgba(255,255,255,.95), transparent 60%),
@@ -391,7 +401,7 @@ body {
    Each layer slides by exactly one tile height along its own axis
    (rotate then translateY composes in the layer's local space), so the loop
    is seamless; the slant leans with the cloud drift, like wind-blown rain. */
-.sky-rain { position: absolute; inset: 0; z-index: 4; overflow: hidden; }
+.sky-rain { position: absolute; inset: 0; z-index: 4; }
 .sky-rain::before, .sky-rain::after { content: ""; position: absolute;
   inset: -90px -50px -50px; }
 .sky-rain::before {
@@ -408,8 +418,10 @@ body {
                          to { transform: rotate(11deg) translateY(42px); } }
 /* falling snow: same seamless transform-tile trick, two flake layers, while
    the container sways gently side to side (the old background-position drift
-   shifted by a non-tile-multiple, which jumped at every loop) */
-.sky-snow { position: absolute; inset: 0; z-index: 4; overflow: hidden;
+   shifted by a non-tile-multiple, which jumped at every loop). NO overflow
+   on the swaying container — that would drag its own clip box along and
+   leave a bare strip at the sky edge; .sky's overflow already clips. */
+.sky-snow { position: absolute; inset: 0; z-index: 4;
   animation: snow-sway 7s ease-in-out infinite alternate; }
 .sky-snow::before, .sky-snow::after { content: ""; position: absolute;
   inset: -100px -40px -40px; }

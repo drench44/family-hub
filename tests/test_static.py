@@ -391,6 +391,26 @@ def test_sky_scene_phase_and_condition_classes_are_styled():
     for cls in (".sky-sun", ".sky-moon", ".sky-stars", ".sky-cloud",
                 ".sky-rain", ".sky-snow", ".sky-fog", ".sky-txt"):
         assert _css_rule(cls).strip(), f"{cls} scene layer is unstyled"
+    # the moon-phase construction: moonHtml emits the direction classes + the
+    # inline --m-term, so only these rules make the phase visible. A bare
+    # .sky-moon (no classes) must draw neither part — that IS the full-disc
+    # fallback for feed data that's missing or not understood.
+    assert _css_rule(".sky-moon.m-waxing::after").strip(), \
+        "the waxing shadow half-disc is unstyled"
+    assert _css_rule(".sky-moon.m-waning::after").strip(), \
+        "the waning shadow half-disc is unstyled"
+    assert "var(--m-term" in _css_rule(".sky-moon.m-waxing::before"), \
+        "the terminator ellipse must size from var(--m-term)"
+    assert _css_rule(".sky-moon.m-gibbous::before").strip(), \
+        "the gibbous (moon-colored) terminator is unstyled"
+    # every ambient sky/chart layer is pinned off under prefers-reduced-motion
+    # (the animation now lives on pseudo-elements for rain/snow — compositing)
+    for cls in (".sky-sun", ".sky-stars", ".sky-cloud", ".sky-fog",
+                ".sky-rain::before", ".sky-rain::after",
+                ".sky-snow", ".sky-snow::before", ".sky-snow::after",
+                ".spark .sp-halo"):
+        assert "animation: none" in _css_rule(cls), \
+            f"{cls} is not pinned off under prefers-reduced-motion"
 
 
 def test_favicon_is_local_svg():

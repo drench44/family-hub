@@ -2847,6 +2847,13 @@ test('sky phase follows the feed sunrise/sunset when present, fixed boundaries o
   assert.equal(sandbox.skyPhase(7.0), 'dawn');
   assert.equal(sandbox.skyPhase(12), 'day');
   assert.equal(sandbox.skyPhase(19, 20.25, 6.25), 'dusk', 'reversed pair falls back');
+  // exact window edges (half-open, built from the same 40/60 the code uses):
+  // the last dawn instant is < sr+W, the first day instant is exactly sr+W
+  const W = 40 / 60, sr = 7.5, ss = 16.75;
+  assert.equal(sandbox.skyPhase(sr - W, sr, ss), 'dawn');
+  assert.equal(sandbox.skyPhase(sr + W, sr, ss), 'day');
+  assert.equal(sandbox.skyPhase(ss - W, sr, ss), 'dusk');
+  assert.equal(sandbox.skyPhase(ss + W, sr, ss), 'night');
   // end to end: real sunset in the payload flips a fixed-boundary "dusk" hour
   // to an honest night sky
   const winter = sandbox.weatherCardHtml(
@@ -2854,25 +2861,58 @@ test('sky phase follows the feed sunrise/sunset when present, fixed boundaries o
   assert.match(winter, /ph-night/);
 });
 
+test('a fractional render hour never leaks into the chart tick labels', () => {
+  const { sandbox } = newHub();
+  // the sky-phase clock runs on minutes; the chart floors it (2:30pm -> "2p"
+  // ticks, never "2.5p"/"8.5a")
+  const spark = [75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 68, 70,
+    72, 74, 76, 78, 77, 76, 75, 74, 73, 72, 71, 70];
+  const svg = sandbox.sparkSvg(spark, 12, 14.5);
+  assert.match(svg, /class="sp-tick"[^>]*>8a</);
+  assert.ok(!/\d\.\d+[ap]</.test(svg), 'no fractional hour in any tick');
+  // through the card path too (its default hour is fractional now)
+  const card = sandbox.weatherCardHtml({ ...WX_GOOD }, 14.5);
+  assert.ok(!/\.\d+[ap]</.test(card), 'no fractional tick through weatherCardHtml');
+});
+
 test('the moon renders its real phase from the feed, full disc without data', () => {
   const { sandbox } = newHub();
-  // waxing 29% lit: shadow slides LEFT (negative shift) so the right limb is
-  // lit; 34px disc * .291 -> 10px
-  const waxing = sandbox.weatherCardHtml(
-    { ...WX_GOOD, moon_phase: 'Waxing Crescent', moon_illum: 29.1 }, 23);
-  assert.match(waxing, /<span class="sky-moon" style="--m-shift:-10px"><\/span>/);
-  // waning mirrors it (positive shift, left limb lit); Last Quarter is waning
-  const waning = sandbox.weatherCardHtml(
-    { ...WX_GOOD, moon_phase: 'Last Quarter', moon_illum: 50 }, 23);
-  assert.match(waning, /--m-shift:17px/);
-  // no illum -> the bare moon span (CSS default = full disc); never NaN
+  // the two-part construction: direction class picks the shadow half-disc's
+  // side, --m-term is the centered terminator ellipse's width (34·|1−2f|),
+  // m-gibbous flips the ellipse moon-colored past half
+  const moonOf = (phase, ill) => {
+    const m = /<span class="sky-moon( [^"]*)?"(?: style="--m-term:(-?\d+)px")?><\/span>/.exec(
+      sandbox.weatherCardHtml({ ...WX_GOOD, moon_phase: phase, moon_illum: ill }, 23));
+    return m && { cls: (m[1] || '').trim(), term: m[2] == null ? null : Number(m[2]) };
+  };
+  // waxing crescent 29.1%: right limb lit, shadow-colored terminator ellipse
+  // bowing inward (34·|1−.582| -> 14px), NOT gibbous
+  assert.deepEqual(moonOf('Waxing Crescent', 29.1), { cls: 'm-waxing', term: 14 });
+  // the quarters: a STRAIGHT terminator (ellipse width 0); First waxes, Last/
+  // Third wane — a regex edit must not silently flip a limb
+  assert.deepEqual(moonOf('First Quarter', 50), { cls: 'm-waxing', term: 0 });
+  assert.deepEqual(moonOf('Last Quarter', 50), { cls: 'm-waning', term: 0 });
+  assert.deepEqual(moonOf('Third Quarter', 50), { cls: 'm-waning', term: 0 });
+  // gibbous 68%: the terminator ellipse turns moon-colored (m-gibbous) and
+  // bows outward (34·|1−1.36| -> 12px)
+  assert.deepEqual(moonOf('Waning Gibbous', 68), { cls: 'm-waning m-gibbous', term: 12 });
+  // a new moon is fully shadowed: dark half + full-width dark ellipse
+  assert.deepEqual(moonOf('New Moon', 0), { cls: 'm-waxing', term: 34 });
+  // an off-scale illum clamps to the full-disc geometry, not past it
+  assert.deepEqual(moonOf('Waxing Gibbous', 140), { cls: 'm-waxing m-gibbous', term: 34 });
+  // no illum -> the bare moon span (no phase classes = full disc); never NaN
   const bare = sandbox.weatherCardHtml({ ...WX_GOOD, moon_illum: 'soon' }, 23);
   assert.match(bare, /<span class="sky-moon"><\/span>/);
   assert.ok(!bare.includes('NaN'));
-  // an off-scale illum clamps to the full disc, not past it
-  const over = sandbox.weatherCardHtml(
-    { ...WX_GOOD, moon_phase: 'Full Moon', moon_illum: 140 }, 23);
-  assert.match(over, /--m-shift:-34px/);
+  // a phase name OUTSIDE the waxing/waning vocabulary (or missing, or the
+  // numeric 0..1 convention) must never confidently light the wrong limb:
+  // it renders the bare full-disc fallback, same as missing illum
+  for (const odd of [null, 'Gibbous', '0.75', 'Full Moon']) {
+    const html = sandbox.weatherCardHtml({ ...WX_GOOD, moon_phase: odd, moon_illum: 50 }, 23);
+    assert.match(html, /<span class="sky-moon"><\/span>/,
+      `phase ${odd} falls back to the full disc`);
+    assert.ok(!html.includes('--m-term'), `no phase geometry guess for phase ${odd}`);
+  }
 });
 
 test('weather card hides the H/L readout only when BOTH ends are missing', () => {
