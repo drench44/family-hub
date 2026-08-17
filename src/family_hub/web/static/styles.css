@@ -763,14 +763,16 @@ body.overlay-open { overflow: hidden; }
 .overlay-content { position: absolute; inset: 0; }
 .overlay-frame { width: 100%; height: 100%; border: 0; }
 /* Full-screen camera grid (the "camera page" opened from the wall's Cameras
-   header). Fills the overlay; each cell's live stream fills its cell, with the
-   label floated over the top-left corner. Two columns; rows are created as
-   needed at equal height (grid-auto-rows: 1fr), so any camera count lays out
-   row-major and fills the height evenly — four cameras give 2x2, six give 2x3 —
-   rather than a hardcoded two rows that squashed a third row of tiles. */
+   header). Two columns; each row is half the visible height so exactly FOUR
+   cameras fill one screen (2x2), and any beyond that scroll into view below.
+   This is deliberate over squashing every camera onto one screen: four large,
+   glanceable tiles with a scroll for the rest reads better on the wall than six
+   tiny ones. grid-auto-rows sizes each row to half the container (minus the
+   gap); overflow-y lets the extra rows scroll. */
 .camera-page {
-  position: absolute; inset: 0;
-  display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr;
+  position: absolute; inset: 0; overflow-y: auto;
+  display: grid; grid-template-columns: 1fr 1fr;
+  grid-auto-rows: calc((100% - 10px) / 2);
   gap: 10px; padding: 60px 16px 16px;
 }
 .camera-page .tile-camera { grid-column: auto; min-height: 0; padding: 0; }

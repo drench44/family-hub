@@ -355,21 +355,24 @@ def test_each_tab_hides_every_other_surface():
         "cams tab must stack cameras in a single column on the phone"
 
 
-def test_camera_page_grid_rows_are_adaptive():
-    # The full-screen camera page must lay out ANY number of cameras two-wide in
-    # equal-height rows: four -> 2x2, six -> 2x3, etc. A hardcoded
-    # `grid-template-rows: 1fr 1fr` assumed exactly four and squashed a third row
-    # of tiles into auto height. Rows must come from `grid-auto-rows: 1fr` so the
-    # count is free. Guards the `.camera-page` block only (not -empty / children).
+def test_camera_page_shows_four_per_screen_and_scrolls():
+    # The full-screen camera page is deliberately two columns with each row half
+    # the visible height, so exactly FOUR cameras fill one screen (2x2) and any
+    # beyond that scroll into view. That means: two columns, a row height derived
+    # from half the container (a `/ 2` calc, NOT `1fr` which would squash all
+    # rows onto one screen), and a scrollable container. Guards the
+    # `.camera-page` block only (not -empty / children).
     block = re.search(r"\.camera-page\s*\{([^}]*)\}", CSS)
     assert block, "no .camera-page grid block in styles.css"
     body = block.group(1)
     assert "grid-template-columns: 1fr 1fr" in body, \
         "camera page must be exactly two columns"
-    assert "grid-auto-rows: 1fr" in body, \
-        "camera page rows must be adaptive (grid-auto-rows: 1fr), not a fixed count"
-    assert "grid-template-rows" not in body, \
-        "camera page must not hardcode a fixed row count (regresses >4 cameras)"
+    assert "overflow-y: auto" in body, \
+        "camera page must scroll so cameras beyond the first four are reachable"
+    assert "grid-auto-rows:" in body and "/ 2" in body, \
+        "each row must be half the screen (a `/ 2` calc) so four cameras fill one screen"
+    assert "grid-auto-rows: 1fr" not in body, \
+        "grid-auto-rows: 1fr squashes every camera onto one screen — use a half-height row"
 
 
 def test_tab_bar_covers_all_tabs():
