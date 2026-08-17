@@ -10,6 +10,13 @@ const CAM_PROBE_MS = 30000;
 const CAM_HD_POLL_MS = 700;   // HD-twin liveness RETRY cadence (first check fires immediately)
 const CAM_HD_TRIES = 12;      // ~8s budget, then give up and keep the warm stream
 const CAM_HD_FADE_MS = 450;   // drop the base after the cross-fade; keep > the .cam-hd-upgrade CSS transition (0.4s)
+// Per-attempt timeout for the HD reveal probe: well under J_TIMEOUT_MS (common.js,
+// 12s) on purpose. revealHdWhenLive's own ~8s give-up budget (CAM_HD_TRIES x
+// CAM_HD_POLL_MS) assumes each attempt resolves quickly; a wedged HD producer
+// hanging every attempt for the full 12s would balloon that to minutes instead
+// of ~8s, so this is deliberately scoped short relative to the retry loop
+// while staying well above the "returns a frame in about a second" happy path.
+const CAM_HD_PROBE_TIMEOUT_MS = 3000;
 
 let links = {};
 let weatherData = null;   // last /api/tiles/weather payload (native weather card)
@@ -110,8 +117,11 @@ function eventRow(ev, day) {
    an empty day that falls OUTSIDE it as "not synced" rather than "nothing
    scheduled": the day browser can page past the synced range (issue #37),
    and a genuinely free day must stay visually distinct from one Google was
-   never asked about. Omitted `win` behaves exactly as before (used by the
-   compact home feed, which never pages). */
+   never asked about. `win` is optional (not every caller has fetched a
+   calendar payload with a `window` field) and a missing/omitted one simply
+   never marks anything (isDayOutsideWindow fails open): the 5-day home feed
+   passes its own calendar.window too, it just never reaches far enough
+   forward to trip it under the default sync window. */
 function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter, win) {
   const byDay = bucketByDay(events);
   let html = '';
@@ -187,15 +197,19 @@ async function fetchCalWindow() {
    the range the backend actually caches, and an out-of-window day rendered
    the same as an in-window free day is a confident-but-wrong "nothing here":
    the family would trust an empty grid Google actually has events on. Only an
-   EMPTY out-of-window cell is marked (same rule as agendaHtml): the backend
-   never caches events past its own window, so this never fires in practice,
-   but it keeps a stray cached event from rendering under a contradictory
-   "not synced" mark rather than silently overriding it. */
+   in-month, EMPTY, out-of-window cell is marked: same rule as agendaHtml for
+   "empty" (the backend never caches events past its own window, so a stray
+   cached event on an out-of-window day never happens in practice, but this
+   keeps one from rendering under a contradictory "not synced" mark); and
+   `.mg-out` (adjacent-month padding, already opacity-dimmed) is excluded so
+   the mark is never rendered at .mg-out's low opacity, which would make the
+   hatch and caption nearly illegible right where they're least needed (the
+   grid's own filler cells, not the page the family is actually reading). */
 function monthCellHtml(cell, byDay, todayStr, win) {
   const evs = byDay[cell.date] || [];
   const shown = evs.slice(0, 3);
   const more = evs.length - shown.length;
-  const unsynced = evs.length === 0 && isDayOutsideWindow(cell.date, win);
+  const unsynced = cell.inMonth && evs.length === 0 && isDayOutsideWindow(cell.date, win);
   const cls = ['mg-day'];
   if (!cell.inMonth) cls.push('mg-out');
   if (cell.date === todayStr) cls.push('mg-today');
@@ -936,10 +950,12 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
     if (openView !== view || !hd.parentNode) return;   // overlay closed / switched
     let live = false;
     try {
-      // fetchTimeout (common.js): same J_TIMEOUT_MS bound as probeOneCamera,
-      // so a wedged HD producer can't hang this retry loop indefinitely.
+      // fetchTimeout (common.js), scoped to CAM_HD_PROBE_TIMEOUT_MS (not the
+      // longer default): a wedged HD producer must not hang this retry loop
+      // long enough to blow its own ~8s give-up budget (see the constant above).
       live = (await fetchTimeout(
-        `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`)).ok;
+        `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`,
+        CAM_HD_PROBE_TIMEOUT_MS)).ok;
     } catch (e) { /* still connecting, down, or timed out: treated as not-yet-live */ }
     if (openView !== view || !hd.parentNode) return;   // re-check after the await
     if (live) {
@@ -1024,16 +1040,25 @@ function closeOverlay() {
   scrollPageToTop();   // coming home always lands at the top of the page
 }
 
-/* Close EVERY full-screen surface in one call: #ev-modal / #chore-modal /
-   #confirm-modal are fixed siblings of #overlay, not children of it, so
-   closeOverlay() alone leaves any of them stranded open over the home wall.
-   Shared by the #overlay-home tap and the idle auto-return (armIdle) below so
-   the two "go home" paths can't drift apart again: a stranded modal also
-   wedges wallBusy() (~1446) into deferring the deploy auto-reload forever. */
+/* The fixed-position modals that layer above #overlay (siblings, not
+   children): closeAllOverlays (below) and wallBusy (~1500) both need this
+   exact set (one to close them, the other to detect any of them still shown),
+   so it's named once here rather than hardcoded twice, which is exactly how
+   the idle-timer/#overlay-home pair drifted apart in the first place (issue
+   #34: only closeOverlay() knew to close the overlay, nothing closed these). */
+const MODAL_CLOSERS = {
+  'ev-modal': () => closeEventDetail(),
+  'chore-modal': () => closeChoreEditor(),
+  'confirm-modal': () => closeDeleteConfirm(),
+};
+
+/* Close EVERY full-screen surface in one call: the MODAL_CLOSERS modals are
+   fixed siblings of #overlay, not children of it, so closeOverlay() alone
+   leaves any of them stranded open over the home wall. Shared by the
+   #overlay-home tap and the idle auto-return (armIdle) below so the two
+   "go home" paths can't drift apart again. */
 function closeAllOverlays() {
-  closeDeleteConfirm();
-  closeChoreEditor();
-  closeEventDetail();
+  Object.values(MODAL_CLOSERS).forEach((close) => close());
   closeOverlay();
 }
 
@@ -1491,7 +1516,7 @@ function wallBusy() {
     return !!(el && !el.classList.contains('hidden'));
   };
   return hasClass('overlay', 'open') || hasClass('theme-pop', 'open')
-    || shown('ev-modal') || shown('chore-modal') || shown('confirm-modal')
+    || Object.keys(MODAL_CLOSERS).some(shown)   // same modal set closeAllOverlays closes
     // a direct tap on the bare wall (e.g. a chore toggle) opens no overlay, so
     // defer the reload for a short quiet window after any recent interaction
     || (Date.now() - lastInteraction < INTERACTION_QUIET_MS);
@@ -1621,6 +1646,13 @@ async function submitChore(url, method, body) {
 }
 
 async function openChoreEditor(seed) {
+  // data-add-chore/data-edit-chore only render inside the chores overlay's
+  // edit mode, so openView is always truthy ('chores') here. Remember it: if
+  // the idle timer or a home tap runs closeAllOverlays() while this fetch is
+  // in flight, openView goes back to null, and this must NOT reopen a modal
+  // over a wall the user (or the idle return) already left: same stale-async
+  // guard as ensurePeopleThenRerender below.
+  const view = openView;
   let state;
   try {
     state = await j('/api/admin/state');   // {people (flat, active flags), chores (full records)}
@@ -1628,6 +1660,7 @@ async function openChoreEditor(seed) {
     showToast('Couldn’t open the editor — check the hub and try again.');
     return;
   }
+  if (openView !== view) return;   // overlay closed/switched while this was in flight
   const host = document.getElementById('chore-editor');
   let model;
   let label;

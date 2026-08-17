@@ -596,6 +596,28 @@ test('monthHtml: an event on the day wins over the unsynced marking (defensive, 
   assert.match(cellHtml, /Somehow cached/);
 });
 
+test('monthHtml never marks an out-of-month padding cell (.mg-out) as unsynced, even when it falls outside the window', () => {
+  // .mg-out is already opacity-dimmed (0.38); stacking .mg-unsynced's hatch +
+  // caption under that opacity would render them nearly illegible right on the
+  // grid's own filler cells, which the family isn't reading as "this page".
+  const { sandbox } = newHub();
+  const win = { from: '2026-08-01', to: '2026-08-05' };   // most of the grid falls outside this
+  const html = sandbox.monthHtml(2026, 8, [], '2026-08-14', win);
+
+  const cellHtml = (date) => {
+    const m = html.match(new RegExp(`<div class="[^"]*" data-date="${date}"[\\s\\S]*?<\\/div>`));
+    assert.ok(m, `cell for ${date} rendered`);
+    return m[0];
+  };
+
+  const julyPadding = cellHtml('2026-07-26');   // grid start: the Sunday before Aug 1 (mg-out)
+  assert.match(julyPadding, /\bmg-out\b/, 'sanity: this is an adjacent-month padding cell');
+  assert.doesNotMatch(julyPadding, /mg-unsynced/, 'a padding cell is never also marked unsynced');
+
+  const inMonth = cellHtml('2026-08-14');   // in-month, past the tiny window
+  assert.match(inMonth, /\bmg-unsynced\b/, 'an in-month day past the window is still marked');
+});
+
 test('agendaHtml: a day past the sync window reads "not synced", not "nothing scheduled"', () => {
   const { sandbox } = newHub();
   const win = { from: '2026-08-01', to: '2026-08-15' };
@@ -981,6 +1003,35 @@ test('chores overlay edit mode: a FAILED /api/admin/state fetch shows a toast an
     'the editor modal stayed hidden');
   assert.equal(document.getElementById('chore-editor').innerHTML, '',
     'no form was rendered');
+});
+
+test('openChoreEditor does not reopen the modal if the wall went home while /api/admin/state was still in flight', async () => {
+  // openChoreEditor's fetch can outlive the overlay it was opened from: the
+  // idle timer or a #overlay-home tap can run closeAllOverlays() mid-await.
+  // When the fetch then resolves, it must not resurrect a modal over a wall
+  // the user (or the idle return) already left.
+  const { document, sandbox, tap } = mountChoresFull(SAMPLE_PEOPLE);
+  document.getElementById('chore-modal').classList.add('hidden');   // index.html's initial state
+  let resolveState;
+  sandbox.fetch = async (url) => {
+    if (url === '/api/admin/state') {
+      return new Promise((res) => { resolveState = res; });   // held open until we resolve it below
+    }
+    throw new Error('offline in test');
+  };
+  tap('[data-chedit="1"]');
+  tap('[data-add-chore="1"]');   // openChoreEditor starts; its /api/admin/state fetch is now pending
+
+  sandbox.closeAllOverlays();    // the wall goes home WHILE that fetch is still in flight
+
+  resolveState({ ok: true, status: 200,
+    json: async () => ({ people: SAMPLE_ADMIN.people, chores: SAMPLE_ADMIN.chores }) });
+  await flush();
+
+  assert.ok(document.getElementById('chore-modal').classList.contains('hidden'),
+    'the editor must NOT reopen after the wall already went home');
+  assert.equal(document.getElementById('chore-editor').innerHTML, '',
+    'no stale form got built into the editor host');
 });
 
 test('chores overlay edit mode: submitting the add form POSTs the right body and re-renders in edit mode', async () => {
@@ -2537,4 +2588,28 @@ test('camera HD upgrade gives up and keeps the warm stream when the HD never ans
   assert.ok(!hd.classList.contains('ready'), 'HD never revealed — it never answered');
   assert.equal(content.children.length, 1, 'the dead HD layer was dropped');
   assert.equal(content.children[0].src, '/wr/drive', 'the warm working stream is what stays');
+});
+
+test('camera HD reveal probe arms a short bounded timeout (CAM_HD_PROBE_TIMEOUT_MS), not the long default', () => {
+  // revealHdWhenLive's own give-up budget is ~8s (CAM_HD_TRIES x CAM_HD_POLL_MS).
+  // fetchTimeout defaults to the much longer J_TIMEOUT_MS (12s); a wedged HD
+  // producer hanging on the default for all 12 tries would balloon the "~8s,
+  // then give up" promise into minutes. Prove the HD probe passes its own
+  // shorter, explicit timeout instead of falling back to that default.
+  const { sandbox } = newHub();
+  const timers = captureTimers(sandbox);   // captures every setTimeout, incl. fetchTimeout's abort timer
+  sandbox.AbortController = AbortController;
+  sandbox.fetch = () => new Promise(() => {});   // hang forever; only the armed timer matters here
+  vm.runInContext(`links = { cameras: [${JSON.stringify(HD_CAM)}] };`, sandbox);
+
+  sandbox.openOverlay('camera:drive');
+  const first = nextTimer(timers, 0);   // the first HD reveal check fires immediately
+  assert.ok(first, 'first HD reveal check scheduled');
+  first.done = true;
+  first.fn();   // runs synchronously up to the await, which is where fetchTimeout arms its abort timer
+
+  assert.ok(timers.some((t) => t.ms === 3000 && !t.done),
+    'the HD probe arms a 3000ms (CAM_HD_PROBE_TIMEOUT_MS) abort timeout');
+  assert.ok(!timers.some((t) => t.ms === 12000),
+    'never the long J_TIMEOUT_MS default for this probe');
 });
