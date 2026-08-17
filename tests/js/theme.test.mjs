@@ -232,3 +232,64 @@ test('stampLayout applies the choice WITHOUT persisting (house-default path)', (
   assert.equal(root.getAttribute('data-layout'), 'desktop');
   assert.equal(localStorage.getItem('fh.layout'), null);     // but NOT stored
 });
+
+// ---- Idle auto-return choice (data-idle-return) ----
+// A per-device toggle: "on" (default — the shared wall drifts back to the home
+// dashboard after an idle timeout) vs "off" (a personal phone / TV stays on the
+// page you opened). Behavioral only (hub.js's armIdle reads the attribute), but
+// managed exactly like the other device prefs so it persists + has a house
+// default. Default ON so the wall keeps its existing behavior untouched.
+test('fresh device defaults to idle-return=on and persists nothing', () => {
+  const { root, localStorage } = loadTheme();
+  assert.equal(root.getAttribute('data-idle-return'), 'on');
+  assert.equal(localStorage.getItem('fh.idleReturn'), null);   // a default, not a choice
+});
+
+test('setIdleReturn(off) stamps data-idle-return=off and persists (personal device)', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.setIdleReturn('off');
+  assert.equal(root.getAttribute('data-idle-return'), 'off');
+  assert.equal(localStorage.getItem('fh.idleReturn'), 'off');
+});
+
+test('setIdleReturn(on) restores auto-return', () => {
+  const { root, localStorage, win } = loadTheme({ storage: { 'fh.idleReturn': 'off' } });
+  assert.equal(root.getAttribute('data-idle-return'), 'off');   // started opted-out
+  win.setIdleReturn('on');
+  assert.equal(root.getAttribute('data-idle-return'), 'on');
+  assert.equal(localStorage.getItem('fh.idleReturn'), 'on');
+});
+
+test('an invalid idle-return value is rejected: no stamp change, no persist', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.setIdleReturn('sometimes');
+  win.setIdleReturn('');
+  assert.equal(root.getAttribute('data-idle-return'), 'on');    // unchanged
+  assert.equal(localStorage.getItem('fh.idleReturn'), null);
+});
+
+test('a persisted fh.idleReturn=off survives a reload', () => {
+  const { root } = loadTheme({ storage: { 'fh.idleReturn': 'off' } });
+  assert.equal(root.getAttribute('data-idle-return'), 'off');
+});
+
+test('window.FH_THEME.idleReturn is the fallback when no localStorage override exists', () => {
+  const { root, localStorage } = loadTheme({ fhTheme: { idleReturn: 'off' } });
+  assert.equal(root.getAttribute('data-idle-return'), 'off');
+  assert.equal(localStorage.getItem('fh.idleReturn'), null);     // config default, not stored
+});
+
+test('a stored fh.idleReturn beats the FH_THEME.idleReturn config default', () => {
+  const { root } = loadTheme({
+    storage: { 'fh.idleReturn': 'on' },
+    fhTheme: { idleReturn: 'off' },
+  });
+  assert.equal(root.getAttribute('data-idle-return'), 'on');     // device choice wins
+});
+
+test('stampIdleReturn applies the choice WITHOUT persisting (house-default path)', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.stampIdleReturn('off');
+  assert.equal(root.getAttribute('data-idle-return'), 'off');
+  assert.equal(localStorage.getItem('fh.idleReturn'), null);     // but NOT stored
+});

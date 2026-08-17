@@ -479,6 +479,35 @@ def test_layout_mode_control_present_and_wired():
         "reflectThemeControls must reflect the [data-layout-set] buttons"
 
 
+def test_idle_return_control_present_and_wired():
+    """The Auto-return On/Off control lives in the display popover + full Settings,
+    is wired to setIdleReturn in hub.js, and setIdleReturn/stampIdleReturn + the
+    data-idle-return stamp exist in theme.js. The click wiring uses a
+    descendant-combinator selector the fake-DOM harness can't exercise, so this
+    static guard covers it; the reflection + armIdle branches are DOM-tested. This
+    is the escape hatch so a personal phone/TV isn't yanked back to the home wall
+    while someone is reading a full-screen view, so it must not silently vanish."""
+    index = (STATIC / "index.html").read_text()
+    theme = (STATIC / "theme.js").read_text()
+    hub = (STATIC / "hub.js").read_text()
+    for v in ("on", "off"):
+        assert f'data-idle-set="{v}"' in index, \
+            f"display popover missing the {v} auto-return button"
+    # theme.js: persisted setter + stamp-only applier + the attribute stamp
+    assert "window.setIdleReturn" in theme, "theme.js must expose setIdleReturn"
+    assert "window.stampIdleReturn" in theme, "theme.js must expose stampIdleReturn"
+    assert 'setAttribute("data-idle-return"' in theme, \
+        "theme.js must stamp the data-idle-return choice attribute"
+    # hub.js: a [data-idle-set] tap forwards to setIdleReturn, the control is
+    # reflected, and armIdle honors the choice (skips arming when opted out)
+    assert re.search(r"data-idle-set\]'\)[\s\S]{0,120}setIdleReturn\(", hub), \
+        "hub.js must wire a [data-idle-set] tap to setIdleReturn()"
+    assert "data-idle-set" in hub, \
+        "reflectThemeControls must reflect the [data-idle-set] buttons"
+    assert 'data-idle-return' in hub, \
+        "armIdle must read the data-idle-return choice"
+
+
 def test_camera_page_shows_four_per_screen_and_scrolls():
     # The full-screen camera page is two columns with a minmax row height:
     #   grid-auto-rows: minmax(calc((100% - <N>px) / 2), 1fr)
