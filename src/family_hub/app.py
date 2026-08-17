@@ -300,16 +300,20 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             "label": cal.get("label"),
             "event_color": GOOGLE_EVENT_COLORS.get(e["color_id"] or ""),
         })
-    # The date range the sync actually caches (today - past_days .. today +
-    # window_days). The frontend pages the month view past this, so it marks
-    # out-of-window days as "not synced" rather than rendering them as free
-    # (issue #37).
+    # The range for which THIS payload is authoritative (a missing day is really
+    # free): the INTERSECTION of what was fetched (past_days .. days) and what
+    # the sync actually caches (cfg.calendar_past_days .. cfg.calendar_window_days).
+    # Reporting the raw config window would falsely mark a day that the sync
+    # caches but this request never fetched (e.g. calendar_past_days raised above
+    # the frontend's fixed past=45) as free instead of "not synced" (issue #37).
+    synced_back = min(past_days, cfg.calendar_past_days)
+    synced_fwd = min(days, cfg.calendar_window_days)
     return {
         "status": status,
         "events": events,
         "window": {
-            "from": (today - dt.timedelta(days=cfg.calendar_past_days)).isoformat(),
-            "to": (today + dt.timedelta(days=cfg.calendar_window_days)).isoformat(),
+            "from": (today - dt.timedelta(days=synced_back)).isoformat(),
+            "to": (today + dt.timedelta(days=synced_fwd)).isoformat(),
         },
     }
 
@@ -966,12 +970,14 @@ def _open_sync_conn():
                 except Exception:
                     pass
             try:   # surface the failure; skip silently if the DB is unwritable
-                sc = fdb.connect(DB_PATH)
-                prior = fdb.kv_get(sc, "calendar_status") or {}
-                fdb.kv_set(sc, "calendar_status",
-                           {"ok": False, "error": f"sync startup: {e}",
-                            "last_sync": prior.get("last_sync")})
-                sc.close()
+                # closing() guarantees the fd is released even when kv_set raises
+                # on the same lock that triggered this retry — else the infinite
+                # backoff loop would leak one connection per iteration.
+                with contextlib.closing(fdb.connect(DB_PATH)) as sc:
+                    prior = fdb.kv_get(sc, "calendar_status") or {}
+                    fdb.kv_set(sc, "calendar_status",
+                               {"ok": False, "error": f"sync startup: {e}",
+                                "last_sync": prior.get("last_sync")})
             except Exception:
                 pass
             time.sleep(backoff)

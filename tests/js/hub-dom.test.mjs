@@ -1791,6 +1791,19 @@ test('scheduledProbeCamera: skips a second tick while a probe run is still in fl
   assert.equal(probeCalls, afterFirst, 'no second round of probes while one is still in flight');
 });
 
+test('camera SD probe arms fetchTimeout (J_TIMEOUT_MS), not a bare unbounded fetch', () => {
+  // probeOneCamera was changed from a bare fetch to fetchTimeout so a wedged
+  // producer can't stack never-resolving sockets (issue #33). Prove the SD probe
+  // arms an abort timer at the default J_TIMEOUT_MS (12s); a bare fetch arms none.
+  const { sandbox } = hubWithTiles([CAM1]);
+  const timers = captureTimers(sandbox);   // capture only the timers THIS probe arms
+  sandbox.AbortController = AbortController;
+  sandbox.fetch = () => new Promise(() => {});   // hang forever; only the armed timer matters
+  sandbox.probeCamera();   // issues probeOneCamera synchronously up to its fetchTimeout await
+  assert.ok(timers.some((t) => t.ms === 12000 && !t.done),
+    'the SD probe arms a J_TIMEOUT_MS (12000ms) abort timer via fetchTimeout, not a bare fetch');
+});
+
 test('probeCamera probes every camera concurrently — one slow camera never delays the rest', async () => {
   const { document, sandbox } = hubWithTiles([CAM1, CAM2]);
   const started = [];

@@ -252,6 +252,32 @@ def test_schema_adds_autoincrement_to_legacy_people(tmp_path):
     c.close()
 
 
+def test_schema_adds_autoincrement_to_legacy_chores(tmp_path):
+    """Same as the people migration, for chores: a pre-AUTOINCREMENT chores table
+    is rebuilt with the id counter pinned, so a delete+add gets max+1 and never
+    reuses the freed id (issue #31, the legacy-DB path for chores)."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.execute("""CREATE TABLE chores(
+        id INTEGER PRIMARY KEY, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+        schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+        days_mask INTEGER NOT NULL DEFAULT 0,
+        assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+        fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+        rotation_epoch TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)""")
+    c.execute("INSERT INTO chores(id, title, schedule_kind, assign_kind, rotation_epoch) "
+              "VALUES(5, 'Old', 'daily', 'rotation', '2026-08-01')")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.list_chores(c, include_inactive=True)[0]["id"] == 5   # row preserved
+    fdb.delete_chore(c, 5)
+    nid = fdb.add_chore(c, title="New", icon="", schedule_kind="daily", days_mask=0,
+                        assign_kind="rotation", fixed_person_id=None,
+                        rotation_order=[], rotation_epoch="2026-08-01")
+    assert nid == 6                                                  # max+1, not reused
+    c.close()
+
+
 def test_kv(conn):
     assert fdb.kv_get(conn, "calendar_status") is None
     fdb.kv_set(conn, "calendar_status", {"ok": True})

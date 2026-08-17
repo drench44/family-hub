@@ -427,6 +427,25 @@ def test_calendar_exposes_synced_window(tmp_path, monkeypatch):
     assert win["from"] == (today - dt.timedelta(days=5)).isoformat()
 
 
+def test_calendar_window_is_intersection_of_fetch_and_sync(tmp_path, monkeypatch):
+    """The window must be the INTERSECTION of the fetch range and the sync
+    coverage. A config window wider than the fixed fetch (frontend uses
+    days=90&past=45) must cap to the fetch, or days the sync caches but this
+    request never fetched would render as falsely-empty instead of not-synced."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendar_window_days": 120, "calendar_past_days": 60})
+    with TestClient(appmod.app) as c:
+        win = c.get("/api/calendar").json()["window"]              # default fetch 90/45
+        win2 = c.get("/api/calendar?days=10&past=5").json()["window"]
+    today = appmod._today()
+    # config 120/60 capped to the fetch 90/45
+    assert win["to"] == (today + dt.timedelta(days=90)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
+    # an explicit narrower fetch caps further
+    assert win2["to"] == (today + dt.timedelta(days=10)).isoformat()
+    assert win2["from"] == (today - dt.timedelta(days=5)).isoformat()
+
+
 def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod):
     """Regression for issue #35: an explicit JSON null for a field backed by a
     NOT NULL column is a 422, not a 500 from the DB write. fixed_person_id (the
@@ -1269,10 +1288,16 @@ def test_db_connection_is_per_thread(app_mod):
     assert app_mod._db() is main_conn
 
 
-def test_open_sync_conn_retries_on_transient_startup_failure(app_mod, monkeypatch):
+def test_open_sync_conn_retries_and_flags_failure(app_mod, monkeypatch):
     """Regression for issue #32: a transient ensure_schema failure at sync
     startup must not kill the thread; _open_sync_conn retries until it succeeds
-    instead of freezing calendar sync behind a still-healthy badge."""
+    AND records an unhealthy calendar_status so the wall shows staleness instead
+    of a false-healthy badge."""
+    # Pre-create the schema so the failure path can write calendar_status (the kv
+    # table has to exist for the status write to land, not be swallowed).
+    seed = app_mod.fdb.connect(app_mod.DB_PATH)
+    app_mod.fdb.ensure_schema(seed)
+    seed.close()
     real_ensure = app_mod.fdb.ensure_schema
     calls = {"n": 0}
 
@@ -1287,6 +1312,9 @@ def test_open_sync_conn_retries_on_transient_startup_failure(app_mod, monkeypatc
     conn = app_mod._open_sync_conn()
     assert conn.execute("SELECT 1").fetchone()[0] == 1
     assert calls["n"] == 2   # failed once, retried, succeeded
+    # the failure surfaced, not a false-healthy badge
+    status = app_mod.fdb.kv_get(conn, "calendar_status")
+    assert status["ok"] is False and "sync startup" in status["error"]
 
 
 def test_demo_disables_background_sync(tmp_path, monkeypatch):
