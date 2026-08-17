@@ -33,6 +33,10 @@ class FakeCalDav:
         col = next(c for c in self._cols if c["id"] == collection["id"])
         return col.get("ics", [])
 
+    def fetch_todos(self, collection):
+        col = next(c for c in self._cols if c["id"] == collection["id"])
+        return col.get("todos", [])
+
 
 _CFG = SimpleNamespace(calendar_window_days=28, calendar_past_days=45)
 _NOW = dt.datetime(2026, 8, 17, 12, 0, 0)
@@ -110,3 +114,46 @@ def test_caldav_service_configured_and_client_from_env():
     client = caldav_service.client_from_env(env)
     assert client is not None and client.configured() is True
     assert client.url == caldav_service.ICLOUD_CALDAV_URL
+
+
+_VTODO = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t1\r\n"
+          "SUMMARY:Buy milk\r\nDUE;VALUE=DATE:20260820\r\nEND:VTODO\r\n"
+          "END:VCALENDAR\r\n")
+
+
+def test_caldav_sync_pulls_reminders(conn):
+    client = FakeCalDav([
+        {"id": "cal", "name": "Family", "comp": "VEVENT",
+         "ics": [_ics("u1", "Dentist", "20260820", "20260821")]},
+        {"id": "rem", "name": "Groceries", "comp": "VTODO", "todos": [_VTODO]},
+    ])
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["reminders"] == 1 and st["events"] == 1
+    rems = fdb.kv_get(conn, "caldav_reminders")
+    assert [r["title"] for r in rems] == ["Buy milk"]
+    assert rems[0]["list_name"] == "Groceries"
+
+
+def test_is_auth_error_detects_401_and_ignores_transient():
+    assert caldav_sync._is_auth_error(RuntimeError("HTTP 401 Unauthorized")) is True
+    assert caldav_sync._is_auth_error(RuntimeError("connection reset")) is False
+
+
+def test_caldav_sync_flags_needs_auth_and_keeps_cache(conn):
+    # a previously-cached CalDAV event; an expired login must NOT wipe it
+    fdb.replace_events_caldav(conn, [{"id": "old", "calendar_id": "caldav:cal",
+        "title": "Kept", "start_ts": "2026-08-20", "end_ts": "2026-08-21",
+        "all_day": 1}])
+
+    class AuthFail:
+        def configured(self):
+            return True
+
+        def discover(self):
+            raise RuntimeError("401 Unauthorized")
+
+    st = caldav_sync.sync_once(AuthFail(), conn, _CFG, _NOW)
+    assert st["ok"] is False and st.get("needs_auth") is True
+    # cached event survives (read-only degradation), status recorded
+    assert [r["title"] for r in fdb.list_events(conn)] == ["Kept"]
+    assert fdb.kv_get(conn, "caldav_status")["needs_auth"] is True

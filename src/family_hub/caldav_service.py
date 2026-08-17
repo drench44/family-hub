@@ -120,3 +120,10 @@ class CalDavClient:
         end = dt.datetime.combine(hi, dt.time.max)
         objs = cal.search(start=start, end=end, event=True, expand=False)
         return [o.data for o in objs if getattr(o, "data", None)]
+
+    def fetch_todos(self, collection: dict) -> list[str]:
+        """Raw ICS (one VCALENDAR per VTODO) for a reminders collection,
+        including completed ones so grouping can decide what to show."""
+        cal = collection["_cal"]
+        return [t.data for t in cal.todos(include_completed=True)
+                if getattr(t, "data", None)]

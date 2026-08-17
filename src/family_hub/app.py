@@ -28,6 +28,7 @@ from . import chores as chlogic
 from . import db as fdb
 from . import demo as fdemo
 from . import integrations as fintegrations
+from . import reminders as remlogic
 from . import tiles
 from . import todos as tdlogic
 from . import caldav_service
@@ -378,11 +379,29 @@ def _links(enabled_ids: set | None = None) -> dict:
     return {"cameras": cameras, "panels": panels, "camera_page": camera_page}
 
 
+def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
+    """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
+    or None for one with no sync (cameras/weather/climate). Drives the settings
+    menu's 'Reconnect iCloud' / warning affordance on auth-failure or error."""
+    src = caldav_status if iid == "icloud_caldav" else (
+        cal_status if iid in ("google_calendar", "ics_calendar") else None)
+    if not src:
+        return None
+    if src.get("needs_auth"):
+        return "needs_auth"
+    err = src.get("error")
+    if src.get("ok") is False and err not in (None, "", "not configured", "disabled"):
+        return "error"
+    return "ok"
+
+
 def _integrations_state(c) -> dict:
-    """The available integrations plus their enable/disable state, and the set of
-    enabled ids for render gating. Available comes from config/env (the
-    registry); the enabled flag comes from the integrations table (default True
-    for a not-yet-seeded one, so gating never hides an un-toggled source)."""
+    """The available integrations plus their enable/disable state and health, and
+    the set of enabled ids for render gating. Available comes from config/env
+    (the registry); the enabled flag comes from the integrations table (default
+    True for a not-yet-seeded one, so gating never hides an un-toggled source)."""
+    caldav_status = fdb.kv_get(c, "caldav_status") or {}
+    cal_status = fdb.kv_get(c, "calendar_status") or {}
     lst = []
     enabled_ids = set()
     for integ in fintegrations.available_only(cfg, os.environ):
@@ -390,7 +409,8 @@ def _integrations_state(c) -> dict:
         if en:
             enabled_ids.add(integ["id"])
         lst.append({"id": integ["id"], "kind": integ["kind"],
-                    "name": integ["name"], "enabled": en})
+                    "name": integ["name"], "enabled": en,
+                    "status": _integ_status(integ["id"], caldav_status, cal_status)})
     return {"list": lst, "enabled_ids": enabled_ids}
 
 
@@ -528,11 +548,17 @@ def hub():
         todos_block = {b: [] for b in tdlogic.BUCKETS}
         todos_ok = False
     istate = _integrations_state(c)
+    # iCloud Reminders (read-only), grouped; empty unless the CalDAV integration
+    # is available AND enabled. A separate surface from the local To-Dos.
+    caldav_on = "icloud_caldav" in istate["enabled_ids"]
+    reminders_block = (remlogic.group(fdb.kv_get(c, "caldav_reminders") or [], today)
+                       if caldav_on else {b: [] for b in remlogic.BUCKETS})
     return {
         "date": today.isoformat(),
         "people": _people_day(c, today),
         "todos": todos_block,
         "todos_ok": todos_ok,
+        "reminders": reminders_block,
         "calendar": _calendar_block(c, today, 14),
         "links": _links(istate["enabled_ids"]),
         # The wall's settings menu reads this; tiles for disabled integrations
@@ -718,6 +744,21 @@ def integrations_patch(iid: str, body: IntegrationPatch):
     fdb.seed_integration(c, iid, avail[iid]["kind"])
     fdb.set_integration_enabled(c, iid, body.enabled)
     return {"id": iid, "enabled": body.enabled}
+
+
+# --- reminders (read-only iCloud VTODO) -----------------------------------
+
+@app.get("/api/reminders")
+def reminders_full():
+    """The full grouped iCloud Reminders view. `configured` is False (empty
+    buckets) when CalDAV has no credentials or its integration is off."""
+    c = _db()
+    on = (fintegrations.caldav_configured(os.environ)
+          and fdb.integration_enabled(c, "icloud_caldav", default=True))
+    if not on:
+        return {"buckets": {b: [] for b in remlogic.BUCKETS}, "configured": False}
+    rem = fdb.kv_get(c, "caldav_reminders") or []
+    return {"buckets": remlogic.group(rem, _today()), "configured": True}
 
 
 # --- admin ----------------------------------------------------------------

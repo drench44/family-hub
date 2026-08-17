@@ -1520,3 +1520,54 @@ def test_calendar_renders_caldav_events_with_color_and_gating(tmp_path, monkeypa
         tc.patch("/api/integrations/icloud_caldav", json={"enabled": False})
         assert all(e["title"] != "Dentist"
                    for e in tc.get("/api/calendar").json()["events"])
+
+
+def test_reminders_api_and_hub_block(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        today = appmod._today()
+        appmod.fdb.kv_set(c, "caldav_reminders", [
+            {"id": "r1", "title": "Buy milk", "completed": False, "list_id": "caldav:x",
+             "due": (today + dt.timedelta(days=2)).isoformat()},
+            {"id": "r2", "title": "Old thing", "completed": False, "list_id": "caldav:x",
+             "due": (today - dt.timedelta(days=1)).isoformat()},
+            {"id": "r3", "title": "Done", "completed": True, "list_id": "caldav:x",
+             "due": today.isoformat()},
+        ])
+        data = tc.get("/api/reminders").json()
+        assert data["configured"] is True
+        assert [r["title"] for r in data["buckets"]["upcoming"]] == ["Buy milk"]
+        assert [r["title"] for r in data["buckets"]["overdue"]] == ["Old thing"]
+        # completed never appears
+        assert all("Done" not in [r["title"] for r in data["buckets"][b]]
+                   for b in ["overdue", "today", "upcoming", "no_date"])
+        # hub carries the grouped block
+        assert [r["title"] for r in tc.get("/api/hub").json()["reminders"]["upcoming"]] \
+            == ["Buy milk"]
+        # disabling iCloud CalDAV empties reminders everywhere
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": False})
+        assert tc.get("/api/reminders").json()["buckets"]["upcoming"] == []
+        assert tc.get("/api/hub").json()["reminders"]["upcoming"] == []
+
+
+def test_reminders_api_not_configured_without_creds(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        data = tc.get("/api/reminders").json()
+        assert data["configured"] is False and data["buckets"]["today"] == []
+
+
+def test_integration_status_surfaces_needs_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        appmod.fdb.kv_set(appmod._db(), "caldav_status",
+                          {"ok": False, "needs_auth": True, "error": "401"})
+        integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert integ["icloud_caldav"]["status"] == "needs_auth"

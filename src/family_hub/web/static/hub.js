@@ -1998,13 +1998,20 @@ function renderIntegrations(data) {
   const host = document.getElementById('integrations-ctl');
   if (!host) return;
   host.innerHTML = list.length
-    ? list.map((it) =>
-      `<button class="integ-row" type="button" role="switch"`
-      + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
-      + ` data-integ-toggle="${escapeHtml(it.id)}">`
-      + `<span class="integ-name">${escapeHtml(it.name)}</span>`
-      + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
-      + `</button>`).join('')
+    ? list.map((it) => {
+      // Auth-failure / error is a first-class state: a revoked or expired login
+      // shows "reconnect" so the family knows to fix it (the cached view stays).
+      const warn = it.status === 'needs_auth' ? 'reconnect'
+        : (it.status === 'error' ? 'error' : '');
+      return `<button class="integ-row" type="button" role="switch"`
+        + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
+        + ` data-integ-toggle="${escapeHtml(it.id)}">`
+        + `<span class="integ-name">${escapeHtml(it.name)}`
+        + (warn ? `<span class="integ-warn">${warn}</span>` : '')
+        + `</span>`
+        + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+        + `</button>`;
+    }).join('')
     : `<div class="integ-empty">none configured</div>`;
 }
 

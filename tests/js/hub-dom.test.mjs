@@ -2663,3 +2663,14 @@ test('toggleIntegration: PATCHes the opposite of the current state', async () =>
   assert.equal(calls[0].method, 'PATCH');
   assert.deepEqual(calls[0].body, { enabled: false });   // was on -> turn off
 });
+
+test('renderIntegrations: shows a reconnect hint when status is needs_auth', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)',
+      enabled: true, status: 'needs_auth' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /integ-warn/);
+  assert.match(host.innerHTML, /reconnect/);
+});
