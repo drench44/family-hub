@@ -636,6 +636,39 @@ body {
 }
 .todos-page { display: none; }
 
+/* ---- iCloud reminders: the To-Do surface backed by iCloud instead of the
+   local list. Rows reuse the .todo-row(-full) chrome above; these are just the
+   source chip, the stacked bucket list, and the per-row due/priority meta. ---- */
+/* Quiet source pill next to the "To-Do" header (and atop the full view) so it's
+   clear the list is iCloud-backed. */
+.shead-chip {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--faint); background: var(--surface-2);
+  padding: 2px 8px; border-radius: 999px;
+}
+/* Reminder buckets stack in one readable column (overdue first), not a 3-up
+   grid — there are four buckets and empty ones are dropped. Capped for line
+   length on the wide wall; full width on the phone (viewport < the cap). */
+.rem-list { display: flex; flex-direction: column; gap: 16px; max-width: 640px; margin: 16px auto 0; }
+/* The exact due date on overdue/upcoming rows, and a single "!" for a
+   high-priority reminder — both quiet, both inline after the title. */
+.rem-due {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em;
+  color: var(--faint); margin-left: 8px;
+}
+.rem-pri { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--warn); margin-left: 8px; }
+/* The list picker in the reminders add row (only when more than one list is
+   enabled). 16px font keeps iOS from zoom-on-focus; 44px min height stays a
+   comfortable tap target. Matches .todo-add input's box. */
+.todo-list-select {
+  font-size: 16px; color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--edge); border-radius: 10px;
+  padding: 10px 12px; min-height: 44px; cursor: pointer;
+}
+.todo-list-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* Completion celebration — one shot when a person clears their whole day. */
 .card-celebrate { animation: celebrate 900ms ease-out; position: relative; }
 @keyframes celebrate {
@@ -1259,6 +1292,11 @@ body.overlay-open { overflow: hidden; }
   font-family: var(--mono); font-size: 10px; font-weight: 600;
   letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint);
 }
+/* To-Do source picker (local vs iCloud), between the integrations switch list
+   and the CalDAV panel. Empty (no CalDAV configured) => it takes no space, so
+   the card's flex gap doesn't open a hole where the picker isn't shown. */
+.todo-source-ctl { display: flex; flex-direction: column; gap: 8px; }
+.todo-source-ctl:empty { display: none; }
 
 /* ---- iCloud (CalDAV) account panel, inside the Integrations card ---- */
 .caldav-panel {
@@ -1387,6 +1425,9 @@ body.integ-off-cameras #camgrid { display: none; }
      a stub, so let it wrap to its own full-width row */
   .todo-add { flex-wrap: wrap; }
   .todo-add input { flex: 1 1 100%; }
+  /* the reminder list picker gets its own full-width row too, so the phone add
+     line reads input / list / Add, each comfortably tappable */
+  .todo-add .todo-list-select { flex: 1 1 100%; }
   /* each tab shows exactly one surface of the one page */
   body[data-tab="chores"] .cal,
   body[data-tab="chores"] .tiles,

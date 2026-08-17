@@ -176,12 +176,13 @@ function calStatusNote(cal) {
    The ⛶ glyph is prepended here, so callers pass clean labels. Every
    config/user-derived value (label, expandLabel, overlay) is escaped — panelHtml
    feeds config-derived p.label / p.id through here. */
-function sectionHead(label, { overlay, expandLabel } = {}) {
+function sectionHead(label, { overlay, expandLabel, chip } = {}) {
+  const chipHtml = chip ? `<span class="shead-chip">${escapeHtml(chip)}</span>` : '';
   const act = (overlay && expandLabel)
     ? `<span class="act"><button class="expand" type="button"`
       + ` data-overlay="${escapeHtml(overlay)}">⛶ ${escapeHtml(expandLabel)}</button></span>`
     : '';
-  return `<div class="shead"><span class="tick"></span><h2>${escapeHtml(label)}</h2>${act}</div>`;
+  return `<div class="shead"><span class="tick"></span><h2>${escapeHtml(label)}</h2>${chipHtml}${act}</div>`;
 }
 
 function renderCalendar(data) {
@@ -545,6 +546,12 @@ function renderPeople(data) {
    (operator, 2026-08-14) — separate from the person cards it used to trail. */
 function renderTodoSlot(data) {
   const host = document.getElementById('todo-slot');
+  // The To-Do surface can be backed by the local whiteboard (default) or by
+  // iCloud Reminders (settings picker). Render whichever the operator chose.
+  if (data.todo_source === 'icloud') {
+    host.innerHTML = reminderCardHtml(data.reminders, !!data.reminders_writable);
+    return;
+  }
   // todos_ok===false means the server's todos read/group threw and it shipped
   // empty buckets as a fail-soft. Render a "couldn't load" note, NOT a
   // reassuring empty card the family would read as "all caught up".
@@ -557,7 +564,7 @@ function renderTodoSlot(data) {
    the hub payload every poll; the full view (overlay on the wall, To-Dos tab
    on phones) fetches /api/todos on entry and after its own writes ONLY, so a
    60s poll can never wipe a half-typed add box. */
-const todoState = { data: null, addBucket: 'now', openId: null };
+const todoState = { data: null, reminders: null, source: 'local', addBucket: 'now', openId: null };
 
 function todoRowHtml(t, full) {
   const done = !!t.done_at;
@@ -613,7 +620,139 @@ function todoCardHtml(todos, ok = true) {
     + `</div>`;
 }
 
+/* ------------------------------------------------- iCloud reminders view */
+
+/* The To-Do surface, backed by iCloud Reminders instead of the local list.
+   Reminders arrive already grouped by due (overdue/today/upcoming/no_date) and
+   with completed ones dropped, so every row shown is open. When two-way is on
+   (`writable`) a row is a tap-to-complete control; when it's read-only the same
+   rows render inert — same information, no controls — matching how read-only
+   chores render (look, don't touch). */
+const REM_BUCKETS = [['overdue', 'Overdue'], ['today', 'Today'],
+  ['upcoming', 'Upcoming'], ['no_date', 'No date']];
+
+/* A high-priority reminder gets a single quiet "!" mark (shape + text, never
+   colour alone) so an urgent item stands out on the wall. RFC 5545 priority is
+   1 (highest) .. 9 (lowest); Apple's "High" is 1. Treat 1-4 as high; medium/low
+   stay unmarked to keep the surface calm. */
+function reminderPriHtml(priority) {
+  const p = Number(priority);
+  if (!Number.isFinite(p) || p < 1 || p > 4) return '';
+  return `<span class="rem-pri" title="High priority" aria-label="High priority">!</span>`;
+}
+
+/* The exact due date, shown only where the bucket alone is ambiguous: "upcoming"
+   spans days to weeks, and "overdue" wants the how-long-ago. Today/no_date carry
+   their date in the bucket label already, so they stay clean. */
+function reminderDueHtml(bucket, due) {
+  if (!due || (bucket !== 'upcoming' && bucket !== 'overdue')) return '';
+  return `<span class="rem-due">${escapeHtml(dayLabel(due.slice(0, 10), data_date))}</span>`;
+}
+
+function reminderRowHtml(r, full, writable) {
+  const title = escapeHtml(r.title);
+  const id = escapeHtml(r.id);
+  // title + due + priority ride together in a .todo-body so the meta sits inline
+  // beside the title (not as separate flex children of the row).
+  const body = `<span class="todo-title">${title}</span>`
+    + reminderDueHtml(r.bucket, r.due) + reminderPriHtml(r.priority);
+  if (!full) {
+    // Home card (wall): a compact tap-to-complete row, or an inert one when
+    // read-only. The inert row carries no data-reminder, so a tap no-ops.
+    if (!writable) {
+      return `<div class="todo-row"><span class="todo-check"></span>`
+        + `<span class="todo-body">${body}</span></div>`;
+    }
+    return `<button class="todo-row" type="button" data-reminder="${id}"`
+      + ` aria-label="mark done: ${title}"><span class="todo-check">✓</span>`
+      + `<span class="todo-body">${body}</span></button>`;
+  }
+  // Full view. Read-only: a plain row, no check button, no delete affordance.
+  if (!writable) {
+    return `<div class="todo-row-full"><span class="todo-check"></span>`
+      + `<span class="todo-body">${body}</span></div>`;
+  }
+  const isOpen = String(todoState.openId) === String(r.id);
+  const actions = isOpen
+    ? `<div class="todo-actions">`
+      + `<button class="todo-act todo-act-del" type="button" data-reminder-del="${id}">delete</button>`
+      + `</div>`
+    : '';
+  return `<div class="todo-row-full">`
+    + `<button class="todo-row-main" type="button" data-reminder="${id}"`
+    + ` aria-label="mark done: ${title}"><span class="todo-check">✓</span></button>`
+    + `<button class="todo-body" type="button" data-reminder-open="${id}">${body}</button>`
+    + actions
+    + `</div>`;
+}
+
+/* Wall home card: the pressing reminders (overdue + today, overdue first, up to
+   five) plus three count chips. Mirrors todoCardHtml's shape so the To-Do slot
+   reads the same whichever source backs it. */
+function reminderCardHtml(buckets, writable) {
+  const b = buckets || {};
+  const tag = (bk) => (b[bk] || []).map((r) => ({ ...r, bucket: bk }));
+  const pressing = [...tag('overdue'), ...tag('today')].slice(0, 5);
+  const rows = pressing.length
+    ? pressing.map((r) => reminderRowHtml(r, false, writable)).join('')
+    : `<div class="cal-empty">nothing on the list</div>`;
+  const chips = [['overdue', true], ['today', false], ['upcoming', false]]
+    .map(([bk, lead]) => `<span class="chip${lead ? ' now' : ''}">`
+      + `${(b[bk] || []).length} ${bk}</span>`).join('');
+  return sectionHead('To-Do', { overlay: 'todos', expandLabel: 'Full list', chip: 'iCloud' })
+    + `<div class="card todo">`
+    + rows
+    + `<div class="foot">${chips}</div>`
+    + `</div>`;
+}
+
+/* The add row for the reminders full view. Zero lists hides it (handled by the
+   caller); one list targets it directly with a naming placeholder; more than one
+   adds a compact list picker so a wall-added reminder lands in the right list. */
+function reminderAddHtml(lists) {
+  const single = lists.length === 1;
+  const placeholder = single ? `Add to ${lists[0].name}…` : 'Add a reminder…';
+  const select = single ? ''
+    : `<select id="todo-list-select" class="todo-list-select" aria-label="Reminder list">`
+      + lists.map((l, i) => `<option value="${escapeHtml(l.id)}"${i === 0 ? ' selected' : ''}>`
+        + `${escapeHtml(l.name)}</option>`).join('')
+      + `</select>`;
+  return `<form id="todo-add-form" class="todo-add">`
+    + `<input id="todo-add-input" maxlength="120" placeholder="${escapeHtml(placeholder)}"`
+    + ` autocomplete="off" aria-label="Add a reminder">`
+    + select
+    + `<button class="cal-nav-btn" type="submit">Add</button>`
+    + `</form>`;
+}
+
+function remindersFullHtml() {
+  const r = todoState.reminders;
+  if (!r) {
+    return `<div class="cal-empty">couldn’t load reminders — is the hub reachable?</div>`;
+  }
+  if (r.configured === false) {
+    return `<div class="cal-empty">iCloud isn’t connected — add it in Settings.</div>`;
+  }
+  const writable = !!r.writable;
+  const buckets = r.buckets || {};
+  const lists = (hubData && hubData.reminder_lists) || [];
+  const total = REM_BUCKETS.reduce((n, [bk]) => n + (buckets[bk] || []).length, 0);
+  const sections = REM_BUCKETS
+    .filter(([bk]) => (buckets[bk] || []).length)
+    .map(([bk, label]) => `<div class="card pad todo-section">`
+      + `<div class="todo-sec-head">${label}</div>`
+      + buckets[bk].map((rm) => reminderRowHtml({ ...rm, bucket: bk }, true, writable)).join('')
+      + `</div>`).join('');
+  const add = (writable && lists.length) ? reminderAddHtml(lists) : '';
+  return `<div class="shead"><span class="shead-chip">iCloud</span></div>`
+    + add
+    + `<div class="rem-list">`
+    + (total ? sections : `<div class="cal-empty">nothing on the list</div>`)
+    + `</div>`;
+}
+
 function todosFullHtml() {
+  if (todoState.source === 'icloud') return remindersFullHtml();
   const d = todoState.data;
   if (!d) {
     return `<div class="cal-empty">couldn’t load the list — is the hub reachable?</div>`;
@@ -669,15 +808,22 @@ function renderTodosPaint() {
 }
 
 async function renderTodosFull() {
+  // The full view follows the same source as the home card. Read it from the
+  // last hub payload so the fetch below hits the right endpoint.
+  const source = (hubData && hubData.todo_source) || 'local';
+  todoState.source = source;
+  const icloud = source === 'icloud';
+  const had = icloud ? todoState.reminders != null : todoState.data != null;
   try {
-    todoState.data = await j('/api/todos');
+    if (icloud) todoState.reminders = await j('/api/reminders');
+    else todoState.data = await j('/api/todos');
   } catch (e) {
     // keep the last data (or null -> unreachable message). But if this was a
     // REFRESH (data already populated from a prior load) a silent catch would
     // let the stale pre-mutation list sit on screen while the conn badge
     // still says live, so surface it instead of hiding a failed post-mutation
     // GET behind reassuring-looking old data.
-    if (todoState.data != null) showToast('Couldn’t refresh the list — check the hub.');
+    if (had) showToast('Couldn’t refresh the list — check the hub.');
   }
   renderTodosPaint();
 }
@@ -718,6 +864,38 @@ async function moveTodo(id, bucket) {
 async function deleteTodo(id) {
   const r = await attemptTodo(`/api/todos/${id}`, 'DELETE');
   if (!r.ok) showToast(todoFailMessage(r.error));
+  todoState.openId = null;
+  await refreshTodos();
+}
+
+/* ------- iCloud reminder writes (two-way; only wired when writable) ------- */
+
+/* Check off / reopen a reminder. The click handler flips the row's .done class
+   first (optimistic), then this writes and refreshes; a completed reminder drops
+   out of the open buckets on the next read, so a checked row simply disappears. */
+async function toggleReminder(id, completed) {
+  const r = await attemptTodo('/api/reminders/toggle', 'POST', { id, completed });
+  if (!r.ok) showToast(reminderFailMessage(r.error));
+  await refreshTodos();
+}
+
+async function addReminder() {
+  const input = document.getElementById('todo-add-input');
+  const title = ((input && input.value) || '').trim();
+  if (!title) return;
+  const lists = (hubData && hubData.reminder_lists) || [];
+  if (!lists.length) return;                       // no target list -> nothing to do
+  const sel = document.getElementById('todo-list-select');
+  const listId = sel ? sel.value : lists[0].id;    // single list needs no picker
+  const r = await attemptTodo('/api/reminders/add', 'POST', { list_id: listId, title });
+  if (!r.ok) { showToast(reminderFailMessage(r.error)); return; }
+  if (input) input.value = '';
+  await refreshTodos();
+}
+
+async function deleteReminder(id) {
+  const r = await attemptTodo('/api/reminders/delete', 'POST', { id });
+  if (!r.ok) showToast(reminderFailMessage(r.error));
   todoState.openId = null;
   await refreshTodos();
 }
@@ -1039,7 +1217,9 @@ function openOverlay(view) {
     renderChoresFull(hubData ? hubData.people : null);  // instant paint, today
   } else if (view === 'todos') {
     content.innerHTML = `<div class="overlay-panel"><div id="todos-full"></div></div>`;
-    if (todoState.data) renderTodosPaint();  // instant paint from cache
+    todoState.source = (hubData && hubData.todo_source) || 'local';
+    const cache = todoState.source === 'icloud' ? todoState.reminders : todoState.data;
+    if (cache) renderTodosPaint();           // instant paint from cache
     renderTodosFull();                       // then refresh from the API
   } else if (view === 'settings') {
     content.innerHTML = `<div class="overlay-panel"><div id="settings-full"></div></div>`;
@@ -1955,6 +2135,28 @@ document.addEventListener('click', (e) => {
   }
   const tseg = e.target.closest('[data-todo-bucket]');
   if (tseg) { todoState.addBucket = tseg.dataset.todoBucket; renderTodosPaint(); return; }
+  // iCloud reminders (two-way): delete + open-actions before the check row, same
+  // ordering rule as the to-dos above. Read-only rows carry no data-reminder, so
+  // they fall through to nothing — look, don't touch.
+  const remdel = e.target.closest('[data-reminder-del]');
+  if (remdel) { deleteReminder(remdel.dataset.reminderDel); return; }
+  const remopen = e.target.closest('[data-reminder-open]');
+  if (remopen) {
+    const id = remopen.dataset.reminderOpen;
+    todoState.openId = String(todoState.openId) === id ? null : id;
+    renderTodosPaint();
+    return;
+  }
+  const remrow = e.target.closest('[data-reminder]');
+  if (remrow) {
+    // Optimistic: flip the row now so the wall feels instant; the write +
+    // refresh below reconciles (a completed reminder then drops off the list).
+    const rowEl = remrow.closest('.todo-row-full') || remrow.closest('.todo-row') || remrow;
+    const wasDone = rowEl.classList.contains('done');
+    rowEl.classList.toggle('done', !wasDone);
+    toggleReminder(remrow.dataset.reminder, !wasDone);
+    return;
+  }
   // home surfaces (readonly rows carry no data-chore — look, don't touch)
   const chore = e.target.closest('.chore-row');
   if (chore && chore.dataset.chore) {
@@ -1975,7 +2177,11 @@ document.addEventListener('click', (e) => {
 ['pointerdown', 'touchstart', 'keydown'].forEach((evt) =>
   document.addEventListener(evt, () => { noteInteraction(); if (openView) armIdle(); }, { passive: true }));
 document.addEventListener('submit', (e) => {
-  if (e.target && e.target.id === 'todo-add-form') { e.preventDefault(); addTodo(); }
+  if (e.target && e.target.id === 'todo-add-form') {
+    e.preventDefault();
+    // One add form id, two backends: dispatch by the source the view is showing.
+    if (todoState.source === 'icloud') addReminder(); else addTodo();
+  }
 });
 
 /* ------------------- persisted display controls (Task 5) ------------------ */
@@ -2100,12 +2306,48 @@ function renderSettingsFull() {
     + `<div class="card pad settings-card">`
     + `<div class="shead"><span class="tick"></span><h2>Integrations</h2></div>`
     + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
+    + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
     + `</div>`;
   reflectThemeControls();
   renderIntegrations(hubData || { integrations: lastIntegrations });
+  renderTodoSourcePicker();
   renderCaldavPanel();
   fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
+}
+
+/* The To-Do source picker inside the Integrations card: choose whether the
+   To-Do surface reads the local whiteboard or iCloud Reminders. Shown only when
+   CalDAV is available at all (an icloud_caldav entry exists) — there's nothing
+   to pick otherwise. Its own host + render fn (like renderIntegrations /
+   renderCaldavPanel) so a source switch can repaint just this row without the
+   collections re-fetch renderSettingsFull does. */
+function renderTodoSourcePicker() {
+  const host = document.getElementById('todo-source-ctl');
+  if (!host) return;
+  const caldav = caldavIntegration();
+  if (!caldav) { host.innerHTML = ''; return; }
+  const source = (hubData && hubData.todo_source) || 'local';
+  const readonly = caldav.readonly !== false;   // server default is 1-way (true)
+  // iCloud chosen but still read-only: reminders show but can't be checked off
+  // until two-way is on. The Sync direction toggle sits just below in this card.
+  const hint = (source === 'icloud' && readonly)
+    ? `<div class="hint">Reminders show read-only until you set Sync direction to 2-way, below.</div>`
+    : '';
+  host.innerHTML = `<div class="settings-row"><span class="settings-k">To-Do list</span>`
+    + `<div class="segmented" role="group" aria-label="To-Do list source">`
+    + `<button class="seg-btn${source === 'local' ? ' active' : ''}" type="button" data-todo-source="local">On this hub</button>`
+    + `<button class="seg-btn${source === 'icloud' ? ' active' : ''}" type="button" data-todo-source="icloud">iCloud</button>`
+    + `</div></div>${hint}`;
+}
+
+async function setTodoSource(source) {
+  if (source === ((hubData && hubData.todo_source) || 'local')) return;   // no-op tap
+  const r = await attemptTodo('/api/todo-source', 'PATCH', { source });
+  if (!r.ok) { showToast('Couldn’t switch the To-Do list — check the hub and tap again.'); return; }
+  await poll();                 // hubData.todo_source updates; the home card repaints
+  renderTodoSourcePicker();     // reflect the new selection + read-only hint
+  if (todosViewActive()) await renderTodosFull();   // repaint the open full view for the new source
 }
 
 /* The live icloud_caldav entry from /api/hub's `integrations` list (or
@@ -2308,6 +2550,9 @@ document.addEventListener('click', (e) => {
   // inside the Settings overlay (#integrations-ctl), never the popover.
   const ig = e.target.closest('[data-integ-toggle]');
   if (ig) { toggleIntegration(ig.dataset.integToggle); return; }
+  // To-Do source picker (local vs iCloud), shown in the Integrations card.
+  const ts = e.target.closest('[data-todo-source]');
+  if (ts) { setTodoSource(ts.dataset.todoSource); return; }
   // iCloud (CalDAV) panel actions. (No data-caldav-enable-toggle: the panel
   // deliberately has no second enable switch; see caldavPanelHtml.)
   if (e.target.closest('[data-caldav-connect]')) { connectCaldav(); return; }

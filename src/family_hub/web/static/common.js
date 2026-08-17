@@ -608,6 +608,26 @@ function todoFailMessage(error) {
   return 'Couldn’t save — check the hub and tap again.';
 }
 
+/* Same shape as todoFailMessage, for the iCloud reminder writes. The write
+   endpoints answer 409 when iCloud is off or still read-only, and 404 when the
+   reminder was changed/deleted on another device since the wall last read it —
+   two different diagnoses. Substrings match app.py's own detail strings
+   ('read-only', 'not connected', 'unknown reminder'); pure so each branch is
+   testable without a DOM. */
+function reminderFailMessage(error) {
+  const s = String(error || '');
+  if (s.includes('read-only')) {
+    return 'Reminders are read-only — switch Sync direction to 2-way in Settings.';
+  }
+  if (s.includes('not connected')) {
+    return 'iCloud isn’t connected — add it in Settings.';
+  }
+  if (s.includes('unknown reminder')) {
+    return 'That reminder was already changed on another device.';
+  }
+  return 'Couldn’t save — check the hub and tap again.';
+}
+
 /* The calendar-status banner message ('' = no banner). Pure so the
    needs_auth / not-connected / generic branches are testable without a DOM;
    hub.js's calStatusNote wraps the result in markup. */
@@ -748,7 +768,7 @@ function caldavPanelHtml(integ, ui) {
     + `<span class="settings-k">Sync direction</span>`
     + `<div class="segmented" role="group" aria-label="Sync direction">`
     + `<button class="seg-btn${readonly ? ' active' : ''}" type="button" data-caldav-readonly="1">1-way (read-only)</button>`
-    + `<button class="seg-btn${readonly ? '' : ' active'}" type="button" data-caldav-readonly="0">2-way (writing back, coming soon)</button>`
+    + `<button class="seg-btn${readonly ? '' : ' active'}" type="button" data-caldav-readonly="0">2-way (write back)</button>`
     + `</div></div>`
     + `<div class="caldav-actions">`
     + `<button class="padmin-btn" type="button" data-caldav-test ${dis(st.testing)}>`

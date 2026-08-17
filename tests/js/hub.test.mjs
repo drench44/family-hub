@@ -478,7 +478,7 @@ test('caldavPanelHtml: readonly defaults to 1-way and the seg-btn reflects it', 
   assert.match(oneWay, /seg-btn active" type="button" data-caldav-readonly="1"/);
   const twoWay = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, readonly: false }, {});
   assert.match(twoWay, /seg-btn active" type="button" data-caldav-readonly="0"/);
-  assert.match(twoWay, /writing back, coming soon/);
+  assert.match(twoWay, /2-way \(write back\)/);   // two-way is live now, not "coming soon"
 });
 
 test('caldavPanelHtml: connected + needs_auth/error status shows the reconnect/error warning', () => {
@@ -628,6 +628,16 @@ test('todoFailMessage: distinguishes a concurrent-edit 404 from a generic failur
   assert.equal(sandbox.todoFailMessage('unknown todo'),
     'That item was already changed on another device.');
   assert.equal(sandbox.todoFailMessage('/api/todos/1 -> HTTP 500'),
+    'Couldn’t save — check the hub and tap again.');
+});
+
+test('reminderFailMessage: read-only / not-connected / already-changed / generic each get their own copy', () => {
+  assert.match(sandbox.reminderFailMessage('iCloud reminders are read-only (enable two-way in settings)'),
+    /2-way in Settings/);
+  assert.match(sandbox.reminderFailMessage('iCloud is not connected'), /isn’t connected/);
+  assert.equal(sandbox.reminderFailMessage('unknown reminder'),
+    'That reminder was already changed on another device.');
+  assert.equal(sandbox.reminderFailMessage('/api/reminders/toggle -> HTTP 500'),
     'Couldn’t save — check the hub and tap again.');
 });
 

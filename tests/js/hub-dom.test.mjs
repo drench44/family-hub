@@ -1638,6 +1638,222 @@ test('todosFullHtml: full-screen buckets are boxed like every other section, row
   assert.match(html, /data-todo-open="1"/);
 });
 
+// ---- iCloud reminders as the To-Do source -------------------------------
+
+const REMINDERS = {
+  overdue: [{ id: 'caldav:g/1', title: 'Renew tags', due: '2026-08-11', priority: 1 }],
+  today: [{ id: 'caldav:g/2', title: 'Call the vet', due: '2026-08-17' }],
+  upcoming: [{ id: 'caldav:g/3', title: 'Book flights', due: '2026-09-01' }],
+  no_date: [{ id: 'caldav:g/4', title: 'Someday project' }],
+};
+
+test('renderTodoSlot: iCloud source renders the reminders card with a source chip, pressing rows, and count chips', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: true, reminders: REMINDERS });
+  const html = document.getElementById('todo-slot').innerHTML;
+
+  // Header still reads "To-Do", now carrying the quiet iCloud source chip.
+  assert.match(html, /<h2>To-Do<\/h2>/);
+  assert.match(html, /class="shead-chip">iCloud</);
+  // Pressing = overdue + today; a writable row is a tap-to-complete button.
+  assert.match(html, /data-reminder="caldav:g\/1"/);
+  assert.match(html, /Renew tags/);
+  assert.match(html, /Call the vet/);
+  // Overdue row shows its date; the high-priority one gets the "!" mark.
+  assert.match(html, /class="rem-due">Tue 8\/11</);
+  assert.match(html, /class="rem-pri"[^>]*>!</);
+  // Three counts: overdue leads (accent chip), then today, then upcoming.
+  assert.match(html, /<span class="chip now">1 overdue<\/span>/);
+  assert.match(html, /<span class="chip">1 today<\/span>/);
+  assert.match(html, /<span class="chip">1 upcoming<\/span>/);
+});
+
+test('renderTodoSlot: iCloud read-only renders inert rows — same items, no data-reminder to tap', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: false, reminders: REMINDERS });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /Renew tags/);                 // the information is still shown
+  assert.doesNotMatch(html, /data-reminder=/);      // but nothing is tappable
+});
+
+test('renderTodoSlot: iCloud with no reminders reads "nothing on the list", not a broken card', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: true,
+    reminders: { overdue: [], today: [], upcoming: [], no_date: [] } });
+  assert.match(document.getElementById('todo-slot').innerHTML, /nothing on the list/);
+});
+
+function mountRemindersFull(reminders, { writable = true, lists = [] } = {}) {
+  const { document, sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  vm.runInContext(`todoState.source = 'icloud';
+    todoState.reminders = ${JSON.stringify({ buckets: reminders, configured: true, writable })};
+    hubData = { reminder_lists: ${JSON.stringify(lists)} };`, sandbox);
+  return { document, sandbox, html: sandbox.todosFullHtml() };
+}
+
+test('todosFullHtml (iCloud): buckets stack overdue-first, empty buckets are dropped, rows are writable', () => {
+  const { html } = mountRemindersFull({
+    overdue: REMINDERS.overdue, today: [], upcoming: REMINDERS.upcoming, no_date: [],
+  }, { writable: true, lists: [{ id: 'caldav:g', name: 'Groceries' }] });
+
+  // Only the non-empty buckets render, and Overdue comes before Upcoming.
+  assert.match(html, /todo-sec-head">Overdue<\/div>/);
+  assert.match(html, /todo-sec-head">Upcoming<\/div>/);
+  assert.doesNotMatch(html, /todo-sec-head">Today<\/div>/);
+  assert.doesNotMatch(html, /todo-sec-head">No date<\/div>/);
+  assert.ok(html.indexOf('Overdue') < html.indexOf('Upcoming'), 'overdue leads');
+  // Writable => check button + open/delete affordance.
+  assert.match(html, /data-reminder="caldav:g\/1"/);
+  assert.match(html, /data-reminder-open="caldav:g\/1"/);
+  // Single enabled list => a naming placeholder and NO list picker.
+  assert.match(html, /placeholder="Add to Groceries…"/);
+  assert.doesNotMatch(html, /id="todo-list-select"/);
+});
+
+test('todosFullHtml (iCloud): more than one list adds a compact list picker defaulting to the first', () => {
+  const { html } = mountRemindersFull(
+    { overdue: [], today: REMINDERS.today, upcoming: [], no_date: [] },
+    { writable: true, lists: [{ id: 'caldav:g', name: 'Groceries' }, { id: 'caldav:h', name: 'Home' }] });
+  assert.match(html, /placeholder="Add a reminder…"/);
+  assert.match(html, /id="todo-list-select"/);
+  assert.match(html, /<option value="caldav:g" selected>Groceries<\/option>/);
+  assert.match(html, /<option value="caldav:h">Home<\/option>/);
+});
+
+test('todosFullHtml (iCloud): read-only shows the reminders but no add form and no check controls', () => {
+  const { html } = mountRemindersFull(
+    { overdue: [], today: REMINDERS.today, upcoming: [], no_date: [] },
+    { writable: false, lists: [{ id: 'caldav:g', name: 'Groceries' }] });
+  assert.match(html, /Call the vet/);                 // information is present
+  assert.doesNotMatch(html, /id="todo-add-form"/);    // no add control
+  assert.doesNotMatch(html, /data-reminder=/);        // no tap-to-complete
+  assert.doesNotMatch(html, /data-reminder-open=/);   // no delete affordance
+});
+
+test('todosFullHtml (iCloud): an unconfigured account points at Settings rather than faking an empty list', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("todoState.source = 'icloud'; todoState.reminders = { configured: false, buckets: {} };", sandbox);
+  assert.match(sandbox.todosFullHtml(), /iCloud isn’t connected — add it in Settings/);
+});
+
+test('toggleReminder: POSTs the id + completed flag to /api/reminders/toggle', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: opts && opts.method, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/toggle') return okResp({ id: 'caldav:g/2', completed: true });
+    throw new Error('offline in test');   // the refresh's poll/reminders GET — irrelevant here
+  };
+  await sandbox.toggleReminder('caldav:g/2', true);
+  const post = calls.find((c) => c.url === '/api/reminders/toggle');
+  assert.equal(post.method, 'POST');
+  assert.deepEqual(post.body, { id: 'caldav:g/2', completed: true });
+});
+
+test('addReminder: targets the single list directly, and the picked list when there are several', async () => {
+  const { document, sandbox } = newHub();
+  const input = document.createElement('input'); input._id = 'todo-add-input'; input.value = 'Buy eggs';
+  document.body.appendChild(input);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/add') return okResp({ id: 'caldav:g/new', title: 'Buy eggs', due: null });
+    throw new Error('offline in test');
+  };
+
+  // one list, no picker: uses it directly
+  vm.runInContext("hubData = { reminder_lists: [{ id: 'caldav:g', name: 'Groceries' }] };", sandbox);
+  await sandbox.addReminder();
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/add').body,
+    { list_id: 'caldav:g', title: 'Buy eggs' });
+  assert.equal(input.value, '', 'the input clears on success');
+
+  // several lists + a picker: honours the selected list
+  calls.length = 0; input.value = 'Fix gate';
+  const sel = document.createElement('select'); sel._id = 'todo-list-select'; sel.value = 'caldav:h';
+  document.body.appendChild(sel);
+  vm.runInContext("hubData = { reminder_lists: [{ id: 'caldav:g', name: 'Groceries' }, { id: 'caldav:h', name: 'Home' }] };", sandbox);
+  await sandbox.addReminder();
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/add').body,
+    { list_id: 'caldav:h', title: 'Fix gate' });
+});
+
+test('deleteReminder: POSTs the id to /api/reminders/delete', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/delete') return okResp({ id: 'caldav:g/2', deleted: true });
+    throw new Error('offline in test');
+  };
+  await sandbox.deleteReminder('caldav:g/2');
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/delete').body, { id: 'caldav:g/2' });
+});
+
+test('a failed reminder write surfaces the right toast: read-only vs already-changed', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.fetch = async (url) => {
+    if (url === '/api/reminders/toggle') return failResp(409, 'iCloud reminders are read-only (enable two-way in settings)');
+    throw new Error('offline in test');
+  };
+  await sandbox.toggleReminder('caldav:g/2', true);
+  assert.match(document.getElementById('toast').textContent, /read-only/);
+
+  sandbox.fetch = async (url) => {
+    if (url === '/api/reminders/delete') return failResp(404, 'unknown reminder');
+    throw new Error('offline in test');
+  };
+  await sandbox.deleteReminder('caldav:g/2');
+  assert.match(document.getElementById('toast').textContent, /already changed on another device/);
+});
+
+test('setTodoSource: PATCHes /api/todo-source and no-ops when the source is unchanged', async () => {
+  const { sandbox } = newHub();
+  vm.runInContext("hubData = { todo_source: 'local' };", sandbox);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: opts && opts.method, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/todo-source') return okResp({ source: 'icloud' });
+    throw new Error('offline in test');   // the follow-up poll() — caught, irrelevant here
+  };
+  await sandbox.setTodoSource('icloud');
+  const patch = calls.find((c) => c.url === '/api/todo-source');
+  assert.equal(patch.method, 'PATCH');
+  assert.deepEqual(patch.body, { source: 'icloud' });
+
+  // Tapping the already-active source writes nothing.
+  calls.length = 0;
+  await sandbox.setTodoSource('local');
+  assert.equal(calls.length, 0, 'no PATCH when the source is unchanged');
+});
+
+test('renderTodoSourcePicker: hidden without CalDAV; shown with a read-only hint once iCloud is chosen but still 1-way', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div'); host._id = 'todo-source-ctl';
+  document.body.appendChild(host);
+
+  // No icloud_caldav integration => nothing to pick, so the picker stays empty.
+  vm.runInContext("hubData = { integrations: [], todo_source: 'local' };", sandbox);
+  sandbox.renderTodoSourcePicker();
+  assert.equal(host.innerHTML, '');
+
+  // CalDAV present, iCloud chosen, still read-only => the picker shows and warns.
+  vm.runInContext("hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, readonly: true }], todo_source: 'icloud' };", sandbox);
+  sandbox.renderTodoSourcePicker();
+  assert.match(host.innerHTML, /data-todo-source="local"/);
+  assert.match(host.innerHTML, /data-todo-source="icloud"/);
+  assert.match(host.innerHTML, /seg-btn active" type="button" data-todo-source="icloud"/);
+  assert.match(host.innerHTML, /read-only until you set Sync direction to 2-way/);
+
+  // Two-way on => no hint.
+  vm.runInContext("hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, readonly: false }], todo_source: 'icloud' };", sandbox);
+  sandbox.renderTodoSourcePicker();
+  assert.doesNotMatch(host.innerHTML, /read-only until/);
+});
+
 // links is module-level `let` state in hub.js, set for real by poll() from
 // /api/hub's response. A plain `sandbox.links = ...` from out here would only
 // add an own property to the sandbox object — it wouldn't touch the separate
@@ -3003,7 +3219,7 @@ test('setCaldavReadonly: PATCHes {readonly} and re-renders the sync-direction co
 
   const patch = calls.find((c) => c.method === 'PATCH');
   assert.deepEqual(patch.body, { readonly: false });
-  assert.match(document.getElementById('caldav-panel').innerHTML, /writing back, coming soon/);
+  assert.match(document.getElementById('caldav-panel').innerHTML, /2-way \(write back\)/);
 });
 
 test('setCaldavReadonly: a failed PATCH shows a toast', async () => {
