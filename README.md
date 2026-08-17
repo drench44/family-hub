@@ -109,7 +109,12 @@ chores, streaks and a week strip, a shared to-do list, a few calendar events,
 canned weather and per-room climate cards, and placeholder camera tiles. No
 config, no calendars, no cameras, no feeds needed. Nothing reaches the network.
 
+Needs Python 3.12 and the runtime dependencies (a virtualenv is tidiest):
+
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
 DEMO=1 DB_PATH="$(mktemp -d)/demo.db" CONFIG_PATH=config.demo.json \
   PYTHONPATH=src DISABLE_SYNC=1 \
   python3 -m uvicorn family_hub.app:app --port 8139
@@ -304,11 +309,10 @@ script + systemd units (fail-loud, atomic, keeps 14): edit the paths in the
 
 ## Tests
 
-Four layers, no external services needed:
+Four layers, no external services needed (Python 3.12):
 
 ```bash
-pip install pytest fastapi httpx uvicorn icalendar recurring-ical-events \
-  google-api-python-client google-auth google-auth-oauthlib tzdata
+pip install -r requirements.txt pytest        # same deps CI + the image use, + pytest
 PYTHONPATH=src python3 -m pytest tests -q
 ```
 
@@ -316,6 +320,11 @@ Pure chore logic (rotation/streak math) · API (FastAPI + temp SQLite, all
 upstreams mocked) · static frontend contracts (every referenced class styled,
 no external resources, no hardcoded URLs) · executable JS helpers
 (`node --test`, needs Node ≥ 20).
+
+The JS layer runs via `tests/test_js.py`, which shells out to `node` (or a
+Docker `node:20-alpine` fallback). If neither is present it **skips** — a skip
+means the JS layer went unchecked, not that it passed, so install Node or Docker
+to exercise it.
 
 ## License
 
