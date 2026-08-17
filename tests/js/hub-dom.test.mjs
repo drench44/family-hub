@@ -457,10 +457,15 @@ test('updateTabVisibility: every feature off -> hub-empty, all tabs hidden', () 
   assert.ok(document.querySelectorAll('.tab-btn').every((b) => b.hidden));
 });
 
-test('updateTabVisibility: chores/todos ABSENT from a non-empty payload fail OPEN (stay visible)', () => {
+test('updateTabVisibility: chores/todos ABSENT from a non-empty payload fail OPEN (stay visible), a configurable integration ABSENT fails CLOSED', () => {
   // A non-empty payload that omits the always-on features must not read as
   // "chores/todos are off" — only a genuinely-configurable integration
-  // (cameras here) legitimately reflows away when absent.
+  // (calendar here, absent entirely from this payload) legitimately reflows
+  // away when absent. Both contracts are exercised in the same scenario so
+  // the asymmetry between them (fail-open ids vs. on.has-membership ids) is
+  // pinned in one place: this test must fail if either `cal` were changed to
+  // fail-open (it would stop being hidden) or chores/todos were changed to
+  // plain on.has membership (they'd start being hidden).
   const { sandbox, document } = newHub();
   seedTabbar(document);
   document.body.dataset.tab = 'chores';
@@ -472,6 +477,8 @@ test('updateTabVisibility: chores/todos ABSENT from a non-empty payload fail OPE
   assert.equal(byTab('chores').hidden, false, 'chores tab stays visible (fail-open)');
   assert.equal(byTab('todos').hidden, false, 'todos tab stays visible (fail-open)');
   assert.equal(byTab('cams').hidden, false, 'cameras tab visible (explicitly on)');
+  assert.equal(byTab('cal').hidden, true,
+    'calendar tab hidden: absent + configurable => fail CLOSED (unconfigured => reflow away)');
   assert.equal(document.body.classList.contains('hub-empty'), false,
     'must not stamp hub-empty when the always-on tabs are actually showing');
 });
