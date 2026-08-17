@@ -378,6 +378,21 @@ def test_climate_weather_out_of_range_visuals_are_styled():
     assert "var(--crit)" in _css_rule(".room .rh.st-crit")
 
 
+def test_sky_scene_phase_and_condition_classes_are_styled():
+    """The weather card's sky scene classes are built dynamically in hub.js
+    (`sky ph-${phase} cn-${cond}`), so the generic referenced-class scan can't
+    see them — deleting .sky.ph-night from styles.css would pass every test
+    while the card renders an unstyled div all night. Guard each phase
+    gradient, each condition's veil, and every scene layer explicitly."""
+    for ph in ("day", "dawn", "dusk", "night"):
+        assert _css_rule(f".sky.ph-{ph}").strip(), f".sky.ph-{ph} gradient is unstyled"
+    for cn in ("cloudy", "rain", "storm", "snow", "fog"):
+        assert _css_rule(f".sky.cn-{cn}").strip(), f".sky.cn-{cn} veil is unstyled"
+    for cls in (".sky-sun", ".sky-moon", ".sky-stars", ".sky-cloud",
+                ".sky-rain", ".sky-snow", ".sky-fog", ".sky-txt"):
+        assert _css_rule(cls).strip(), f"{cls} scene layer is unstyled"
+
+
 def test_favicon_is_local_svg():
     for p in HTML_FILES:
         assert 'rel="icon" href="favicon.svg"' in p.read_text(), \

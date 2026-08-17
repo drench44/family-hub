@@ -2804,11 +2804,35 @@ test('weather card sky scene follows the local hour and the conditions text', ()
   // partly cloudy keeps the sun, adds clouds
   const partly = sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Partly cloudy' }, 12);
   assert.ok(partly.includes('sky-sun') && partly.includes('sky-cloud'));
+  // full overcast hides the sun entirely
+  const cloudy = sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Overcast' }, 12);
+  assert.match(cloudy, /cn-cloudy/);
+  assert.ok(cloudy.includes('sky-cloud') && !cloudy.includes('sky-sun'),
+    'no bright sun under full cover');
+  // an unrecognized conditions string falls back to partly (sun + clouds)
+  const unk = sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Wintry mix' }, 12);
+  assert.match(unk, /cn-partly/);
+  assert.ok(unk.includes('sky-sun'), 'the partly fallback keeps a sun by day');
+});
+
+test('room thermometer clamps at the tube edges; a real cold reading still shows a stub', () => {
+  const { sandbox } = newHub();
+  // 100°F is past the 90° tube ceiling: mercury pins to the full tube, no
+  // negative-y overflow outside the viewBox
+  assert.match(sandbox.thermoSvg(100, 'crit'),
+    /<rect class="t-merc st-crit" x="6" y="3" width="4" height="35" rx="2"\/>/);
+  // 48°F is below the 50° tube floor: a crit stub still renders — a freezing
+  // room must never draw the same empty tube as a MISSING sensor
+  assert.match(sandbox.thermoSvg(48, 'crit'),
+    /<rect class="t-merc st-crit" x="6" y="32" width="4" height="6" rx="2"\/>/);
 });
 
 test('weather card hides the H/L readout only when BOTH ends are missing', () => {
   const { sandbox } = newHub();
   assert.ok(!sandbox.weatherCardHtml({ ...WX_GOOD, high: null, low: null }, 12).includes('class="hilo'));
+  // empty STRINGS are missing too (same emptiness test wxVal uses) — a feed
+  // drift to '' must not render a dangling "H – L –" box
+  assert.ok(!sandbox.weatherCardHtml({ ...WX_GOOD, high: '', low: '' }, 12).includes('class="hilo'));
   // one missing end still renders, with an en-dash for the absent value
   const oneEnd = sandbox.weatherCardHtml({ ...WX_GOOD, high: null }, 12);
   assert.match(oneEnd, /<span class="hl-k">H<\/span> – <span class="hl-k">L<\/span> 59°/);
@@ -2825,6 +2849,12 @@ test('weather card dew point comfort word tints when muggy or worse', () => {
   const none = sandbox.weatherCardHtml({ ...WX_GOOD, dew_point: null }, 12);
   assert.match(none, /<div class="dew-big num">–<\/div>/);
   assert.ok(!none.includes('Pleasant') && !none.includes('Dry'));
+  // the comfort scale is °F: a metric feed shows the number but NO word (21°C
+  // dew is muggy — a calm "Dry" would be confidently wrong)
+  const metric = sandbox.weatherCardHtml({ ...WX_GOOD, unit: '°C', dew_point: 21 }, 12);
+  assert.match(metric, /<div class="dew-big num">21°<\/div>/);
+  assert.ok(!metric.includes('Dry') && !metric.includes('Pleasant'),
+    'no °F comfort word on a non-Fahrenheit feed');
 });
 
 test('wxTempParts renders exactly one degree, even when the unit already carries one (no °°F)', () => {
@@ -2963,6 +2993,9 @@ test('temp chart labels real clock times every 6 hours around the now anchor', (
   assert.match(svg, /class="sp-tick"[^>]*>8p</);
   // midnight and noon read 12a / 12p (hour 18 + 6 -> 12a)
   assert.match(sandbox.sparkSvg(spark, 12, 18), /class="sp-tick"[^>]*>12a</);
+  // a pre-now tick in the early morning wraps a NEGATIVE hour correctly
+  // (hour 2, tick at now-6 -> 8p yesterday, never "-4a")
+  assert.match(sandbox.sparkSvg(spark, 12, 2), /class="sp-tick"[^>]*>8p</);
 });
 
 test('temp chart drops a time tick that would collide with the low-point label', () => {
@@ -2981,6 +3014,9 @@ test('temp chart falls back to a last-point dot, all solid, when no now index is
   const { html } = renderWeatherHtml({ ...WX_GOOD, spark_now: undefined });
   assert.match(html, /<circle class="sp-dot sp-nowdot" cx="300"/, 'dot on the last point');
   assert.ok(!html.includes('sp-future'), 'no separate forecast segment when now is unknown');
+  // without a real anchor the clock labels would be confidently WRONG (the
+  // fallback anchor is the forecast endpoint, ~12h ahead) — no ticks at all
+  assert.ok(!html.includes('sp-tick'), 'no time ticks without a valid now anchor');
 });
 
 test('temp chart with an out-of-range integer now index falls back to the last point (no throw)', () => {
@@ -2988,6 +3024,7 @@ test('temp chart with an out-of-range integer now index falls back to the last p
   assert.doesNotThrow(() => { out = renderWeatherHtml({ ...WX_GOOD, spark_now: 99 }); });
   assert.match(out.html, /<circle class="sp-dot sp-nowdot" cx="300"/, 'dot on the last point');
   assert.ok(!out.html.includes('sp-future'), 'no forecast segment when now is out of range');
+  assert.ok(!out.html.includes('sp-tick'), 'no time ticks on an out-of-range anchor');
 });
 
 test('temp chart with now at index 0 renders an all-forecast curve with the dot at the start', () => {
@@ -3156,8 +3193,9 @@ test('climate card tints a COLD room red on the temp cell', () => {
 test('climate card marks a STALE room warn (regardless of temperature)', () => {
   const { html } = renderClimateHtml(CLIMATE);
   // Attic is fully comfortable (70°, 45%) but its sensor is stale -> the tile
-  // washes warn AND announces itself with a "stale" tag on the name
-  assert.match(html, /<div class="room warn">[^]*?Attic<span class="rstale">stale<\/span>/);
+  // washes warn AND announces itself with a "stale" tag on the TEMP line
+  // (never inside .rk, whose ellipsis would clip it on a long room name)
+  assert.match(html, /<div class="room warn">[^]*?70°<span class="rstale">stale<\/span><\/div><div class="rk">Attic<\/div>/);
   // exactly two warn tiles in this fixture: Garage (hot) + Attic (stale)
   assert.equal((html.match(/<div class="room warn">/g) || []).length, 2);
   // fresh rooms never show the tag

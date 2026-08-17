@@ -1441,10 +1441,15 @@ function skySceneHtml(wx, hour) {
   const condText = escapeHtml(wx.conditions != null ? String(wx.conditions) : '');
   const feelsPart = (wx.feels != null && String(wx.feels) !== '')
     ? `${condText ? ' · ' : ''}feels ${escapeHtml(String(wx.feels))}°` : '';
-  const stalePart = wx.stale ? ` · <span class="wx-stale">stale</span>` : '';
+  // the stale mark is its own pinned pill in the sky's top-left, NOT part of
+  // the conditions line — that line ellipsizes short of the H/L readout, and
+  // a long conditions string must never silently swallow the staleness signal
+  const staleTag = wx.stale ? '<span class="wx-stale">stale</span>' : '';
   // today's range, tucked in the sky's bottom-right; hidden only when the
-  // feed omits BOTH ends (one missing end shows an en-dash via wxVal)
-  const hilo = (wx.high == null && wx.low == null) ? ''
+  // feed omits BOTH ends (one missing end shows an en-dash via wxVal). Same
+  // emptiness test wxVal uses, so '' can't render a dangling "H – L –" box.
+  const miss = (v) => v == null || String(v) === '';
+  const hilo = (miss(wx.high) && miss(wx.low)) ? ''
     : `<div class="hilo num"><span class="hl-k">H</span> ${wxVal(wx.high, '°')}`
       + ` <span class="hl-k">L</span> ${wxVal(wx.low, '°')}</div>`;
   // celestial body only when the sky is clear enough to see it
@@ -1458,11 +1463,11 @@ function skySceneHtml(wx, hour) {
     : cond === 'snow' ? '<span class="sky-snow"></span>'
       : cond === 'fog' ? '<span class="sky-fog"></span>' : '';
   return `<div class="sky ph-${phase} cn-${cond}">`
-    + stars + celestial + clouds + precip
+    + stars + celestial + clouds + precip + staleTag
     + `<div class="sky-txt">`
     + `<div class="tline"><span class="temp num">${tp.whole}</span>`
     + `<span class="deg num">${tp.deg}</span></div>`
-    + `<div class="cond">${condText}${feelsPart}${stalePart}</div>`
+    + `<div class="cond">${condText}${feelsPart}</div>`
     + hilo
     + `</div></div>`;
 }
@@ -1513,8 +1518,10 @@ function wxGauge(k, value, suffix, band, label, frac) {
     + `</div>`;
 }
 
-/* Dew-point comfort words (the standard muggy scale). Muggy and up tint like
-   any other out-of-range reading; a missing/non-numeric reading -> null. */
+/* Dew-point comfort words (the standard muggy scale — FAHRENHEIT thresholds).
+   The caller gates on the feed's unit: a metric feed must show no word at all
+   rather than a calmly wrong one (21°C dew is muggy, not "Dry"). Muggy and up
+   tint like any other out-of-range reading; missing/non-numeric -> null. */
 function dewComfort(dp) {
   const n = _reading(dp);
   if (n === null) return null;
@@ -1559,7 +1566,8 @@ function sparkSvg(spark, nowIndex, hour = new Date().getHours()) {
     y: rnd(PT + (1 - (v - min) / range) * usable),
   }));
   const path = (seg) => seg.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' ');
-  const ni = (Number.isInteger(nowIndex) && nowIndex >= 0 && nowIndex < n) ? nowIndex : n - 1;
+  const hasNow = Number.isInteger(nowIndex) && nowIndex >= 0 && nowIndex < n;
+  const ni = hasNow ? nowIndex : n - 1;
   const now = pts[ni];
   const area = `${path(pts)} L${pts[n - 1].x},${plotBottom} L${pts[0].x},${plotBottom} Z`;
   const past = path(pts.slice(0, ni + 1));      // observed
@@ -1576,18 +1584,23 @@ function sparkSvg(spark, nowIndex, hour = new Date().getHours()) {
       ? `<circle class="sp-dot" cx="${loPt.x}" cy="${loPt.y}" r="2"/>`
         + `<text class="sp-hilo" x="${cx(loPt.x)}" y="${Math.min(plotBottom + 8, loPt.y + 12)}" text-anchor="middle">${Math.round(min)}°</text>`
       : '');
-  // time ticks every 6 hours, anchored at "now" (each point is one hour).
-  // A tick that lands under the low point's value label would collide with
-  // it (the low label hangs into the bottom band) — skip that tick; "now"
-  // always wins and renders.
+  // Time ticks every 6 hours, anchored at "now" (each point is one hour).
+  // ONLY when the feed gave a valid now anchor: without it the fallback
+  // anchor is just the last point (~12h of forecast ahead of the real now),
+  // and stamping clock labels on that would be confidently WRONG — the old
+  // unlabeled chart is the honest render. A tick that lands under the low
+  // point's value label would collide with it (the low label hangs into the
+  // bottom band) — skip that tick; "now" always wins and renders.
   let ticks = '';
-  for (let i = 0; i < n; i++) {
-    if ((i - ni) % 6 !== 0) continue;
-    if (i !== ni && Math.abs(pts[i].x - loPt.x) < 18 && loPt.y + 12 > plotBottom - 2) continue;
-    const isNow = i === ni;
-    const lbl = isNow ? 'now' : hourLbl(hour + (i - ni));
-    const tickCls = isNow ? ' sp-now' : '';
-    ticks += `<text class="sp-tick${tickCls}" x="${cx(pts[i].x)}" y="${H - 2}" text-anchor="middle">${lbl}</text>`;
+  if (hasNow) {
+    for (let i = 0; i < n; i++) {
+      if ((i - ni) % 6 !== 0) continue;
+      if (i !== ni && Math.abs(pts[i].x - loPt.x) < 18 && loPt.y + 12 > plotBottom - 2) continue;
+      const isNow = i === ni;
+      const lbl = isNow ? 'now' : hourLbl(hour + (i - ni));
+      const tickCls = isNow ? ' sp-now' : '';
+      ticks += `<text class="sp-tick${tickCls}" x="${cx(pts[i].x)}" y="${H - 2}" text-anchor="middle">${lbl}</text>`;
+    }
   }
   return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true">`
     + `<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">`
@@ -1612,7 +1625,9 @@ function weatherCardHtml(wx, hour = new Date().getHours()) {
   // labeled extremes; dew point reads as a comfort word (dewComfort).
   const uvB = uvBand(wx.uv) || uvBandText(wx.uv_desc);
   const aqiB = aqiBand(wx.aqi) || aqiBandText(wx.aqi_cat);
-  const dew = dewComfort(wx.dew_point);
+  // dewComfort's thresholds are °F; only label when the feed's unit says F
+  const isF = /^f$/i.test(String(wx.unit == null ? '' : wx.unit).replace(/^\s*°/, '').trim());
+  const dew = isF ? dewComfort(wx.dew_point) : null;
   const dewLbl = dew
     ? `<span class="wx-band${dew.band ? ` st-${dew.band}` : ''}">${dew.word}</span>` : '';
   const dewN = _reading(wx.dew_point);   // dash any non-numeric reading, never "NaN°"
@@ -1718,8 +1733,9 @@ function roomBand(room) {
 function thermoSvg(tempF, band) {
   const n = _reading(tempF);
   const frac = n === null ? 0 : Math.max(0, Math.min(1, (n - 50) / 40));
-  // band -> mercury class: comfortable ('ok') renders good-green, like the
-  // old status dot did (roomBand ranks ok and good together)
+  // band -> mercury class: the mercury follows the TEMP band alone (an
+  // in-range 'ok' draws calm green); humidity/staleness show on the tile
+  // wash + their own cells, not here
   const merc = band === 'warn' || band === 'crit' ? ` st-${band}` : (n === null ? ' t-none' : ' st-good');
   const tubeTop = 3, tubeH = 32;
   // a real reading always shows at least a stub of mercury
@@ -1758,12 +1774,15 @@ function roomTileHtml(room) {
   const cell = (b) => ((b === 'warn' || b === 'crit') ? ` st-${b}` : '');
   const band = roomBand(room);
   const rowCls = (band === 'warn' || band === 'crit') ? ` ${band}` : '';
+  // the stale tag rides the temp line, NOT the name line — .rk ellipsizes a
+  // long room name, which would silently clip the tag out of existence and
+  // leave only an ambiguous amber wash
   const stale = room.stale ? '<span class="rstale">stale</span>' : '';
   return `<div class="room${rowCls}">`
     + thermoSvg(room.temp_f, tb)
     + `<div class="rmain">`
-    + `<div class="rv num${cell(tb)}">${tempCell}</div>`
-    + `<div class="rk">${name}${stale}</div>`
+    + `<div class="rv num${cell(tb)}">${tempCell}${stale}</div>`
+    + `<div class="rk">${name}</div>`
     + `<div class="rh num${cell(hb)}">${dropSvg()}${humCell}</div>`
     + `</div></div>`;
 }
