@@ -1003,9 +1003,22 @@ function closeOverlay() {
   scrollPageToTop();   // coming home always lands at the top of the page
 }
 
+/* Close EVERY full-screen surface in one call: #ev-modal / #chore-modal /
+   #confirm-modal are fixed siblings of #overlay, not children of it, so
+   closeOverlay() alone leaves any of them stranded open over the home wall.
+   Shared by the #overlay-home tap and the idle auto-return (armIdle) below so
+   the two "go home" paths can't drift apart again — a stranded modal also
+   wedges wallBusy() (~1446) into deferring the deploy auto-reload forever. */
+function closeAllOverlays() {
+  closeDeleteConfirm();
+  closeChoreEditor();
+  closeEventDetail();
+  closeOverlay();
+}
+
 function armIdle() {
   if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(closeOverlay, idleReturnMs(openView));
+  idleTimer = setTimeout(closeAllOverlays, idleReturnMs(openView));
 }
 
 /* --------------------------------------------------------------- polling */
@@ -1876,7 +1889,7 @@ document.addEventListener('click', (e) => {
   if (head) { openOverlay('chores'); return; }
   const day = e.target.closest('.cal-day');
   if (day && !openView) { openOverlay('calendar'); return; }
-  if (e.target.closest('#overlay-home')) { closeDeleteConfirm(); closeChoreEditor(); closeEventDetail(); closeOverlay(); }
+  if (e.target.closest('#overlay-home')) { closeAllOverlays(); }
 });
 ['pointerdown', 'touchstart', 'keydown'].forEach((evt) =>
   document.addEventListener(evt, () => { noteInteraction(); if (openView) armIdle(); }, { passive: true }));

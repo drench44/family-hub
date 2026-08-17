@@ -1839,6 +1839,35 @@ test('opening an overlay locks page scroll (body.overlay-open); closing unlocks 
   assert.equal(document.scrollingElement.scrollTop, 0, 'closeOverlay resets the scroller');
 });
 
+test('idle auto-return closes every modal, not just the overlay (a stranded editor must not block the deploy reload)', () => {
+  const { document, sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+
+  sandbox.openOverlay('chores');   // arms the idle timer for the 'chores' view
+
+  // Simulate an editor / delete-confirm / event-detail modal left open over
+  // the overlay — each is a fixed sibling of #overlay, reachable only while
+  // an overlay is open (openChoreEditor/openDeleteConfirm/openEventDetail all
+  // gate their own armIdle() on `openView`).
+  document.getElementById('chore-modal').classList.remove('hidden');
+  document.getElementById('confirm-modal').classList.remove('hidden');
+  document.getElementById('ev-modal').classList.remove('hidden');
+
+  const idleMs = sandbox.idleReturnMs('chores');
+  const idle = timers.find((t) => t.ms === idleMs && !t.done);
+  assert.ok(idle, 'idle timer armed while the overlay is open');
+  idle.done = true;
+  idle.fn();   // idle fires
+
+  assert.ok(!document.getElementById('overlay').classList.contains('open'), 'overlay closes');
+  assert.ok(document.getElementById('chore-modal').classList.contains('hidden'), 'chore editor closes too');
+  assert.ok(document.getElementById('confirm-modal').classList.contains('hidden'), 'delete confirm closes too');
+  assert.ok(document.getElementById('ev-modal').classList.contains('hidden'), 'event detail closes too');
+  assert.equal(vm.runInContext('openView', sandbox), null, 'openView cleared');
+  assert.ok(!sandbox.wallBusy(),
+    'wallBusy() no longer sees a stranded modal, so the deploy auto-reload can proceed');
+});
+
 test('openOverlay("cameras-page") with an empty camera_page shows a note, not a black grid', () => {
   const { document, sandbox } = newHub();
   captureTimers(sandbox);
