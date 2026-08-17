@@ -247,6 +247,25 @@ def test_weather_spark_handles_tempseries_shapes():
         assert tiles._weather_spark(wx) == {"temps": [], "now": None}
 
 
+def test_weather_spark_warns_on_good_temps_with_bad_now_index(caplog):
+    # A valid series whose nowIndex is missing/malformed renders UNANCHORED on
+    # the wall (no time ticks, no "now" marker) — legitimate fail-soft, but a
+    # feed-shape drift (like the hourlyTemps guess before it) must be loud in
+    # the logs, not discovered by squinting at a chart with no clock labels.
+    import logging
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        out = tiles._weather_spark(
+            {"tempSeries": {"temps": [70.0, 71.0, 72.0], "nowIndex": "2"}})
+    assert out == {"temps": [70.0, 71.0, 72.0], "now": None}
+    assert any("nowIndex" in r.message for r in caplog.records)
+    # a fully valid anchor stays quiet
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        tiles._weather_spark(
+            {"tempSeries": {"temps": [70.0, 71.0, 72.0], "nowIndex": 1}})
+    assert not caplog.records
+
+
 def test_weather_warns_when_temp_present_but_no_chart_series(caplog):
     # The original bug: a valid temp with no usable series silently blanked the
     # chart and nobody noticed. A recurrence must now show up in the logs.
