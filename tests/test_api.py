@@ -1237,6 +1237,42 @@ def test_db_connection_is_per_thread(app_mod):
     assert app_mod._db() is main_conn
 
 
+def test_open_sync_conn_retries_on_transient_startup_failure(app_mod, monkeypatch):
+    """Regression for issue #32: a transient ensure_schema failure at sync
+    startup must not kill the thread; _open_sync_conn retries until it succeeds
+    instead of freezing calendar sync behind a still-healthy badge."""
+    real_ensure = app_mod.fdb.ensure_schema
+    calls = {"n": 0}
+
+    def flaky(conn):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        return real_ensure(conn)
+
+    monkeypatch.setattr(app_mod.fdb, "ensure_schema", flaky)
+    monkeypatch.setattr(app_mod.time, "sleep", lambda *_: None)   # no real backoff wait
+    conn = app_mod._open_sync_conn()
+    assert conn.execute("SELECT 1").fetchone()[0] == 1
+    assert calls["n"] == 2   # failed once, retried, succeeded
+
+
+def test_demo_disables_background_sync(tmp_path, monkeypatch):
+    """Regression for issue #38: DEMO mode must not start the sync thread, which
+    would overwrite the seeded calendar_status with 'not configured'."""
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    monkeypatch.setenv("DEMO", "1")
+    monkeypatch.delenv("DISABLE_SYNC", raising=False)
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    assert appmod._sync_enabled() is False        # DEMO -> no sync thread
+    monkeypatch.delenv("DEMO", raising=False)
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    importlib.reload(appmod)
+    assert appmod._sync_enabled() is False         # DISABLE_SYNC -> no sync thread
+
+
 def test_interrupted_backfill_rolls_back_whole_then_retries(app_mod, monkeypatch):
     """An interrupted backfill must commit NOTHING (no partial day-log, flag
     unset) so it re-runs from scratch on the next boot — a half-written history

@@ -915,16 +915,57 @@ def _sync_tick(client, conn, cfg):
         return conn
 
 
+def _open_sync_conn():
+    """Open the sync thread's own DB connection, retrying with backoff. The old
+    code ran connect/ensure_schema outside any try, so a transient startup
+    failure (e.g. ensure_schema racing a request thread's migration ->
+    'database is locked') killed the daemon thread permanently and froze calendar
+    sync forever behind a still-healthy 'last synced' badge (issue #32). Retry
+    instead, and best-effort flag the failure in calendar_status so the wall
+    shows staleness rather than a false-healthy state."""
+    backoff = 5
+    while True:
+        conn = None
+        try:
+            conn = fdb.connect(DB_PATH)
+            fdb.ensure_schema(conn)
+            return conn
+        except Exception as e:
+            log.exception("sync startup failed; retrying in %ss", backoff)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            try:   # surface the failure; skip silently if the DB is unwritable
+                sc = fdb.connect(DB_PATH)
+                prior = fdb.kv_get(sc, "calendar_status") or {}
+                fdb.kv_set(sc, "calendar_status",
+                           {"ok": False, "error": f"sync startup: {e}",
+                            "last_sync": prior.get("last_sync")})
+                sc.close()
+            except Exception:
+                pass
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+
+
 def sync_loop():
-    conn = fdb.connect(DB_PATH)
-    fdb.ensure_schema(conn)
+    conn = _open_sync_conn()
     client = GoogleCalendarClient(TOKEN_PATH)
     while True:
         conn = _sync_tick(client, conn, cfg)
         time.sleep(300)
 
 
-if os.environ.get("DISABLE_SYNC") != "1":
+def _sync_enabled() -> bool:
+    """The background sync thread runs unless disabled for tests (DISABLE_SYNC)
+    or in DEMO mode. DEMO's canned data must not be overwritten by a real sync
+    that would flag the seeded calendar as 'not configured' (issue #38)."""
+    return os.environ.get("DISABLE_SYNC") != "1" and not DEMO
+
+
+if _sync_enabled():
     threading.Thread(target=sync_loop, daemon=True).start()
 
 # HTML must always revalidate (no-cache still allows ETag 304s): the ?v=N
