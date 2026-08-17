@@ -270,13 +270,19 @@ class FakeEl {
 // and each test gets its own isolated document tree + registry.
 function newHub() {
   const registry = {};
+  // Captured lifecycle listeners so a test can fire pageshow/visibilitychange/
+  // resize/orientationchange and observe the effect (the --app-h gap fix). A
+  // plain object of type -> [fn]; fire() below dispatches to both maps.
+  const winListeners = {};
+  const docListeners = {};
   // document.querySelector(All) searches every registered element's parsed
   // innerHTML — enough for hub.js's document-wide lookups (probeCamera's
   // '.tile-camera[data-cam="..."]', renderPeople's '.person-card[...]').
   const document = {
     getElementById: (id) => registry[id] || null,
     createElement: (tag) => new FakeEl(registry, tag),
-    addEventListener: () => {},
+    addEventListener: (type, fn) => { (docListeners[type] || (docListeners[type] = [])).push(fn); },
+    visibilityState: 'visible',
     querySelector: (sel) => {
       for (const el of Object.values(registry)) {
         const hit = queryFirst(el._queryChildren || [], sel);
@@ -299,7 +305,21 @@ function newHub() {
   // Scroll targets scrollPageToTop() zeroes on iOS (besides window.scrollTo);
   // seeded non-zero so a test can prove each one gets reset to the top.
   document.scrollingElement = { scrollTop: 0 };
-  document.documentElement = { scrollTop: 0 };
+  // documentElement carries a style recorder so the --app-h gap fix
+  // (documentElement.style.setProperty('--app-h', ...)) is observable, and a
+  // tiny attribute bag so reflectThemeControls() can read the live data-theme/
+  // data-accent/data-cols/data-layout the way it does off the real <html>.
+  document.documentElement = {
+    scrollTop: 0,
+    _attrs: {},
+    getAttribute(k) { return k in this._attrs ? this._attrs[k] : null; },
+    setAttribute(k, v) { this._attrs[k] = String(v); },
+    style: {
+      _props: {},
+      setProperty(k, v) { this._props[k] = String(v); },
+      getPropertyValue(k) { return this._props[k]; },
+    },
+  };
   // The phone scroll container. scrollPageToTop() resets document.querySelector
   // ('.wrap'); expose a stand-in so the reset is observable in tests.
   const wrapEl = new FakeEl(registry, 'div');
@@ -312,7 +332,11 @@ function newHub() {
   const scrollCalls = [];
   const sandbox = {
     document,
-    window: { addEventListener: () => {}, innerWidth: 1280, innerHeight: 800 },
+    window: {
+      addEventListener: (type, fn) => { (winListeners[type] || (winListeners[type] = [])).push(fn); },
+      innerWidth: 1280,
+      innerHeight: 800,
+    },
     innerWidth: 1280,
     innerHeight: 800,
     scrollTo: (x, y) => { scrollCalls.push([x, y]); },
@@ -328,7 +352,13 @@ function newHub() {
   vm.createContext(sandbox);
   vm.runInContext(commonSrc, sandbox);
   vm.runInContext(hubSrc, sandbox);
-  return { document, sandbox };
+  // Dispatch a captured lifecycle event to both window- and document-level
+  // listeners (real code registers pageshow/resize/orientationchange on window,
+  // visibilitychange on document).
+  const fire = (type, ev = {}) => {
+    [...(winListeners[type] || []), ...(docListeners[type] || [])].forEach((fn) => fn(ev));
+  };
+  return { document, sandbox, fire, winListeners, docListeners };
 }
 
 test('showToast builds the .hub-toast element with textContent (no innerHTML/XSS)', () => {
@@ -375,6 +405,126 @@ test('setTab scrolls the page back to the top on every tab tap', () => {
     're-tapping the active tab must still scroll to the top');
   assert.equal(document.scrollingElement.scrollTop, 0,
     're-tap also resets the scrolling element');
+});
+
+// ---- --app-h: the phone-shell height var (tab-bar gap fix) ----
+// The phone shell body is height: var(--app-h, 100dvh). On iOS a stale 100dvh
+// after a bfcache/app-switch restore left the in-flow tab bar floating above a
+// gap until a full reload. hub.js measures window.innerHeight into --app-h and
+// re-measures it on the lifecycle events iOS doesn't reliably relayout for.
+
+const appH = (document) => document.documentElement.style.getPropertyValue('--app-h');
+
+test('--app-h is set from window.innerHeight at load', () => {
+  const { document } = newHub();   // sandbox.window.innerHeight = 800
+  assert.equal(appH(document), '800px',
+    'the phone shell height var must be measured from innerHeight up front');
+});
+
+test('a pageshow (bfcache restore) re-measures --app-h', () => {
+  // The reported bug: returning to an already-open iOS tab restores a stale
+  // height and the tab bar floats above a gap until reload. pageshow must fix it.
+  const { document, sandbox, fire } = newHub();
+  sandbox.window.innerHeight = 640;   // Safari restored a different viewport
+  fire('pageshow', { persisted: true });
+  assert.equal(appH(document), '640px', 'pageshow must resync the shell height');
+});
+
+test('a visibilitychange back to visible re-measures --app-h', () => {
+  const { document, sandbox, fire } = newHub();
+  sandbox.window.innerHeight = 712;
+  document.visibilityState = 'visible';
+  fire('visibilitychange');
+  assert.equal(appH(document), '712px');
+});
+
+test('an orientationchange re-measures --app-h', () => {
+  const { document, sandbox, fire } = newHub();
+  sandbox.window.innerHeight = 500;   // rotated to landscape
+  fire('orientationchange');
+  assert.equal(appH(document), '500px');
+});
+
+test('a resize re-measures --app-h', () => {
+  const { document, sandbox, fire } = newHub();
+  sandbox.window.innerHeight = 900;
+  fire('resize');
+  assert.equal(appH(document), '900px');
+});
+
+test('a zero innerHeight is ignored, not stamped (would black-screen the shell)', () => {
+  // iOS Safari can transiently report innerHeight:0 on exactly these lifecycle
+  // events. --app-h drives the whole shell height; a literal 0px collapses it to
+  // an empty screen (and the 100dvh fallback does NOT kick in — 0px is "valid").
+  const { document, sandbox, fire } = newHub();
+  assert.equal(appH(document), '800px');   // measured at load
+  sandbox.window.innerHeight = 0;
+  fire('pageshow', { persisted: true });
+  assert.equal(appH(document), '800px', 'a 0px reading must not overwrite the good height');
+});
+
+test('a visibilitychange to HIDDEN does not re-measure --app-h', () => {
+  // Only a return to visible should re-measure; a hidden tab can report a
+  // collapsed viewport, so re-measuring then would stamp a bad height.
+  const { document, sandbox, fire } = newHub();
+  assert.equal(appH(document), '800px');
+  sandbox.window.innerHeight = 640;
+  document.visibilityState = 'hidden';
+  fire('visibilitychange');
+  assert.equal(appH(document), '800px', 'a hidden tab must be left at its prior height');
+});
+
+// ---- Layout control reflection in the display popover ----
+// The popover carries an Auto/Desktop segmented control (data-layout-set).
+// reflectThemeControls() must mark exactly the button matching the live
+// <html data-layout> as .on, the same way it does Theme/Accent/Columns.
+// Buttons are wrapped in .theme-ctl, matching the real markup shape both
+// surfaces use — reflectThemeControls scopes its query to that container.
+
+function seedThemePopWithLayout(document) {
+  const pop = document.getElementById('theme-pop') || (() => {
+    // theme-pop isn't in SEEDED_IDS; register a bare host to attach markup to
+    const el = document.createElement('div');
+    el._id = 'theme-pop';
+    return el;
+  })();
+  pop.innerHTML =
+    '<div class="theme-ctl">'
+    + '<button type="button" data-layout-set="auto">Auto</button>'
+    + '<button type="button" data-layout-set="desktop">Desktop</button>'
+    + '</div>';
+  return pop;
+}
+
+test('reflectThemeControls marks the active layout button .on (desktop)', () => {
+  const { document, sandbox } = newHub();
+  const pop = seedThemePopWithLayout(document);
+  // register so getElementById('theme-pop') finds it inside reflectThemeControls
+  document.body.appendChild(pop);
+  document.documentElement.setAttribute('data-layout', 'desktop');
+
+  sandbox.reflectThemeControls();
+
+  const btns = pop.querySelectorAll('[data-layout-set]');
+  const on = btns.filter((b) => b.classList.contains('on')).map((b) => b.dataset.layoutSet);
+  assert.deepEqual(on, ['desktop'], 'only the desktop layout button is marked on');
+});
+
+test('reflectThemeControls clears the old .on when the layout choice changes', () => {
+  // Genuinely exercise the toggle-OFF branch: pre-mark Desktop as active, then
+  // reflect with data-layout=auto and assert Desktop lost .on and Auto gained it.
+  const { document, sandbox } = newHub();
+  const pop = seedThemePopWithLayout(document);
+  document.body.appendChild(pop);
+  pop.querySelectorAll('[data-layout-set]')
+    .find((b) => b.dataset.layoutSet === 'desktop').classList.add('on');
+  document.documentElement.setAttribute('data-layout', 'auto');
+
+  sandbox.reflectThemeControls();
+
+  const btns = pop.querySelectorAll('[data-layout-set]');
+  const on = btns.filter((b) => b.classList.contains('on')).map((b) => b.dataset.layoutSet);
+  assert.deepEqual(on, ['auto'], 'the desktop button was cleared and auto marked on');
 });
 
 test('toggleChore surfaces the "couldn’t save" toast when the write fails', async () => {
@@ -782,6 +932,10 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
     registry[id] = el;
   });
   document.body = new FakeEl(registry, 'body');
+  // hub.js's load-time syncAppHeight() sets --app-h on documentElement.style;
+  // give it a documentElement so the module loads (these tests don't assert on
+  // the height var — newHub() covers that).
+  document.documentElement = { scrollTop: 0, style: { setProperty() {} } };
   // openOverlay('chores') writes #chores-full via innerHTML; our fake parser
   // doesn't register parsed nodes by id, so pre-register a real host FakeEl.
   const choresFull = new FakeEl(registry);
@@ -1900,6 +2054,9 @@ function mountReminders({ surface = 'full', writable = true, lists = [],
   };
   SEEDED_IDS.forEach((id) => { const el = new FakeEl(registry); el._id = id; registry[id] = el; });
   document.body = new FakeEl(registry, 'body');
+  // hub.js's load-time syncAppHeight() sets --app-h on documentElement.style;
+  // give it a documentElement so the module loads.
+  document.documentElement = { scrollTop: 0, style: { setProperty() {} } };
   // The full view paints into #todos-page (not in SEEDED_IDS); the add flow reads
   // #todo-add-input by id (parsed innerHTML nodes aren't id-registered, so seed a
   // real one). Only the full surface needs these.
