@@ -2278,22 +2278,30 @@ function renderIntegrations(data) {
     document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
   const host = document.getElementById('integrations-ctl');
   if (!host) return;
-  host.innerHTML = list.length
-    ? list.map((it) => {
-      // Auth-failure / error is a first-class state: a revoked or expired login
-      // shows "reconnect" so the family knows to fix it (the cached view stays).
-      const warn = it.status === 'needs_auth' ? 'reconnect'
-        : (it.status === 'error' ? 'error' : '');
-      return `<button class="integ-row" type="button" role="switch"`
-        + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
-        + ` data-integ-toggle="${escapeHtml(it.id)}">`
-        + `<span class="integ-name">${escapeHtml(it.name)}`
-        + (warn ? `<span class="integ-warn">${warn}</span>` : '')
-        + `</span>`
-        + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
-        + `</button>`;
-    }).join('')
-    : `<div class="integ-empty">none configured</div>`;
+  const row = (it) => {
+    // Auth-failure / error is a first-class state: a revoked or expired login
+    // shows "reconnect" so the family knows to fix it (the cached view stays).
+    const warn = it.status === 'needs_auth' ? 'reconnect'
+      : (it.status === 'error' ? 'error' : '');
+    return `<button class="integ-row" type="button" role="switch"`
+      + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
+      + ` data-integ-toggle="${escapeHtml(it.id)}">`
+      + `<span class="integ-name">${escapeHtml(it.name)}`
+      + (warn ? `<span class="integ-warn">${warn}</span>` : '')
+      + `</span>`
+      + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+      + `</button>`;
+  };
+  // Chores/To-Dos (group: 'feature') get their own header ahead of the
+  // external services, so the switch list reads as "things this hub does"
+  // vs "things it talks to" instead of one flat undifferentiated list.
+  const group = (title, items) => items.length
+    ? `<div class="integ-group-title">${title}</div>` + items.map(row).join('')
+    : '';
+  const features = list.filter((it) => it.group === 'feature');
+  const services = list.filter((it) => it.group !== 'feature');
+  const html = group('Features', features) + group('Integrations', services);
+  host.innerHTML = html || `<div class="integ-empty">none configured</div>`;
 }
 
 async function toggleIntegration(id) {
@@ -2355,7 +2363,7 @@ function renderSettingsFull() {
     + `</div></div>`
     + `</div></div>`
     + `<div class="card pad settings-card">`
-    + `<div class="shead"><span class="tick"></span><h2>Integrations</h2></div>`
+    + `<div class="shead"><span class="tick"></span><h2>Features &amp; integrations</h2></div>`
     + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`

@@ -1267,6 +1267,11 @@ body.overlay-open { overflow: hidden; }
   background: none; border: 0; cursor: pointer; color: inherit; text-align: left;
 }
 .integ-row + .integ-row { border-top: 1px solid var(--edge-soft); }
+.integ-group-title {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--faint);
+  margin: 14px 2px 6px; }
+.integ-group-title:first-child { margin-top: 2px; }
 .integ-name { font-size: 14px; color: var(--ink); }
 .integ-warn {
   margin-left: 8px; font-family: var(--mono); font-size: 10px;

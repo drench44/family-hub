@@ -681,3 +681,10 @@ def test_theme_js_is_first_script(html_path):
                re.findall(r'<script src="([^"]+)"', html_path.read_text())]
     assert scripts and scripts[0] == "theme.js", \
         f"{html_path.name}: theme.js must be the first script (got {scripts[:1]})"
+
+
+def test_settings_has_a_features_group():
+    assert ".integ-group-title" in CSS, "features/integrations sub-headers unstyled"
+    hub = (STATIC / "hub.js").read_text()
+    assert "'Features'" in hub or '"Features"' in hub, \
+        "renderIntegrations must render a Features group"
