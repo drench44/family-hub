@@ -407,6 +407,52 @@ test('setTab scrolls the page back to the top on every tab tap', () => {
     're-tap also resets the scrolling element');
 });
 
+// ---- updateTabVisibility: hide/fall-back/all-off empty state (Task 4) ----
+
+// Injects the real tab bar markup into the already-registered #tabbar element
+// (document.querySelectorAll('.tab-btn') below finds these through the
+// registry-wide search over each element's parsed _queryChildren — the same
+// pattern seedThemePopWithLayout uses for '[data-layout-set]').
+function seedTabbar(document) {
+  const bar = document.getElementById('tabbar');
+  bar.innerHTML =
+    '<button class="tab-btn active" data-tab="chores">Chores</button>' +
+    '<button class="tab-btn" data-tab="todos">To-Dos</button>' +
+    '<button class="tab-btn" data-tab="cal">Calendar</button>' +
+    '<button class="tab-btn" data-tab="cams">Cameras</button>' +
+    '<button class="tab-btn" data-tab="weather">Weather</button>';
+  return bar;
+}
+
+test('updateTabVisibility: an off feature hides its tab', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  document.body.dataset.tab = 'todos';
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'weather', enabled: true, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('todos').hidden, true, 'todos tab hidden when off');
+  assert.equal(byTab('chores').hidden, false, 'chores tab stays');
+  // active tab (todos) was hidden -> fell back to the first visible tab
+  assert.equal(document.body.dataset.tab, 'chores');
+  assert.equal(document.body.classList.contains('hub-empty'), false);
+});
+
+test('updateTabVisibility: every feature off -> hub-empty, all tabs hidden', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+  ] });
+  assert.equal(document.body.classList.contains('hub-empty'), true);
+  assert.ok(document.querySelectorAll('.tab-btn').every((b) => b.hidden));
+});
+
 // ---- --app-h: the phone-shell height var (tab-bar gap fix) ----
 // The phone shell body is height: var(--app-h, 100dvh). On iOS a stale 100dvh
 // after a bfcache/app-switch restore left the in-flow tab bar floating above a

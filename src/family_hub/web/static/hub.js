@@ -1089,6 +1089,49 @@ function scrollPageToTop() {
   if (wrap) wrap.scrollTop = 0;
 }
 
+// Which integration(s) back each phone tab. A tab shows when ANY backing
+// feature is enabled, so the calendar tab survives on any one calendar source
+// and the weather tab survives on either weather or climate. Chores/To-Dos are
+// always-available features, so their tabs track their single toggle.
+const TAB_FEATURES = {
+  chores: ['chores'],
+  todos: ['todos'],
+  cal: ['google_calendar', 'ics_calendar', 'icloud_caldav'],
+  cams: ['cameras'],
+  weather: ['weather', 'climate'],
+};
+
+// True unless the integration is present AND disabled. Fail-open: an id absent
+// from the payload (older server, transient gap) is treated as on, never
+// blanking a surface on a hiccup.
+function featureEnabled(id) {
+  const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  const e = list.find((x) => x.id === id);
+  return e ? !!e.enabled : true;
+}
+
+// Reconcile the phone tab bar with the enabled feature set: hide tabs with no
+// enabled backing feature, move off a hidden active tab, and flag the all-off
+// state so the empty panel can show. No-ops (fail-open) on an empty list.
+function updateTabVisibility(list) {
+  if (!list || !list.length) return;
+  const on = new Set(list.filter((i) => i.enabled).map((i) => i.id));
+  const visible = (tab) => (TAB_FEATURES[tab] || []).some((f) => on.has(f));
+  const btns = [...document.querySelectorAll('.tab-btn')];
+  let any = false;
+  btns.forEach((b) => {
+    const vis = visible(b.dataset.tab);
+    b.hidden = !vis;
+    if (vis) any = true;
+  });
+  document.body.classList.toggle('hub-empty', !any);
+  const active = document.body.dataset.tab;
+  if (any && (!active || !visible(active))) {
+    const first = btns.find((b) => !b.hidden);
+    if (first) setTab(first.dataset.tab);
+  }
+}
+
 function setTab(tab) {
   document.body.dataset.tab = tab;
   document.querySelectorAll('.tab-btn').forEach((b) =>
@@ -1226,11 +1269,13 @@ function openOverlay(view) {
     renderCalFull();                       // instant paint from cache
     fetchCalWindow().then(renderCalFull);  // then refresh from the API
   } else if (view === 'chores') {
+    if (!featureEnabled('chores')) return;
     content.innerHTML = `<div class="overlay-panel"><div id="chores-full"></div></div>`;
     choreState.day = data_date;
     choreState.editing = false;   // always open in check-off mode
     renderChoresFull(hubData ? hubData.people : null);  // instant paint, today
   } else if (view === 'todos') {
+    if (!featureEnabled('todos')) return;
     content.innerHTML = `<div class="overlay-panel"><div id="todos-full"></div></div>`;
     todoState.source = (hubData && hubData.todo_source) || 'local';
     const cache = todoState.source === 'icloud' ? todoState.reminders : todoState.data;
@@ -2276,6 +2321,7 @@ function renderIntegrations(data) {
   lastIntegrations = list;
   list.forEach((it) =>
     document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
+  updateTabVisibility(list);
   const host = document.getElementById('integrations-ctl');
   if (!host) return;
   const row = (it) => {
@@ -2587,7 +2633,7 @@ document.addEventListener('click', (e) => {
   // The popover's "All settings" row: close the quick popover (it sits at a
   // higher z-index than the full-screen overlay and would otherwise float
   // over it) and open the real thing.
-  if (e.target.closest('#theme-pop [data-open-settings]')) {
+  if (e.target.closest('[data-open-settings]')) {
     closeThemePop();
     openOverlay('settings');
     return;

@@ -702,6 +702,29 @@ body {
 }
 .empty-hub .empty-sub { color: var(--faint); font-size: 12px; }
 
+/* All-off empty state (body.hub-empty, stamped by updateTabVisibility when no
+   tab has an enabled backing feature): the wall/phone would otherwise render
+   completely blank, so replace the whole grid + tab bar with one message and
+   a way back into Settings. No .btn class exists elsewhere in this sheet, so
+   its tap-target styling is scoped here rather than reusing an unrelated
+   context-specific button (padmin-btn / cal-nav-btn). */
+.hub-empty-state { display: none; }
+body.hub-empty .hub-empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding: 80px 20px; text-align: center;
+  color: var(--dim); font-family: var(--mono); font-size: 15px;
+}
+body.hub-empty .hub-grid,
+body.hub-empty .tabbar { display: none; }
+.hub-empty-state .btn {
+  min-height: 44px; padding: 0 20px;
+  font-family: var(--mono); font-size: 13px; font-weight: 600;
+  letter-spacing: 0.04em; color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--edge); border-radius: 10px; cursor: pointer;
+}
+.hub-empty-state .btn:hover { border-color: var(--accent); }
+.hub-empty-state .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ============================ tiles ========================== */
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .tiles .shead { grid-column: 1 / -1; }
