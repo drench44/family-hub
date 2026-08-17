@@ -290,9 +290,10 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     # CalDAV events gate on availability AND the toggle (same as reminders), so
     # pulling the credentials hides stale cached events instead of showing them.
     cal_caldav_on = _integration_on(c, "icloud_caldav")
-    # CalDAV events carry a 'caldav:<slug>' calendar_id; their name/color come
-    # from the discovered-collection metadata the caldav sync records, not config.
-    caldav_cols = fdb.kv_get(c, "caldav_collections") or {}
+    # CalDAV events carry a 'caldav:<slug>' calendar_id; their name/color + the
+    # per-calendar visibility toggle (the settings picker) come from the
+    # caldav_collections table the sync records, not config.
+    caldav_cols = {col["id"]: col for col in fdb.list_caldav_collections(c)}
     # rail color: the user's own Google sidebar color for the calendar wins;
     # config color is the pre-first-sync fallback
     google_colors = fdb.kv_get(c, "calendar_colors") or {}
@@ -319,10 +320,13 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             continue
         cid = e["calendar_id"]
         if cid.startswith("caldav:"):
-            if not cal_caldav_on:
+            meta = caldav_cols.get(cid)
+            # hidden if the integration is off OR this specific calendar is
+            # unchecked in the picker (a known collection with enabled=0)
+            if not cal_caldav_on or (meta is not None and not meta["enabled"]):
                 continue
-            meta = caldav_cols.get(cid, {})
-            color, label = meta.get("color"), meta.get("name")
+            color = meta.get("color") if meta else None
+            label = meta.get("display_name") if meta else None
         else:
             cal = cal_map.get(cid, {})
             cal_kind = cal.get("kind", "google")
@@ -401,6 +405,15 @@ def _integration_on(c, iid: str) -> bool:
     available = any(i["id"] == iid
                     for i in _available_only())
     return available and fdb.integration_enabled(c, iid, default=True)
+
+
+def _visible_reminders(c) -> list:
+    """iCloud reminders from ENABLED collections only — respects the calendar
+    picker (a reminder list unchecked in settings hides its reminders)."""
+    rem = fdb.kv_get(c, "caldav_reminders") or []
+    disabled = {col["id"] for col in fdb.list_caldav_collections(c)
+                if not col["enabled"]}
+    return [r for r in rem if r.get("list_id") not in disabled]
 
 
 def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
@@ -585,7 +598,7 @@ def hub():
     # iCloud Reminders (read-only), grouped; empty unless the CalDAV integration
     # is available AND enabled. A separate surface from the local To-Dos.
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
-    reminders_block = (remlogic.group(fdb.kv_get(c, "caldav_reminders") or [], today)
+    reminders_block = (remlogic.group(_visible_reminders(c), today)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
     return {
         "date": today.isoformat(),
@@ -831,6 +844,28 @@ def caldav_test_connection():
     return caldav_sync.sync_once(client, _db(), cfg, _now_local())
 
 
+@app.get("/api/integrations/icloud_caldav/collections")
+def caldav_collections():
+    """The discovered iCloud calendars + reminder lists for the settings picker:
+    each with name, color, kind (VEVENT/VTODO), and its visibility toggle."""
+    return {"collections": [
+        {"id": col["id"], "name": col["display_name"], "color": col["color"],
+         "comp_type": col["comp_type"], "enabled": col["enabled"]}
+        for col in fdb.list_caldav_collections(_db())]}
+
+
+class CollectionPatch(BaseModel):
+    enabled: bool
+
+
+@app.patch("/api/integrations/icloud_caldav/collections/{cid}")
+def caldav_collection_patch(cid: str, body: CollectionPatch):
+    """Show/hide one iCloud calendar or reminder list on the wall (cache kept)."""
+    if not fdb.set_caldav_collection_enabled(_db(), cid, body.enabled):
+        raise HTTPException(404, "unknown collection")
+    return {"id": cid, "enabled": body.enabled}
+
+
 # --- reminders (read-only iCloud VTODO) -----------------------------------
 
 @app.get("/api/reminders")
@@ -840,8 +875,8 @@ def reminders_full():
     c = _db()
     if not _integration_on(c, "icloud_caldav"):
         return {"buckets": {b: [] for b in remlogic.BUCKETS}, "configured": False}
-    rem = fdb.kv_get(c, "caldav_reminders") or []
-    return {"buckets": remlogic.group(rem, _today()), "configured": True}
+    return {"buckets": remlogic.group(_visible_reminders(c), _today()),
+            "configured": True}
 
 
 # --- admin ----------------------------------------------------------------

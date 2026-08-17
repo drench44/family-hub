@@ -55,8 +55,10 @@ def test_caldav_sync_pulls_events_and_records_collection_colors(conn):
     rows = fdb.list_events(conn)
     assert len(rows) == 1
     assert rows[0]["calendar_id"] == "caldav:abc" and rows[0]["title"] == "Dentist"
-    cols = fdb.kv_get(conn, "caldav_collections")
-    assert cols["caldav:abc"] == {"name": "Family", "color": "#FF0000"}
+    cols = {col["id"]: col for col in fdb.list_caldav_collections(conn)}
+    assert cols["caldav:abc"]["display_name"] == "Family"
+    assert cols["caldav:abc"]["color"] == "#FF0000"
+    assert cols["caldav:abc"]["enabled"] is True
 
 
 def test_caldav_sync_skips_when_unconfigured(conn):
@@ -310,3 +312,25 @@ def test_caldav_credentials_file_storage(tmp_path):
     assert caldav_service.caldav_credentials(env2) == ("env@x", "envpw")
     caldav_service.clear_credentials(env)
     assert caldav_service.configured(env) is False
+
+
+def test_caldav_collections_upsert_preserves_toggle(conn):
+    fdb.upsert_caldav_collection(conn, "caldav:a", "VEVENT", "Family", "#FF0000", "t1")
+    assert fdb.caldav_collection_enabled(conn, "caldav:a") is True
+    fdb.set_caldav_collection_enabled(conn, "caldav:a", False)
+    # re-discovery updates metadata but keeps the operator's OFF toggle
+    fdb.upsert_caldav_collection(conn, "caldav:a", "VEVENT", "Renamed", "#00FF00", "t2")
+    col = fdb.list_caldav_collections(conn)[0]
+    assert col["display_name"] == "Renamed" and col["color"] == "#00FF00"
+    assert col["enabled"] is False
+
+
+def test_caldav_sync_records_collections(conn):
+    caldav_sync.sync_once(FakeCalDav([
+        {"id": "cal", "name": "Family", "color": "#FF0000", "comp": "VEVENT",
+         "ics": [_ics("u1", "E", "20260820", "20260821")]},
+        {"id": "rem", "name": "Groceries", "comp": "VTODO", "todos": [_VTODO]},
+    ]), conn, _CFG, _NOW)
+    cols = {c["id"]: c for c in fdb.list_caldav_collections(conn)}
+    assert cols["caldav:cal"]["comp_type"] == "VEVENT" and cols["caldav:cal"]["display_name"] == "Family"
+    assert cols["caldav:rem"]["comp_type"] == "VTODO"   # reminder list recorded too

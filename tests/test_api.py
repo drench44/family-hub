@@ -1508,8 +1508,8 @@ def test_calendar_renders_caldav_events_with_color_and_gating(tmp_path, monkeypa
         appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:abc",
             "title": "Dentist", "start_ts": f"{soon}T10:00:00",
             "end_ts": f"{soon}T11:00:00", "all_day": 0}])
-        appmod.fdb.kv_set(c, "caldav_collections",
-                          {"caldav:abc": {"name": "Family", "color": "#FF0000"}})
+        appmod.fdb.upsert_caldav_collection(c, "caldav:abc", "VEVENT", "Family",
+                                            "#FF0000", "2026-08-17T00:00:00")
         ev = next(e for e in tc.get("/api/calendar").json()["events"]
                   if e["title"] == "Dentist")
         assert ev["color"] == "#FF0000" and ev["label"] == "Family"
@@ -1676,3 +1676,35 @@ def test_caldav_readonly_mode_toggle(tmp_path, monkeypatch):
         # a plain enable toggle doesn't reset the mode
         tc.patch("/api/integrations/icloud_caldav", json={"enabled": True})
         assert get()["icloud_caldav"]["readonly"] is False
+
+
+def test_caldav_collection_picker_hides_calendar_and_reminders(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        appmod.fdb.upsert_caldav_collection(c, "caldav:fam", "VEVENT", "Family", "#FF0000", "t")
+        appmod.fdb.upsert_caldav_collection(c, "caldav:groc", "VTODO", "Groceries", None, "t")
+        appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:fam",
+            "title": "Dentist", "start_ts": f"{soon}T10:00:00",
+            "end_ts": f"{soon}T11:00:00", "all_day": 0}])
+        appmod.fdb.kv_set(c, "caldav_reminders", [{"id": "r1", "title": "Buy milk",
+            "due": None, "completed": False, "list_id": "caldav:groc"}])
+        # picker lists both, enabled; event + reminder show
+        cols = {x["id"]: x for x in tc.get(
+            "/api/integrations/icloud_caldav/collections").json()["collections"]}
+        assert cols["caldav:fam"]["name"] == "Family" and cols["caldav:fam"]["enabled"] is True
+        assert cols["caldav:groc"]["comp_type"] == "VTODO"
+        assert any(e["title"] == "Dentist" for e in tc.get("/api/calendar").json()["events"])
+        assert [r["title"] for r in tc.get("/api/reminders").json()["buckets"]["no_date"]] == ["Buy milk"]
+        # uncheck the calendar -> its events hide (cache kept); uncheck the list -> reminders hide
+        assert tc.patch("/api/integrations/icloud_caldav/collections/caldav:fam",
+                        json={"enabled": False}).json()["enabled"] is False
+        tc.patch("/api/integrations/icloud_caldav/collections/caldav:groc", json={"enabled": False})
+        assert all(e["title"] != "Dentist" for e in tc.get("/api/calendar").json()["events"])
+        assert tc.get("/api/reminders").json()["buckets"]["no_date"] == []
+        # unknown collection -> 404
+        assert tc.patch("/api/integrations/icloud_caldav/collections/caldav:nope",
+                        json={"enabled": False}).status_code == 404

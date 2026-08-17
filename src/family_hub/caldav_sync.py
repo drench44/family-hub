@@ -105,16 +105,22 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         lo_dt = now - dt.timedelta(days=getattr(cfg, "calendar_past_days", 45))
         hi_dt = now + dt.timedelta(days=cfg.calendar_window_days)
         collections = client.discover()
+        # Persist every discovered collection (calendars + reminder lists) so the
+        # settings calendar picker has a per-collection visibility toggle; upsert
+        # keeps the operator's toggle across syncs. Never pruned — a discover blip
+        # must not drop the picker state.
+        now_iso = now.isoformat()
+        for col in collections:
+            fdb.upsert_caldav_collection(
+                conn, "caldav:" + col["id"], col.get("comp", "VEVENT"),
+                col.get("name", ""), col.get("color"), now_iso)
 
         events: list[dict] = []
-        colors: dict = {}
         errors: list[str] = []
         failed: list[str] = []
         needs_auth = False
         for col in (c for c in collections if c.get("comp", "VEVENT") == "VEVENT"):
             cal_id = "caldav:" + col["id"]
-            colors[cal_id] = {"name": col.get("name", ""),
-                              "color": col.get("color")}
             seen_objs: set = set()
             try:
                 for obj in client.fetch_ics(col, lo_dt.date(), hi_dt.date()):
@@ -191,14 +197,11 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         # discover, rather than dropping them (they aren't in `rem`).
         if not collections:
             rem = fdb.kv_get(conn, "caldav_reminders") or []
-            colors = fdb.kv_get(conn, "caldav_collections") or colors
         elif vtodo_failed:
             keep = set(vtodo_failed)
             rem.extend(r for r in (fdb.kv_get(conn, "caldav_reminders") or [])
                        if r.get("list_id") in keep)
 
-        # collection metadata (color/name) drives the wall's rail color + label
-        fdb.kv_set(conn, "caldav_collections", colors)
         fdb.kv_set(conn, "caldav_reminders", rem)
         fdb.replace_events_caldav(
             conn, events, keep_ids=tuple(set(failed) | set(suspicious)))

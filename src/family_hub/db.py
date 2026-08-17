@@ -88,6 +88,20 @@ CREATE TABLE IF NOT EXISTS cal_objects(
   local_modified_at TEXT,
   sync_attempts INTEGER NOT NULL DEFAULT 0,
   last_sync_error TEXT);
+-- Discovered CalDAV collections (Fable rec 2). One row per iCloud calendar /
+-- reminders list, so the settings "calendar picker" has a persistent per-
+-- collection visibility toggle (`enabled`) that survives sync, plus the metadata
+-- the wall renders (display_name/color). ctag/sync_token are reserved for future
+-- change detection.
+CREATE TABLE IF NOT EXISTS caldav_collections(
+  id TEXT PRIMARY KEY,               -- 'caldav:<slug>'
+  comp_type TEXT NOT NULL,           -- 'VEVENT' | 'VTODO'
+  display_name TEXT NOT NULL DEFAULT '',
+  color TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  ctag TEXT,
+  sync_token TEXT,
+  last_seen_at TEXT);
 """
 
 # Columns a caller may set through update_person / add_chore validation.
@@ -754,3 +768,50 @@ def set_integration_config(conn, iid: str, config: dict) -> None:
     conn.execute("UPDATE integrations SET config_json = ? WHERE id = ?",
                  (json.dumps(config), iid))
     conn.commit()
+
+
+# --- caldav collections (the calendar picker) -----------------------------
+
+def upsert_caldav_collection(conn, cid: str, comp_type: str, name: str,
+                             color, now_iso: str) -> None:
+    """Record a discovered collection. Inserts new ones ENABLED; on re-discovery
+    updates metadata (name/color/last_seen) but NEVER the enabled toggle, so the
+    operator's picker choice survives every sync."""
+    conn.execute(
+        "INSERT OR IGNORE INTO caldav_collections(id, comp_type, display_name, "
+        "color, enabled, last_seen_at) VALUES(?, ?, ?, ?, 1, ?)",
+        (cid, comp_type, name, color, now_iso))
+    conn.execute(
+        "UPDATE caldav_collections SET comp_type = ?, display_name = ?, "
+        "color = ?, last_seen_at = ? WHERE id = ?",
+        (comp_type, name, color, now_iso, cid))
+    conn.commit()
+
+
+def list_caldav_collections(conn, comp_type: str | None = None) -> list[dict]:
+    if comp_type:
+        rows = conn.execute(
+            "SELECT * FROM caldav_collections WHERE comp_type = ? "
+            "ORDER BY display_name, id", (comp_type,))
+    else:
+        rows = conn.execute(
+            "SELECT * FROM caldav_collections ORDER BY display_name, id")
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["enabled"] = bool(d["enabled"])
+        out.append(d)
+    return out
+
+
+def caldav_collection_enabled(conn, cid: str, default: bool = True) -> bool:
+    row = conn.execute(
+        "SELECT enabled FROM caldav_collections WHERE id = ?", (cid,)).fetchone()
+    return default if row is None else bool(row["enabled"])
+
+
+def set_caldav_collection_enabled(conn, cid: str, enabled: bool) -> bool:
+    cur = conn.execute("UPDATE caldav_collections SET enabled = ? WHERE id = ?",
+                       (1 if enabled else 0, cid))
+    conn.commit()
+    return cur.rowcount > 0
