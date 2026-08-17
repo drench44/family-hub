@@ -21,6 +21,7 @@ const {
   idleReturnMs, nightClass,
   fmtTimeRange, monthName, eventColor, wallZoom,
   isDayOutsideWindow,
+  caldavTestMessage, caldavPanelHtml, caldavCollectionsHtml,
 } = sandbox;
 const panelFit = (...a) => ({ ...sandbox.panelFit(...a) });
 const monthGrid = (...a) => JSON.parse(JSON.stringify(sandbox.monthGrid(...a)));
@@ -350,20 +351,250 @@ test('calStatusMessage: ok status shows no banner', () => {
   assert.equal(sandbox.calStatusMessage({}), '');   // ok undefined != false -> no banner
 });
 
-test('calStatusMessage: revoked token asks to re-run setup', () => {
+test('calStatusMessage: revoked token asks to reconnect', () => {
   const m = sandbox.calStatusMessage({ ok: false, needs_auth: true });
   assert.match(m, /sign-in expired/);
-  assert.match(m, /re-run calendar setup/);
+  assert.match(m, /reconnect it in settings/);
 });
 
 test('calStatusMessage: not-configured vs generic error', () => {
-  assert.match(sandbox.calStatusMessage({ ok: false, error: 'not configured' }), /isn.t connected yet/);
+  assert.match(sandbox.calStatusMessage({ ok: false, error: 'not configured' }), /connected yet/);
   assert.match(sandbox.calStatusMessage({ ok: false, error: 'quota exceeded' }), /hit a snag/);
+});
+
+test('calStatusMessage: copy is source-neutral (no "Google" — the hub has several sources)', () => {
+  for (const st of [{ ok: false, needs_auth: true },
+                    { ok: false, error: 'not configured' },
+                    { ok: false, error: 'quota exceeded' }]) {
+    assert.doesNotMatch(sandbox.calStatusMessage(st), /google/i);
+  }
 });
 
 test('calStatusMessage: needs_auth wins over a not-configured error string', () => {
   const m = sandbox.calStatusMessage({ ok: false, needs_auth: true, error: 'not configured' });
   assert.match(m, /sign-in expired/);
+});
+
+test('calStatusMessage: an expired source still warns even when another source is ok', () => {
+  // Mixed setup: Google ok, iCloud password revoked -> agg is {ok:true,
+  // needs_auth:true}. The reconnect banner must still show; otherwise the iCloud
+  // half silently goes stale behind a "connected" wall and nobody reconnects it.
+  const m = sandbox.calStatusMessage({ ok: true, needs_auth: true });
+  assert.match(m, /sign-in expired/);
+  assert.match(m, /reconnect it in settings/);
+  // ...but don't claim we're "showing the last events we saw" — the healthy
+  // source is fresh, only the expired one is stale.
+  assert.doesNotMatch(m, /last events/);
+});
+
+test('caldavTestMessage: a successful test reports events + reminders counts', () => {
+  assert.equal(caldavTestMessage({ ok: true, events: 12, reminders: 3 }),
+    'Connected - 12 events, 3 reminders.');
+});
+
+test('caldavTestMessage: singular event/reminder counts drop the trailing s', () => {
+  assert.equal(caldavTestMessage({ ok: true, events: 1, reminders: 1 }),
+    'Connected - 1 event, 1 reminder.');
+});
+
+test('caldavTestMessage: a missing events/reminders count on ok:true reads as zero, not NaN', () => {
+  assert.equal(caldavTestMessage({ ok: true }), 'Connected - 0 events, 0 reminders.');
+});
+
+test('caldavTestMessage: needs_auth asks to check the app-specific password', () => {
+  assert.match(caldavTestMessage({ needs_auth: true }), /Sign-in rejected/);
+  assert.match(caldavTestMessage({ needs_auth: true }), /app-specific password/);
+});
+
+test('caldavTestMessage: needs_auth wins over an error string on the same result', () => {
+  const m = caldavTestMessage({ ok: false, needs_auth: true, error: 'HTTP 401' });
+  assert.match(m, /Sign-in rejected/);
+});
+
+test('caldavTestMessage: a plain failure shows the server\'s error text', () => {
+  assert.equal(caldavTestMessage({ ok: false, error: 'no credentials' }), 'no credentials');
+});
+
+test('caldavTestMessage: a failure with no error text falls back to a generic message', () => {
+  assert.match(caldavTestMessage({ ok: false }), /Couldn.t connect/);
+  assert.match(caldavTestMessage(null), /Couldn.t connect/);
+});
+
+test('caldavPanelHtml: not connected shows a credential form with a MASKED password field', () => {
+  const html = caldavPanelHtml(null, {});
+  assert.match(html, /id="caldav-user-input"/);
+  assert.match(html, /id="caldav-pw-input"/);
+  assert.match(html, /type="password"/);   // the hard security requirement: masked input
+  assert.match(html, /data-caldav-connect/);
+  assert.match(html, />Connect</);
+  assert.match(html, /app-specific password/);
+  assert.match(html, /Stored on this device only, never shared/);
+  // never a plaintext password field
+  assert.doesNotMatch(html, /type="text"[^>]*id="caldav-pw-input"/);
+});
+
+test('caldavPanelHtml: not connected + connecting disables the inputs and shows progress text', () => {
+  const html = caldavPanelHtml(null, { connecting: true });
+  assert.match(html, />Connecting…</);
+  assert.match(html, /id="caldav-user-input"[^>]*disabled/);
+  assert.match(html, /id="caldav-pw-input"[^>]*disabled/);
+  assert.match(html, /data-caldav-connect[^>]*disabled/);
+});
+
+test('caldavPanelHtml: not connected + a form error shows it inline', () => {
+  const html = caldavPanelHtml(null, { formError: 'Enter both fields.' });
+  assert.match(html, /form-error">Enter both fields\.</);
+});
+
+test('caldavPanelHtml: never renders a password value anywhere, on any branch', () => {
+  // caldavPanelHtml's signature has no password parameter at all — this pins
+  // that a hypothetical caller mistake (e.g. stashing it on `ui`) still can't
+  // leak it into the DOM, since the function only ever emits its own fixed
+  // strings plus `integ`/`ui` fields it actually reads (id, account, status,
+  // etc — never anything password-shaped).
+  const ui = { formError: '', connecting: false, testing: false, testResult: null,
+    password: 'hunter2', app_password: 'hunter2' };
+  assert.doesNotMatch(caldavPanelHtml(null, ui), /hunter2/);
+  assert.doesNotMatch(
+    caldavPanelHtml({ id: 'icloud_caldav', account: 'a@example.com', enabled: true }, ui),
+    /hunter2/);
+});
+
+test('caldavPanelHtml: connected shows the account, NO password field, and no SECOND enable switch', () => {
+  // The enable switch for icloud_caldav already lives one section up, in the
+  // generic Integrations list (#integrations-ctl, renderIntegrations), wired
+  // straight through poll(), which this panel deliberately is not (see
+  // renderCaldavPanel's comment). A second switch HERE would go stale after
+  // a tap (nothing repaints #caldav-panel on its own) and could disagree with
+  // the first one: two controls for one boolean, silently able to drift out
+  // of sync. Pins that this panel carries none of that switch's markup.
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'bot@example.com', enabled: true, readonly: true },
+    {});
+  assert.match(html, /Connected as <strong>bot@example\.com<\/strong>/);
+  assert.doesNotMatch(html, /data-caldav-enable-toggle/);
+  assert.doesNotMatch(html, /integ-switch/);
+  assert.doesNotMatch(html, /id="caldav-pw-input"/);
+  assert.doesNotMatch(html, /type="password"/);
+});
+
+test('caldavPanelHtml: connected escapes the account (XSS-safe interpolation)', () => {
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: '<img src=x onerror=alert(1)>', enabled: true }, {});
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img/);
+});
+
+test('caldavPanelHtml: readonly defaults to 1-way and the seg-btn reflects it', () => {
+  const oneWay = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, readonly: true }, {});
+  assert.match(oneWay, /seg-btn active" type="button" data-caldav-readonly="1"/);
+  const twoWay = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, readonly: false }, {});
+  assert.match(twoWay, /seg-btn active" type="button" data-caldav-readonly="0"/);
+  assert.match(twoWay, /2-way \(write back\)/);   // two-way is live now, not "coming soon"
+});
+
+test('caldavPanelHtml: connected + needs_auth/error status shows the reconnect/error warning', () => {
+  const reconnect = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true, status: 'needs_auth' }, {});
+  assert.match(reconnect, /integ-warn">reconnect</);
+  const errored = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true, status: 'error' }, {});
+  assert.match(errored, /integ-warn">error</);
+});
+
+test('caldavPanelHtml: an outbox backlog shows a quiet "not yet synced" note; 0/absent shows nothing', () => {
+  const none = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true }, {});
+  assert.doesNotMatch(none, /not yet synced/, 'no note when pending is absent');
+  const zero = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, pending: 0 }, {});
+  assert.doesNotMatch(zero, /not yet synced/, 'no note when pending is 0');
+  const one = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, pending: 1 }, {});
+  assert.match(one, /caldav-pending">1 change not yet synced/, 'singular copy');
+  const many = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, pending: 3 }, {});
+  assert.match(many, /caldav-pending">3 changes not yet synced/, 'plural copy');
+});
+
+test('caldavPanelHtml: connected + testing shows progress text and disables the Test button', () => {
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true }, { testing: true });
+  assert.match(html, /data-caldav-test[^>]*disabled/);
+  assert.match(html, />Testing…</);
+});
+
+test('caldavPanelHtml: connected + a test result shows the formatted message with an ok/err class', () => {
+  const ok = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true },
+    { testResult: { ok: true, events: 4, reminders: 2 } });
+  assert.match(ok, /caldav-test-result ok">Connected - 4 events, 2 reminders\./);
+  const err = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true },
+    { testResult: { ok: false, error: 'boom' } });
+  assert.match(err, /caldav-test-result err">boom</);
+});
+
+test('caldavCollectionsHtml: empty/null/undefined all show the same "try Test connection" empty state', () => {
+  assert.match(caldavCollectionsHtml([]), /integ-empty">No calendars found yet - try Test connection</);
+  assert.match(caldavCollectionsHtml(null), /integ-empty/);
+  assert.match(caldavCollectionsHtml(undefined), /integ-empty/);
+});
+
+test('caldavCollectionsHtml: a VEVENT row labels "Calendar", a VTODO row labels "Reminders"', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'caldav:ev1', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+    { id: 'caldav:rm1', name: 'Groceries', color: null, comp_type: 'VTODO', enabled: true },
+  ]);
+  assert.match(html, /Family<span class="caldav-cal-kind">Calendar<\/span>/);
+  assert.match(html, /Groceries<span class="caldav-cal-kind">Reminders<\/span>/);
+});
+
+test('caldavCollectionsHtml: the switch reflects each row\'s own enabled state', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'a', name: 'On', color: null, comp_type: 'VEVENT', enabled: true },
+    { id: 'b', name: 'Off', color: null, comp_type: 'VEVENT', enabled: false },
+  ]);
+  assert.match(html, /aria-checked="true"[^>]*data-caldav-collection-toggle="a"/s);
+  assert.match(html, /On<span class="caldav-cal-kind">Calendar<\/span><\/span>\s*<span class="integ-switch on"/);
+  assert.match(html, /aria-checked="false"[^>]*data-caldav-collection-toggle="b"/s);
+  assert.match(html, /Off<span class="caldav-cal-kind">Calendar<\/span><\/span>\s*<span class="integ-switch" aria-hidden/,
+    'no " on" class when disabled');
+});
+
+test('caldavCollectionsHtml: each row carries its id for the click handler', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+  ]);
+  assert.match(html, /data-caldav-collection-toggle="caldav:ab12"/);
+});
+
+test('caldavCollectionsHtml: a non-null hex color renders a swatch dot; a null color omits it', () => {
+  const withColor = caldavCollectionsHtml([
+    { id: 'a', name: 'Family', color: '#ff8800', comp_type: 'VEVENT', enabled: true },
+  ]);
+  assert.match(withColor, /caldav-cal-dot" style="background:#ff8800"/);
+  const noColor = caldavCollectionsHtml([
+    { id: 'b', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+  ]);
+  assert.doesNotMatch(noColor, /caldav-cal-dot/);
+});
+
+test('caldavCollectionsHtml: a name with an emoji and a `<` is escaped (XSS-safe)', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'a', name: 'Reminders ⚠️ <script>alert(1)</script>', color: null, comp_type: 'VTODO', enabled: true },
+  ]);
+  assert.match(html, /Reminders ⚠️ &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+});
+
+test('caldavPanelHtml: connected embeds the Calendars section with its caption and the collections list', () => {
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true },
+    { collections: [{ id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true }] });
+  assert.match(html, /<div class="settings-k">Calendars<\/div>/);
+  assert.match(html, /Pick which iCloud calendars and reminder lists show on the wall\./);
+  assert.match(html, /data-caldav-collection-toggle="caldav:ab12"/);
+});
+
+test('caldavPanelHtml: not connected never renders the Calendars section', () => {
+  const html = caldavPanelHtml(null, { collections: [{ id: 'a', name: 'X', comp_type: 'VEVENT', enabled: true }] });
+  assert.doesNotMatch(html, /caldav-collections/);
+  assert.doesNotMatch(html, /Calendars</);
 });
 
 test('chore round-trips: choreToModel -> buildChorePayload preserves schedule/assign', () => {
@@ -420,6 +651,20 @@ test('todoFailMessage: distinguishes a concurrent-edit 404 from a generic failur
   assert.equal(sandbox.todoFailMessage('unknown todo'),
     'That item was already changed on another device.');
   assert.equal(sandbox.todoFailMessage('/api/todos/1 -> HTTP 500'),
+    'Couldn’t save — check the hub and tap again.');
+});
+
+test('reminderFailMessage: read-only / not-connected / dead-list / already-changed / generic each get their own copy', () => {
+  assert.match(sandbox.reminderFailMessage('iCloud reminders are read-only (enable two-way in settings)'),
+    /2-way in Settings/);
+  assert.match(sandbox.reminderFailMessage('iCloud is not connected'), /isn’t connected/);
+  // A dead-list add 404 ('unknown reminder list') must NOT fall into the
+  // 'unknown reminder' edit-collision branch (the former contains the latter).
+  assert.equal(sandbox.reminderFailMessage('unknown reminder list'),
+    'That list is no longer available — pick another in Settings.');
+  assert.equal(sandbox.reminderFailMessage('unknown reminder'),
+    'That reminder was already changed on another device.');
+  assert.equal(sandbox.reminderFailMessage('/api/reminders/toggle -> HTTP 500'),
     'Couldn’t save — check the hub and tap again.');
 });
 

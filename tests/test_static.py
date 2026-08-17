@@ -115,6 +115,39 @@ def test_chore_row_is_a_big_tap_target():
     assert m and int(m.group(1)) >= 48, ".chore-row must be >= 48px (tap target)"
 
 
+def test_reminder_list_picker_avoids_ios_zoom_and_is_a_tap_target():
+    # The reminders add row's list <select> shows on the phone To-Dos tab. A
+    # sub-16px font makes iOS Safari zoom the page on focus (the same trap the
+    # .todo-add input avoids), and it needs a real tap target. Pin both.
+    rule = _css_rule(".todo-list-select")
+    assert rule.strip(), ".todo-list-select must be styled"
+    fs = re.search(r"font-size:\s*(\d+)px", rule)
+    assert fs and int(fs.group(1)) >= 16, "list picker font must be >= 16px (no iOS zoom-on-focus)"
+    mh = re.search(r"min-height:\s*(\d+)px", rule)
+    assert mh and int(mh.group(1)) >= 44, "list picker must be a >= 44px tap target"
+
+
+def test_todo_and_reminder_rows_and_actions_are_big_tap_targets():
+    # The to-do / reminder rows and the delete/move action pills are all real
+    # touch targets on the wall and the phone. Only .chore-row was guarded; pin
+    # these too so a future compaction can't quietly shrink them below the
+    # ~44px floor (CLAUDE.md). Rows share one rule; the action pills another.
+    row = _css_rule(".todo-row, .todo-row-full")
+    rm = re.search(r"min-height:\s*(\d+)px", row)
+    assert rm and int(rm.group(1)) >= 44, ".todo-row(-full) must be a >= 44px tap target"
+    act = _css_rule(".todo-act")
+    am = re.search(r"min-height:\s*(\d+)px", act)
+    assert am and int(am.group(1)) >= 44, ".todo-act (delete/move) must be a >= 44px tap target"
+
+
+def test_reminder_bucket_list_reuses_the_shared_row_and_box_classes():
+    # The iCloud reminders view is built from the same .todo-row(-full)/.card
+    # chrome as the local list — not a parallel styling system that could drift.
+    # Pin that the source-chip + stacked-list classes it DOES add are styled.
+    for cls in (".shead-chip", ".rem-list", ".rem-due", ".rem-pri"):
+        assert _css_rule(cls).strip(), f"{cls} (iCloud reminders view) is unstyled"
+
+
 def test_celebration_is_reduced_motion_guarded():
     assert ".card-celebrate" in CSS, "missing the completion celebration class"
     assert "prefers-reduced-motion" in CSS, "celebration must be reduced-motion guarded"
