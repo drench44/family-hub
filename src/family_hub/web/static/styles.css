@@ -335,11 +335,18 @@ body {
 .cn-partly .sky-sun { width: 38px; height: 38px; right: 46px; }
 @keyframes sun-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 
-/* the moon + a field of twinkling stars (night, clear/partly) */
+/* the moon + a field of twinkling stars (night, clear/partly). The real
+   phase: a same-size shadow disc slides off the face by --m-shift (set from
+   the feed's illumination in moonHtml — waxing exits left so the right limb
+   is lit, waning the mirror). The 100% default = shadow fully off = the full
+   disc, so a feed without moon data renders exactly as before. */
 .sky-moon { position: absolute; z-index: 1; top: 20px; right: 28px;
-  width: 34px; height: 34px; border-radius: 50%;
+  width: 34px; height: 34px; border-radius: 50%; overflow: hidden;
   background: radial-gradient(circle at 36% 34%, #F7F9FD, #C7D2E8 70%, #AAB8D4);
   box-shadow: 0 0 22px 6px rgba(214,226,255,.35); }
+.sky-moon::after { content: ""; position: absolute; inset: -1px;
+  border-radius: 50%; background: rgba(12,18,38,.95);
+  transform: translateX(var(--m-shift, 100%)); }
 .sky-stars { position: absolute; inset: 0; z-index: 1;
   background-image:
     radial-gradient(1.7px 1.7px at 12% 26%, rgba(255,255,255,.95), transparent 60%),
@@ -378,27 +385,45 @@ body {
 .cn-storm .sky-cloud { color: rgba(88,98,116,.94); }
 .ph-night .sky-cloud { color: rgba(200,210,230,.55); }
 
-/* falling rain: three parallax layers of thin slanted streaks (elongated
-   feathered gradients tiled and sliding down). One shared duration over three
-   tile heights = three fall speeds, and the loop stays seamless; the slant
-   leans with the cloud drift, like wind-blown rain. */
-.sky-rain { position: absolute; inset: -28px -14px 0 -14px; z-index: 4;
-  background-image:
-    radial-gradient(1.1px 10px at 50% 50%, rgba(255,255,255,.55), transparent 65%),
-    radial-gradient(.9px 8px at 50% 50%, rgba(255,255,255,.36), transparent 65%),
-    radial-gradient(.8px 6px at 50% 50%, rgba(255,255,255,.22), transparent 65%);
-  background-size: 19px 30px, 27px 42px, 34px 54px;
-  transform: rotate(11deg) scale(1.18);
-  animation: rain-fall .55s linear infinite; }
-@keyframes rain-fall { to { background-position: 0 30px, 0 42px, 0 54px; } }
-/* falling snow: two parallax layers of round flakes, drifting as they fall */
-.sky-snow { position: absolute; inset: -30px 0 0 0; z-index: 4;
-  background-image:
-    radial-gradient(2.4px 2.4px at 50% 50%, rgba(255,255,255,.95), transparent 60%),
-    radial-gradient(1.7px 1.7px at 50% 50%, rgba(255,255,255,.7), transparent 60%);
-  background-size: 26px 30px, 38px 44px;
-  animation: snow-fall 3.2s linear infinite; }
-@keyframes snow-fall { to { background-position: 9px 30px, -7px 44px; } }
+/* falling rain: two parallax streak layers on pseudo-elements, animated with
+   a TRANSFORM — compositable, so the always-on wall never pays a repaint
+   loop for weather (background-position animation repaints every frame).
+   Each layer slides by exactly one tile height along its own axis
+   (rotate then translateY composes in the layer's local space), so the loop
+   is seamless; the slant leans with the cloud drift, like wind-blown rain. */
+.sky-rain { position: absolute; inset: 0; z-index: 4; overflow: hidden; }
+.sky-rain::before, .sky-rain::after { content: ""; position: absolute;
+  inset: -90px -50px -50px; }
+.sky-rain::before {
+  background-image: radial-gradient(1.1px 10px at 50% 50%, rgba(255,255,255,.55), transparent 65%);
+  background-size: 19px 30px;
+  animation: rain-fall-a .5s linear infinite; }
+.sky-rain::after {
+  background-image: radial-gradient(.9px 8px at 50% 50%, rgba(255,255,255,.34), transparent 65%);
+  background-size: 27px 42px;
+  animation: rain-fall-b .75s linear infinite; }
+@keyframes rain-fall-a { from { transform: rotate(11deg) translateY(0); }
+                         to { transform: rotate(11deg) translateY(30px); } }
+@keyframes rain-fall-b { from { transform: rotate(11deg) translateY(0); }
+                         to { transform: rotate(11deg) translateY(42px); } }
+/* falling snow: same seamless transform-tile trick, two flake layers, while
+   the container sways gently side to side (the old background-position drift
+   shifted by a non-tile-multiple, which jumped at every loop) */
+.sky-snow { position: absolute; inset: 0; z-index: 4; overflow: hidden;
+  animation: snow-sway 7s ease-in-out infinite alternate; }
+.sky-snow::before, .sky-snow::after { content: ""; position: absolute;
+  inset: -100px -40px -40px; }
+.sky-snow::before {
+  background-image: radial-gradient(2.4px 2.4px at 50% 50%, rgba(255,255,255,.95), transparent 60%);
+  background-size: 26px 30px;
+  animation: snow-fall-a 2.6s linear infinite; }
+.sky-snow::after {
+  background-image: radial-gradient(1.7px 1.7px at 50% 50%, rgba(255,255,255,.7), transparent 60%);
+  background-size: 38px 44px;
+  animation: snow-fall-b 3.9s linear infinite; }
+@keyframes snow-fall-a { to { transform: translateY(30px); } }
+@keyframes snow-fall-b { to { transform: translateY(44px); } }
+@keyframes snow-sway { from { transform: translateX(-6px); } to { transform: translateX(6px); } }
 /* fog: soft horizontal bands sliding sideways */
 .sky-fog { position: absolute; inset: 0; z-index: 4;
   background-image: repeating-linear-gradient(180deg,
@@ -1742,7 +1767,9 @@ body.integ-off-cameras #camgrid { display: none; }
   .chore-row.done .chore-check,
   .chore-row.done .chore-title::after,
   .todo-row.done .todo-check, .todo-row-full.done .todo-check,
-  .sky-sun, .sky-stars, .sky-cloud, .sky-rain, .sky-snow, .sky-fog,
+  .sky-sun, .sky-stars, .sky-cloud, .sky-fog,
+  .sky-rain::before, .sky-rain::after,
+  .sky-snow, .sky-snow::before, .sky-snow::after,
   .spark .sp-halo,
   .card-celebrate { animation: none; }
   .card-celebrate { border-color: var(--good); }

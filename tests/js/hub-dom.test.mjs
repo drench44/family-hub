@@ -2827,6 +2827,54 @@ test('room thermometer clamps at the tube edges; a real cold reading still shows
     /<rect class="t-merc st-crit" x="6" y="32" width="4" height="6" rx="2"\/>/);
 });
 
+test('sky phase follows the feed sunrise/sunset when present, fixed boundaries otherwise', () => {
+  const { sandbox } = newHub();
+  // parseHmm: the feed's "HH:MM" shape, and nothing else
+  assert.equal(sandbox.parseHmm('06:15'), 6.25);
+  assert.equal(sandbox.parseHmm('20:15'), 20.25);
+  for (const bad of ['', null, undefined, '6:15pm', '25:00', '12:60', 'soon', 615]) {
+    assert.equal(sandbox.parseHmm(bad), null, `parseHmm(${bad}) must be null`);
+  }
+  // winter sun (rise 7:30, set 16:45): 7am is DAWN with real times where the
+  // fixed boundaries would already call it day-bright at 8
+  assert.equal(sandbox.skyPhase(7.0, 7.5, 16.75), 'dawn');
+  assert.equal(sandbox.skyPhase(12, 7.5, 16.75), 'day');
+  assert.equal(sandbox.skyPhase(16.5, 7.5, 16.75), 'dusk');
+  assert.equal(sandbox.skyPhase(18, 7.5, 16.75), 'night');   // fixed rules say dusk
+  // summer sun (rise 5:45, set 20:45): 8:30pm still glows dusk
+  assert.equal(sandbox.skyPhase(20.5, 5.75, 20.75), 'dusk');
+  // no sun times (or a nonsensical pair) -> the fixed civil boundaries stand
+  assert.equal(sandbox.skyPhase(7.0), 'dawn');
+  assert.equal(sandbox.skyPhase(12), 'day');
+  assert.equal(sandbox.skyPhase(19, 20.25, 6.25), 'dusk', 'reversed pair falls back');
+  // end to end: real sunset in the payload flips a fixed-boundary "dusk" hour
+  // to an honest night sky
+  const winter = sandbox.weatherCardHtml(
+    { ...WX_GOOD, sunrise: '07:30', sunset: '16:45' }, 19);
+  assert.match(winter, /ph-night/);
+});
+
+test('the moon renders its real phase from the feed, full disc without data', () => {
+  const { sandbox } = newHub();
+  // waxing 29% lit: shadow slides LEFT (negative shift) so the right limb is
+  // lit; 34px disc * .291 -> 10px
+  const waxing = sandbox.weatherCardHtml(
+    { ...WX_GOOD, moon_phase: 'Waxing Crescent', moon_illum: 29.1 }, 23);
+  assert.match(waxing, /<span class="sky-moon" style="--m-shift:-10px"><\/span>/);
+  // waning mirrors it (positive shift, left limb lit); Last Quarter is waning
+  const waning = sandbox.weatherCardHtml(
+    { ...WX_GOOD, moon_phase: 'Last Quarter', moon_illum: 50 }, 23);
+  assert.match(waning, /--m-shift:17px/);
+  // no illum -> the bare moon span (CSS default = full disc); never NaN
+  const bare = sandbox.weatherCardHtml({ ...WX_GOOD, moon_illum: 'soon' }, 23);
+  assert.match(bare, /<span class="sky-moon"><\/span>/);
+  assert.ok(!bare.includes('NaN'));
+  // an off-scale illum clamps to the full disc, not past it
+  const over = sandbox.weatherCardHtml(
+    { ...WX_GOOD, moon_phase: 'Full Moon', moon_illum: 140 }, 23);
+  assert.match(over, /--m-shift:-34px/);
+});
+
 test('weather card hides the H/L readout only when BOTH ends are missing', () => {
   const { sandbox } = newHub();
   assert.ok(!sandbox.weatherCardHtml({ ...WX_GOOD, high: null, low: null }, 12).includes('class="hilo'));

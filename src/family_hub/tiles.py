@@ -173,6 +173,16 @@ async def weather_tile(client, cfg) -> dict:
             "spark": spark["temps"],
             "spark_now": spark["now"],
             "stale": wx.get("weatherStale"),
+            # Sky-scene inputs (verified against the live feed 2026-08-17):
+            # sunrise/sunset are "HH:MM" local strings that drive the sky's
+            # dawn/day/dusk/night phase (absent -> the frontend's fixed civil
+            # boundaries); moonPhase is a name ("Waxing Crescent") and
+            # moonIllum a lit percentage that shape the drawn moon (absent ->
+            # a full disc).
+            "sunrise": wx.get("sunrise"),
+            "sunset": wx.get("sunset"),
+            "moon_phase": wx.get("moonPhase"),
+            "moon_illum": wx.get("moonIllum"),
         }
         # A 200-but-empty upstream ({}, {"error": "warming up"}, temp
         # missing/null) would paint an all-dashes card that still looks LIVE.
