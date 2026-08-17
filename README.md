@@ -46,6 +46,12 @@ at one URL.
   sensor goes stale). Tap **⛶ Full** on either to open your full weather or
   climate dashboard. Both fail soft: a dead feed quietly hides its card, never
   the wall.
+- **Laundry:** washer + dryer as porthole cards fed by Home Assistant — a
+  timer-dial ring counts the minutes down, the drum tumbles while a cycle
+  runs, and a finished load shows a check with *when* it finished (remembered
+  even after the machine is opened or powered off). Built for LG ThinQ's
+  sensors, but any HA integration exposing a status enum + a remaining-time
+  timestamp works. Fails soft like weather/climate.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —
   no phone needed. The same page works from any browser on the LAN, so a phone
@@ -149,6 +155,7 @@ browser.
 | `go2rtc_base` | Your go2rtc URL (browser-reachable), omit if no cameras |
 | `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
 | `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
+| `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
 | `theme` | House default display theme — `{"mode","accent","columns"}` (`mode`: light/dark, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines). Applied on a fresh device with no saved override |
 
 ### Calendars: Google

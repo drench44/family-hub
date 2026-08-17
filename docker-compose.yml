@@ -15,6 +15,10 @@ services:
       # iCloud CalDAV bot credentials (optional; see .env). Empty = off.
       - ICLOUD_CALDAV_USER=${ICLOUD_CALDAV_USER:-}
       - ICLOUD_CALDAV_APP_PASSWORD=${ICLOUD_CALDAV_APP_PASSWORD:-}
+      # Home Assistant long-lived token for the laundry card (optional; see
+      # .env). Empty = laundry off. This allowlist is the only way env vars
+      # reach the container — a var missing here is invisible inside.
+      - HA_TOKEN=${HA_TOKEN:-}
     # HUB_BIND (in .env) pins every published port to one LAN interface.
     # The hub has NO auth — never expose it beyond your LAN. See README.
     ports: [ "${HUB_BIND:-0.0.0.0}:8138:8138" ]

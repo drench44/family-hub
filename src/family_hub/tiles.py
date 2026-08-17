@@ -236,7 +236,7 @@ LAUNDRY_RUNNING = {
 
 
 def _laundry_phase(status: str | None, finishes_at: str | None) -> str:
-    s = (status or "").strip().lower()
+    s = str(status or "").strip().lower()   # str(): a non-string state must not raise
     if s in LAUNDRY_GONE:
         return "offline"
     if s in LAUNDRY_DONE:
@@ -252,17 +252,34 @@ def _laundry_phase(status: str | None, finishes_at: str | None) -> str:
     if s in LAUNDRY_RUNNING:
         return "running"
     # An unrecognized status (firmware vocabulary drift) fails toward
-    # "running" when a finish time exists — never hide an active cycle —
-    # and "idle" otherwise.
+    # "running" when a FUTURE finish time exists — never hide an active
+    # cycle — and "idle" otherwise. Future matters: remaining-time sensors
+    # that latch their last value instead of going unknown would otherwise
+    # pin an off machine in a perpetual tumbling "Any minute".
     log.warning("laundry: unrecognized status %r (phase from finish time)", s)
-    return "running" if finishes_at else "idle"
+    return "running" if _laundry_future(finishes_at) else "idle"
 
 
-def _laundry_ts(raw: str | None) -> str | None:
+def _laundry_future(iso: str | None) -> bool:
+    """True iff the ISO instant parses and lies in the future. Naive (no
+    offset) timestamps are refused — comparing them to now is a guess."""
+    if not iso:
+        return False
+    try:
+        t = dt.datetime.fromisoformat(iso)
+    except ValueError:
+        return False
+    if t.tzinfo is None:
+        return False
+    return t > dt.datetime.now(dt.timezone.utc)
+
+
+def _laundry_ts(raw: object) -> str | None:
     """An HA timestamp state, validated: the ISO string as-is when it parses,
     else None. HA reports 'unknown'/'unavailable' as states too — those are
-    not timestamps."""
-    if not raw or raw in LAUNDRY_GONE:
+    not timestamps. Non-strings (a flaky upstream serving a number/null) are
+    refused here rather than raising TypeError out of the fail-soft tile."""
+    if not isinstance(raw, str) or not raw or raw in LAUNDRY_GONE:
         return None
     try:
         dt.datetime.fromisoformat(raw)
@@ -327,7 +344,7 @@ async def laundry_tile(client, cfg, token: str) -> dict:
         out.append({
             "id": m["id"], "label": m["label"], "kind": m["kind"],
             "phase": phase,
-            "status": (status or "").strip().lower() or None,
+            "status": str(status or "").strip().lower() or None,
             "finishes_at": finishes,
             "status_since": _laundry_ts(st.get("last_changed") if st else None),
         })

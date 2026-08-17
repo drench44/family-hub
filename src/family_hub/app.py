@@ -500,7 +500,7 @@ def _reminder_lists(c) -> list:
 
 def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
     """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
-    or None for one with no sync (cameras/weather/climate). Drives the settings
+    or None for one with no sync (cameras/weather/climate/laundry). Drives the settings
     menu's 'Reconnect iCloud' / warning affordance on auth-failure or error."""
     # calendar_status is shared by Google + ICS and can't tell them apart, and
     # needs_auth is a Google-only concept — so only surface it on google_calendar
@@ -1358,19 +1358,40 @@ async def tile_laundry():
     # Completion memory: a machine sitting in "end" carries WHEN it finished
     # (status_since). Stamp that into the kv store so "finished at 2:14"
     # survives the machine being opened / powered off — and later restarts of
-    # this server — then attach the remembered stamp to every machine. The
-    # tile itself is cached in-process (tiles._laundry_cache), so copy before
-    # annotating: the cached dict must stay un-mutated.
-    c = _db()
-    machines = []
-    for m in t.get("machines", []):
-        m = dict(m)
-        key = f"laundry_done_{m['id']}"
-        if m.get("phase") == "done" and m.get("status_since"):
-            if fdb.kv_get(c, key) != m["status_since"]:   # write once per finish
-                fdb.kv_set(c, key, m["status_since"])
-        m["last_done"] = fdb.kv_get(c, key)
-        machines.append(m)
+    # this server — then attach the remembered stamp to every machine.
+    #
+    # Stamp ONLY on an observed TRANSITION into done (previous phase, kept in
+    # kv, was neither done nor offline). status_since is HA's last_changed,
+    # which resets on an HA restart or a done→unavailable→done cloud blip —
+    # naive re-stamping would overwrite the real 9:02pm finish with the 3am
+    # restart time. A genuine new cycle always passes through running/idle
+    # first; a blip or restart never does (it reads done→offline→done, or
+    # done→done with a moved last_changed — both refused here).
+    #
+    # The tile itself is cached in-process (tiles._laundry_cache), so copy
+    # before annotating: the cached dict must stay un-mutated. And the kv
+    # work must never 500 an otherwise scrupulously fail-soft endpoint: on
+    # any DB hiccup, serve the tile un-annotated and say so in the log.
+    machines = [dict(m) for m in t.get("machines", [])]
+    try:
+        c = _db()
+        for m in machines:
+            done_key = f"laundry_done_{m['id']}"
+            phase_key = f"laundry_phase_{m['id']}"
+            phase = m.get("phase")
+            prev = fdb.kv_get(c, phase_key)
+            if (phase == "done" and m.get("status_since")
+                    and prev not in ("done", "offline")
+                    and fdb.kv_get(c, done_key) != m["status_since"]):
+                fdb.kv_set(c, done_key, m["status_since"])
+            if phase and phase != prev:
+                fdb.kv_set(c, phase_key, phase)
+            m["last_done"] = fdb.kv_get(c, done_key)
+    except Exception:
+        log.warning("laundry: completion-memory kv unavailable; serving the "
+                    "tile without last_done", exc_info=True)
+        for m in machines:
+            m.setdefault("last_done", None)
     return {**t, "machines": machines}
 
 

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
+
+log = logging.getLogger("family_hub.config")
 
 
 @dataclass
@@ -88,11 +91,16 @@ def _clean_laundry(raw: object) -> dict | None:
     raw_machines = raw.get("machines")
     for m in (raw_machines if isinstance(raw_machines, list) else []):
         if not isinstance(m, dict):
+            log.warning("laundry: dropping non-dict machine entry %r", m)
             continue
         mid = m.get("id")
         status = m.get("status_entity")
         remaining = m.get("remaining_entity")
         if not (mid and status and remaining):
+            # A typo'd key here would otherwise vanish the machine (or the
+            # whole integration) with zero signal — say which entry and why.
+            log.warning("laundry: dropping machine entry %r (needs id, "
+                        "status_entity, remaining_entity)", m)
             continue
         machines.append({
             "id": str(mid),
@@ -104,6 +112,8 @@ def _clean_laundry(raw: object) -> dict | None:
             "remaining_entity": str(remaining),
         })
     if not machines:
+        log.warning("laundry: ha_base is set but no valid machines survived — "
+                    "the laundry integration is OFF")
         return None
     return {"ha_base": str(raw["ha_base"]).rstrip("/"), "machines": machines}
 

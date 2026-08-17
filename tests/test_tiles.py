@@ -461,9 +461,18 @@ def test_laundry_phase_mapping():
     }
     for status, phase in cases.items():
         assert tiles._laundry_phase(status, None) == phase, status
-    # unrecognized status: active if a finish time exists, idle otherwise —
-    # a firmware vocabulary drift must never hide an active cycle
-    assert tiles._laundry_phase("mystery_new_state", FINISH) == "running"
+    # unrecognized status: active only on a FUTURE finish time — a remaining
+    # sensor that latches a stale (past) value must not pin an off machine in
+    # a perpetual "running"; and a firmware vocabulary drift mid-cycle (future
+    # finish) must never hide the active cycle
+    import datetime as dt
+    future = (dt.datetime.now(dt.timezone.utc)
+              + dt.timedelta(minutes=30)).isoformat()
+    past = (dt.datetime.now(dt.timezone.utc)
+            - dt.timedelta(minutes=30)).isoformat()
+    assert tiles._laundry_phase("mystery_new_state", future) == "running"
+    assert tiles._laundry_phase("mystery_new_state", past) == "idle"
+    assert tiles._laundry_phase("mystery_new_state", "2026-01-01T00:00:00") == "idle"  # naive ts refused
     assert tiles._laundry_phase("mystery_new_state", None) == "idle"
 
 
@@ -548,3 +557,19 @@ def test_laundry_success_cached():
     n = calls["n"]
     t2 = run_laundry(handler)
     assert t2 == t1 and calls["n"] == n   # served from cache, no refetch
+
+
+def test_laundry_non_string_states_guarded():
+    # A flaky upstream serving a NUMBER (or null) as the state must degrade,
+    # never raise TypeError/AttributeError out of the fail-soft tile.
+    tiles.reset_caches()
+    t = run_laundry(laundry_handler({
+        "sensor.w_status": {"state": 5, "last_changed": 7, "attributes": {}},
+        "sensor.w_rem": {"state": None, "last_changed": None, "attributes": {}},
+        "sensor.d_status": ha_state("end"),
+        "sensor.d_rem": ha_state("unknown"),
+    }))
+    assert t["available"] is True
+    w, d = t["machines"]
+    assert w["finishes_at"] is None and w["status_since"] is None
+    assert d["phase"] == "done"
