@@ -45,6 +45,10 @@ _THEME_AXES = {
     "mode": {"light", "soft", "dark", "grey", "black"},
     "accent": {"cyan", "violet", "amber", "green"},
     "columns": {"none", "wells", "lines"},
+    # per-device prefs that also accept a house default (applied by the frontend's
+    # applyHouseTheme on a device that has made no local choice)
+    "layout": {"auto", "desktop"},
+    "idleReturn": {"on", "off"},
 }
 
 
