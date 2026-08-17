@@ -762,12 +762,15 @@ body.overlay-open { overflow: hidden; }
    2026-08-12: full-screen views rendered as a strip). */
 .overlay-content { position: absolute; inset: 0; }
 .overlay-frame { width: 100%; height: 100%; border: 0; }
-/* Full-screen 2x2 camera grid (the "camera page" opened from the wall's Cameras
+/* Full-screen camera grid (the "camera page" opened from the wall's Cameras
    header). Fills the overlay; each cell's live stream fills its cell, with the
-   label floated over the top-left corner. */
+   label floated over the top-left corner. Two columns; rows are created as
+   needed at equal height (grid-auto-rows: 1fr), so any camera count lays out
+   row-major and fills the height evenly — four cameras give 2x2, six give 2x3 —
+   rather than a hardcoded two rows that squashed a third row of tiles. */
 .camera-page {
   position: absolute; inset: 0;
-  display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+  display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr;
   gap: 10px; padding: 60px 16px 16px;
 }
 .camera-page .tile-camera { grid-column: auto; min-height: 0; padding: 0; }
