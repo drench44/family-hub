@@ -2165,7 +2165,7 @@ function lnLines(m, now = Date.now()) {
    check when done, empty when idle. Washer drums run water-cool, dryers
    warm — set by the ln-washer / ln-dryer class on the machine block. */
 function lnPortholeSvg(m, now = Date.now()) {
-  const R = 44, C = 2 * Math.PI * R;
+  const R = 47.5, C = 2 * Math.PI * R;   // data ring: a thin halo outside the steel
   const mins = lnMinutesLeft(m.finishes_at, now);
   let frac = 0;
   if (m.phase === 'done') frac = 1;
@@ -2176,28 +2176,64 @@ function lnPortholeSvg(m, now = Date.now()) {
     ? `<circle class="ln-arc" cx="50" cy="50" r="${R}"`
       + ` stroke-dasharray="${(frac * C).toFixed(1)} ${C.toFixed(1)}"/>`
     : '';
-  let inner = '';
-  if (m.phase === 'running' || m.phase === 'paused') {
-    // three tumbling garments + two suds bubbles, rotating about the drum
-    // center; the drift animation on each blob keeps the tumble organic
-    inner = `<g class="ln-tumble">`
-      + `<ellipse class="ln-g ln-g1" cx="50" cy="68" rx="13" ry="8"/>`
-      + `<ellipse class="ln-g ln-g2" cx="36" cy="58" rx="9" ry="6"/>`
-      + `<ellipse class="ln-g ln-g3" cx="62" cy="56" rx="8" ry="6"/>`
-      + `<circle class="ln-sud" cx="43" cy="43" r="2.5"/>`
-      + `<circle class="ln-sud" cx="58" cy="47" r="1.8"/>`
-      + `</g>`;
+  // Gradients/clips need per-machine ids — two portholes share one document,
+  // and duplicate SVG ids silently resolve to the first.
+  const gid = String(m.id).replace(/[^a-zA-Z0-9_-]/g, '') || 'm';
+  const spinning = m.phase === 'running' || m.phase === 'paused';
+  // Drum furniture: inner-drum hub, two perforation rings, three lifter
+  // baffles — the stainless drum you actually see through the door. While a
+  // cycle runs it rides the tumble group (the DRUM spins, like the real
+  // machine); idle shows it standing still, honestly empty.
+  const drum = `<circle class="ln-hub" cx="50" cy="50" r="16"/>`
+    + `<circle class="ln-perf" cx="50" cy="50" r="25"/>`
+    + `<circle class="ln-perf" cx="50" cy="50" r="31"/>`
+    + [0, 120, 240].map((a) =>
+      `<rect class="ln-baffle" x="47.6" y="15.5" width="4.8" height="10.5" rx="2.4"`
+      + ` transform="rotate(${a} 50 50)"/>`).join('');
+  let inner;
+  if (spinning) {
+    // clothes ride the drum; the water line stays LEVEL outside the tumble
+    // group (only the washer has one), with foam floating on it
+    inner = `<g class="ln-tumble">${drum}`
+      + `<ellipse class="ln-g ln-g1" cx="50" cy="66" rx="14" ry="8.5" transform="rotate(-8 50 66)"/>`
+      + `<ellipse class="ln-g ln-g2" cx="35.5" cy="56" rx="9" ry="6" transform="rotate(24 35.5 56)"/>`
+      + `<ellipse class="ln-g ln-g3" cx="62.5" cy="55" rx="8" ry="5.5" transform="rotate(-18 62.5 55)"/>`
+      + `<ellipse class="ln-ghi" cx="47" cy="61.5" rx="7" ry="1.6" transform="rotate(-10 47 61.5)"/>`
+      + `<ellipse class="ln-ghi" cx="34.5" cy="52.5" rx="4.4" ry="1.1" transform="rotate(22 34.5 52.5)"/>`
+      + `</g>`
+      + (m.kind !== 'dryer'
+        ? `<path class="ln-water" d="M13 66 Q 31 60 50 66 T 87 66 L 87 90 L 13 90 Z"/>`
+          + `<circle class="ln-sud" cx="41" cy="64" r="2.7"/>`
+          + `<circle class="ln-sud" cx="47" cy="62.4" r="1.9"/>`
+          + `<circle class="ln-sud" cx="60" cy="64.5" r="2.2"/>`
+        : '');
   } else if (m.phase === 'done') {
-    inner = `<path class="ln-check" d="M36 51 L46 61 L65 40"/>`;
+    // the cycle-complete light: the drum glows softly until the door opens
+    inner = `<circle class="ln-donewash" cx="50" cy="50" r="37"/>` + drum
+      + `<path class="ln-check" d="M36 51 L46 61 L65 40"/>`;
   } else if (m.phase === 'error') {
-    inner = `<text class="ln-bang" x="50" y="60" text-anchor="middle">!</text>`;
+    inner = drum + `<text class="ln-bang" x="50" y="60" text-anchor="middle">!</text>`;
+  } else {
+    inner = drum;   // idle/offline: the still, empty drum
   }
   return `<svg class="ln-door" viewBox="0 0 100 100" aria-hidden="true">`
-    + `<circle class="ln-bezel" cx="50" cy="50" r="${R}"/>`
+    + `<defs>`
+    + `<linearGradient id="lnbz-${gid}" x1="0" y1="0" x2="1" y2="1">`
+    + `<stop class="ln-st-bzhi" offset="0"/><stop class="ln-st-bzmid" offset=".45"/>`
+    + `<stop class="ln-st-bzlo" offset="1"/></linearGradient>`
+    + `<radialGradient id="lngl-${gid}" cx=".38" cy=".3" r=".9">`
+    + `<stop class="ln-st-glhi" offset="0"/><stop class="ln-st-glmid" offset=".55"/>`
+    + `<stop class="ln-st-gllo" offset="1"/></radialGradient>`
+    + `<clipPath id="lncl-${gid}"><circle cx="50" cy="50" r="37"/></clipPath>`
+    + `</defs>`
+    + `<circle class="ln-bezel" cx="50" cy="50" r="43" stroke="url(#lnbz-${gid})"/>`
+    // a fat translucent ring behind the data ring; breathes while done
+    + (m.phase === 'done' ? `<circle class="ln-halo" cx="50" cy="50" r="${R}"/>` : '')
     + arc
-    + `<circle class="ln-glass" cx="50" cy="50" r="36"/>`
-    + inner
-    + `<path class="ln-glint" d="M30 34 A26 26 0 0 1 46 25" fill="none"/>`
+    + `<circle class="ln-glass" cx="50" cy="50" r="37" fill="url(#lngl-${gid})"/>`
+    + `<g clip-path="url(#lncl-${gid})">${inner}</g>`
+    + `<circle class="ln-lip" cx="50" cy="50" r="38.2"/>`
+    + `<path class="ln-glint" d="M25 37 A 31 31 0 0 1 41 22 A 35 35 0 0 0 28 46 Z"/>`
     + `</svg>`;
 }
 
