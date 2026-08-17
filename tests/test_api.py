@@ -1853,3 +1853,18 @@ def test_reminder_toggle_unknown_id_is_404(tmp_path, monkeypatch):
         r = tc.post("/api/reminders/toggle",
                     json={"id": "caldav:rem/nope", "completed": True})
         assert r.status_code == 404
+
+
+def test_hub_exposes_reminder_lists_and_writable(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        body = tc.get("/api/hub").json()
+        assert body["reminders_writable"] is True
+        assert {"id": "caldav:rem", "name": "Groceries"} in body["reminder_lists"]
+        # a disabled list drops out of the add targets
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        fdb.set_caldav_collection_enabled(c, "caldav:rem", False)
+        c.close()
+        assert tc.get("/api/hub").json()["reminder_lists"] == []

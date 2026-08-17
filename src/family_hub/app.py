@@ -468,6 +468,14 @@ def _visible_reminders(c) -> list:
     return [r for r in rem if r.get("list_id") not in disabled]
 
 
+def _reminder_lists(c) -> list:
+    """Enabled iCloud reminder (VTODO) lists as [{id, name}] — the targets a
+    wall-added reminder can be filed under (the To-Do surface's add control)."""
+    return [{"id": col["id"], "name": col["display_name"]}
+            for col in fdb.list_caldav_collections(c)
+            if col["comp_type"] == "VTODO" and col["enabled"]]
+
+
 def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
     """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
     or None for one with no sync (cameras/weather/climate). Drives the settings
@@ -647,8 +655,9 @@ def hub():
         todos_block = {b: [] for b in tdlogic.BUCKETS}
         todos_ok = False
     istate = _integrations_state(c)
-    # iCloud Reminders (read-only), grouped; empty unless the CalDAV integration
-    # is available AND enabled. A separate surface from the local To-Dos.
+    # iCloud Reminders, grouped; empty unless the CalDAV integration is available
+    # AND enabled. A separate surface from the local To-Dos; two-way when the
+    # operator has enabled writes (readonly=False).
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
     reminders_block = (remlogic.group(_visible_reminders(c), today)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
@@ -658,6 +667,11 @@ def hub():
         "todos": todos_block,
         "todos_ok": todos_ok,
         "reminders": reminders_block,
+        # Two-way state for the To-Do surface when it's showing iCloud: whether
+        # writes are on, and the enabled reminder lists a wall-added reminder can
+        # target (empty => read-only or no lists, so the add control hides).
+        "reminders_writable": caldav_on and _reminders_writable(c),
+        "reminder_lists": _reminder_lists(c) if caldav_on else [],
         # Which source backs the To-Do surface: 'local' (the built-in whiteboard,
         # default) or 'icloud' (the iCloud Reminders list, two-way). The frontend
         # renders the todos block or the reminders block accordingly.
