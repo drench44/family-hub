@@ -50,6 +50,11 @@ _fetch_cfg = dataclasses.replace(
     cfg, go2rtc_base=os.environ.get("GO2RTC_FETCH_BASE", cfg.go2rtc_base))
 DB_PATH = os.environ.get("DB_PATH", "data/hub.db")
 TOKEN_PATH = os.environ.get("TOKEN_PATH", "data/token.json")
+# Server-side store for UI-entered iCloud CalDAV credentials (default: next to
+# the DB / Google token, in the git-ignored data dir). caldav_service reads it.
+os.environ.setdefault(
+    "CALDAV_CREDS_PATH",
+    os.path.join(os.path.dirname(DB_PATH) or ".", "caldav.json"))
 TZ = ZoneInfo(os.environ.get("TZ", "America/Los_Angeles"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "web", "static")
 
@@ -205,7 +210,7 @@ def _init_db_once(conn) -> None:
         # Seed a row (enabled) for each available integration that has none yet.
         # Idempotent: never flips an existing toggle. This is the non-breaking
         # hinge — an existing install seeds every configured source ON.
-        for i, integ in enumerate(fintegrations.available_only(cfg, os.environ)):
+        for i, integ in enumerate(_available_only()):
             fdb.seed_integration(conn, integ["id"], integ["kind"], sort=i)
         _ensure_history_backfill(conn)   # kv-guarded, atomic; raises on failure
         if DEMO:
@@ -381,12 +386,20 @@ def _links(enabled_ids: set | None = None) -> dict:
     return {"cameras": cameras, "panels": panels, "camera_page": camera_page}
 
 
+def _available_only():
+    """The available integrations, with iCloud CalDAV availability reflecting the
+    REAL credential state (env OR the server-side creds file), so UI-entered
+    credentials make the integration appear without an env var or restart."""
+    return fintegrations.available_only(
+        cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
+
+
 def _integration_on(c, iid: str) -> bool:
     """One definition of 'this integration is on': available (configured in
     config/env) AND its toggle enabled. Every render/sync gate goes through here
     so their notions of 'on' cannot drift (Fable architecture review, rec 4)."""
     available = any(i["id"] == iid
-                    for i in fintegrations.available_only(cfg, os.environ))
+                    for i in _available_only())
     return available and fdb.integration_enabled(c, iid, default=True)
 
 
@@ -418,13 +431,20 @@ def _integrations_state(c) -> dict:
     cal_status = fdb.kv_get(c, "calendar_status") or {}
     lst = []
     enabled_ids = set()
-    for integ in fintegrations.available_only(cfg, os.environ):
+    for integ in _available_only():
         en = fdb.integration_enabled(c, integ["id"], default=True)
         if en:
             enabled_ids.add(integ["id"])
-        lst.append({"id": integ["id"], "kind": integ["kind"],
-                    "name": integ["name"], "enabled": en,
-                    "status": _integ_status(integ["id"], caldav_status, cal_status)})
+        entry = {"id": integ["id"], "kind": integ["kind"],
+                 "name": integ["name"], "enabled": en,
+                 "status": _integ_status(integ["id"], caldav_status, cal_status)}
+        if integ["id"] == "icloud_caldav":
+            # the connected Apple ID (not a secret) so settings can show it; the
+            # password is never included. readonly = 1-way (read-only) vs 2-way.
+            entry["account"] = caldav_service.caldav_credentials(os.environ)[0]
+            entry["readonly"] = fdb.integration_config(
+                c, "icloud_caldav").get("readonly", True)
+        lst.append(entry)
     return {"list": lst, "enabled_ids": enabled_ids}
 
 
@@ -739,7 +759,8 @@ def todos_delete(tid: int):
 # --- integrations (the settings menu / extension toggles) -----------------
 
 class IntegrationPatch(BaseModel):
-    enabled: bool
+    enabled: bool | None = None
+    readonly: bool | None = None   # CalDAV: 1-way (read-only, True) vs 2-way
 
 
 @app.get("/api/integrations")
@@ -751,13 +772,63 @@ def integrations_list():
 @app.patch("/api/integrations/{iid}")
 def integrations_patch(iid: str, body: IntegrationPatch):
     c = _db()
-    avail = {i["id"]: i for i in fintegrations.available_only(cfg, os.environ)}
+    avail = {i["id"]: i for i in _available_only()}
     if iid not in avail:
         raise HTTPException(404, "unknown integration")
     # ensure a row exists (a never-toggled integration has none yet), then set it
     fdb.seed_integration(c, iid, avail[iid]["kind"])
-    fdb.set_integration_enabled(c, iid, body.enabled)
-    return {"id": iid, "enabled": body.enabled}
+    if body.enabled is not None:
+        fdb.set_integration_enabled(c, iid, body.enabled)
+    if body.readonly is not None:
+        conf = fdb.integration_config(c, iid)
+        conf["readonly"] = bool(body.readonly)
+        fdb.set_integration_config(c, iid, conf)
+    return {"id": iid, "enabled": fdb.integration_enabled(c, iid),
+            "readonly": fdb.integration_config(c, iid).get("readonly", True)}
+
+
+# --- iCloud CalDAV credentials (entered in settings, stored server-side) ---
+
+class CalDavCreds(BaseModel):
+    user: str
+    app_password: str
+
+
+@app.post("/api/integrations/icloud_caldav/credentials")
+def caldav_set_credentials(body: CalDavCreds):
+    """Store the iCloud bot credentials the operator types in settings. The
+    app-specific password is written to a server-side file (mode 0600) and is
+    NEVER returned by any endpoint; only its presence is ever reported."""
+    user = (body.user or "").strip()
+    pw = (body.app_password or "").strip()
+    if not (user and pw):
+        raise HTTPException(422, "user and app_password are required")
+    caldav_service.store_credentials(user, pw)
+    global _caldav_client_built
+    _caldav_client_built = False          # next sync/test rebuilds with new creds
+    fdb.seed_integration(_db(), "icloud_caldav", "caldav")
+    return {"ok": True, "user": user}     # the Apple ID is not a secret; no password
+
+
+@app.delete("/api/integrations/icloud_caldav/credentials")
+def caldav_clear_credentials():
+    caldav_service.clear_credentials()
+    global _caldav_client_built
+    _caldav_client_built = False
+    return {"ok": True}
+
+
+@app.post("/api/integrations/icloud_caldav/test")
+def caldav_test_connection():
+    """Run a CalDAV sync now and report the outcome so credentials can be
+    verified from settings. Returns status only (ok / needs_auth / error /
+    counts) — never the password. Network call is deliberate (a user action)."""
+    global _caldav_client_built
+    _caldav_client_built = False
+    client = _get_caldav_client()
+    if client is None:
+        return {"ok": False, "error": "no credentials"}
+    return caldav_sync.sync_once(client, _db(), cfg, _now_local())
 
 
 # --- reminders (read-only iCloud VTODO) -----------------------------------

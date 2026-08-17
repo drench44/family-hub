@@ -1613,3 +1613,66 @@ def test_caldav_events_hidden_without_credentials(tmp_path, monkeypatch):
         # no credentials -> cached CalDAV events are hidden, not shown stale
         assert all(e["title"] != "Stale"
                    for e in tc.get("/api/calendar").json()["events"])
+
+
+def test_caldav_credentials_endpoints_never_leak_the_password(tmp_path, monkeypatch):
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        ids = lambda: {i["id"] for i in tc.get("/api/integrations").json()["integrations"]}
+        assert "icloud_caldav" not in ids()                       # not configured yet
+        r = tc.post("/api/integrations/icloud_caldav/credentials",
+                    json={"user": "bot@icloud.com", "app_password": "abcd-efgh"})
+        assert r.status_code == 200 and r.json()["user"] == "bot@icloud.com"
+        assert "abcd-efgh" not in r.text                          # password NEVER returned
+        # now available, account shown, password still never exposed
+        integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert integ["icloud_caldav"]["account"] == "bot@icloud.com"
+        assert "abcd-efgh" not in tc.get("/api/integrations").text
+        assert tc.post("/api/integrations/icloud_caldav/credentials",
+                       json={"user": "x", "app_password": ""}).status_code == 422
+        assert tc.delete("/api/integrations/icloud_caldav/credentials").json()["ok"] is True
+        assert "icloud_caldav" not in ids()                       # disconnected
+
+
+def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        assert tc.post("/api/integrations/icloud_caldav/test").json() \
+            == {"ok": False, "error": "no credentials"}
+
+    class _Fake:
+        def configured(self):
+            return True
+
+        def discover(self):
+            return [{"id": "cal", "name": "F", "comp": "VEVENT", "color": None}]
+
+        def fetch_ics(self, col, lo, hi):
+            return [{"href": "h", "etag": "e", "ics":
+                     "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:u1\r\n"
+                     "SUMMARY:E\r\nDTSTART;VALUE=DATE:20260820\r\n"
+                     "DTEND;VALUE=DATE:20260821\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"}]
+
+        def fetch_todos(self, col):
+            return []
+    monkeypatch.setattr(appmod, "_get_caldav_client", lambda: _Fake())
+    with TestClient(appmod.app) as tc:
+        st = tc.post("/api/integrations/icloud_caldav/test").json()
+        assert st["ok"] is True and st["events"] == 1
+
+
+def test_caldav_readonly_mode_toggle(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        get = lambda: {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert get()["icloud_caldav"]["readonly"] is True         # defaults to 1-way
+        assert tc.patch("/api/integrations/icloud_caldav",
+                        json={"readonly": False}).json()["readonly"] is False
+        assert get()["icloud_caldav"]["readonly"] is False         # 2-way persisted
+        # a plain enable toggle doesn't reset the mode
+        tc.patch("/api/integrations/icloud_caldav", json={"enabled": True})
+        assert get()["icloud_caldav"]["readonly"] is False

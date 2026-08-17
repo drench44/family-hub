@@ -19,6 +19,7 @@ URL, prefixed 'caldav:' by the sync so events route to the CalDAV source scope.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 
@@ -27,14 +28,57 @@ log = logging.getLogger("family_hub.caldav")
 ICLOUD_CALDAV_URL = "https://caldav.icloud.com"
 
 
+def _creds_path(env):
+    """Where UI-entered credentials are stored server-side — a file in the data
+    dir (like the Google token), never in git, never in an env the operator has
+    to hand out. Set by app.py from DB_PATH's dir."""
+    return env.get("CALDAV_CREDS_PATH")
+
+
 def caldav_credentials(env=None):
+    """(user, app_password), from env first (advanced/backward-compat) then the
+    server-side creds file (the settings UI writes it). Neither -> (None, None)."""
     env = env if env is not None else os.environ
-    return (env.get("ICLOUD_CALDAV_USER"),
-            env.get("ICLOUD_CALDAV_APP_PASSWORD"))
+    user, pw = (env.get("ICLOUD_CALDAV_USER"),
+                env.get("ICLOUD_CALDAV_APP_PASSWORD"))
+    if user and pw:
+        return user, pw
+    path = _creds_path(env)
+    if path and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+            return d.get("user"), d.get("app_password")
+        except Exception:
+            log.warning("caldav creds file unreadable: %s", path, exc_info=True)
+    return None, None
+
+
+def store_credentials(user: str, app_password: str, env=None) -> None:
+    """Persist UI-entered credentials to the server-side file, mode 0600. The
+    plaintext never leaves the box; no API ever returns it."""
+    env = env if env is not None else os.environ
+    path = _creds_path(env)
+    if not path:
+        raise RuntimeError("CALDAV_CREDS_PATH not set")
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"user": user, "app_password": app_password}, f)
+
+
+def clear_credentials(env=None) -> None:
+    env = env if env is not None else os.environ
+    path = _creds_path(env)
+    if path and os.path.exists(path):
+        os.remove(path)
 
 
 def configured(env=None) -> bool:
-    """Feature flag: both the bot Apple ID and its app-specific password set."""
+    """Feature flag: both the bot Apple ID and its app-specific password set
+    (via env OR the server-side creds file)."""
     user, pw = caldav_credentials(env)
     return bool(user and pw)
 

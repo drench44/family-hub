@@ -23,11 +23,14 @@ def caldav_configured(env: dict) -> bool:
                 and env.get("ICLOUD_CALDAV_APP_PASSWORD"))
 
 
-def available_integrations(cfg, env: dict | None = None) -> list[dict]:
+def available_integrations(cfg, env: dict | None = None,
+                           caldav_ok: bool | None = None) -> list[dict]:
     """The integrations available for THIS config/env, in display order. Each is
     {id, kind, name, available}. `available=False` entries are returned too so a
     caller can explain why something isn't shown, but the API/seeding filter to
-    available ones."""
+    available ones. `caldav_ok` lets the caller inject the real credential state
+    (env OR the server-side creds file — see caldav_service.configured); None
+    falls back to the env-only check."""
     env = env or {}
     cals = getattr(cfg, "calendars", []) or []
     out: list[dict] = []
@@ -41,7 +44,7 @@ def available_integrations(cfg, env: dict | None = None) -> list[dict]:
     add("ics_calendar", "calendar", "Shared / ICS calendars",
         any(c.get("kind") == "ics" for c in cals))
     add("icloud_caldav", "caldav", "iCloud (CalDAV)",
-        caldav_configured(env))
+        caldav_ok if caldav_ok is not None else caldav_configured(env))
     add("cameras", "cameras", "Cameras",
         bool(getattr(cfg, "go2rtc_base", "")
              or (getattr(cfg, "cameras", []) or [])))
@@ -52,6 +55,8 @@ def available_integrations(cfg, env: dict | None = None) -> list[dict]:
     return out
 
 
-def available_only(cfg, env: dict | None = None) -> list[dict]:
+def available_only(cfg, env: dict | None = None,
+                   caldav_ok: bool | None = None) -> list[dict]:
     """available_integrations() filtered to the ones actually configured."""
-    return [i for i in available_integrations(cfg, env) if i["available"]]
+    return [i for i in available_integrations(cfg, env, caldav_ok)
+            if i["available"]]

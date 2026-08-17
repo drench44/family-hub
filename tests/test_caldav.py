@@ -292,3 +292,21 @@ def test_upsert_cal_object_synced_never_clobbers_pending(conn):
     row = fdb.list_cal_objects(conn)[0]
     assert row["summary"] == "local edit" and row["sync_state"] == "PENDING_UPDATE"
     assert [o["id"] for o in fdb.caldav_pending(conn)] == ["caldav:x/u1"]  # in the outbox
+
+
+def test_caldav_credentials_file_storage(tmp_path):
+    import os
+    import stat
+    path = str(tmp_path / "caldav.json")
+    env = {"CALDAV_CREDS_PATH": path}
+    assert caldav_service.configured(env) is False
+    caldav_service.store_credentials("bot@icloud.com", "abcd-efgh", env)
+    assert caldav_service.configured(env) is True
+    assert caldav_service.caldav_credentials(env) == ("bot@icloud.com", "abcd-efgh")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600           # secret file perms
+    # env creds take precedence over the file (advanced/backward-compat)
+    env2 = {**env, "ICLOUD_CALDAV_USER": "env@x",
+            "ICLOUD_CALDAV_APP_PASSWORD": "envpw"}
+    assert caldav_service.caldav_credentials(env2) == ("env@x", "envpw")
+    caldav_service.clear_credentials(env)
+    assert caldav_service.configured(env) is False

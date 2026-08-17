@@ -736,3 +736,21 @@ def caldav_pending(conn) -> list[dict]:
         "SELECT * FROM cal_objects WHERE sync_state != 'SYNCED' "
         "ORDER BY local_modified_at, id")
     return [dict(r) for r in rows]
+
+
+def integration_config(conn, iid: str) -> dict:
+    """Per-integration JSON config (e.g. CalDAV's readonly / 1-way vs 2-way)."""
+    row = conn.execute("SELECT config_json FROM integrations WHERE id = ?",
+                       (iid,)).fetchone()
+    if row is None:
+        return {}
+    try:
+        return json.loads(row["config_json"] or "{}")
+    except Exception:
+        return {}
+
+
+def set_integration_config(conn, iid: str, config: dict) -> None:
+    conn.execute("UPDATE integrations SET config_json = ? WHERE id = ?",
+                 (json.dumps(config), iid))
+    conn.commit()
