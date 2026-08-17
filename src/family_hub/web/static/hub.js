@@ -1432,14 +1432,30 @@ function wxVal(v, suffix) {
   return (v == null || String(v) === '') ? '–' : `${escapeHtml(String(v))}${suffix}`;
 }
 
-/* A quality chip (.q good|warn) — only when there's a label to show. */
-function wxChip(cls, label) {
-  return (label != null && String(label).trim() !== '')
-    ? ` <span class="q ${cls}">${escapeHtml(String(label))}</span>` : '';
-}
-
 function wxStat(k, vHtml) {
   return `<div class="stat"><div class="k">${k}</div><div class="v num">${vHtml}</div></div>`;
+}
+
+/* A weather stat with a severity meter — the UV and Air-Quality metrics. The
+   value is tinted to its `band` (the standard EPA/AQI scale from the NUMBER when
+   present, else a category-text fallback — see the caller), the category shows
+   as a small label, and a proportional bar fills to `pct` (0..100) in the band's
+   color. `band` is '' | 'good' | 'ok' | 'warn' | 'crit'; only good/warn/crit
+   tint (an 'ok'/absent reading stays neutral ink over a grey bar). */
+function wxMeterStat(k, value, suffix, band, label, pct) {
+  const st = (band === 'good' || band === 'warn' || band === 'crit') ? ` st-${band}` : '';
+  // The category is normally a quiet grey sub-label under the colored number.
+  // But when the number is MISSING, the label is the only signal, so it inherits
+  // the band tint too — a feed that omits the number but says "Unhealthy" must
+  // never read as calm grey (see uvBand/aqiBand text fallback in common.js).
+  const missing = value == null || String(value).trim() === '' || !isFinite(Number(value));
+  const lblCls = missing ? `wx-band${st}` : 'wx-band';
+  const lbl = (label != null && String(label).trim() !== '')
+    ? `<span class="${lblCls}">${escapeHtml(String(label))}</span>` : '';
+  return `<div class="stat wx-meter"><div class="k">${k}</div>`
+    + `<div class="v num${st}">${wxVal(value, suffix)}${lbl}</div>`
+    + `<div class="bar" aria-hidden="true"><i class="bar-fill${st}" style="width:${pct}%"></i></div>`
+    + `</div>`;
 }
 
 /* Temperature curve for the weather card: a ~24h window (observed past +
@@ -1488,17 +1504,16 @@ function weatherCardHtml(wx) {
   const stalePart = wx.stale ? ` · <span class="wx-stale">stale</span>` : '';
   const cond = `${escapeHtml(condText)}${feelsPart}${stalePart}`;
 
-  // Chip logic: UV warns when high (>=6 or a "high"-ish desc); AQI is good when
-  // the category says so or the number is <=50, else it warns.
-  const uvWarn = Number(wx.uv) >= 6 || /high|extreme|severe|very/i.test(String(wx.uv_desc || ''));
-  const uvChip = wxChip(uvWarn ? 'warn' : 'good', wx.uv_desc);
-  const aqiGood = /good/i.test(String(wx.aqi_cat || '')) || (wx.aqi != null && Number(wx.aqi) <= 50);
-  const aqiChip = wxChip(aqiGood ? 'good' : 'warn', wx.aqi_cat);
-
+  // UV + AQI get a colored severity meter (wxMeterStat). Color follows the
+  // NUMBER (uvBand/aqiBand); the feed's category text is only the label. Meter
+  // fill: UV against a full-scale 11 (EPA extreme), AQI against 200 (its
+  // "very unhealthy" line), both clamped so an off-scale reading can't overflow.
+  const uvB = uvBand(wx.uv) || uvBandText(wx.uv_desc);
+  const aqiB = aqiBand(wx.aqi) || aqiBandText(wx.aqi_cat);
   const stats = wxStat('High', wxVal(wx.high, '°'))
     + wxStat('Low', wxVal(wx.low, '°'))
-    + wxStat('UV Index', `${wxVal(wx.uv, '')}${uvChip}`)
-    + wxStat('Air Quality', `${wxVal(wx.aqi, '')}${aqiChip}`)
+    + wxMeterStat('UV Index', wx.uv, '', uvB, wx.uv_desc, Math.round(clampFrac(wx.uv, 11) * 100))
+    + wxMeterStat('Air Quality', wx.aqi, '', aqiB, wx.aqi_cat, Math.round(clampFrac(wx.aqi, 200) * 100))
     + wxStat('Humidity', wxVal(wx.humidity, '%'))
     + wxStat('Dew point', wxVal(wx.dew_point, '°'));
 
@@ -1565,13 +1580,6 @@ async function fetchWeather() {
 
 /* ------------------------------------------------- native climate card */
 
-/* A room runs "hot" (and so warns) at or above HOT_F. The mockup marks a 77°
-   room warn, but a real indoor room that warm is normal in summer; 80°F is a
-   defensible "actually too hot inside" line. TUNABLE at T10/dogfood against the
-   real house feed. A stale sensor also warns (see roomWarns), independent of
-   temperature. */
-const HOT_F = 80;
-
 /* The outdoor-air sensor is EXCLUDED from the house-climate card — its
    temperature already shows in the Weather section above, so listing it here is
    redundant. The backend /api/tiles/climate is a FAITHFUL passthrough (it
@@ -1587,17 +1595,24 @@ function isIndoorRoom(room) {
   return !OUTDOOR_KEYS.has(name);
 }
 
-/* A room warns when its sensor is stale OR it runs hot (temp_f >= HOT_F). A
-   non-finite / missing temp_f never triggers the hot branch (it shows as --). */
-function roomWarns(room) {
-  const t = Number(room.temp_f);
-  const hot = room.temp_f != null && String(room.temp_f) !== '' && isFinite(t) && t >= HOT_F;
-  return !!room.stale || hot;
+/* The room's overall comfort band: the worst of its temperature band, its
+   humidity band, and a stale sensor (which warns on its own, like the old
+   grid). Comfortable readings rank 'good' (a calm green dot); no readings at
+   all rank '' (a neutral dot). Drives the status dot + the optional row class. */
+function roomBand(room) {
+  const rank = { '': 0, ok: 1, good: 1, warn: 2, crit: 3 };
+  let worst = 0;
+  const bump = (b) => { if (rank[b] > worst) worst = rank[b]; };
+  bump(tempBandF(room.temp_f));
+  bump(humidityBand(room.humidity));
+  if (room && room.stale) bump('warn');
+  return ['', 'good', 'warn', 'crit'][worst];
 }
 
-/* One room row: NAME · temp_f° · humidity%. Missing/non-finite temp -> "--",
-   missing humidity -> "—". Values are rounded to whole units to match the
-   mockup's clean glance. The name is escaped. */
+/* One room row: a comfort status dot · NAME · temp_f° · humidity%. Missing/
+   non-finite temp -> "--", missing humidity -> "—". Out-of-range temp/humidity
+   cells are tinted to their band (warn amber / crit red); comfortable cells stay
+   neutral. Values are rounded to whole units; the name is escaped. */
 function roomRowHtml(room) {
   const t = Number(room.temp_f);
   const tempOk = room.temp_f != null && String(room.temp_f) !== '' && isFinite(t);
@@ -1606,10 +1621,17 @@ function roomRowHtml(room) {
   const humOk = room.humidity != null && String(room.humidity) !== '' && isFinite(h);
   const humCell = humOk ? `${Math.round(h)}%` : '—';
   const name = escapeHtml(String(room.name == null ? '' : room.name));
-  return `<div class="room${roomWarns(room) ? ' warn' : ''}">`
+  const tb = tempBandF(room.temp_f);
+  const hb = humidityBand(room.humidity);
+  const cell = (b) => ((b === 'warn' || b === 'crit') ? ` st-${b}` : '');
+  const band = roomBand(room);
+  const rowCls = (band === 'warn' || band === 'crit') ? ` ${band}` : '';
+  const dotCls = band ? ` st-${band}` : '';
+  return `<div class="room${rowCls}">`
+    + `<span class="dot${dotCls}"></span>`
     + `<span class="rk">${name}</span>`
-    + `<span class="rv num">${tempCell}</span>`
-    + `<span class="rh num">${humCell}</span>`
+    + `<span class="rv num${cell(tb)}">${tempCell}</span>`
+    + `<span class="rh num${cell(hb)}">${humCell}</span>`
     + `</div>`;
 }
 
