@@ -1495,6 +1495,29 @@ def test_integrations_list_toggle_and_hub_block(tmp_path, monkeypatch):
         assert c.patch("/api/integrations/nope", json={"enabled": False}).status_code == 404
 
 
+def test_chores_todos_toggle_via_integrations_and_hub_block(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {})  # nothing else configured
+    with TestClient(appmod.app) as c:
+        ids = {i["id"]: i for i in c.get("/api/integrations").json()["integrations"]}
+        # always present, seeded enabled, tagged as features
+        assert ids["chores"]["enabled"] is True
+        assert ids["todos"]["enabled"] is True
+        assert ids["chores"]["group"] == "feature"
+        assert ids["todos"]["group"] == "feature"
+        # /api/hub carries the same entries incl. group
+        hub = c.get("/api/hub").json()
+        hids = {i["id"]: i for i in hub["integrations"]}
+        assert hids["chores"]["group"] == "feature"
+        # toggle chores off -> flag flips (data still served; UI hides it)
+        assert c.patch("/api/integrations/chores", json={"enabled": False}).status_code == 200
+        hub2 = c.get("/api/hub").json()
+        assert next(i for i in hub2["integrations"] if i["id"] == "chores")["enabled"] is False
+        # round-trip: toggle it back on -> /api/hub reports it enabled again
+        assert c.patch("/api/integrations/chores", json={"enabled": True}).status_code == 200
+        hub3 = c.get("/api/hub").json()
+        assert next(i for i in hub3["integrations"] if i["id"] == "chores")["enabled"] is True
+
+
 def test_disabling_calendar_integration_hides_its_events(tmp_path, monkeypatch):
     appmod = _reload_with(tmp_path, monkeypatch, {
         "calendars": [{"id": "fam", "kind": "google", "label": "Fam"}]})
