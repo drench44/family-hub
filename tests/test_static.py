@@ -695,3 +695,12 @@ def test_off_features_hide_their_wall_surface():
                      CSS), "chores-off must hide the people column on the wall"
     assert re.search(r"body\.integ-off-todos[^\{]*\.todo-slot[^\{]*\{[^}]*display:\s*none",
                      CSS), "todos-off must hide the to-do slot on the wall"
+
+
+def test_all_off_empty_state_present_and_wired():
+    index = (STATIC / "index.html").read_text()
+    assert 'id="hub-empty-msg"' in index, "missing all-off empty-state element"
+    assert "body.hub-empty" in CSS, "hub-empty visibility rules missing"
+    hub = (STATIC / "hub.js").read_text()
+    assert "updateTabVisibility" in hub and "TAB_FEATURES" in hub, \
+        "data-driven tab visibility missing"
