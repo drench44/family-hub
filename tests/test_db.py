@@ -166,6 +166,118 @@ def test_schema_migrates_pre_detail_events_table(tmp_path):
     c.close()
 
 
+def test_events_same_id_on_two_calendars_coexist(conn):
+    """Regression for issue #30: Google reuses one event's id across every
+    calendar it appears on, so 'Dentist' on both parents' calendars arrives as
+    two rows with the SAME id. The composite PK (calendar_id, id) lets them
+    coexist instead of aborting the whole sync on a duplicate-id INSERT."""
+    fdb.replace_events(conn, [
+        {"id": "shared", "calendar_id": "mom", "title": "Dentist",
+         "start_ts": "2026-08-20T10:00:00-07:00",
+         "end_ts": "2026-08-20T11:00:00-07:00", "all_day": 0},
+        {"id": "shared", "calendar_id": "dad", "title": "Dentist",
+         "start_ts": "2026-08-20T10:00:00-07:00",
+         "end_ts": "2026-08-20T11:00:00-07:00", "all_day": 0}])
+    rows = fdb.list_events(conn)
+    assert len(rows) == 2 and {r["calendar_id"] for r in rows} == {"mom", "dad"}
+    # a same-(calendar_id, id) duplicate within one batch replaces, never crashes
+    fdb.replace_events(conn, [
+        {"id": "dup", "calendar_id": "mom", "title": "A",
+         "start_ts": "2026-08-21", "end_ts": "2026-08-22", "all_day": 1},
+        {"id": "dup", "calendar_id": "mom", "title": "B",
+         "start_ts": "2026-08-21", "end_ts": "2026-08-22", "all_day": 1}])
+    dup = [r for r in fdb.list_events(conn) if r["id"] == "dup"]
+    assert len(dup) == 1 and dup[0]["title"] == "B"
+
+
+def test_schema_migrates_single_id_pk_events_to_composite(tmp_path):
+    """A DB whose events table still has the bare `id` PRIMARY KEY is rebuilt to
+    PRIMARY KEY(calendar_id, id) on ensure_schema, preserving rows, so the
+    cross-calendar duplicate that used to abort sync now stores cleanly."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.execute("""CREATE TABLE events(
+        id TEXT PRIMARY KEY, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
+        start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
+        updated TEXT, location TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '', color_id TEXT)""")
+    c.execute("INSERT INTO events(id, calendar_id, title, start_ts, end_ts, all_day) "
+              "VALUES('e1','mom','Kept','2026-08-01','2026-08-01',1)")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.list_events(c)[0]["title"] == "Kept"            # row preserved
+    fdb.replace_events(c, [
+        {"id": "e1", "calendar_id": "mom", "title": "Kept",
+         "start_ts": "2026-08-01", "end_ts": "2026-08-01", "all_day": 1},
+        {"id": "e1", "calendar_id": "dad", "title": "Kept",
+         "start_ts": "2026-08-01", "end_ts": "2026-08-01", "all_day": 1}])
+    assert len(fdb.list_events(c)) == 2                        # composite PK active
+    c.close()
+
+
+def test_deleted_person_id_is_not_reused(conn):
+    """Regression for issue #31: a deleted person's id must not be handed to the
+    next person, or the newcomer inherits the deleted one's frozen history."""
+    a = fdb.add_person(conn, "Ann", "#111111")
+    assert fdb.delete_person(conn, a) is True
+    b = fdb.add_person(conn, "Bea", "#222222")
+    assert b > a
+
+
+def test_deleted_chore_id_is_not_reused(conn):
+    """Regression for issue #31: same guarantee for chores (occurrence_log keeps
+    frozen rows keyed by chore id)."""
+    mk = lambda t: fdb.add_chore(
+        conn, title=t, icon="", schedule_kind="daily", days_mask=0,
+        assign_kind="rotation", fixed_person_id=None, rotation_order=[],
+        rotation_epoch="2026-08-01")
+    a = mk("A")
+    assert fdb.delete_chore(conn, a) is True
+    assert mk("B") > a
+
+
+def test_schema_adds_autoincrement_to_legacy_people(tmp_path):
+    """A DB whose people table predates AUTOINCREMENT is rebuilt on ensure_schema
+    with the id counter pinned to the max preserved id, so a later delete+add
+    gets max+1 and never reuses the freed id (issue #31)."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.execute("""CREATE TABLE people(
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)""")
+    c.execute("INSERT INTO people(id, name, color) VALUES(5, 'Old', '#abcabc')")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.list_people(c, include_inactive=True)[0]["id"] == 5   # row preserved
+    fdb.delete_person(c, 5)
+    assert fdb.add_person(c, "New", "#defdef") == 6                  # max+1, not reused
+    c.close()
+
+
+def test_schema_adds_autoincrement_to_legacy_chores(tmp_path):
+    """Same as the people migration, for chores: a pre-AUTOINCREMENT chores table
+    is rebuilt with the id counter pinned, so a delete+add gets max+1 and never
+    reuses the freed id (issue #31, the legacy-DB path for chores)."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.execute("""CREATE TABLE chores(
+        id INTEGER PRIMARY KEY, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+        schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+        days_mask INTEGER NOT NULL DEFAULT 0,
+        assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+        fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+        rotation_epoch TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)""")
+    c.execute("INSERT INTO chores(id, title, schedule_kind, assign_kind, rotation_epoch) "
+              "VALUES(5, 'Old', 'daily', 'rotation', '2026-08-01')")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.list_chores(c, include_inactive=True)[0]["id"] == 5   # row preserved
+    fdb.delete_chore(c, 5)
+    nid = fdb.add_chore(c, title="New", icon="", schedule_kind="daily", days_mask=0,
+                        assign_kind="rotation", fixed_person_id=None,
+                        rotation_order=[], rotation_epoch="2026-08-01")
+    assert nid == 6                                                  # max+1, not reused
+    c.close()
+
+
 def test_kv(conn):
     assert fdb.kv_get(conn, "calendar_status") is None
     fdb.kv_set(conn, "calendar_status", {"ok": True})

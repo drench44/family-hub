@@ -103,10 +103,29 @@ def test_demo_seed_is_idempotent_across_reopen(demo_app):
     """Re-opening the connection must not double-seed (guarded on no people)."""
     with TestClient(demo_app.app) as c:
         first = len(c.get("/api/hub").json()["people"])
-    demo_app._conn = None   # force a fresh connect on the next open
+    demo_app._db_initialized = False   # force the one-time seed to re-run
     with TestClient(demo_app.app) as c:
         second = len(c.get("/api/hub").json()["people"])
     assert first == 3 and second == 3
+
+
+def test_demo_seed_skips_when_any_seeded_table_nonempty(demo_app, tmp_path):
+    """Regression for issue #36: a real db that is people-less but holds todos or
+    events must NOT be seeded or wiped by DEMO mode (the old guard checked only
+    people)."""
+    from family_hub import db as fdb, demo as fdemo
+    c = fdb.connect(str(tmp_path / "real.db"))
+    fdb.ensure_schema(c)
+    fdb.add_todo(c, "Real user todo", "now")
+    fdb.replace_events(c, [{"id": "real", "calendar_id": "real-cal",
+                            "title": "Real event", "start_ts": "2026-08-20",
+                            "end_ts": "2026-08-21", "all_day": 1}])
+    assert fdemo.is_unseeded(c) is False
+    demo_app._ensure_demo_seed(c)   # must be a no-op, not a wipe
+    assert [t["title"] for t in fdb.list_todos(c)] == ["Real user todo"]
+    assert fdb.list_events(c)[0]["title"] == "Real event"
+    assert fdb.list_people(c) == []   # nothing seeded over the real data
+    c.close()
 
 
 def test_no_demo_env_seeds_nothing(tmp_path, monkeypatch):

@@ -48,6 +48,19 @@ def _add_daily_fixed(conn, title, icon, person_id, epoch):
 _SEEDED_TABLES = ("completions", "occurrence_log", "todos", "events", "chores", "people")
 
 
+def is_unseeded(conn) -> bool:
+    """True only if EVERY table seed_demo writes into is empty. The seed (and the
+    clear_demo it triggers on a partial failure) must run only against a truly
+    empty db: a real family's db can be people-less while still holding todos,
+    events, or chore history (todos need no people; or every person was deleted),
+    and seeding would then wipe real events and mix demo rows into real ones
+    (issue #36). Guard on all seeded tables, not just people."""
+    for tbl in _SEEDED_TABLES:
+        if conn.execute(f"SELECT 1 FROM {tbl} LIMIT 1").fetchone() is not None:
+            return False
+    return True
+
+
 def clear_demo(conn) -> None:
     """Undo everything seed_demo writes, back to an empty db. app.py calls this
     when a seed raises partway: the fdb helpers each self-commit, so a failed
