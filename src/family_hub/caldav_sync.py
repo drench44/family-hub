@@ -88,6 +88,39 @@ def _store_object(conn, collection_id: str, comp_type: str, obj: dict,
         log.warning("caldav object store skipped (%s)", collection_id, exc_info=True)
 
 
+def flush_pending(client, conn, collections, now_iso: str) -> dict:
+    """Push the outbox — locally-edited cal_objects (wall edits) — to iCloud: PUT
+    creates/updates, DELETE removals. Only collections discovered this round are
+    flushable; a row whose collection wasn't seen this pull waits for the next.
+    Per-row failures are isolated and recorded (the row stays PENDING and retries
+    next sync); an auth failure is surfaced so the wall shows Reconnect. Returns
+    {pushed, errors, needs_auth}. Never raises — a bad push must not blank the
+    calendar, same fails-soft rule as the read path."""
+    col_by_id = {"caldav:" + c["id"]: c for c in collections}
+    pushed, errors, needs_auth = 0, [], False
+    for row in fdb.caldav_pending(conn):
+        col = col_by_id.get(row["collection_id"])
+        if col is None:
+            continue   # collection not in this discover; retry next round
+        try:
+            if row["sync_state"] == "PENDING_DELETE":
+                if row.get("href"):
+                    client.delete_object(col, row["href"])
+                fdb.delete_cal_object_row(conn, row["id"])
+            else:   # PENDING_CREATE | PENDING_UPDATE
+                res = client.put_object(col, row.get("href"), row["raw_ics"])
+                fdb.mark_cal_object_pushed(
+                    conn, row["id"], (res or {}).get("href") or row.get("href"),
+                    (res or {}).get("etag"))
+            pushed += 1
+        except Exception as e:
+            fdb.record_cal_object_error(conn, row["id"], str(e), now_iso)
+            errors.append(f"{row['id']}: {e}")
+            needs_auth = needs_auth or _is_auth_error(e)
+            log.warning("caldav push failed for %s", row["id"], exc_info=True)
+    return {"pushed": pushed, "errors": errors, "needs_auth": needs_auth}
+
+
 def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
     prior = fdb.kv_get(conn, "caldav_status") or {}
 
@@ -205,6 +238,19 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         fdb.kv_set(conn, "caldav_reminders", rem)
         fdb.replace_events_caldav(
             conn, events, keep_ids=tuple(set(failed) | set(suspicious)))
+
+        # Two-way: push the outbox (wall edits) to iCloud AFTER the pull, so the
+        # pull's prune has already kept un-pushed PENDING rows (no create-then-
+        # prune race). Gated on the operator's 1-way/2-way choice via the
+        # integration's `readonly` flag (default True = read-only until they opt
+        # into writes in settings — never touch someone's iCloud unasked). The
+        # read path overlays these same PENDING edits, so the wall reflects a
+        # click instantly regardless of when the push lands.
+        cfg_row = fdb.integration_config(conn, "icloud_caldav") or {}
+        if not cfg_row.get("readonly", True):
+            flushed = flush_pending(client, conn, collections, now.isoformat())
+            errors.extend(flushed["errors"])
+            needs_auth = needs_auth or flushed["needs_auth"]
 
         st = {"ok": not errors, "last_sync": now.isoformat(),
               "events": len(events), "reminders": remlogic.open_count(rem)}

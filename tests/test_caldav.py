@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from family_hub import caldav_service, caldav_sync
 from family_hub import db as fdb
+from family_hub import reminders as remlogic
 
 
 def _ics(uid, summary, start, end):
@@ -334,3 +335,128 @@ def test_caldav_sync_records_collections(conn):
     cols = {c["id"]: c for c in fdb.list_caldav_collections(conn)}
     assert cols["caldav:cal"]["comp_type"] == "VEVENT" and cols["caldav:cal"]["display_name"] == "Family"
     assert cols["caldav:rem"]["comp_type"] == "VTODO"   # reminder list recorded too
+
+
+# --- two-way write path (outbox flush) ------------------------------------
+
+_UTC_NOW = dt.datetime(2026, 8, 17, 12, 0, 0, tzinfo=dt.timezone.utc)
+
+
+class WriteFake(FakeCalDav):
+    """FakeCalDav plus a recording write side — an in-memory 'server' so the
+    outbox flush is testable without a network."""
+    def __init__(self, collections):
+        super().__init__(collections)
+        self.puts = []      # (collection_id, href_or_None, ics)
+        self.deletes = []   # (collection_id, href)
+        self._n = 0
+
+    def put_object(self, collection, href, ics):
+        self.puts.append((collection["id"], href, ics))
+        if href is None:                       # create -> server assigns a URL
+            self._n += 1
+            href = f"h/{collection['id']}/new{self._n}"
+        return {"href": href, "etag": "srv-etag"}
+
+    def delete_object(self, collection, href):
+        self.deletes.append((collection["id"], href))
+
+
+def _seed_vtodo_collection(conn, cid="rem", name="Groceries"):
+    fdb.upsert_caldav_collection(conn, "caldav:" + cid, "VTODO", name, None,
+                                 "2026-08-17T00:00:00")
+
+
+def test_flush_pushes_create_and_marks_synced(conn):
+    _seed_vtodo_collection(conn)
+    ics = remlogic.build_vtodo("U-NEW", "Water plants", _UTC_NOW)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U-NEW", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "U-NEW", "summary": "Water plants",
+        "raw_ics": ics}, "t0")
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["pushed"] == 1 and client.puts[0][1] is None   # create = no href
+    row = fdb.get_cal_object(conn, "caldav:rem/U-NEW")
+    assert row["sync_state"] == "SYNCED"
+    assert row["href"] == "h/rem/new1" and row["etag"] == "srv-etag"
+    assert fdb.caldav_pending(conn) == []                     # outbox drained
+
+
+def test_flush_pushes_update_from_toggle(conn):
+    _seed_vtodo_collection(conn)
+    fdb.upsert_cal_object_synced(conn, {
+        "id": "caldav:rem/t1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "href": "h/rem/0", "etag": "e0", "summary": "Buy milk",
+        "raw_ics": _VTODO, "sequence": 0, "last_modified": None})
+    done = remlogic.set_completed(_VTODO, True, _UTC_NOW)
+    assert fdb.queue_cal_object_update(conn, "caldav:rem/t1", done, "Buy milk", "t0")
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert client.puts[0][1] == "h/rem/0"                     # update = PUT to href
+    assert "STATUS:COMPLETED" in client.puts[0][2]
+    assert fdb.get_cal_object(conn, "caldav:rem/t1")["sync_state"] == "SYNCED"
+
+
+def test_flush_deletes_and_removes_row(conn):
+    _seed_vtodo_collection(conn)
+    fdb.upsert_cal_object_synced(conn, {
+        "id": "caldav:rem/t1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "href": "h/rem/0", "etag": "e0", "summary": "Buy milk",
+        "raw_ics": _VTODO, "sequence": 0, "last_modified": None})
+    assert fdb.queue_cal_object_delete(conn, "caldav:rem/t1", "t0")
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert client.deletes == [("rem", "h/rem/0")]
+    assert fdb.get_cal_object(conn, "caldav:rem/t1") is None  # row gone locally
+
+
+def test_delete_of_unpushed_create_never_hits_server(conn):
+    _seed_vtodo_collection(conn)
+    ics = remlogic.build_vtodo("U-NEW", "Oops", _UTC_NOW)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U-NEW", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "U-NEW", "summary": "Oops",
+        "raw_ics": ics}, "t0")
+    # deleting a create that never synced just drops the row (nothing on server)
+    assert fdb.queue_cal_object_delete(conn, "caldav:rem/U-NEW", "t1")
+    assert fdb.get_cal_object(conn, "caldav:rem/U-NEW") is None
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    caldav_sync.flush_pending(client, conn, client.discover(), "t2")
+    assert client.puts == [] and client.deletes == []
+
+
+def test_flush_isolates_and_records_error_keeping_pending(conn):
+    _seed_vtodo_collection(conn)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "U1", "summary": "x", "raw_ics": remlogic.build_vtodo("U1", "x", _UTC_NOW)}, "t0")
+
+    class Boom(WriteFake):
+        def put_object(self, collection, href, ics):
+            raise RuntimeError("HTTP 401 Unauthorized")
+
+    client = Boom([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["pushed"] == 0 and res["needs_auth"] is True
+    row = fdb.get_cal_object(conn, "caldav:rem/U1")
+    assert row["sync_state"] == "PENDING_CREATE"              # still queued, retries
+    assert row["sync_attempts"] == 1 and "401" in row["last_sync_error"]
+
+
+def test_sync_once_skips_flush_when_readonly(conn):
+    _seed_vtodo_collection(conn)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "U1", "summary": "x", "raw_ics": remlogic.build_vtodo("U1", "x", _UTC_NOW)}, "t0")
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO", "todos": []}])
+    # default: readonly (1-way) -> outbox is NOT pushed
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert client.puts == []
+    assert fdb.get_cal_object(conn, "caldav:rem/U1")["sync_state"] == "PENDING_CREATE"
+    # switch to 2-way -> the next sync flushes it
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert len(client.puts) == 1
+    assert fdb.get_cal_object(conn, "caldav:rem/U1")["sync_state"] == "SYNCED"

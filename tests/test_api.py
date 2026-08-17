@@ -1738,3 +1738,118 @@ def test_todo_source_setting(tmp_path, monkeypatch):
         assert tc.get("/api/hub").json()["todo_source"] == "icloud"
         assert tc.patch("/api/todo-source", json={"source": "nope"}).status_code == 422
         assert tc.patch("/api/todo-source", json={"source": "local"}).json()["source"] == "local"
+
+
+# --- two-way iCloud reminder writes (toggle / add / delete) ---------------
+
+_RVTODO = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t1\r\n"
+           "SUMMARY:Buy milk\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n"
+           "END:VCALENDAR\r\n")
+
+
+def _caldav_env(monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "abcd-efgh")
+
+
+def _seed_reminder(tmp_path, readonly):
+    """Seed the same DB file the app uses: a writable/read-only CalDAV integration,
+    one reminder list, and one open reminder (pulled + cached)."""
+    from family_hub import reminders as remlogic
+    c = fdb.connect(str(tmp_path / "hub.db"))
+    fdb.ensure_schema(c)
+    fdb.seed_integration(c, "icloud_caldav", "caldav")
+    fdb.set_integration_config(c, "icloud_caldav", {"readonly": readonly})
+    fdb.upsert_caldav_collection(c, "caldav:rem", "VTODO", "Groceries", None,
+                                 "2026-08-17T00:00:00")
+    fdb.upsert_cal_object_synced(c, {
+        "id": "caldav:rem/t1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "href": "h/rem/0", "etag": "e0", "summary": "Buy milk",
+        "raw_ics": _RVTODO, "sequence": 0, "last_modified": None})
+    fdb.kv_set(c, "caldav_reminders",
+               remlogic.parse_vtodo(_RVTODO, "caldav:rem", "Groceries"))
+    c.close()
+
+
+def _titles(buckets):
+    return [x["title"] for b in buckets.values() for x in b]
+
+
+def test_reminder_toggle_completes_via_overlay(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        full = tc.get("/api/reminders").json()
+        assert full["writable"] is True and "Buy milk" in _titles(full["buckets"])
+        r = tc.post("/api/reminders/toggle",
+                    json={"id": "caldav:rem/t1", "completed": True})
+        assert r.status_code == 200 and r.json()["completed"] is True
+        # overlay: a completed reminder drops out of the open buckets at once
+        assert "Buy milk" not in _titles(tc.get("/api/reminders").json()["buckets"])
+        # ...and the object is queued for the next push
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:rem/t1")["sync_state"] == "PENDING_UPDATE"
+        c.close()
+
+
+def test_reminder_add_appears_in_overlay_and_queues_create(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/add",
+                    json={"list_id": "caldav:rem", "title": "Eggs"})
+        assert r.status_code == 200
+        oid = r.json()["id"]
+        assert "Eggs" in _titles(tc.get("/api/reminders").json()["buckets"])
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, oid)["sync_state"] == "PENDING_CREATE"
+        c.close()
+
+
+def test_reminder_delete_removes_from_overlay(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/delete", json={"id": "caldav:rem/t1"})
+        assert r.status_code == 200 and r.json()["deleted"] is True
+        assert "Buy milk" not in _titles(tc.get("/api/reminders").json()["buckets"])
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:rem/t1")["sync_state"] == "PENDING_DELETE"
+        c.close()
+
+
+def test_reminder_write_refused_when_readonly(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=True)      # 1-way (default)
+        assert tc.get("/api/reminders").json()["writable"] is False
+        r = tc.post("/api/reminders/toggle",
+                    json={"id": "caldav:rem/t1", "completed": True})
+        assert r.status_code == 409                  # loud refusal, not a no-op
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:rem/t1")["sync_state"] == "SYNCED"
+        c.close()
+
+
+def test_reminder_add_bad_due_is_422(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/add",
+                    json={"list_id": "caldav:rem", "title": "X", "due": "not-a-date"})
+        assert r.status_code == 422
+
+
+def test_reminder_toggle_unknown_id_is_404(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/toggle",
+                    json={"id": "caldav:rem/nope", "completed": True})
+        assert r.status_code == 404

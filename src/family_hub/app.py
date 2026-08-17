@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -431,10 +432,37 @@ def _integration_on(c, iid: str) -> bool:
     return available and fdb.integration_enabled(c, iid, default=True)
 
 
+def _overlay_pending_reminders(c, rem: list) -> list:
+    """Layer the outbox (PENDING cal_objects VTODOs) over the last-synced reminders
+    so a wall-side edit shows instantly and across the iCloud-lag window: a
+    PENDING_UPDATE/CREATE replaces/adds the reminder by id (re-parsed from its
+    local raw_ics), a PENDING_DELETE drops it. cal_objects is the source of truth
+    for anything edited locally; the pulled cache covers everything else."""
+    pending = [o for o in fdb.caldav_pending(c) if o["comp_type"] == "VTODO"]
+    if not pending:
+        return rem
+    names = {col["id"]: col["display_name"]
+             for col in fdb.list_caldav_collections(c)}
+    by_id = {r["id"]: r for r in rem}
+    for o in pending:
+        if o["sync_state"] == "PENDING_DELETE":
+            by_id.pop(o["id"], None)
+            continue
+        try:
+            for r in remlogic.parse_vtodo(o["raw_ics"], o["collection_id"],
+                                          names.get(o["collection_id"], "")):
+                by_id[r["id"]] = r
+        except Exception:
+            log.warning("pending reminder overlay skipped: %s", o["id"],
+                        exc_info=True)
+    return list(by_id.values())
+
+
 def _visible_reminders(c) -> list:
     """iCloud reminders from ENABLED collections only — respects the calendar
-    picker (a reminder list unchecked in settings hides its reminders)."""
-    rem = fdb.kv_get(c, "caldav_reminders") or []
+    picker (a reminder list unchecked in settings hides its reminders) — with
+    un-pushed local edits overlaid so wall-side changes show immediately."""
+    rem = _overlay_pending_reminders(c, fdb.kv_get(c, "caldav_reminders") or [])
     disabled = {col["id"] for col in fdb.list_caldav_collections(c)
                 if not col["enabled"]}
     return [r for r in rem if r.get("list_id") not in disabled]
@@ -918,7 +946,103 @@ def reminders_full():
     if not _integration_on(c, "icloud_caldav"):
         return {"buckets": {b: [] for b in remlogic.BUCKETS}, "configured": False}
     return {"buckets": remlogic.group(_visible_reminders(c), _today()),
-            "configured": True}
+            "configured": True, "writable": _reminders_writable(c)}
+
+
+# --- reminders (two-way iCloud VTODO writes) ------------------------------
+
+class ReminderToggle(BaseModel):
+    id: str
+    completed: bool
+
+
+class ReminderAdd(BaseModel):
+    list_id: str
+    title: str
+    due: str | None = None      # 'YYYY-MM-DD' (all-day) or None
+
+
+class ReminderDelete(BaseModel):
+    id: str
+
+
+def _reminders_writable(c) -> bool:
+    """Two-way is on: CalDAV available+enabled AND the operator has switched it
+    off read-only (readonly=False) in settings."""
+    return (_integration_on(c, "icloud_caldav")
+            and not fdb.integration_config(c, "icloud_caldav").get("readonly", True))
+
+
+def _require_reminders_write(c) -> None:
+    """Guard shared by the write endpoints — a clear 409 (not a silent no-op) when
+    iCloud is off or reminders are still read-only, so the wall can explain why."""
+    if not _integration_on(c, "icloud_caldav"):
+        raise HTTPException(409, "iCloud is not connected")
+    if fdb.integration_config(c, "icloud_caldav").get("readonly", True):
+        raise HTTPException(409, "iCloud reminders are read-only "
+                                 "(enable two-way in settings)")
+
+
+def _parse_due(s: str | None):
+    """An all-day due date from 'YYYY-MM-DD', or None. 422 on a malformed string
+    rather than silently dropping the date."""
+    if not s:
+        return None
+    try:
+        return dt.date.fromisoformat(s[:10])
+    except ValueError:
+        raise HTTPException(422, "due must be YYYY-MM-DD")
+
+
+@app.post("/api/reminders/toggle")
+def reminders_toggle(body: ReminderToggle):
+    """Check off / reopen an iCloud reminder from the wall: mutate the stored
+    VTODO and queue it for the next sync's push. The read overlay reflects it at
+    once, so the wall updates without waiting for the round-trip."""
+    c = _db()
+    _require_reminders_write(c)
+    obj = fdb.get_cal_object(c, body.id)
+    if obj is None or obj["comp_type"] != "VTODO":
+        raise HTTPException(404, "unknown reminder")
+    now = dt.datetime.now(dt.timezone.utc)
+    ics = remlogic.set_completed(obj["raw_ics"], body.completed, now)
+    fdb.queue_cal_object_update(c, body.id, ics, obj["summary"], now.isoformat())
+    return {"id": body.id, "completed": body.completed}
+
+
+@app.post("/api/reminders/add")
+def reminders_add(body: ReminderAdd):
+    """Add a reminder to an iCloud list from the wall (queued, pushed next sync)."""
+    c = _db()
+    _require_reminders_write(c)
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(422, "title required")
+    col = next((x for x in fdb.list_caldav_collections(c)
+                if x["id"] == body.list_id and x["comp_type"] == "VTODO"), None)
+    if col is None:
+        raise HTTPException(404, "unknown reminder list")
+    due = _parse_due(body.due)
+    now = dt.datetime.now(dt.timezone.utc)
+    uid = f"familyhub-{uuid.uuid4()}".upper()
+    oid = f"{body.list_id}/{uid}"
+    ics = remlogic.build_vtodo(uid, title, now, due=due)
+    fdb.queue_cal_object_create(c, {
+        "id": oid, "collection_id": body.list_id, "comp_type": "VTODO",
+        "uid": uid, "summary": title, "raw_ics": ics}, now.isoformat())
+    return {"id": oid, "title": title, "due": due.isoformat() if due else None}
+
+
+@app.post("/api/reminders/delete")
+def reminders_delete(body: ReminderDelete):
+    """Delete an iCloud reminder from the wall (queued, removed server-side next
+    sync)."""
+    c = _db()
+    _require_reminders_write(c)
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    if not fdb.queue_cal_object_delete(c, body.id, now_iso):
+        raise HTTPException(404, "unknown reminder")
+    return {"id": body.id, "deleted": True}
 
 
 # --- admin ----------------------------------------------------------------

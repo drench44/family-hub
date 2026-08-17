@@ -185,3 +185,28 @@ class CalDavClient:
         cal = collection["_cal"]
         return [self._obj(t) for t in cal.todos(include_completed=True)
                 if getattr(t, "data", None)]
+
+    # --- write side (two-way) ---------------------------------------------
+
+    def put_object(self, collection: dict, href, ics: str) -> dict:
+        """Create (href=None) or update (href set) one object in `collection`;
+        returns {href, etag}. The caldav library's high-level save issues the PUT
+        and, on create, iCloud assigns the resource URL. A None etag back is fine
+        — the next pull reconciles it (upsert stores the server's etag)."""
+        import caldav
+        cal = collection["_cal"]
+        if href:
+            obj = caldav.CalendarObjectResource(
+                client=cal.client, url=href, parent=cal, data=ics)
+            obj.save()
+        else:
+            obj = cal.save_todo(ics)   # reminders write path is VTODO-only
+        return {"href": str(getattr(obj, "url", href) or href) or None,
+                "etag": getattr(obj, "etag", None)}
+
+    def delete_object(self, collection: dict, href: str) -> None:
+        """DELETE one object by its server href."""
+        import caldav
+        cal = collection["_cal"]
+        caldav.CalendarObjectResource(
+            client=cal.client, url=href, parent=cal).delete()

@@ -752,6 +752,91 @@ def caldav_pending(conn) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_cal_object(conn, oid: str) -> dict | None:
+    row = conn.execute("SELECT * FROM cal_objects WHERE id = ?", (oid,)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def queue_cal_object_update(conn, oid: str, raw_ics: str, summary: str,
+                            now_iso: str) -> bool:
+    """Mark an existing pulled object as edited-locally (PENDING_UPDATE) so the
+    next sync PUTs it. Keeps base_etag (the If-Match the push builds on). No-op
+    (returns False) if the row is gone. A row already mid-create (PENDING_CREATE)
+    stays a create — we only overwrite its body — so a quick edit after add
+    doesn't turn into an update against a server object that doesn't exist yet."""
+    row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
+                       (oid,)).fetchone()
+    if row is None:
+        return False
+    state = "PENDING_CREATE" if row["sync_state"] == "PENDING_CREATE" \
+        else "PENDING_UPDATE"
+    conn.execute(
+        "UPDATE cal_objects SET raw_ics = ?, summary = ?, sync_state = ?, "
+        "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL "
+        "WHERE id = ?", (raw_ics, summary, state, now_iso, oid))
+    conn.commit()
+    return True
+
+
+def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
+    """Insert a wall-created object as PENDING_CREATE (no href/etag yet — the push
+    assigns them)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "
+        "href, etag, base_etag, summary, raw_ics, sequence, sync_state, "
+        "local_modified_at) VALUES(?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 0, "
+        "'PENDING_CREATE', ?)",
+        (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
+         obj.get("summary", ""), obj.get("raw_ics"), now_iso))
+    conn.commit()
+
+
+def queue_cal_object_delete(conn, oid: str, now_iso: str) -> bool:
+    """Queue a delete. If the object was never pushed (PENDING_CREATE), just drop
+    the row — there's nothing on the server to DELETE. Otherwise mark
+    PENDING_DELETE so the flush removes it server-side then locally. False if the
+    row is gone already."""
+    row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
+                       (oid,)).fetchone()
+    if row is None:
+        return False
+    if row["sync_state"] == "PENDING_CREATE":
+        conn.execute("DELETE FROM cal_objects WHERE id = ?", (oid,))
+    else:
+        conn.execute(
+            "UPDATE cal_objects SET sync_state = 'PENDING_DELETE', "
+            "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL "
+            "WHERE id = ?", (now_iso, oid))
+    conn.commit()
+    return True
+
+
+def mark_cal_object_pushed(conn, oid: str, href, etag) -> None:
+    """After a successful PUT: adopt the server href/etag and go back to SYNCED
+    (base_etag = etag, the base the next edit builds on)."""
+    conn.execute(
+        "UPDATE cal_objects SET href = ?, etag = ?, base_etag = ?, "
+        "sync_state = 'SYNCED', sync_attempts = 0, last_sync_error = NULL "
+        "WHERE id = ?", (href, etag, etag, oid))
+    conn.commit()
+
+
+def delete_cal_object_row(conn, oid: str) -> None:
+    """Remove a row outright (after a successful server DELETE)."""
+    conn.execute("DELETE FROM cal_objects WHERE id = ?", (oid,))
+    conn.commit()
+
+
+def record_cal_object_error(conn, oid: str, err: str, now_iso: str) -> None:
+    """A push failed: keep the row PENDING, bump the attempt count and record the
+    error so it retries next sync and the operator can see why it's stuck."""
+    conn.execute(
+        "UPDATE cal_objects SET sync_attempts = sync_attempts + 1, "
+        "last_sync_error = ?, local_modified_at = COALESCE(local_modified_at, ?) "
+        "WHERE id = ?", (err[:500], now_iso, oid))
+    conn.commit()
+
+
 def integration_config(conn, iid: str) -> dict:
     """Per-integration JSON config (e.g. CalDAV's readonly / 1-way vs 2-way)."""
     row = conn.execute("SELECT config_json FROM integrations WHERE id = ?",
@@ -765,9 +850,14 @@ def integration_config(conn, iid: str) -> dict:
 
 
 def set_integration_config(conn, iid: str, config: dict) -> None:
-    conn.execute("UPDATE integrations SET config_json = ? WHERE id = ?",
-                 (json.dumps(config), iid))
+    """Persist an integration's JSON config. Raises if the integration has no row
+    (seed it first) rather than silently dropping the write — a swallowed config
+    update is how a 'two-way' toggle would appear to save yet never take effect."""
+    cur = conn.execute("UPDATE integrations SET config_json = ? WHERE id = ?",
+                        (json.dumps(config), iid))
     conn.commit()
+    if cur.rowcount == 0:
+        raise KeyError(f"no integration row {iid!r} (seed it before set config)")
 
 
 # --- caldav collections (the calendar picker) -----------------------------
