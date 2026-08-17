@@ -1760,8 +1760,9 @@ body.integ-off-todos .todo-slot { display: none; }
      scroll position, and "scroll to top" is just resetting .wrap. */
   :root:not([data-layout="desktop"]),
   :root:not([data-layout="desktop"]) body { height: 100%; }
-  /* Body height: the innerHeight-backed --app-h var (set by hub.js, refreshed on
-     pageshow/visibilitychange/resize/orientation) with a 100dvh fallback. iOS
+  /* Body height: the measured --app-h var (set by hub.js from innerHeight +
+     visualViewport, refreshed on pageshow/visibilitychange/resize/vv-resize/
+     orientation plus short settle re-measures) with a 100dvh fallback. iOS
      left a stale 100dvh after a bfcache/app-switch restore, so the in-flow tab
      bar floated above a gap until a full reload — the var is re-measured on
      those events and closes the gap. min-height:0 REQUIRED: the base body
