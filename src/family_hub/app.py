@@ -523,6 +523,7 @@ def _integrations_state(c) -> dict:
             enabled_ids.add(integ["id"])
         entry = {"id": integ["id"], "kind": integ["kind"],
                  "name": integ["name"], "enabled": en,
+                 "group": integ.get("group", "integration"),
                  "status": _integ_status(integ["id"], caldav_status, cal_status)}
         if integ["id"] == "icloud_caldav":
             # the connected Apple ID (not a secret) so settings can show it; the

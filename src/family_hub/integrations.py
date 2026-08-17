@@ -26,7 +26,10 @@ def caldav_configured(env: dict) -> bool:
 def available_integrations(cfg, env: dict | None = None,
                            caldav_ok: bool | None = None) -> list[dict]:
     """The integrations available for THIS config/env, in display order. Each is
-    {id, kind, name, available}. `available=False` entries are returned too so a
+    {id, kind, name, available, group}, where `group` is "feature" for the core
+    always-on features (chores, todos) and "integration" for everything else —
+    the Settings UI uses it to head two separate lists.
+    `available=False` entries are returned too so a
     caller can explain why something isn't shown, but the API/seeding filter to
     available ones. `caldav_ok` lets the caller inject the real credential state
     (env OR the server-side creds file — see caldav_service.configured); None
@@ -35,10 +38,15 @@ def available_integrations(cfg, env: dict | None = None,
     cals = getattr(cfg, "calendars", []) or []
     out: list[dict] = []
 
-    def add(iid, kind, name, available):
+    def add(iid, kind, name, available, group="integration"):
         out.append({"id": iid, "kind": kind, "name": name,
-                    "available": bool(available)})
+                    "available": bool(available), "group": group})
 
+    # Core features — always available; the operator turns them off to slim the
+    # wall down. Listed first so they seed with the lowest sort and head the
+    # Settings "Features" group.
+    add("chores", "chores", "Chores", True, group="feature")
+    add("todos", "todos", "To-Dos", True, group="feature")
     add("google_calendar", "calendar", "Google Calendar",
         any(c.get("kind", "google") == "google" for c in cals))
     add("ics_calendar", "calendar", "Shared / ICS calendars",
