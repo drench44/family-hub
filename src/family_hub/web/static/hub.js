@@ -23,6 +23,7 @@ let weatherData = null;   // last /api/tiles/weather payload (native weather car
 let climateData = null;   // last /api/tiles/climate payload (native climate card)
 let weatherFails = 0;     // consecutive weather fetch failures (see fetchWeather)
 let climateFails = 0;     // consecutive climate fetch failures (see fetchClimate)
+let lastIntegrations = [];  // last /api/hub integrations block (settings toggles)
 const TILE_FAIL_LIMIT = 3;   // keep the last good card until this many in a row
 let warnedNoWeatherSlot = false;   // one-time warn: weather_base set, no 'weather' panel
 let warnedNoClimateSlot = false;   // one-time warn: climate_base set, no 'climate' panel
@@ -1542,6 +1543,7 @@ async function poll() {
     renderCalendar(data);
     renderPeople(data);
     renderTodoSlot(data);
+    renderIntegrations(data);
     pruneEvIndex();
     document.body.dataset.conn = 'up';
     document.getElementById('conn-word').textContent = 'live';
@@ -1985,6 +1987,35 @@ function reflectThemeControls() {
     b.classList.toggle('on', b.dataset.colsSet === cols));
 }
 
+/* The settings popover's Integrations section: one on/off switch per available
+   data source / tile. Renders from the /api/hub `integrations` block each poll,
+   and mirrors each disabled one onto a body class so CSS hides its tile. */
+function renderIntegrations(data) {
+  const list = (data && data.integrations) || [];
+  lastIntegrations = list;
+  list.forEach((it) =>
+    document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
+  const host = document.getElementById('integrations-ctl');
+  if (!host) return;
+  host.innerHTML = list.length
+    ? list.map((it) =>
+      `<button class="integ-row" type="button" role="switch"`
+      + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
+      + ` data-integ-toggle="${escapeHtml(it.id)}">`
+      + `<span class="integ-name">${escapeHtml(it.name)}</span>`
+      + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+      + `</button>`).join('')
+    : `<div class="integ-empty">none configured</div>`;
+}
+
+async function toggleIntegration(id) {
+  const cur = (lastIntegrations.find((x) => x.id === id) || {}).enabled;
+  const ok = await attemptTodo('/api/integrations/' + encodeURIComponent(id),
+    'PATCH', { enabled: !cur });
+  if (!ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
+  await poll();   // re-render the toggles + tile gating from fresh state
+}
+
 function closeThemePop() {
   const pop = document.getElementById('theme-pop');
   const gear = document.getElementById('wall-gear');
@@ -2010,6 +2041,8 @@ document.addEventListener('click', (e) => {
   if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
   const c = e.target.closest('#theme-pop [data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
+  const ig = e.target.closest('#theme-pop [data-integ-toggle]');
+  if (ig) { toggleIntegration(ig.dataset.integToggle); return; }
   // a tap anywhere outside an open popover dismisses it
   if (pop && pop.classList.contains('open') && !e.target.closest('#theme-pop')) {
     closeThemePop();

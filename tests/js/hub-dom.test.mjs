@@ -34,7 +34,7 @@ const hubSrc = readFileSync(join(staticDir, 'hub.js'), 'utf8');
 // for real — that's the whole point of the showToast assertions below.
 const SEEDED_IDS = [
   'conn-word', 'clock-date', 'clock-time', 'cal', 'people', 'todo-slot', 'tiles',
-  'camgrid',
+  'camgrid', 'integrations-ctl',
   'panels', 'tabbar', 'overlay', 'overlay-home', 'overlay-content', 'ev-modal',
   'ev-card',
   'chore-modal', 'chore-card', 'chore-editor',
@@ -2625,4 +2625,41 @@ test('camera HD reveal probe arms a short bounded timeout (CAM_HD_PROBE_TIMEOUT_
     'the HD probe arms a 3000ms (CAM_HD_PROBE_TIMEOUT_MS) abort timeout');
   assert.ok(!timers.some((t) => t.ms === 12000),
     'never the long J_TIMEOUT_MS default for this probe');
+});
+
+test('renderIntegrations: a switch per integration, and gates disabled tiles', () => {
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'weather', kind: 'weather', name: 'Weather', enabled: true },
+    { id: 'cameras', kind: 'cameras', name: 'Cameras', enabled: false },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /Weather/);
+  assert.match(host.innerHTML, /data-integ-toggle="cameras"/);
+  assert.match(host.innerHTML, /integ-switch on/);                 // weather is on
+  assert.match(host.innerHTML, /aria-checked="false"/);            // cameras is off
+  // a disabled integration stamps a body gating class; an enabled one does not
+  assert.ok(sandbox.document.body.classList.contains('integ-off-cameras'));
+  assert.ok(!sandbox.document.body.classList.contains('integ-off-weather'));
+  // toggling flips: re-render with cameras enabled clears the gate
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', kind: 'cameras', name: 'Cameras', enabled: true },
+  ] });
+  assert.ok(!sandbox.document.body.classList.contains('integ-off-cameras'));
+});
+
+test('toggleIntegration: PATCHes the opposite of the current state', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: opts.method, body: JSON.parse(opts.body) });
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'weather', kind: 'weather', name: 'Weather', enabled: true },
+  ] });
+  await sandbox.toggleIntegration('weather');
+  assert.equal(calls[0].url, '/api/integrations/weather');
+  assert.equal(calls[0].method, 'PATCH');
+  assert.deepEqual(calls[0].body, { enabled: false });   // was on -> turn off
 });

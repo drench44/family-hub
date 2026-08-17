@@ -1190,6 +1190,50 @@ body.overlay-open { overflow: hidden; }
    them in a row via the default .theme-ctl flex-wrap) */
 .theme-pop .theme-ctl { flex-direction: column; align-items: flex-start; gap: 0; }
 
+/* ---- integrations toggles (settings popover) ---- */
+/* One on/off switch per available data source / tile. hub.js renderIntegrations
+   fills .integrations-ctl and stamps body.integ-off-<id> for each disabled one,
+   which the gating rules below use to hide that tile on the wall. */
+/* A divider setting the integration toggles apart from the display controls. */
+.theme-pop .theme-pop-integrations {
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--edge-soft);
+}
+.theme-pop .integrations-ctl {
+  display: flex; flex-direction: column; gap: 0; min-width: 224px;
+}
+.integ-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; width: 100%; min-height: 44px; padding: 6px 2px;
+  background: none; border: 0; cursor: pointer; color: inherit; text-align: left;
+}
+.integ-row + .integ-row { border-top: 1px solid var(--edge-soft); }
+.integ-name { font-size: 14px; color: var(--ink); }
+.integ-switch {
+  flex: none; position: relative;
+  width: 40px; height: 24px; border-radius: 999px;
+  background: var(--edge); border: 1px solid var(--edge);
+  transition: background 140ms ease;
+}
+.integ-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--surface); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform 140ms ease;
+}
+.integ-switch.on { background: var(--accent); border-color: var(--accent); }
+.integ-switch.on::after { transform: translateX(16px); }
+.integ-row:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px;
+}
+.integ-empty { font-size: 13px; color: var(--faint); padding: 6px 2px; }
+
+/* Tile gating: hide a disabled integration's tile. Cameras are also blanked
+   server-side (links), so this is belt-and-suspenders + covers the Cameras tab. */
+body.integ-off-weather #weather-slot { display: none; }
+body.integ-off-climate #climate-slot { display: none; }
+body.integ-off-cameras .tile-camera,
+body.integ-off-cameras #camgrid { display: none; }
+
 /* ==================== column separation ==================== */
 /* The Columns control stamps data-cols on <html>. "none" (default) is the flat
    layout; "wells" wraps each column's stack in a soft tinted panel; "lines"
