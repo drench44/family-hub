@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="styles.css?v=75">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
-  <script src="theme.js?v=6"></script>
+  <script src="theme.js?v=7"></script>
 </head>
 <body class="wall" data-conn="up" data-tab="chores">
   <div class="wrap">
@@ -66,6 +66,16 @@
             <div class="seg" role="group" aria-label="Layout mode">
               <button type="button" data-layout-set="auto">Auto</button>
               <button type="button" data-layout-set="desktop">Desktop</button>
+            </div>
+          </div>
+          <!-- Auto-return: On (default) drifts back to the home wall after an
+               idle timeout — right for the shared wall. Off keeps a personal
+               phone/TV on the full-screen view it opened. -->
+          <div class="theme-pop-row">
+            <span class="theme-pop-k">Auto-return</span>
+            <div class="seg" role="group" aria-label="Return to home when idle">
+              <button type="button" data-idle-set="on">On</button>
+              <button type="button" data-idle-set="off">Off</button>
             </div>
           </div>
           <!-- Integrations + iCloud CalDAV moved to the full Settings overlay
@@ -157,6 +167,6 @@
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
   <script src="osk.js?v=1"></script>
-  <script src="hub.js?v=74"></script>
+  <script src="hub.js?v=75"></script>
 </body>
 </html>

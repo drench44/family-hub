@@ -3,12 +3,14 @@
 
    Runs SYNCHRONOUSLY from <head>, before the body paints, so the wall
    never flashes the wrong theme (or the wrong layout). It reads the
-   persisted preferences and stamps four attributes on <html>:
+   persisted preferences and stamps five attributes on <html>:
 
-     data-theme   light | soft | dark | grey | black
-     data-accent  cyan | violet | amber | green
-     data-cols    none | wells | lines
-     data-layout  auto | desktop            (the per-device layout CHOICE)
+     data-theme        light | soft | dark | grey | black
+     data-accent       cyan | violet | amber | green
+     data-cols         none | wells | lines
+     data-layout       auto | desktop       (the per-device layout CHOICE)
+     data-idle-return  on | off             (per-device idle auto-return; hub.js
+                                              reads it — behavioral, not visual)
 
    data-layout is the ONLY layout attribute. In "auto" the phone/wall split
    is decided by a pure-CSS width media query (max-width:1000px) — no JS
@@ -21,14 +23,14 @@
    flashing the phone shell first on such a device.
 
    Fallback order for each preference:
-     1. localStorage  (fh.theme / fh.accent / fh.cols / fh.layout)
-     2. window.FH_THEME  { mode, accent, columns, layout }, injected by the
-        page from server config (may be undefined)
-     3. hardcoded default  grey / green / none / auto
+     1. localStorage  (fh.theme / fh.accent / fh.cols / fh.layout / fh.idleReturn)
+     2. window.FH_THEME  { mode, accent, columns, layout, idleReturn }, injected
+        by the page from server config (may be undefined)
+     3. hardcoded default  grey / green / none / auto / on
 
-   Exposes setTheme / setAccent / setColumns / setLayout: each validates its
-   value, writes the localStorage key, and re-stamps live, so a control can
-   apply a change without a reload.
+   Exposes setTheme / setAccent / setColumns / setLayout / setIdleReturn: each
+   validates its value, writes the localStorage key, and re-stamps live, so a
+   control can apply a change without a reload.
 
    Dependency-free, no network, no house data. LAN wall display safe.
    ================================================================ */
@@ -41,11 +43,13 @@
   var ACCENTS = ["cyan", "violet", "amber", "green"];
   var COLUMNS = ["none", "wells", "lines"];
   var LAYOUTS = ["auto", "desktop"];
+  var IDLE_RETURNS = ["on", "off"];
 
   var DEFAULT_THEME = "grey";
   var DEFAULT_ACCENT = "green";
   var DEFAULT_COLUMNS = "none";
   var DEFAULT_LAYOUT = "auto";
+  var DEFAULT_IDLE_RETURN = "on";
 
   // localStorage can throw (private mode / disabled storage); never let that
   // break first paint.
@@ -103,6 +107,16 @@
     root.setAttribute("data-layout", layout);
   }
 
+  // ---- idle auto-return: data-idle-return (on | off) ----
+  // Behavioral, not visual: hub.js's armIdle() reads this attribute and skips
+  // arming the return-home timer when it is "off". Managed here (rather than ad
+  // hoc in hub.js) so it shares the same localStorage + house-default + setter
+  // machinery as the other device prefs. Default "on" keeps the shared wall's
+  // existing drift-back-to-home behavior; a personal phone/TV sets "off".
+  function stampIdleReturn(v) {
+    root.setAttribute("data-idle-return", v);
+  }
+
   // ---- public setters: validate, persist, re-stamp live ----
   function setTheme(mode) {
     if (THEMES.indexOf(mode) === -1) return;
@@ -124,11 +138,17 @@
     writeStored("fh.layout", layout);
     stampLayout(layout);
   }
+  function setIdleReturn(v) {
+    if (IDLE_RETURNS.indexOf(v) === -1) return;
+    writeStored("fh.idleReturn", v);
+    stampIdleReturn(v);
+  }
 
   window.setTheme = setTheme;
   window.setAccent = setAccent;
   window.setColumns = setColumns;
   window.setLayout = setLayout;
+  window.setIdleReturn = setIdleReturn;
 
   // ---- stamp-only appliers: validate + re-stamp live, WITHOUT persisting ----
   // The house default from server config (window.FH_THEME / /api/hub) is applied
@@ -149,14 +169,19 @@
   function stampLayoutIf(layout) {
     if (LAYOUTS.indexOf(layout) !== -1) stampLayout(layout);
   }
+  function stampIdleReturnIf(v) {
+    if (IDLE_RETURNS.indexOf(v) !== -1) stampIdleReturn(v);
+  }
   window.stampTheme = stampThemeIf;
   window.stampAccent = stampAccentIf;
   window.stampColumns = stampColumnsIf;
   window.stampLayout = stampLayoutIf;
+  window.stampIdleReturn = stampIdleReturnIf;
 
   // ---- initial stamp (synchronous, before paint) ----
   stampTheme(resolve(THEMES, "fh.theme", "mode", DEFAULT_THEME));
   stampAccent(resolve(ACCENTS, "fh.accent", "accent", DEFAULT_ACCENT));
   stampColumns(resolve(COLUMNS, "fh.cols", "columns", DEFAULT_COLUMNS));
   stampLayout(resolve(LAYOUTS, "fh.layout", "layout", DEFAULT_LAYOUT));
+  stampIdleReturn(resolve(IDLE_RETURNS, "fh.idleReturn", "idleReturn", DEFAULT_IDLE_RETURN));
 })();
