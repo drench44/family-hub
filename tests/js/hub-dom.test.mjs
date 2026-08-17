@@ -510,6 +510,49 @@ test('updateTabVisibility + applyWallLayout: off -> on round-trip restores the t
     'wall column restored on re-enable');
 });
 
+test('updateTabVisibility: weather+climate OFF but a custom dashboard panel exists -> weather tab stays visible, hub-empty NOT stamped', () => {
+  // Mirrors the applyWallLayout custom-panel rescue below (finding L): a
+  // links.panels entry whose id isn't weather/climate has no toggle of its
+  // own, so the phone's Weather tab (which shows the .panels column) must
+  // stay reachable, and the wall's live panel must not be hidden behind the
+  // hub-empty "all features off" state.
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  // Pre-select the weather tab so updateTabVisibility's "active tab got
+  // hidden, fall back to the first visible one" branch doesn't fire setTab
+  // (which would run fitPanels against panel DOM this fixture doesn't seed —
+  // irrelevant to what this test is pinning).
+  document.body.dataset.tab = 'weather';
+  vm.runInContext("links = { panels: [{ id: 'custom1' }] };", sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('weather').hidden, false,
+    'weather tab stays visible so the custom panel is reachable on the phone');
+  assert.equal(document.body.classList.contains('hub-empty'), false,
+    'hub-empty must not hide a live custom panel');
+});
+
+test('updateTabVisibility: weather+climate OFF and no custom panels -> weather tab hidden', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  vm.runInContext('links = { panels: [] };', sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('weather').hidden, true,
+    'weather tab hidden: both backing features off and no custom panel to rescue it');
+});
+
 // ---- applyWallLayout: reflow the wall grid when a column is off (Task 6) ----
 
 // index.html's `.hub-grid` (and its `.people-col`/`.cal`/`.todo-slot`/`.tiles`/

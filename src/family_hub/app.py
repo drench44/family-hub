@@ -442,9 +442,18 @@ def _links(enabled_ids: set | None = None) -> dict:
 def _available_only():
     """The available integrations, with iCloud CalDAV availability reflecting the
     REAL credential state (env OR the server-side creds file), so UI-entered
-    credentials make the integration appear without an env var or restart."""
-    return fintegrations.available_only(
+    credentials make the integration appear without an env var or restart.
+    DEMO overlay: the demo serves placeholder cameras and canned weather/climate
+    (see _camera_links and the DEMO branches) even though config leaves them
+    unset, so the registry must call them available or the layout engine and
+    tab bar hide the demo's columns."""
+    items = fintegrations.available_integrations(
         cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
+    demo_ids = {"cameras", "weather", "climate"} if DEMO else set()
+    return [dict(i, available=True) if (i["id"] in demo_ids and not i["available"])
+            else i
+            for i in items
+            if i["available"] or i["id"] in demo_ids]
 
 
 def _integration_on(c, iid: str) -> bool:
