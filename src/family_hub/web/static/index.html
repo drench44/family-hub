@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=68">
+  <link rel="stylesheet" href="styles.css?v=69">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
   <script src="theme.js?v=5"></script>
@@ -22,8 +22,10 @@
            or unsticks a stale page) without needing a keyboard or a phone. -->
       <button class="wall-refresh" id="wall-refresh" type="button" aria-label="Refresh" title="Refresh">↻</button>
       <!-- Display gear: re-theme the wall touchscreen without a phone. Opens the
-           popover below — the wall's only display controls (theme, accent,
-           columns), since the admin page was retired. -->
+           quick popover below (theme, accent, columns); its "All settings" row
+           opens the full-screen Settings overlay (hub.js openOverlay('settings'))
+           for Integrations and the richer iCloud (CalDAV) connect/test panel,
+           the same full-screen pattern the Chores/To-Dos/Calendar cards use. -->
       <button class="wall-gear" id="wall-gear" type="button" aria-label="Display settings" aria-haspopup="dialog" aria-expanded="false">⚙</button>
       <div class="theme-pop" id="theme-pop" role="dialog" aria-label="Display settings">
         <div class="theme-ctl">
@@ -54,11 +56,18 @@
               <button type="button" data-cols-set="lines">Lines</button>
             </div>
           </div>
-          <!-- Integrations: one on/off toggle per available data source / tile,
-               populated by hub.js renderIntegrations from the /api/hub block. -->
-          <div class="theme-pop-row theme-pop-integrations">
-            <span class="theme-pop-k">Integrations</span>
-            <div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>
+          <!-- Integrations + iCloud CalDAV moved to the full Settings overlay
+               (hub.js renderSettingsFull / openOverlay('settings')), which
+               has more room than this quick popover.
+               NOT class="expand": that class carries an implicit contract
+               with the big delegated click listener's generic .expand
+               handler (openOverlay(el.dataset.overlay)): any .expand tap
+               with no data-overlay crashes it (view.indexOf on undefined).
+               This button needs different behavior (close the popover, THEN
+               open the settings overlay), so it gets its own look instead of
+               opting into that shared class. -->
+          <div class="theme-pop-row">
+            <button class="theme-pop-settings-link" type="button" data-open-settings>All settings →</button>
           </div>
         </div>
       </div>
@@ -132,10 +141,10 @@
     </div>
   </div>
 
-  <script src="common.js?v=39"></script>
+  <script src="common.js?v=40"></script>
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
   <script src="osk.js?v=1"></script>
-  <script src="hub.js?v=67"></script>
+  <script src="hub.js?v=68"></script>
 </body>
 </html>

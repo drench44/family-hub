@@ -625,3 +625,82 @@ function calStatusMessage(status) {
   }
   return 'Calendar sync hit a snag — showing the last events we saw.';
 }
+
+/* The iCloud CalDAV "Test connection" result, turned into one line of display
+   copy. Pure so the ok / needs_auth / error branches are testable without a
+   DOM; hub.js's renderCaldavPanel escapes and shows the result. Mirrors the
+   POST /api/integrations/icloud_caldav/test contract (caldav_sync.sync_once):
+   {ok:true, events, reminders} | {needs_auth:true, ...} | {ok:false, error}. */
+function caldavTestMessage(result) {
+  const r = result || {};
+  if (r.needs_auth) return 'Sign-in rejected - check the app-specific password.';
+  if (r.ok) {
+    const events = Number.isFinite(r.events) ? r.events : 0;
+    const reminders = Number.isFinite(r.reminders) ? r.reminders : 0;
+    return `Connected - ${events} event${events === 1 ? '' : 's'}, `
+      + `${reminders} reminder${reminders === 1 ? '' : 's'}.`;
+  }
+  if (r.error) return String(r.error);
+  return 'Couldn’t connect - check the hub and try again.';
+}
+
+/* The iCloud (CalDAV) settings panel body, pure (no DOM) so both branches are
+   unit-testable: hub.js's renderCaldavPanel assigns the result to a host's
+   innerHTML and wires the buttons/inputs.
+   `integ` is the icloud_caldav entry from /api/hub's `integrations` list, or
+   null/undefined when no credentials are stored yet (the not-connected form).
+   `ui` is the transient view state hub.js keeps between polls: {connecting,
+   testing, testResult, formError}, NEVER the password itself. The password
+   only ever lives in the password input's own value; it is read at submit
+   time, sent once in the POST body, and never stored in JS state, a DOM
+   attribute/dataset, or a log/toast. */
+function caldavPanelHtml(integ, ui) {
+  const st = ui || {};
+  // A bare HTML "disabled" attribute, not a CSS class fragment. Written as a
+  // helper returning a plain, unspaced word (no leading space inside the
+  // quoted literal) rather than inlined the way the conditional CSS classes
+  // below are (integ-switch's on/off, seg-btn's active/inactive): the static
+  // "every referenced class is styled" scan (tests/test_static.py) treats
+  // any ternary shaped like that inline pattern as a conditional CSS class
+  // needing a matching selector, which is right for those but would be a
+  // false positive for an HTML attribute that merely looks the same shape.
+  const dis = (b) => (b ? 'disabled' : '');
+  if (!integ) {
+    return `<div class="field"><label>Apple ID</label>`
+      + `<input class="txt-input" id="caldav-user-input" type="text" `
+      + `autocomplete="off" autocapitalize="off" spellcheck="false" ${dis(st.connecting)}></div>`
+      + `<div class="field"><label>App-specific password</label>`
+      + `<input class="txt-input" id="caldav-pw-input" type="password" `
+      + `autocomplete="off" ${dis(st.connecting)}></div>`
+      + (st.formError ? `<div class="form-error">${escapeHtml(st.formError)}</div>` : '')
+      + `<button class="btn-primary" type="button" data-caldav-connect ${dis(st.connecting)}>`
+      + `${st.connecting ? 'Connecting…' : 'Connect'}</button>`
+      + `<div class="hint">A dedicated bot Apple ID + an app-specific password `
+      + `(appleid.apple.com). Stored on this device only, never shared.</div>`;
+  }
+  // Same status vocabulary as renderIntegrations: a revoked/expired sign-in
+  // or a sync error is first-class, shown right on the account row.
+  const warn = integ.status === 'needs_auth' ? 'reconnect'
+    : (integ.status === 'error' ? 'error' : '');
+  const readonly = integ.readonly !== false;   // server default is 1-way (true)
+  const resultMsg = st.testResult ? caldavTestMessage(st.testResult) : '';
+  const resultCls = st.testResult ? (st.testResult.ok ? ' ok' : ' err') : '';
+  return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong></div>`
+    + `<button class="integ-row" type="button" role="switch" `
+    + `aria-checked="${integ.enabled ? 'true' : 'false'}" data-caldav-enable-toggle>`
+    + `<span class="integ-name">Enabled${warn ? `<span class="integ-warn">${warn}</span>` : ''}</span>`
+    + `<span class="integ-switch${integ.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+    + `</button>`
+    + `<div class="settings-row">`
+    + `<span class="settings-k">Sync direction</span>`
+    + `<div class="segmented" role="group" aria-label="Sync direction">`
+    + `<button class="seg-btn${readonly ? ' active' : ''}" type="button" data-caldav-readonly="1">1-way (read-only)</button>`
+    + `<button class="seg-btn${readonly ? '' : ' active'}" type="button" data-caldav-readonly="0">2-way (writing back, coming soon)</button>`
+    + `</div></div>`
+    + `<div class="caldav-actions">`
+    + `<button class="padmin-btn" type="button" data-caldav-test ${dis(st.testing)}>`
+    + `${st.testing ? 'Testing…' : 'Test connection'}</button>`
+    + `<button class="padmin-btn padmin-del" type="button" data-caldav-disconnect>Disconnect</button>`
+    + `</div>`
+    + (resultMsg ? `<div class="caldav-test-result${resultCls}">${escapeHtml(resultMsg)}</div>` : '');
+}

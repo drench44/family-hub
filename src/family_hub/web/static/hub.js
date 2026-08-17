@@ -30,6 +30,16 @@ let warnedNoClimateSlot = false;   // one-time warn: climate_base set, no 'clima
 let lastPeople = [];      // remember done-counts to fire the celebration once
 const celebrated = new Set();
 
+/* Transient iCloud (CalDAV) settings-panel UI state (Settings overlay,
+   Integrations section). Deliberately NEVER the password; that only ever
+   lives in the #caldav-pw-input's own value, read at submit time and sent
+   once. Kept out of poll()'s refresh loop (see renderCaldavPanel) so a
+   Connecting…/Testing… state, a form error, or the last test result doesn't
+   get wiped mid-interaction (or mid-typing) by a background poll tick;
+   it's reset explicitly where that's the right call (disconnect, a fresh
+   Settings-overlay open). */
+let caldavUi = { connecting: false, testing: false, testResult: null, formError: '' };
+
 /* ----------------------------------------------------------- clock + night */
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -1020,6 +1030,10 @@ function openOverlay(view) {
     content.innerHTML = `<div class="overlay-panel"><div id="todos-full"></div></div>`;
     if (todoState.data) renderTodosPaint();  // instant paint from cache
     renderTodosFull();                       // then refresh from the API
+  } else if (view === 'settings') {
+    content.innerHTML = `<div class="overlay-panel"><div id="settings-full"></div></div>`;
+    caldavUi.formError = '';   // a stale validation message shouldn't outlive a reopen
+    renderSettingsFull();      // instant paint from cache (hubData / lastIntegrations)
   }
   overlay().classList.add('open');
   // Lock the page behind the overlay: the tall wall page keeps its own
@@ -1971,19 +1985,21 @@ function applyHouseTheme(theme) {
   reflectThemeControls();
 }
 
-// Mirror the live <html> data-* state onto the popover's control buttons.
+// Mirror the live <html> data-* state onto every Display control on the page:
+// the quick gear popover's AND (when open) the full Settings overlay's own
+// copy, so the two surfaces can never show a stale/conflicting selection.
+// Document-wide (not scoped to one container): only the theme/accent/columns
+// buttons ever carry these data-* attributes, in either surface.
 function reflectThemeControls() {
-  const pop = document.getElementById('theme-pop');
-  if (!pop) return;
   const el = document.documentElement;
   const mode = el.getAttribute('data-theme');
   const accent = el.getAttribute('data-accent');
   const cols = el.getAttribute('data-cols');
-  pop.querySelectorAll('[data-theme-set]').forEach((b) =>
+  document.querySelectorAll('[data-theme-set]').forEach((b) =>
     b.classList.toggle('on', b.dataset.themeSet === mode));
-  pop.querySelectorAll('[data-c]').forEach((b) =>
+  document.querySelectorAll('[data-c]').forEach((b) =>
     b.classList.toggle('on', b.dataset.c === accent));
-  pop.querySelectorAll('[data-cols-set]').forEach((b) =>
+  document.querySelectorAll('[data-cols-set]').forEach((b) =>
     b.classList.toggle('on', b.dataset.colsSet === cols));
 }
 
@@ -2017,10 +2033,153 @@ function renderIntegrations(data) {
 
 async function toggleIntegration(id) {
   const cur = (lastIntegrations.find((x) => x.id === id) || {}).enabled;
-  const ok = await attemptTodo('/api/integrations/' + encodeURIComponent(id),
+  // attemptTodo resolves to {ok, error?} and never throws, so the failure
+  // check must read .ok (a bare `!r` is always false: even {ok:false} is a
+  // truthy object). Left unchecked, a failed PATCH silently reverted the
+  // switch on the next poll() with no toast: the exact silent-failure this
+  // repo's review gate calls out. Caught fixing the CalDAV enable switch,
+  // which reuses this same function.
+  const r = await attemptTodo('/api/integrations/' + encodeURIComponent(id),
     'PATCH', { enabled: !cur });
-  if (!ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
+  if (!r.ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
   await poll();   // re-render the toggles + tile gating from fresh state
+}
+
+/* --------------------------------------------- Settings overlay (T: gear) */
+/* The full-screen Settings overlay (openOverlay('settings')): Display (a
+   second copy of the gear popover's Theme/Accent/Columns controls, laid out
+   with room to breathe; reflectThemeControls keeps both copies in sync) and
+   Integrations (the existing switch list, plus the richer iCloud CalDAV panel
+   below it). Built the same way as chores-full/todos-full/cal-full: an
+   instant paint from cached state, wired through the same delegated click
+   listener as the rest of the app. */
+function renderSettingsFull() {
+  const host = document.getElementById('settings-full');
+  if (!host) return;
+  host.innerHTML = `<div class="overlay-title">Settings</div>`
+    + `<div class="card pad settings-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Display</h2></div>`
+    + `<div class="theme-ctl">`
+    + `<div class="settings-row"><span class="settings-k">Theme</span>`
+    + `<div class="seg seg-theme" role="group" aria-label="Theme">`
+    + `<button type="button" data-theme-set="light">Light</button>`
+    + `<button type="button" data-theme-set="soft">Soft</button>`
+    + `<button type="button" data-theme-set="dark">Blue</button>`
+    + `<button type="button" data-theme-set="grey">Grey</button>`
+    + `<button type="button" data-theme-set="black">Black</button>`
+    + `</div></div>`
+    + `<div class="settings-row"><span class="settings-k">Accent</span>`
+    + `<div class="swatches" role="group" aria-label="Accent color">`
+    + `<button class="swatch" type="button" data-c="cyan" aria-label="Cyan accent"></button>`
+    + `<button class="swatch" type="button" data-c="violet" aria-label="Violet accent"></button>`
+    + `<button class="swatch" type="button" data-c="amber" aria-label="Amber accent"></button>`
+    + `<button class="swatch" type="button" data-c="green" aria-label="Green accent"></button>`
+    + `</div></div>`
+    + `<div class="settings-row"><span class="settings-k">Columns</span>`
+    + `<div class="seg" role="group" aria-label="Column separation">`
+    + `<button type="button" data-cols-set="none">None</button>`
+    + `<button type="button" data-cols-set="wells">Wells</button>`
+    + `<button type="button" data-cols-set="lines">Lines</button>`
+    + `</div></div>`
+    + `</div></div>`
+    + `<div class="card pad settings-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Integrations</h2></div>`
+    + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
+    + `<div class="caldav-panel" id="caldav-panel"></div>`
+    + `</div>`;
+  reflectThemeControls();
+  renderIntegrations(hubData || { integrations: lastIntegrations });
+  renderCaldavPanel();
+}
+
+/* The iCloud (CalDAV) account panel inside the Integrations card. Markup
+   comes from common.js caldavPanelHtml (pure, tested); this just supplies the
+   live integration entry + the transient UI state and writes the result.
+   Deliberately NOT called from poll(): unlike the plain integrations switch
+   list (which is safe to redraw every 60s), the not-connected state holds
+   live text-input fields the operator may be mid-typing into, and refreshing
+   it on a timer would wipe an in-progress Apple ID / password. It's refreshed
+   explicitly instead, after every action that can change what it should show
+   (connect, disconnect, test, the enable switch, the readonly toggle) and
+   once up front when the Settings overlay opens. */
+function renderCaldavPanel() {
+  const host = document.getElementById('caldav-panel');
+  if (!host) return;
+  const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  const integ = list.find((it) => it.id === 'icloud_caldav') || null;
+  host.innerHTML = caldavPanelHtml(integ, caldavUi);
+}
+
+/* Store the operator-entered iCloud credentials (POST, server-side file,
+   never echoed back), then re-poll so the panel flips to the connected view,
+   and auto-run a Test so they immediately see whether they typed the right
+   app-specific password rather than finding out on the next sync. */
+async function connectCaldav() {
+  const userInput = document.getElementById('caldav-user-input');
+  const pwInput = document.getElementById('caldav-pw-input');
+  const user = ((userInput && userInput.value) || '').trim();
+  const pw = (pwInput && pwInput.value) || '';
+  if (!user || !pw) {
+    caldavUi.formError = 'Enter both the Apple ID and the app-specific password.';
+    renderCaldavPanel();
+    return;
+  }
+  caldavUi.formError = '';
+  caldavUi.connecting = true;
+  renderCaldavPanel();
+  try {
+    await j('/api/integrations/icloud_caldav/credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user, app_password: pw }),
+    });
+  } catch (e) {
+    caldavUi.connecting = false;
+    showToast(e.message || 'Couldn’t connect - check the Apple ID and password.');
+    renderCaldavPanel();
+    return;
+  }
+  // The password's only job was to reach that POST body. Blank it the instant
+  // the request succeeds; never rely solely on the next render to clear it.
+  if (pwInput) pwInput.value = '';
+  caldavUi.connecting = false;
+  await poll();   // hubData.integrations now carries icloud_caldav + its account
+  renderCaldavPanel();
+  await testCaldavConnection();
+}
+
+/* POST /api/integrations/icloud_caldav/test never throws on a bad sign-in
+   (it reports needs_auth/error in the 200 body); only a network-level
+   failure lands in the catch, folded into the same {ok:false, error} shape
+   so caldavTestMessage has one contract to format either way. */
+async function testCaldavConnection() {
+  caldavUi.testing = true;
+  renderCaldavPanel();
+  let result;
+  try {
+    result = await j('/api/integrations/icloud_caldav/test', { method: 'POST' });
+  } catch (e) {
+    result = { ok: false, error: e.message || 'Couldn’t reach the hub.' };
+  }
+  caldavUi.testing = false;
+  caldavUi.testResult = result;
+  renderCaldavPanel();
+}
+
+async function disconnectCaldav() {
+  const r = await attemptTodo('/api/integrations/icloud_caldav/credentials', 'DELETE');
+  if (!r.ok) { showToast('Couldn’t disconnect - check the hub and try again.'); return; }
+  caldavUi.testResult = null;   // stale "connected" test result would be misleading now
+  caldavUi.formError = '';
+  await poll();
+  renderCaldavPanel();
+}
+
+async function setCaldavReadonly(readonly) {
+  const r = await attemptTodo('/api/integrations/icloud_caldav', 'PATCH', { readonly });
+  if (!r.ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
+  await poll();
+  renderCaldavPanel();
 }
 
 function closeThemePop() {
@@ -2030,7 +2189,10 @@ function closeThemePop() {
   if (gear) gear.setAttribute('aria-expanded', 'false');
 }
 
-// Separate delegated listener (the big one above owns the dashboard surfaces).
+// Separate delegated listener (the big one above owns the dashboard surfaces):
+// the gear popover, the Settings overlay's Display + Integrations controls
+// (same data-* attributes, generalized below to match either surface), and
+// the iCloud CalDAV panel's actions.
 document.addEventListener('click', (e) => {
   const pop = document.getElementById('theme-pop');
   // Refresh button: reload the wall (picks up a new deploy, unsticks a stale page).
@@ -2042,14 +2204,35 @@ document.addEventListener('click', (e) => {
     if (open) reflectThemeControls();
     return;
   }
-  const t = e.target.closest('#theme-pop [data-theme-set]');
+  // The popover's "All settings" row: close the quick popover (it sits at a
+  // higher z-index than the full-screen overlay and would otherwise float
+  // over it) and open the real thing.
+  if (e.target.closest('#theme-pop [data-open-settings]')) {
+    closeThemePop();
+    openOverlay('settings');
+    return;
+  }
+  // Theme/Accent/Columns: NOT scoped to #theme-pop. The Settings overlay
+  // renders its own copy of these same buttons (renderSettingsFull), and only
+  // theme/accent/columns controls ever carry these data-* attributes, in
+  // either surface, so one branch each covers both.
+  const t = e.target.closest('[data-theme-set]');
   if (t) { setTheme(t.dataset.themeSet); reflectThemeControls(); return; }
-  const a = e.target.closest('#theme-pop [data-c]');
+  const a = e.target.closest('[data-c]');
   if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
-  const c = e.target.closest('#theme-pop [data-cols-set]');
+  const c = e.target.closest('[data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
-  const ig = e.target.closest('#theme-pop [data-integ-toggle]');
+  // Integrations switch list: also unscoped now that it only ever renders
+  // inside the Settings overlay (#integrations-ctl), never the popover.
+  const ig = e.target.closest('[data-integ-toggle]');
   if (ig) { toggleIntegration(ig.dataset.integToggle); return; }
+  // iCloud (CalDAV) panel actions.
+  if (e.target.closest('[data-caldav-connect]')) { connectCaldav(); return; }
+  if (e.target.closest('[data-caldav-disconnect]')) { disconnectCaldav(); return; }
+  if (e.target.closest('[data-caldav-test]')) { testCaldavConnection(); return; }
+  if (e.target.closest('[data-caldav-enable-toggle]')) { toggleIntegration('icloud_caldav'); return; }
+  const ro = e.target.closest('[data-caldav-readonly]');
+  if (ro) { setCaldavReadonly(ro.dataset.caldavReadonly === '1'); return; }
   // a tap anywhere outside an open popover dismisses it
   if (pop && pop.classList.contains('open') && !e.target.closest('#theme-pop')) {
     closeThemePop();

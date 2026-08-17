@@ -2685,3 +2685,304 @@ test('renderIntegrations: shows an error hint when status is error', () => {
   assert.match(host.innerHTML, /integ-warn/);
   assert.match(host.innerHTML, /error/);
 });
+
+test('toggleIntegration: a failed PATCH surfaces a toast (regression: the check used to be a no-op)', async () => {
+  // attemptTodo never throws — it resolves to {ok:false, error}, a truthy
+  // object — so a bare `if (!ok)` on that result is always false. Pins the
+  // fix: toggleIntegration must check `.ok`, or a failed write silently
+  // reverts the switch on the next poll() with no explanation at all.
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'weather', kind: 'weather', name: 'Weather', enabled: true },
+  ] });
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.toggleIntegration('weather');
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'),
+    'the failure toast fired');
+});
+
+/* ------------------------------------------- Settings overlay + CalDAV panel */
+// hub.js keeps caldavUi/hubData as module-lexical `let` bindings (same trick
+// used throughout this file for choreState/data_date/etc.): a follow-up
+// vm.runInContext in the SAME sandbox context shares that lexical scope, so
+// it can seed/read them directly.
+
+test('openOverlay("settings") opens the overlay, builds the settings-full skeleton, and clears a stale form error', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("caldavUi.formError = 'stale error from a previous session';", sandbox);
+
+  sandbox.openOverlay('settings');
+
+  const content = document.getElementById('overlay-content');
+  assert.match(content.innerHTML, /id="settings-full"/);
+  assert.ok(document.getElementById('overlay').classList.contains('open'));
+  assert.equal(vm.runInContext('caldavUi.formError', sandbox), '');
+});
+
+test('renderSettingsFull: paints Display + Integrations, with the live theme reflected onto its own controls', () => {
+  const { document, sandbox } = newHub();
+  // openOverlay('settings') writes #settings-full via innerHTML; the fake
+  // parser doesn't register parsed nodes by id (same limitation the cal-full/
+  // chores-full tests work around), so pre-register a real host FakeEl.
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  // reflectThemeControls reads document.documentElement.getAttribute; newHub's
+  // stub documentElement only carries scrollTop (for scrollPageToTop), so give
+  // it a working getAttribute for this test.
+  document.documentElement.getAttribute = (k) => ({
+    'data-theme': 'grey', 'data-accent': 'green', 'data-cols': 'none',
+  }[k]);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'weather', kind: 'weather', name: 'Weather', enabled: true }] };",
+    sandbox);
+
+  sandbox.renderSettingsFull();
+
+  const html = document.getElementById('settings-full').innerHTML;
+  assert.match(html, /<h2>Display<\/h2>/);
+  assert.match(html, /<h2>Integrations<\/h2>/);
+  assert.match(html, /id="integrations-ctl"/, 'the Integrations switch list mounts here');
+  assert.match(html, /id="caldav-panel"/, 'the iCloud CalDAV panel mounts here');
+  const greyBtn = host.querySelector('[data-theme-set="grey"]');
+  assert.ok(greyBtn && greyBtn.classList.contains('on'),
+    'reflectThemeControls marks the live theme on the overlay\'s own copy of the controls');
+});
+
+test('reflectThemeControls updates every matching control on the page, not just one surface', () => {
+  // Pins the generalization from a single #theme-pop-scoped query to a
+  // document-wide one: both the gear popover's controls AND the Settings
+  // overlay's own copy (rendered separately, see renderSettingsFull) must
+  // stay in sync, since either can be the one currently visible.
+  const { document, sandbox } = newHub();
+  const popHost = document.createElement('div');
+  popHost.innerHTML = '<button data-theme-set="light">Light</button><button data-theme-set="grey">Grey</button>';
+  popHost._id = 'theme-pop';
+  document.body.appendChild(popHost);
+  const overlayHost = document.createElement('div');
+  overlayHost.innerHTML = '<button data-theme-set="light">Light</button><button data-theme-set="grey">Grey</button>';
+  overlayHost._id = 'settings-full';
+  document.body.appendChild(overlayHost);
+  document.documentElement.getAttribute = (k) => (k === 'data-theme' ? 'grey' : null);
+
+  sandbox.reflectThemeControls();
+
+  for (const host of [popHost, overlayHost]) {
+    assert.ok(host.querySelector('[data-theme-set="grey"]').classList.contains('on'));
+    assert.ok(!host.querySelector('[data-theme-set="light"]').classList.contains('on'));
+  }
+});
+
+function seedCaldavPanel(document) {
+  const host = document.createElement('div');
+  host._id = 'caldav-panel';
+  document.body.appendChild(host);
+  return host;
+}
+
+test('renderCaldavPanel: not connected shows the connect form; connected shows the account', () => {
+  const { document, sandbox } = newHub();
+  const host = seedCaldavPanel(document);
+
+  vm.runInContext("hubData = { integrations: [] };", sandbox);
+  sandbox.renderCaldavPanel();
+  assert.match(host.innerHTML, /data-caldav-connect/);
+
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)', "
+    + "enabled: true, status: null, account: 'bot@example.com', readonly: true }] };",
+    sandbox);
+  sandbox.renderCaldavPanel();
+  assert.match(host.innerHTML, /Connected as <strong>bot@example\.com/);
+});
+
+test('renderCaldavPanel: falls back to lastIntegrations when hubData has not loaded yet', () => {
+  const { document, sandbox } = newHub();
+  const host = seedCaldavPanel(document);
+  // lastIntegrations is set by renderIntegrations, independent of hubData —
+  // e.g. the very first paint before poll()'s first /api/hub response lands.
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)',
+      enabled: true, status: null, account: 'first@example.com', readonly: true },
+  ] });
+
+  sandbox.renderCaldavPanel();
+
+  assert.match(host.innerHTML, /Connected as <strong>first@example\.com/);
+});
+
+test('connectCaldav: empty fields show an inline form error and never call the API', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = '';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = '';
+  document.body.appendChild(p);
+  let fetchCalled = false;
+  sandbox.fetch = async () => { fetchCalled = true; return { ok: true, status: 200, json: async () => ({}) }; };
+
+  await sandbox.connectCaldav();
+
+  assert.equal(fetchCalled, false, 'no network call when fields are empty');
+  assert.match(document.getElementById('caldav-panel').innerHTML,
+    /Enter both the Apple ID and the app-specific password/);
+});
+
+test('connectCaldav: success clears the password field, re-polls, and auto-runs a test', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = 'bot@example.com';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = 'app-specific-pw';
+  document.body.appendChild(p);
+
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: opts && opts.method,
+      body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (String(url).includes('/credentials')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, user: 'bot@example.com' }) };
+    }
+    if (String(url) === '/api/hub') {
+      return { ok: true, status: 200, json: async () => ({ integrations: [
+        { id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)',
+          enabled: true, status: null, account: 'bot@example.com', readonly: true },
+      ] }) };
+    }
+    if (String(url).includes('/test')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, events: 5, reminders: 1 }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  await sandbox.connectCaldav();
+
+  assert.equal(p.value, '', 'the password input is blanked the instant the POST succeeds');
+  const credCall = calls.find((c) => c.url.includes('/credentials'));
+  assert.equal(credCall.method, 'POST');
+  assert.deepEqual(credCall.body, { user: 'bot@example.com', app_password: 'app-specific-pw' });
+  // never leak the password anywhere else, e.g. into a later call's URL/body
+  assert.ok(!calls.some((c) => JSON.stringify(c).includes('app-specific-pw') && c !== credCall));
+  assert.ok(calls.some((c) => c.url === '/api/hub'), 'poll() re-fetched /api/hub');
+  assert.ok(calls.some((c) => c.url.includes('/test')), 'a Test ran automatically after connecting');
+  const html = document.getElementById('caldav-panel').innerHTML;
+  assert.match(html, /Connected as <strong>bot@example\.com/);
+  assert.match(html, /caldav-test-result ok">Connected - 5 events, 1 reminder\./);
+});
+
+test('connectCaldav: a rejected POST shows a toast, leaves the password field alone, and stays on the form', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = 'bot@example.com';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = 'wrong-pw';
+  document.body.appendChild(p);
+  sandbox.fetch = async () => { throw new Error('422: user and app_password are required'); };
+
+  await sandbox.connectCaldav();
+
+  assert.equal(p.value, 'wrong-pw', 'a failed attempt does not blank what the operator typed');
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+  assert.match(document.getElementById('caldav-panel').innerHTML, /data-caldav-connect/,
+    'still showing the connect form, not stuck on a permanent "Connecting…"');
+});
+
+test('testCaldavConnection: shows a testing state in flight, then the formatted result', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', kind: 'caldav', name: 'iCloud (CalDAV)', "
+    + "enabled: true, status: null, account: 'bot@example.com', readonly: true }] };",
+    sandbox);
+  let sawTesting = false;
+  sandbox.fetch = async () => {
+    sawTesting = /Testing…/.test(document.getElementById('caldav-panel').innerHTML);
+    return { ok: true, status: 200, json: async () => ({ needs_auth: true }) };
+  };
+
+  await sandbox.testCaldavConnection();
+
+  assert.ok(sawTesting, 'the panel showed the testing state before the request resolved');
+  assert.match(document.getElementById('caldav-panel').innerHTML, /Sign-in rejected/);
+});
+
+test('testCaldavConnection: a network failure folds into the same {ok:false,error} shape', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('network down'); };
+
+  await sandbox.testCaldavConnection();
+
+  assert.match(document.getElementById('caldav-panel').innerHTML, /caldav-test-result err">network down/);
+});
+
+test('disconnectCaldav: DELETEs credentials, clears the stale test result, and re-polls back to the form', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext("caldavUi.testResult = { ok: true, events: 1, reminders: 0 };", sandbox);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: opts && opts.method });
+    if (String(url).includes('/credentials')) return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    if (String(url) === '/api/hub') return { ok: true, status: 200, json: async () => ({ integrations: [] }) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  await sandbox.disconnectCaldav();
+
+  const del = calls.find((c) => c.url.includes('/credentials'));
+  assert.equal(del.method, 'DELETE');
+  assert.equal(vm.runInContext('caldavUi.testResult', sandbox), null, 'a stale "connected" result would be misleading now');
+  assert.match(document.getElementById('caldav-panel').innerHTML, /data-caldav-connect/, 'back to the not-connected form');
+});
+
+test('disconnectCaldav: a failed DELETE shows a toast and does not touch the state', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.disconnectCaldav();
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+});
+
+test('setCaldavReadonly: PATCHes {readonly} and re-renders the sync-direction control', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: opts && opts.method,
+      body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (String(url) === '/api/hub') {
+      return { ok: true, status: 200, json: async () => ({ integrations: [
+        { id: 'icloud_caldav', enabled: true, account: 'bot@example.com', readonly: false },
+      ] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  await sandbox.setCaldavReadonly(false);
+
+  const patch = calls.find((c) => c.method === 'PATCH');
+  assert.deepEqual(patch.body, { readonly: false });
+  assert.match(document.getElementById('caldav-panel').innerHTML, /writing back, coming soon/);
+});
+
+test('setCaldavReadonly: a failed PATCH shows a toast', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.setCaldavReadonly(true);
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+});

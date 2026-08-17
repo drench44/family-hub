@@ -21,6 +21,7 @@ const {
   idleReturnMs, nightClass,
   fmtTimeRange, monthName, eventColor, wallZoom,
   isDayOutsideWindow,
+  caldavTestMessage, caldavPanelHtml,
 } = sandbox;
 const panelFit = (...a) => ({ ...sandbox.panelFit(...a) });
 const monthGrid = (...a) => JSON.parse(JSON.stringify(sandbox.monthGrid(...a)));
@@ -372,6 +373,130 @@ test('calStatusMessage: copy is source-neutral (no "Google" — the hub has seve
 test('calStatusMessage: needs_auth wins over a not-configured error string', () => {
   const m = sandbox.calStatusMessage({ ok: false, needs_auth: true, error: 'not configured' });
   assert.match(m, /sign-in expired/);
+});
+
+test('caldavTestMessage: a successful test reports events + reminders counts', () => {
+  assert.equal(caldavTestMessage({ ok: true, events: 12, reminders: 3 }),
+    'Connected - 12 events, 3 reminders.');
+});
+
+test('caldavTestMessage: singular event/reminder counts drop the trailing s', () => {
+  assert.equal(caldavTestMessage({ ok: true, events: 1, reminders: 1 }),
+    'Connected - 1 event, 1 reminder.');
+});
+
+test('caldavTestMessage: a missing events/reminders count on ok:true reads as zero, not NaN', () => {
+  assert.equal(caldavTestMessage({ ok: true }), 'Connected - 0 events, 0 reminders.');
+});
+
+test('caldavTestMessage: needs_auth asks to check the app-specific password', () => {
+  assert.match(caldavTestMessage({ needs_auth: true }), /Sign-in rejected/);
+  assert.match(caldavTestMessage({ needs_auth: true }), /app-specific password/);
+});
+
+test('caldavTestMessage: needs_auth wins over an error string on the same result', () => {
+  const m = caldavTestMessage({ ok: false, needs_auth: true, error: 'HTTP 401' });
+  assert.match(m, /Sign-in rejected/);
+});
+
+test('caldavTestMessage: a plain failure shows the server\'s error text', () => {
+  assert.equal(caldavTestMessage({ ok: false, error: 'no credentials' }), 'no credentials');
+});
+
+test('caldavTestMessage: a failure with no error text falls back to a generic message', () => {
+  assert.match(caldavTestMessage({ ok: false }), /Couldn.t connect/);
+  assert.match(caldavTestMessage(null), /Couldn.t connect/);
+});
+
+test('caldavPanelHtml: not connected shows a credential form with a MASKED password field', () => {
+  const html = caldavPanelHtml(null, {});
+  assert.match(html, /id="caldav-user-input"/);
+  assert.match(html, /id="caldav-pw-input"/);
+  assert.match(html, /type="password"/);   // the hard security requirement: masked input
+  assert.match(html, /data-caldav-connect/);
+  assert.match(html, />Connect</);
+  assert.match(html, /app-specific password/);
+  assert.match(html, /Stored on this device only, never shared/);
+  // never a plaintext password field
+  assert.doesNotMatch(html, /type="text"[^>]*id="caldav-pw-input"/);
+});
+
+test('caldavPanelHtml: not connected + connecting disables the inputs and shows progress text', () => {
+  const html = caldavPanelHtml(null, { connecting: true });
+  assert.match(html, />Connecting…</);
+  assert.match(html, /id="caldav-user-input"[^>]*disabled/);
+  assert.match(html, /id="caldav-pw-input"[^>]*disabled/);
+  assert.match(html, /data-caldav-connect[^>]*disabled/);
+});
+
+test('caldavPanelHtml: not connected + a form error shows it inline', () => {
+  const html = caldavPanelHtml(null, { formError: 'Enter both fields.' });
+  assert.match(html, /form-error">Enter both fields\.</);
+});
+
+test('caldavPanelHtml: never renders a password value anywhere, on any branch', () => {
+  // caldavPanelHtml's signature has no password parameter at all — this pins
+  // that a hypothetical caller mistake (e.g. stashing it on `ui`) still can't
+  // leak it into the DOM, since the function only ever emits its own fixed
+  // strings plus `integ`/`ui` fields it actually reads (id, account, status,
+  // etc — never anything password-shaped).
+  const ui = { formError: '', connecting: false, testing: false, testResult: null,
+    password: 'hunter2', app_password: 'hunter2' };
+  assert.doesNotMatch(caldavPanelHtml(null, ui), /hunter2/);
+  assert.doesNotMatch(
+    caldavPanelHtml({ id: 'icloud_caldav', account: 'a@example.com', enabled: true }, ui),
+    /hunter2/);
+});
+
+test('caldavPanelHtml: connected shows the account, enable switch, and NO password field', () => {
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'bot@example.com', enabled: true, readonly: true },
+    {});
+  assert.match(html, /Connected as <strong>bot@example\.com<\/strong>/);
+  assert.match(html, /data-caldav-enable-toggle/);
+  assert.match(html, /integ-switch on/);
+  assert.doesNotMatch(html, /id="caldav-pw-input"/);
+  assert.doesNotMatch(html, /type="password"/);
+});
+
+test('caldavPanelHtml: connected escapes the account (XSS-safe interpolation)', () => {
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: '<img src=x onerror=alert(1)>', enabled: true }, {});
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img/);
+});
+
+test('caldavPanelHtml: readonly defaults to 1-way and the seg-btn reflects it', () => {
+  const oneWay = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, readonly: true }, {});
+  assert.match(oneWay, /seg-btn active" type="button" data-caldav-readonly="1"/);
+  const twoWay = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, readonly: false }, {});
+  assert.match(twoWay, /seg-btn active" type="button" data-caldav-readonly="0"/);
+  assert.match(twoWay, /writing back, coming soon/);
+});
+
+test('caldavPanelHtml: connected + needs_auth/error status shows the reconnect/error warning', () => {
+  const reconnect = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true, status: 'needs_auth' }, {});
+  assert.match(reconnect, /integ-warn">reconnect</);
+  const errored = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true, status: 'error' }, {});
+  assert.match(errored, /integ-warn">error</);
+});
+
+test('caldavPanelHtml: connected + testing shows progress text and disables the Test button', () => {
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true }, { testing: true });
+  assert.match(html, /data-caldav-test[^>]*disabled/);
+  assert.match(html, />Testing…</);
+});
+
+test('caldavPanelHtml: connected + a test result shows the formatted message with an ok/err class', () => {
+  const ok = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true },
+    { testResult: { ok: true, events: 4, reminders: 2 } });
+  assert.match(ok, /caldav-test-result ok">Connected - 4 events, 2 reminders\./);
+  const err = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true },
+    { testResult: { ok: false, error: 'boom' } });
+  assert.match(err, /caldav-test-result err">boom</);
 });
 
 test('chore round-trips: choreToModel -> buildChorePayload preserves schedule/assign', () => {
