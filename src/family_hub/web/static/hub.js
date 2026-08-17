@@ -1398,19 +1398,73 @@ function wirePanels() {
 
 /* ------------------------------------------------- native weather card */
 
-/* A weather emoji for the .sun slot, derived from the conditions text (the wx
-   feed carries no icon field). Falls back to partly-cloudy for anything we don't
-   recognize. */
-function wxIcon(conditions) {
+/* Condition key for the sky scene, derived from the conditions text (the wx
+   feed carries no icon field). Priority order matters ("thunderstorm with
+   rain" is a storm, not rain). Falls back to 'partly' for anything we don't
+   recognize — the same fallback the old emoji mapper used. */
+function wxCondKey(conditions) {
   const c = String(conditions || '').toLowerCase();
-  if (/thunder|storm|lightning/.test(c)) return '⛈️';
-  if (/snow|flurr|sleet|\bice\b/.test(c)) return '❄️';
-  if (/rain|drizzle|shower/.test(c)) return '🌧️';
-  if (/fog|mist|haze|smoke/.test(c)) return '🌫️';
-  if (/partly|mostly sunny|few cloud|scattered/.test(c)) return '⛅';
-  if (/cloud|overcast/.test(c)) return '☁️';
-  if (/clear|sun|fair/.test(c)) return '☀️';
-  return '⛅';
+  if (/thunder|storm|lightning/.test(c)) return 'storm';
+  if (/snow|flurr|sleet|\bice\b/.test(c)) return 'snow';
+  if (/rain|drizzle|shower/.test(c)) return 'rain';
+  if (/fog|mist|haze|smoke/.test(c)) return 'fog';
+  if (/partly|mostly sunny|few cloud|scattered/.test(c)) return 'partly';
+  if (/cloud|overcast/.test(c)) return 'cloudy';
+  if (/clear|sun|fair/.test(c)) return 'clear';
+  return 'partly';
+}
+
+/* Sky phase from the local hour: the sky panel's gradient follows the real
+   time of day. Fixed civil-ish boundaries (the feed carries no sunrise/
+   sunset): dawn 5–8, day 8–18, dusk 18–21, night otherwise. */
+function skyPhase(hour) {
+  if (hour >= 5 && hour < 8) return 'dawn';
+  if (hour >= 8 && hour < 18) return 'day';
+  if (hour >= 18 && hour < 21) return 'dusk';
+  return 'night';
+}
+
+/* The living sky: a full-bleed drawn scene at the top of the weather card.
+   The phase class picks the gradient; the condition key layers the scene on
+   top — a sun with a breathing glow (clear/partly by day), a moon + stars
+   (by night), drifting clouds, falling rain/snow, fog bands, and a slate
+   veil (CSS) that mutes the sky under heavy cover. The temperature +
+   conditions + today's high/low live IN the sky over a legibility scrim.
+   Sky colors are deliberately absolute (a sky is a picture of the outdoors,
+   identical in every theme); the overlay text is white-on-scrim in all of
+   them. `hour` is the local hour at render (injectable for tests). */
+function skySceneHtml(wx, hour) {
+  const cond = wxCondKey(wx.conditions);
+  const phase = skyPhase(hour);
+  const night = phase === 'night';
+  const tp = wxTempParts(wx.temp, wx.unit);
+  const condText = escapeHtml(wx.conditions != null ? String(wx.conditions) : '');
+  const feelsPart = (wx.feels != null && String(wx.feels) !== '')
+    ? `${condText ? ' · ' : ''}feels ${escapeHtml(String(wx.feels))}°` : '';
+  const stalePart = wx.stale ? ` · <span class="wx-stale">stale</span>` : '';
+  // today's range, tucked in the sky's bottom-right; hidden only when the
+  // feed omits BOTH ends (one missing end shows an en-dash via wxVal)
+  const hilo = (wx.high == null && wx.low == null) ? ''
+    : `<div class="hilo num"><span class="hl-k">H</span> ${wxVal(wx.high, '°')}`
+      + ` <span class="hl-k">L</span> ${wxVal(wx.low, '°')}</div>`;
+  // celestial body only when the sky is clear enough to see it
+  const celestial = (cond === 'clear' || cond === 'partly')
+    ? (night ? '<span class="sky-moon"></span>' : '<span class="sky-sun"></span>') : '';
+  const stars = night ? '<span class="sky-stars"></span>' : '';
+  const nClouds = { partly: 2, cloudy: 3, storm: 3, rain: 2, snow: 2 }[cond] || 0;
+  let clouds = '';
+  for (let i = 1; i <= nClouds; i++) clouds += `<span class="sky-cloud c${i}"></span>`;
+  const precip = (cond === 'rain' || cond === 'storm') ? '<span class="sky-rain"></span>'
+    : cond === 'snow' ? '<span class="sky-snow"></span>'
+      : cond === 'fog' ? '<span class="sky-fog"></span>' : '';
+  return `<div class="sky ph-${phase} cn-${cond}">`
+    + stars + celestial + clouds + precip
+    + `<div class="sky-txt">`
+    + `<div class="tline"><span class="temp num">${tp.whole}</span>`
+    + `<span class="deg num">${tp.deg}</span></div>`
+    + `<div class="cond">${condText}${feelsPart}${stalePart}</div>`
+    + hilo
+    + `</div></div>`;
 }
 
 /* Split a temperature into the big whole-number part and the ".<frac>°<unit>"
@@ -1432,44 +1486,70 @@ function wxVal(v, suffix) {
   return (v == null || String(v) === '') ? '–' : `${escapeHtml(String(v))}${suffix}`;
 }
 
-function wxStat(k, vHtml) {
-  return `<div class="stat"><div class="k">${k}</div><div class="v num">${vHtml}</div></div>`;
-}
-
-/* A weather stat with a severity meter — the UV and Air-Quality metrics. The
-   value is tinted to its `band` (the standard EPA/AQI scale from the NUMBER when
-   present, else a category-text fallback — see the caller), the category shows
-   as a small label, and a proportional bar fills to `pct` (0..100) in the band's
-   color. `band` is '' | 'good' | 'ok' | 'warn' | 'crit'; only good/warn/crit
-   tint (an 'ok'/absent reading stays neutral ink over a grey bar). */
-function wxMeterStat(k, value, suffix, band, label, pct) {
+/* A ring-gauge stat — UV, Air Quality, and Humidity. The ring fills to `frac`
+   (0..1, pre-clamped by the caller via clampFrac) in the band's color, the
+   value sits in the middle, the metric name + the feed's category word go
+   beneath. The meter contract is unchanged from the old bar meters: the color
+   follows the NUMBER when present ('' | 'good' | 'ok' | 'warn' | 'crit';
+   only good/warn/crit tint); a missing number shows a dash over an empty
+   ring, and then the category label ALONE carries the band tint — a feed
+   that omits the number but says "Unhealthy" must never read as calm grey
+   (see uvBand/aqiBand text fallback in common.js). */
+function wxGauge(k, value, suffix, band, label, frac) {
   const st = (band === 'good' || band === 'warn' || band === 'crit') ? ` st-${band}` : '';
-  // The category is normally a quiet grey sub-label under the colored number.
-  // But when the number is MISSING, the label is the only signal, so it inherits
-  // the band tint too — a feed that omits the number but says "Unhealthy" must
-  // never read as calm grey (see uvBand/aqiBand text fallback in common.js).
   const missing = value == null || String(value).trim() === '' || !isFinite(Number(value));
   const lblCls = missing ? `wx-band${st}` : 'wx-band';
   const lbl = (label != null && String(label).trim() !== '')
     ? `<span class="${lblCls}">${escapeHtml(String(label))}</span>` : '';
-  return `<div class="stat wx-meter"><div class="k">${k}</div>`
-    + `<div class="v num${st}">${wxVal(value, suffix)}${lbl}</div>`
-    + `<div class="bar" aria-hidden="true"><i class="bar-fill${st}" style="width:${pct}%"></i></div>`
+  const C = 2 * Math.PI * 19;   // ring circumference (r=19 in the 46 viewBox)
+  const f = Math.max(0, Math.min(1, Number(frac) || 0));
+  const dash = Math.round(C * f * 10) / 10;
+  return `<div class="stat wx-meter">`
+    + `<div class="g-wrap"><svg class="gauge" viewBox="0 0 46 46" aria-hidden="true">`
+    + `<circle class="g-track" cx="23" cy="23" r="19"/>`
+    + `<circle class="g-fill${st}" cx="23" cy="23" r="19" stroke-dasharray="${dash} ${Math.ceil(C)}"/>`
+    + `</svg><div class="g-num num${st}">${wxVal(value, suffix)}</div></div>`
+    + `<div class="k">${k}</div>${lbl}`
     + `</div>`;
 }
 
-/* Temperature curve for the weather card: a ~24h window (observed past +
-   forecast ahead) normalized into the 0 0 300 46 viewBox (padded top/bottom so
-   the line clears the edges). `nowIndex` marks the current hour: the line is
-   solid for the observed past and lighter for the forecast ahead, with a faint
-   vertical guide and a dot at "now". Absent/out-of-range nowIndex -> all solid,
-   dot on the last point. Returns '' (hide it) when fewer than 2 numeric points
-   survive the filter. */
-function sparkSvg(spark, nowIndex) {
+/* Dew-point comfort words (the standard muggy scale). Muggy and up tint like
+   any other out-of-range reading; a missing/non-numeric reading -> null. */
+function dewComfort(dp) {
+  const n = _reading(dp);
+  if (n === null) return null;
+  if (n < 55) return { word: 'Dry', band: '' };
+  if (n < 60) return { word: 'Pleasant', band: '' };
+  if (n < 65) return { word: 'Sticky', band: '' };
+  if (n < 70) return { word: 'Muggy', band: 'warn' };
+  return { word: 'Oppressive', band: 'crit' };
+}
+
+/* Compact hour label for a chart tick: 0 -> 12a, 12 -> 12p, 14 -> 2p. */
+function hourLbl(h) {
+  const hh = ((h % 24) + 24) % 24;
+  if (hh === 0) return '12a';
+  if (hh === 12) return '12p';
+  return hh < 12 ? `${hh}a` : `${hh - 12}p`;
+}
+
+/* Temperature chart for the weather card: a ~24h window of hourly points
+   (observed past + forecast ahead) in a 0 0 300 64 viewBox. `nowIndex` marks
+   the current hour: the line is solid for the observed past and dashed-light
+   for the forecast ahead, with a faint vertical guide and a pulsing dot at
+   "now". Because each point is one hour anchored at nowIndex, the bottom
+   band carries real time ticks every 6 hours (8a / 2p style; "now" at the
+   anchor), and the high/low points get small value labels. Absent/out-of-
+   range nowIndex -> all solid, anchor on the last point (still labeled as
+   the current hour). `hour` is the local hour at render (injectable for
+   tests). Returns '' (hide it) when fewer than 2 numeric points survive the
+   filter. */
+function sparkSvg(spark, nowIndex, hour = new Date().getHours()) {
   const vals = (Array.isArray(spark) ? spark : [])
     .filter((v) => typeof v === 'number' && isFinite(v));
   if (vals.length < 2) return '';
-  const W = 300, H = 46, PT = 8, PB = 8, usable = H - PT - PB;
+  const W = 300, H = 64, PT = 13, PB = 16, usable = H - PT - PB;
+  const plotBottom = H - PB + 3;
   const min = Math.min(...vals), max = Math.max(...vals);
   const range = (max - min) || 1;
   const n = vals.length;
@@ -1481,51 +1561,73 @@ function sparkSvg(spark, nowIndex) {
   const path = (seg) => seg.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' ');
   const ni = (Number.isInteger(nowIndex) && nowIndex >= 0 && nowIndex < n) ? nowIndex : n - 1;
   const now = pts[ni];
-  const area = `${path(pts)} L${pts[n - 1].x},${H} L${pts[0].x},${H} Z`;
+  const area = `${path(pts)} L${pts[n - 1].x},${plotBottom} L${pts[0].x},${plotBottom} Z`;
   const past = path(pts.slice(0, ni + 1));      // observed
   const future = ni < n - 1 ? path(pts.slice(ni)) : '';   // forecast (overlaps at now)
-  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`
+  // clamp an edge label's anchor so it never clips out of the viewBox
+  const cx = (x) => Math.max(10, Math.min(W - 10, x));
+  // high/low value labels sit on their points (first occurrence each);
+  // clamped vertically so they stay inside the plot band
+  const hiIdx = vals.indexOf(max), loIdx = vals.indexOf(min);
+  const hiPt = pts[hiIdx], loPt = pts[loIdx];
+  const marks = `<circle class="sp-dot" cx="${hiPt.x}" cy="${hiPt.y}" r="2"/>`
+    + `<text class="sp-hilo" x="${cx(hiPt.x)}" y="${Math.max(9, hiPt.y - 5)}" text-anchor="middle">${Math.round(max)}°</text>`
+    + (loIdx !== hiIdx
+      ? `<circle class="sp-dot" cx="${loPt.x}" cy="${loPt.y}" r="2"/>`
+        + `<text class="sp-hilo" x="${cx(loPt.x)}" y="${Math.min(plotBottom + 8, loPt.y + 12)}" text-anchor="middle">${Math.round(min)}°</text>`
+      : '');
+  // time ticks every 6 hours, anchored at "now" (each point is one hour).
+  // A tick that lands under the low point's value label would collide with
+  // it (the low label hangs into the bottom band) — skip that tick; "now"
+  // always wins and renders.
+  let ticks = '';
+  for (let i = 0; i < n; i++) {
+    if ((i - ni) % 6 !== 0) continue;
+    if (i !== ni && Math.abs(pts[i].x - loPt.x) < 18 && loPt.y + 12 > plotBottom - 2) continue;
+    const isNow = i === ni;
+    const lbl = isNow ? 'now' : hourLbl(hour + (i - ni));
+    const tickCls = isNow ? ' sp-now' : '';
+    ticks += `<text class="sp-tick${tickCls}" x="${cx(pts[i].x)}" y="${H - 2}" text-anchor="middle">${lbl}</text>`;
+  }
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true">`
     + `<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">`
     + `<stop offset="0" stop-color="var(--accent)" stop-opacity=".26"/>`
     + `<stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>`
     + `<path d="${area}" fill="url(#sg)"/>`
-    + (future ? `<path d="${future}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-opacity=".38"/>` : '')
-    + `<path d="${past}" fill="none" stroke="var(--accent)" stroke-width="2"/>`
-    + `<line x1="${now.x}" y1="0" x2="${now.x}" y2="${H}" stroke="var(--accent)" stroke-opacity=".2" stroke-width="1"/>`
-    + `<circle cx="${now.x}" cy="${now.y}" r="2.6" fill="var(--accent)"/>`
+    + (future ? `<path class="sp-future" d="${future}"/>` : '')
+    + `<path class="sp-past" d="${past}"/>`
+    + `<line class="sp-guide" x1="${now.x}" y1="4" x2="${now.x}" y2="${plotBottom}"/>`
+    + marks + ticks
+    + `<circle class="sp-halo" cx="${now.x}" cy="${now.y}" r="7"/>`
+    + `<circle class="sp-dot sp-nowdot" cx="${now.x}" cy="${now.y}" r="3"/>`
     + `</svg>`;
 }
 
-function weatherCardHtml(wx) {
-  const tp = wxTempParts(wx.temp, wx.unit);
-  const condText = wx.conditions != null ? String(wx.conditions) : '';
-  const feelsPart = (wx.feels != null && String(wx.feels) !== '')
-    ? `${condText ? ' · ' : ''}feels ${escapeHtml(String(wx.feels))}°` : '';
-  const stalePart = wx.stale ? ` · <span class="wx-stale">stale</span>` : '';
-  const cond = `${escapeHtml(condText)}${feelsPart}${stalePart}`;
-
-  // UV + AQI get a colored severity meter (wxMeterStat). Color follows the
-  // NUMBER (uvBand/aqiBand); the feed's category text is only the label. Meter
-  // fill: UV against a full-scale 11 (EPA extreme), AQI against 200 (its
-  // "very unhealthy" line), both clamped so an off-scale reading can't overflow.
+function weatherCardHtml(wx, hour = new Date().getHours()) {
+  // UV + AQI get a colored ring gauge (wxGauge). Color follows the NUMBER
+  // (uvBand/aqiBand); the feed's category text is only the label. Ring fill:
+  // UV against a full-scale 11 (EPA extreme), AQI against 200 (its "very
+  // unhealthy" line), humidity against 100, all clamped so an off-scale
+  // reading can't overflow. High/low moved into the sky scene + the chart's
+  // labeled extremes; dew point reads as a comfort word (dewComfort).
   const uvB = uvBand(wx.uv) || uvBandText(wx.uv_desc);
   const aqiB = aqiBand(wx.aqi) || aqiBandText(wx.aqi_cat);
-  const stats = wxStat('High', wxVal(wx.high, '°'))
-    + wxStat('Low', wxVal(wx.low, '°'))
-    + wxMeterStat('UV Index', wx.uv, '', uvB, wx.uv_desc, Math.round(clampFrac(wx.uv, 11) * 100))
-    + wxMeterStat('Air Quality', wx.aqi, '', aqiB, wx.aqi_cat, Math.round(clampFrac(wx.aqi, 200) * 100))
-    + wxStat('Humidity', wxVal(wx.humidity, '%'))
-    + wxStat('Dew point', wxVal(wx.dew_point, '°'));
+  const dew = dewComfort(wx.dew_point);
+  const dewLbl = dew
+    ? `<span class="wx-band${dew.band ? ` st-${dew.band}` : ''}">${dew.word}</span>` : '';
+  const dewN = _reading(wx.dew_point);   // dash any non-numeric reading, never "NaN°"
+  const stats = wxGauge('UV Index', wx.uv, '', uvB, wx.uv_desc, clampFrac(wx.uv, 11))
+    + wxGauge('Air Quality', wx.aqi, '', aqiB, wx.aqi_cat, clampFrac(wx.aqi, 200))
+    + wxGauge('Humidity', wx.humidity, '%', '', null, clampFrac(wx.humidity, 100))
+    + `<div class="stat wx-dew"><div class="g-wrap"><div class="dew-big num">${wxVal(dewN == null ? null : Math.round(dewN), '°')}</div></div>`
+    + `<div class="k">Dew point</div>${dewLbl}</div>`;
 
   return `<article class="card wx">`
-    + `<div class="top"><div>`
-    + `<div class="tline"><span class="temp num">${tp.whole}</span>`
-    + `<span class="deg num">${tp.deg}</span></div>`
-    + `<div class="cond">${cond}</div>`
-    + `</div><span class="sun">${wxIcon(wx.conditions)}</span></div>`
-    + sparkSvg(wx.spark, wx.spark_now)
+    + skySceneHtml(wx, hour)
+    + `<div class="wx-body">`
+    + sparkSvg(wx.spark, wx.spark_now, hour)
     + `<div class="stats">${stats}</div>`
-    + `</article>`;
+    + `</div></article>`;
 }
 
 /* Paint the native weather card into its slot (built by buildPanels). The header
@@ -1609,11 +1711,41 @@ function roomBand(room) {
   return ['', 'good', 'warn', 'crit'][worst];
 }
 
-/* One room row: a comfort status dot · NAME · temp_f° · humidity%. Missing/
-   non-finite temp -> "--", missing humidity -> "—". Out-of-range temp/humidity
-   cells are tinted to their band (warn amber / crit red); comfortable cells stay
-   neutral. Values are rounded to whole units; the name is escaped. */
-function roomRowHtml(room) {
+/* A mini thermometer for a room tile: the mercury height maps 50–90°F onto
+   the tube (clamped), colored by the temperature band ('ok' draws in the calm
+   green, matching the old comfort dot; warn/crit in their colors). A missing
+   reading leaves the tube empty with a neutral bulb. */
+function thermoSvg(tempF, band) {
+  const n = _reading(tempF);
+  const frac = n === null ? 0 : Math.max(0, Math.min(1, (n - 50) / 40));
+  // band -> mercury class: comfortable ('ok') renders good-green, like the
+  // old status dot did (roomBand ranks ok and good together)
+  const merc = band === 'warn' || band === 'crit' ? ` st-${band}` : (n === null ? ' t-none' : ' st-good');
+  const tubeTop = 3, tubeH = 32;
+  // a real reading always shows at least a stub of mercury
+  const h = n === null ? 0 : Math.max(3, Math.round(tubeH * frac));
+  const y = tubeTop + tubeH - h;
+  return `<svg class="thermo" viewBox="0 0 16 48" aria-hidden="true">`
+    + `<rect class="t-tube" x="6" y="${tubeTop}" width="4" height="${tubeH}" rx="2"/>`
+    + (h ? `<rect class="t-merc${merc}" x="6" y="${y}" width="4" height="${h + 3}" rx="2"/>` : '')
+    + `<circle class="t-bulb${merc}" cx="8" cy="41" r="5"/>`
+    + `</svg>`;
+}
+
+/* A small droplet glyph for the humidity readout (fill: currentColor, so it
+   inherits the cell's band tint). */
+function dropSvg() {
+  return `<svg class="drop" viewBox="0 0 12 14" aria-hidden="true">`
+    + `<path d="M6 1C6 1 1.6 6.6 1.6 9.5a4.4 4.4 0 0 0 8.8 0C10.4 6.6 6 1 6 1Z"/></svg>`;
+}
+
+/* One room tile: mini thermometer · big temp° · NAME · droplet humidity%.
+   Missing/non-finite temp -> "--", missing humidity -> "—". Out-of-range
+   temp/humidity cells tint to their band (warn amber / crit red); comfortable
+   cells stay neutral. The tile itself carries the room's overall band
+   (roomBand: worst of temp, humidity, stale) as a soft wash — the successor
+   to the old status dot. Values round to whole units; the name is escaped. */
+function roomTileHtml(room) {
   const t = Number(room.temp_f);
   const tempOk = room.temp_f != null && String(room.temp_f) !== '' && isFinite(t);
   const tempCell = tempOk ? `${Math.round(t)}°` : '--';
@@ -1626,33 +1758,39 @@ function roomRowHtml(room) {
   const cell = (b) => ((b === 'warn' || b === 'crit') ? ` st-${b}` : '');
   const band = roomBand(room);
   const rowCls = (band === 'warn' || band === 'crit') ? ` ${band}` : '';
-  const dotCls = band ? ` st-${band}` : '';
+  const stale = room.stale ? '<span class="rstale">stale</span>' : '';
   return `<div class="room${rowCls}">`
-    + `<span class="dot${dotCls}"></span>`
-    + `<span class="rk">${name}</span>`
-    + `<span class="rv num${cell(tb)}">${tempCell}</span>`
-    + `<span class="rh num${cell(hb)}">${humCell}</span>`
-    + `</div>`;
+    + thermoSvg(room.temp_f, tb)
+    + `<div class="rmain">`
+    + `<div class="rv num${cell(tb)}">${tempCell}</div>`
+    + `<div class="rk">${name}${stale}</div>`
+    + `<div class="rh num${cell(hb)}">${dropSvg()}${humCell}</div>`
+    + `</div></div>`;
 }
 
 function climateCardHtml(cl) {
   const rooms = (Array.isArray(cl.rooms) ? cl.rooms : []).filter(isIndoorRoom);
   const rows = rooms.length
-    ? rooms.map(roomRowHtml).join('')
+    ? `<div class="roomgrid">${rooms.map(roomTileHtml).join('')}</div>`
     : `<div class="cal-empty">no indoor sensors reporting</div>`;
-  // Whole-house indoor aggregate (from /api/humidity) as a labeled footer — the
-  // per-room grid has no Dew column, so show RH + dew explicitly here. Fail-soft:
-  // only the values actually present render.
+  // Whole-house indoor aggregate (from /api/humidity) as a labeled footer —
+  // RH + dew, plus the RH marked on a comfort-zone track (the tinted zone is
+  // humidityBand's ok range, 30–55%). Fail-soft: only the values actually
+  // present render; the track needs a finite RH.
   const rh = cl.indoor_rh, dp = cl.indoor_dp;
   const parts = [];
   if (Number.isFinite(rh)) parts.push(`<b class="num">${Math.round(rh)}%</b> RH`);
   if (Number.isFinite(dp)) parts.push(`<b class="num">${Math.round(dp)}°</b> dew`);
+  const hb = humidityBand(rh);
+  const hdotCls = (hb === 'warn' || hb === 'crit') ? ` st-${hb}` : '';
+  const track = Number.isFinite(rh)
+    ? `<div class="htrack" aria-hidden="true"><i class="hzone"></i>`
+      + `<i class="hdot${hdotCls}" style="left:${Math.max(0, Math.min(100, rh))}%"></i></div>`
+    : '';
   const foot = parts.length
-    ? `<div class="rfoot"><span class="rk">Indoor</span>`
-      + `<span class="rfoot-v">${parts.join(' · ')}</span></div>` : '';
+    ? `<div class="rfoot"><div class="rfoot-line"><span class="rk">Indoor</span>`
+      + `<span class="rfoot-v">${parts.join(' · ')}</span></div>${track}</div>` : '';
   return `<article class="card rooms">`
-    + `<div class="rhead"><span class="rk"></span>`
-    + `<span class="u">Temp</span><span class="u">Humidity</span></div>`
     + rows
     + foot
     + `</article>`;

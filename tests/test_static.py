@@ -352,21 +352,27 @@ def test_month_grid_and_event_card_styled():
 
 def test_climate_weather_out_of_range_visuals_are_styled():
     """The out-of-range coloring layer (House Climate + Weather cards): status
-    tints, the UV/AQI severity meter, and the room comfort dot. These are built
-    with dynamic `st-${band}` classes the generic referenced-class scan can't
-    see, so guard them explicitly here so the visual can't silently regress."""
+    tints, the UV/AQI ring gauges, the room thermometer + tile wash. These are
+    built with dynamic `st-${band}` classes the generic referenced-class scan
+    can't see, so guard them explicitly here so the visual can't silently
+    regress."""
     # status text tints map to the CORRECT palette token (catches a color swap,
     # e.g. .st-warn accidentally using --crit)
     for band, token in (("good", "--good"), ("warn", "--warn"), ("crit", "--crit")):
         assert token in _css_rule(f".st-{band}"), f".st-{band} must tint with var({token})"
-    # the UV/AQI meter: a track plus a fill colored per band (all three)
-    assert _css_rule(".wx .bar").strip(), "the meter track is unstyled"
-    assert "var(--good)" in _css_rule(".bar-fill.st-good")
-    assert "var(--warn)" in _css_rule(".bar-fill.st-warn")
-    assert "var(--crit)" in _css_rule(".bar-fill.st-crit")
-    # the room comfort dot carries each band color
-    assert "var(--good)" in _css_rule(".room .dot.st-good")
-    assert "var(--crit)" in _css_rule(".room .dot.st-crit")
+    # the UV/AQI/humidity ring gauge: a track plus a fill stroked per band
+    assert _css_rule(".g-track").strip(), "the gauge track is unstyled"
+    assert "var(--good)" in _css_rule(".g-fill.st-good")
+    assert "var(--warn)" in _css_rule(".g-fill.st-warn")
+    assert "var(--crit)" in _css_rule(".g-fill.st-crit")
+    # the ring's centered value tints with its band too
+    assert "var(--crit)" in _css_rule(".g-num.st-crit")
+    # the room thermometer mercury carries each band color
+    assert "var(--good)" in _css_rule(".t-merc.st-good")
+    assert "var(--crit)" in _css_rule(".t-merc.st-crit")
+    # an out-of-range room tile carries a wash keyed to its band
+    assert "--warn" in _css_rule(".room.warn")
+    assert "--crit" in _css_rule(".room.crit")
     # an out-of-range room cell out-ranks the base cell color (specificity guard:
     # `.room .rh` would otherwise beat a bare `.st-crit`)
     assert "var(--crit)" in _css_rule(".room .rh.st-crit")
