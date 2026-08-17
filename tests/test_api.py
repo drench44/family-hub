@@ -1728,3 +1728,13 @@ def test_calendar_status_not_configured_when_nothing_connected(tmp_path, monkeyp
     with TestClient(appmod.app) as tc:
         st = tc.get("/api/hub").json()["calendar"]["status"]
         assert st["ok"] is False and "not configured" in st.get("error", "")
+
+
+def test_todo_source_setting(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        assert tc.get("/api/hub").json()["todo_source"] == "local"        # default
+        assert tc.patch("/api/todo-source", json={"source": "icloud"}).json()["source"] == "icloud"
+        assert tc.get("/api/hub").json()["todo_source"] == "icloud"
+        assert tc.patch("/api/todo-source", json={"source": "nope"}).status_code == 422
+        assert tc.patch("/api/todo-source", json={"source": "local"}).json()["source"] == "local"

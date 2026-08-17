@@ -630,6 +630,10 @@ def hub():
         "todos": todos_block,
         "todos_ok": todos_ok,
         "reminders": reminders_block,
+        # Which source backs the To-Do surface: 'local' (the built-in whiteboard,
+        # default) or 'icloud' (the iCloud Reminders list, two-way). The frontend
+        # renders the todos block or the reminders block accordingly.
+        "todo_source": fdb.kv_get(c, "todo_source") or "local",
         "calendar": _calendar_block(c, today, 14),
         "links": _links(istate["enabled_ids"]),
         # The wall's settings menu reads this; tiles for disabled integrations
@@ -791,6 +795,20 @@ def todos_delete(tid: int):
     _todo_row(c, tid)
     fdb.delete_todo(c, tid)
     return {"ok": True}
+
+
+class TodoSourceIn(BaseModel):
+    source: str
+
+
+@app.patch("/api/todo-source")   # NOT /api/todos/source: that collides with the
+def todos_set_source(body: TodoSourceIn):   # /api/todos/{tid:int} route (422s)
+    """Choose what backs the To-Do surface: the local whiteboard or iCloud
+    Reminders. Local todos are untouched either way (no migration)."""
+    if body.source not in ("local", "icloud"):
+        raise HTTPException(422, "source must be 'local' or 'icloud'")
+    fdb.kv_set(_db(), "todo_source", body.source)
+    return {"source": body.source}
 
 
 # --- integrations (the settings menu / extension toggles) -----------------
