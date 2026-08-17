@@ -219,6 +219,10 @@ def demo_weather() -> dict:
         "spark": spark,
         "spark_now": 8,
         "stale": False,
+        "sunrise": "06:15",
+        "sunset": "20:15",
+        "moon_phase": "Waxing Gibbous",
+        "moon_illum": 68,
     }
 
 

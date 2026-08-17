@@ -352,24 +352,65 @@ def test_month_grid_and_event_card_styled():
 
 def test_climate_weather_out_of_range_visuals_are_styled():
     """The out-of-range coloring layer (House Climate + Weather cards): status
-    tints, the UV/AQI severity meter, and the room comfort dot. These are built
-    with dynamic `st-${band}` classes the generic referenced-class scan can't
-    see, so guard them explicitly here so the visual can't silently regress."""
+    tints, the UV/AQI ring gauges, the room thermometer + tile wash. These are
+    built with dynamic `st-${band}` classes the generic referenced-class scan
+    can't see, so guard them explicitly here so the visual can't silently
+    regress."""
     # status text tints map to the CORRECT palette token (catches a color swap,
     # e.g. .st-warn accidentally using --crit)
     for band, token in (("good", "--good"), ("warn", "--warn"), ("crit", "--crit")):
         assert token in _css_rule(f".st-{band}"), f".st-{band} must tint with var({token})"
-    # the UV/AQI meter: a track plus a fill colored per band (all three)
-    assert _css_rule(".wx .bar").strip(), "the meter track is unstyled"
-    assert "var(--good)" in _css_rule(".bar-fill.st-good")
-    assert "var(--warn)" in _css_rule(".bar-fill.st-warn")
-    assert "var(--crit)" in _css_rule(".bar-fill.st-crit")
-    # the room comfort dot carries each band color
-    assert "var(--good)" in _css_rule(".room .dot.st-good")
-    assert "var(--crit)" in _css_rule(".room .dot.st-crit")
+    # the UV/AQI/humidity ring gauge: a track plus a fill stroked per band
+    assert _css_rule(".g-track").strip(), "the gauge track is unstyled"
+    assert "var(--good)" in _css_rule(".g-fill.st-good")
+    assert "var(--warn)" in _css_rule(".g-fill.st-warn")
+    assert "var(--crit)" in _css_rule(".g-fill.st-crit")
+    # the ring's centered value tints with its band too
+    assert "var(--crit)" in _css_rule(".g-num.st-crit")
+    # the room thermometer mercury carries each band color
+    assert "var(--good)" in _css_rule(".t-merc.st-good")
+    assert "var(--crit)" in _css_rule(".t-merc.st-crit")
+    # an out-of-range room tile carries a wash keyed to its band
+    assert "--warn" in _css_rule(".room.warn")
+    assert "--crit" in _css_rule(".room.crit")
     # an out-of-range room cell out-ranks the base cell color (specificity guard:
     # `.room .rh` would otherwise beat a bare `.st-crit`)
     assert "var(--crit)" in _css_rule(".room .rh.st-crit")
+
+
+def test_sky_scene_phase_and_condition_classes_are_styled():
+    """The weather card's sky scene classes are built dynamically in hub.js
+    (`sky ph-${phase} cn-${cond}`), so the generic referenced-class scan can't
+    see them — deleting .sky.ph-night from styles.css would pass every test
+    while the card renders an unstyled div all night. Guard each phase
+    gradient, each condition's veil, and every scene layer explicitly."""
+    for ph in ("day", "dawn", "dusk", "night"):
+        assert _css_rule(f".sky.ph-{ph}").strip(), f".sky.ph-{ph} gradient is unstyled"
+    for cn in ("cloudy", "rain", "storm", "snow", "fog"):
+        assert _css_rule(f".sky.cn-{cn}").strip(), f".sky.cn-{cn} veil is unstyled"
+    for cls in (".sky-sun", ".sky-moon", ".sky-stars", ".sky-cloud",
+                ".sky-rain", ".sky-snow", ".sky-fog", ".sky-txt"):
+        assert _css_rule(cls).strip(), f"{cls} scene layer is unstyled"
+    # the moon-phase construction: moonHtml emits the direction classes + the
+    # inline --m-term, so only these rules make the phase visible. A bare
+    # .sky-moon (no classes) must draw neither part — that IS the full-disc
+    # fallback for feed data that's missing or not understood.
+    assert _css_rule(".sky-moon.m-waxing::after").strip(), \
+        "the waxing shadow half-disc is unstyled"
+    assert _css_rule(".sky-moon.m-waning::after").strip(), \
+        "the waning shadow half-disc is unstyled"
+    assert "var(--m-term" in _css_rule(".sky-moon.m-waxing::before"), \
+        "the terminator ellipse must size from var(--m-term)"
+    assert _css_rule(".sky-moon.m-gibbous::before").strip(), \
+        "the gibbous (moon-colored) terminator is unstyled"
+    # every ambient sky/chart layer is pinned off under prefers-reduced-motion
+    # (the animation now lives on pseudo-elements for rain/snow — compositing)
+    for cls in (".sky-sun", ".sky-stars", ".sky-cloud", ".sky-fog",
+                ".sky-rain::before", ".sky-rain::after",
+                ".sky-snow", ".sky-snow::before", ".sky-snow::after",
+                ".spark .sp-halo"):
+        assert "animation: none" in _css_rule(cls), \
+            f"{cls} is not pinned off under prefers-reduced-motion"
 
 
 def test_favicon_is_local_svg():

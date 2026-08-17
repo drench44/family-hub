@@ -125,9 +125,16 @@ def _weather_spark(wx: dict) -> dict:
     temps = [t for t in raw if isinstance(t, (int, float)) and not isinstance(t, bool)]
     if len(temps) != len(raw):
         temps = []
-    now = ts.get("nowIndex")
-    now = now if (isinstance(now, int) and not isinstance(now, bool)
-                  and 0 <= now < len(temps)) else None
+    raw_now = ts.get("nowIndex")
+    now = raw_now if (isinstance(raw_now, int) and not isinstance(raw_now, bool)
+                      and 0 <= raw_now < len(temps)) else None
+    # A good series with a bad/missing anchor deserves a loud log: the chart
+    # falls back to an unanchored render (no time ticks, no "now" marker), and
+    # the next feed-shape drift (like the hourlyTemps guess before it) should
+    # be caught here, not by someone squinting at a wall with no clock labels.
+    if temps and now is None:
+        log.warning("weather feed tempSeries has %d temps but no usable "
+                    "nowIndex (%r); temp chart renders unanchored", len(temps), raw_now)
     return {"temps": temps, "now": now}
 
 
@@ -166,6 +173,16 @@ async def weather_tile(client, cfg) -> dict:
             "spark": spark["temps"],
             "spark_now": spark["now"],
             "stale": wx.get("weatherStale"),
+            # Sky-scene inputs (verified against the live feed 2026-08-17):
+            # sunrise/sunset are "HH:MM" local strings that drive the sky's
+            # dawn/day/dusk/night phase (absent -> the frontend's fixed civil
+            # boundaries); moonPhase is a name ("Waxing Crescent") and
+            # moonIllum a lit percentage that shape the drawn moon (absent ->
+            # a full disc).
+            "sunrise": wx.get("sunrise"),
+            "sunset": wx.get("sunset"),
+            "moon_phase": wx.get("moonPhase"),
+            "moon_illum": wx.get("moonIllum"),
         }
         # A 200-but-empty upstream ({}, {"error": "warming up"}, temp
         # missing/null) would paint an all-dashes card that still looks LIVE.

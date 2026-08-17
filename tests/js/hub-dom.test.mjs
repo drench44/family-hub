@@ -2888,22 +2888,188 @@ test('weather card renders temp, condition/feels, UV, AQI, humidity and dew', ()
   // header carries the almanac overlay hook (the "Full forecast" button)
   assert.match(html, /class="expand"[^>]*data-overlay="panel:weather"/);
   assert.match(html, /⛶ Full forecast/);
-  // big temp split into whole + ".<frac>°<unit>" (74 | .8°F)
+  // big temp split into whole + ".<frac>°<unit>" (74 | .8°F), in the sky scene
   assert.match(html, /class="temp num">74</);
   assert.match(html, /class="deg num">\.8°F</);
   // condition + feels line; the "&" in the conditions string is escaped
   assert.match(html, /Clear &amp; sunny · feels 78°/);
-  // stats
-  assert.match(html, /High<\/div><div class="v num">81°/);
-  assert.match(html, /Low<\/div><div class="v num">59°/);
+  // today's high/low live in the sky scene's corner readout
+  assert.match(html, /<span class="hl-k">H<\/span> 81° <span class="hl-k">L<\/span> 59°/);
   // UV + AQI are the two "air" metrics: the value is tinted to its band, the
-  // feed's category shows as a label, and a proportional severity meter renders.
-  assert.match(html, /UV Index<\/div><div class="v num st-good">2<span class="wx-band">Low<\/span><\/div>/);
-  assert.match(html, /<i class="bar-fill st-good" style="width:18%"><\/i>/);   // uv 2 of 11
-  assert.match(html, /Air Quality<\/div><div class="v num st-good">42<span class="wx-band">Good<\/span><\/div>/);
-  assert.match(html, /<i class="bar-fill st-good" style="width:21%"><\/i>/);   // aqi 42 of 200
-  assert.match(html, /Humidity<\/div><div class="v num">57%/);
-  assert.match(html, /Dew point<\/div><div class="v num">58.5°/);
+  // feed's category shows as a label, and a proportional ring gauge fills.
+  assert.match(html, /<div class="g-num num st-good">2<\/div><\/div><div class="k">UV Index<\/div><span class="wx-band">Low<\/span>/);
+  assert.match(html, /class="g-fill st-good"[^>]*stroke-dasharray="21.7 120"/);   // uv 2 of 11
+  assert.match(html, /<div class="g-num num st-good">42<\/div><\/div><div class="k">Air Quality<\/div><span class="wx-band">Good<\/span>/);
+  assert.match(html, /class="g-fill st-good"[^>]*stroke-dasharray="25.1 120"/);   // aqi 42 of 200
+  // humidity ring (neutral accent — outdoor RH carries no comfort band)
+  assert.match(html, /<div class="g-num num">57%<\/div><\/div><div class="k">Humidity<\/div>/);
+  // dew point: rounded reading + its comfort word (58.5 -> Pleasant, no tint)
+  assert.match(html, /<div class="dew-big num">59°<\/div><\/div><div class="k">Dew point<\/div><span class="wx-band">Pleasant<\/span>/);
+});
+
+test('weather card sky scene follows the local hour and the conditions text', () => {
+  const { sandbox } = newHub();
+  // day + clear -> day gradient, a sun, no moon/stars/precip
+  const day = sandbox.weatherCardHtml(WX_GOOD, 12);
+  assert.match(day, /<div class="sky ph-day cn-clear">/);
+  assert.ok(day.includes('sky-sun') && !day.includes('sky-moon') && !day.includes('sky-stars'));
+  // night + clear -> night gradient, moon + stars, no sun
+  const night = sandbox.weatherCardHtml(WX_GOOD, 23);
+  assert.match(night, /<div class="sky ph-night cn-clear">/);
+  assert.ok(night.includes('sky-moon') && night.includes('sky-stars') && !night.includes('sky-sun'));
+  // dawn/dusk boundaries
+  assert.match(sandbox.weatherCardHtml(WX_GOOD, 6), /ph-dawn/);
+  assert.match(sandbox.weatherCardHtml(WX_GOOD, 19), /ph-dusk/);
+  // rain -> rain layer + clouds, and NO celestial body under full cover
+  const rain = sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Light rain' }, 12);
+  assert.match(rain, /cn-rain/);
+  assert.ok(rain.includes('sky-rain') && rain.includes('sky-cloud') && !rain.includes('sky-sun'));
+  // storm outranks rain in the conditions text; snow and fog get their layers
+  assert.match(sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Thunderstorms with rain' }, 12), /cn-storm/);
+  assert.ok(sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Snow flurries' }, 12).includes('sky-snow'));
+  assert.ok(sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Dense fog' }, 12).includes('sky-fog'));
+  // partly cloudy keeps the sun, adds clouds
+  const partly = sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Partly cloudy' }, 12);
+  assert.ok(partly.includes('sky-sun') && partly.includes('sky-cloud'));
+  // full overcast hides the sun entirely
+  const cloudy = sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Overcast' }, 12);
+  assert.match(cloudy, /cn-cloudy/);
+  assert.ok(cloudy.includes('sky-cloud') && !cloudy.includes('sky-sun'),
+    'no bright sun under full cover');
+  // an unrecognized conditions string falls back to partly (sun + clouds)
+  const unk = sandbox.weatherCardHtml({ ...WX_GOOD, conditions: 'Wintry mix' }, 12);
+  assert.match(unk, /cn-partly/);
+  assert.ok(unk.includes('sky-sun'), 'the partly fallback keeps a sun by day');
+});
+
+test('room thermometer clamps at the tube edges; a real cold reading still shows a stub', () => {
+  const { sandbox } = newHub();
+  // 100°F is past the 90° tube ceiling: mercury pins to the full tube, no
+  // negative-y overflow outside the viewBox
+  assert.match(sandbox.thermoSvg(100, 'crit'),
+    /<rect class="t-merc st-crit" x="6" y="3" width="4" height="35" rx="2"\/>/);
+  // 48°F is below the 50° tube floor: a crit stub still renders — a freezing
+  // room must never draw the same empty tube as a MISSING sensor
+  assert.match(sandbox.thermoSvg(48, 'crit'),
+    /<rect class="t-merc st-crit" x="6" y="32" width="4" height="6" rx="2"\/>/);
+});
+
+test('sky phase follows the feed sunrise/sunset when present, fixed boundaries otherwise', () => {
+  const { sandbox } = newHub();
+  // parseHmm: the feed's "HH:MM" shape, and nothing else
+  assert.equal(sandbox.parseHmm('06:15'), 6.25);
+  assert.equal(sandbox.parseHmm('20:15'), 20.25);
+  for (const bad of ['', null, undefined, '6:15pm', '25:00', '12:60', 'soon', 615]) {
+    assert.equal(sandbox.parseHmm(bad), null, `parseHmm(${bad}) must be null`);
+  }
+  // winter sun (rise 7:30, set 16:45): 7am is DAWN with real times where the
+  // fixed boundaries would already call it day-bright at 8
+  assert.equal(sandbox.skyPhase(7.0, 7.5, 16.75), 'dawn');
+  assert.equal(sandbox.skyPhase(12, 7.5, 16.75), 'day');
+  assert.equal(sandbox.skyPhase(16.5, 7.5, 16.75), 'dusk');
+  assert.equal(sandbox.skyPhase(18, 7.5, 16.75), 'night');   // fixed rules say dusk
+  // summer sun (rise 5:45, set 20:45): 8:30pm still glows dusk
+  assert.equal(sandbox.skyPhase(20.5, 5.75, 20.75), 'dusk');
+  // no sun times (or a nonsensical pair) -> the fixed civil boundaries stand
+  assert.equal(sandbox.skyPhase(7.0), 'dawn');
+  assert.equal(sandbox.skyPhase(12), 'day');
+  assert.equal(sandbox.skyPhase(19, 20.25, 6.25), 'dusk', 'reversed pair falls back');
+  // exact window edges (half-open, built from the same 40/60 the code uses):
+  // the last dawn instant is < sr+W, the first day instant is exactly sr+W
+  const W = 40 / 60, sr = 7.5, ss = 16.75;
+  assert.equal(sandbox.skyPhase(sr - W, sr, ss), 'dawn');
+  assert.equal(sandbox.skyPhase(sr + W, sr, ss), 'day');
+  assert.equal(sandbox.skyPhase(ss - W, sr, ss), 'dusk');
+  assert.equal(sandbox.skyPhase(ss + W, sr, ss), 'night');
+  // end to end: real sunset in the payload flips a fixed-boundary "dusk" hour
+  // to an honest night sky
+  const winter = sandbox.weatherCardHtml(
+    { ...WX_GOOD, sunrise: '07:30', sunset: '16:45' }, 19);
+  assert.match(winter, /ph-night/);
+});
+
+test('a fractional render hour never leaks into the chart tick labels', () => {
+  const { sandbox } = newHub();
+  // the sky-phase clock runs on minutes; the chart floors it (2:30pm -> "2p"
+  // ticks, never "2.5p"/"8.5a")
+  const spark = [75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 68, 70,
+    72, 74, 76, 78, 77, 76, 75, 74, 73, 72, 71, 70];
+  const svg = sandbox.sparkSvg(spark, 12, 14.5);
+  assert.match(svg, /class="sp-tick"[^>]*>8a</);
+  assert.ok(!/\d\.\d+[ap]</.test(svg), 'no fractional hour in any tick');
+  // through the card path too (its default hour is fractional now)
+  const card = sandbox.weatherCardHtml({ ...WX_GOOD }, 14.5);
+  assert.ok(!/\.\d+[ap]</.test(card), 'no fractional tick through weatherCardHtml');
+});
+
+test('the moon renders its real phase from the feed, full disc without data', () => {
+  const { sandbox } = newHub();
+  // the two-part construction: direction class picks the shadow half-disc's
+  // side, --m-term is the centered terminator ellipse's width (34·|1−2f|),
+  // m-gibbous flips the ellipse moon-colored past half
+  const moonOf = (phase, ill) => {
+    const m = /<span class="sky-moon( [^"]*)?"(?: style="--m-term:(-?\d+)px")?><\/span>/.exec(
+      sandbox.weatherCardHtml({ ...WX_GOOD, moon_phase: phase, moon_illum: ill }, 23));
+    return m && { cls: (m[1] || '').trim(), term: m[2] == null ? null : Number(m[2]) };
+  };
+  // waxing crescent 29.1%: right limb lit, shadow-colored terminator ellipse
+  // bowing inward (34·|1−.582| -> 14px), NOT gibbous
+  assert.deepEqual(moonOf('Waxing Crescent', 29.1), { cls: 'm-waxing', term: 14 });
+  // the quarters: a STRAIGHT terminator (ellipse width 0); First waxes, Last/
+  // Third wane — a regex edit must not silently flip a limb
+  assert.deepEqual(moonOf('First Quarter', 50), { cls: 'm-waxing', term: 0 });
+  assert.deepEqual(moonOf('Last Quarter', 50), { cls: 'm-waning', term: 0 });
+  assert.deepEqual(moonOf('Third Quarter', 50), { cls: 'm-waning', term: 0 });
+  // gibbous 68%: the terminator ellipse turns moon-colored (m-gibbous) and
+  // bows outward (34·|1−1.36| -> 12px)
+  assert.deepEqual(moonOf('Waning Gibbous', 68), { cls: 'm-waning m-gibbous', term: 12 });
+  // a new moon is fully shadowed: dark half + full-width dark ellipse
+  assert.deepEqual(moonOf('New Moon', 0), { cls: 'm-waxing', term: 34 });
+  // an off-scale illum clamps to the full-disc geometry, not past it
+  assert.deepEqual(moonOf('Waxing Gibbous', 140), { cls: 'm-waxing m-gibbous', term: 34 });
+  // no illum -> the bare moon span (no phase classes = full disc); never NaN
+  const bare = sandbox.weatherCardHtml({ ...WX_GOOD, moon_illum: 'soon' }, 23);
+  assert.match(bare, /<span class="sky-moon"><\/span>/);
+  assert.ok(!bare.includes('NaN'));
+  // a phase name OUTSIDE the waxing/waning vocabulary (or missing, or the
+  // numeric 0..1 convention) must never confidently light the wrong limb:
+  // it renders the bare full-disc fallback, same as missing illum
+  for (const odd of [null, 'Gibbous', '0.75', 'Full Moon']) {
+    const html = sandbox.weatherCardHtml({ ...WX_GOOD, moon_phase: odd, moon_illum: 50 }, 23);
+    assert.match(html, /<span class="sky-moon"><\/span>/,
+      `phase ${odd} falls back to the full disc`);
+    assert.ok(!html.includes('--m-term'), `no phase geometry guess for phase ${odd}`);
+  }
+});
+
+test('weather card hides the H/L readout only when BOTH ends are missing', () => {
+  const { sandbox } = newHub();
+  assert.ok(!sandbox.weatherCardHtml({ ...WX_GOOD, high: null, low: null }, 12).includes('class="hilo'));
+  // empty STRINGS are missing too (same emptiness test wxVal uses) — a feed
+  // drift to '' must not render a dangling "H – L –" box
+  assert.ok(!sandbox.weatherCardHtml({ ...WX_GOOD, high: '', low: '' }, 12).includes('class="hilo'));
+  // one missing end still renders, with an en-dash for the absent value
+  const oneEnd = sandbox.weatherCardHtml({ ...WX_GOOD, high: null }, 12);
+  assert.match(oneEnd, /<span class="hl-k">H<\/span> – <span class="hl-k">L<\/span> 59°/);
+});
+
+test('weather card dew point comfort word tints when muggy or worse', () => {
+  const { sandbox } = newHub();
+  // WX_WARN dew 74 -> Oppressive, crit tint
+  assert.match(sandbox.weatherCardHtml(WX_WARN, 12),
+    /<div class="k">Dew point<\/div><span class="wx-band st-crit">Oppressive<\/span>/);
+  assert.match(sandbox.weatherCardHtml({ ...WX_GOOD, dew_point: 67 }, 12),
+    /<span class="wx-band st-warn">Muggy<\/span>/);
+  // a missing dew point: dashed value, no comfort word at all
+  const none = sandbox.weatherCardHtml({ ...WX_GOOD, dew_point: null }, 12);
+  assert.match(none, /<div class="dew-big num">–<\/div>/);
+  assert.ok(!none.includes('Pleasant') && !none.includes('Dry'));
+  // the comfort scale is °F: a metric feed shows the number but NO word (21°C
+  // dew is muggy — a calm "Dry" would be confidently wrong)
+  const metric = sandbox.weatherCardHtml({ ...WX_GOOD, unit: '°C', dew_point: 21 }, 12);
+  assert.match(metric, /<div class="dew-big num">21°<\/div>/);
+  assert.ok(!metric.includes('Dry') && !metric.includes('Pleasant'),
+    'no °F comfort word on a non-Fahrenheit feed');
 });
 
 test('wxTempParts renders exactly one degree, even when the unit already carries one (no °°F)', () => {
@@ -2937,18 +3103,18 @@ test('weather card escapes string fields (conditions markup is inert)', () => {
 
 test('weather card tints UV + AQI green (st-good) when air is good / UV is low', () => {
   const { html } = renderWeatherHtml(WX_GOOD);
-  // AQI 42 (good) + UV 2 (low) -> st-good value AND st-good meter fill
-  assert.match(html, /<div class="v num st-good">2<span class="wx-band">Low<\/span>/);
-  assert.match(html, /<div class="v num st-good">42<span class="wx-band">Good<\/span>/);
-  assert.match(html, /class="bar-fill st-good"/);
+  // AQI 42 (good) + UV 2 (low) -> st-good value AND st-good ring fill
+  assert.match(html, /<div class="g-num num st-good">2<\/div><\/div><div class="k">UV Index<\/div><span class="wx-band">Low<\/span>/);
+  assert.match(html, /<div class="g-num num st-good">42<\/div><\/div><div class="k">Air Quality<\/div><span class="wx-band">Good<\/span>/);
+  assert.match(html, /class="g-fill st-good"/);
 });
 
 test('weather card tints UV + AQI amber (st-warn) in the moderate/high band', () => {
   const { html } = renderWeatherHtml(WX_WARN);
-  // UV 6 (high) + AQI 75 (moderate) -> amber st-warn on value + meter
-  assert.match(html, /<div class="v num st-warn">6<span class="wx-band">High<\/span>/);
-  assert.match(html, /<div class="v num st-warn">75<span class="wx-band">Moderate<\/span>/);
-  assert.match(html, /<i class="bar-fill st-warn" style="width:55%"><\/i>/);   // uv 6 of 11
+  // UV 6 (high) + AQI 75 (moderate) -> amber st-warn on value + ring
+  assert.match(html, /<div class="g-num num st-warn">6<\/div><\/div><div class="k">UV Index<\/div><span class="wx-band">High<\/span>/);
+  assert.match(html, /<div class="g-num num st-warn">75<\/div><\/div><div class="k">Air Quality<\/div><span class="wx-band">Moderate<\/span>/);
+  assert.match(html, /class="g-fill st-warn"[^>]*stroke-dasharray="65.1 120"/);   // uv 6 of 11
 });
 
 test('weather card tints UV + AQI red (st-crit) when out of range', () => {
@@ -2956,43 +3122,44 @@ test('weather card tints UV + AQI red (st-crit) when out of range', () => {
   const { html } = renderWeatherHtml({
     ...WX_GOOD, uv: 9, uv_desc: 'Very High', aqi: 151, aqi_cat: 'Unhealthy',
   });
-  assert.match(html, /<div class="v num st-crit">9<span class="wx-band">Very High<\/span>/);
-  assert.match(html, /<div class="v num st-crit">151<span class="wx-band">Unhealthy<\/span>/);
-  assert.match(html, /class="bar-fill st-crit"/);
+  assert.match(html, /<div class="g-num num st-crit">9<\/div><\/div><div class="k">UV Index<\/div><span class="wx-band">Very High<\/span>/);
+  assert.match(html, /<div class="g-num num st-crit">151<\/div><\/div><div class="k">Air Quality<\/div><span class="wx-band">Unhealthy<\/span>/);
+  assert.match(html, /class="g-fill st-crit"/);
 });
 
-test('weather card: an off-scale UV/AQI fills the meter to 100%, never past it', () => {
-  // UV 13 (> 11 full-scale) and AQI 260 (> 200) both clamp to a full bar via
-  // clampFrac — the render-level proof that the meter width can't overflow.
+test('weather card: an off-scale UV/AQI fills the ring to 100%, never past it', () => {
+  // UV 13 (> 11 full-scale) and AQI 260 (> 200) both clamp to a full ring via
+  // clampFrac — the render-level proof that the gauge fill can't overflow.
+  // Full circumference = 2π·19 = 119.4 (the ring's 100% mark).
   const { html } = renderWeatherHtml({
     ...WX_GOOD, uv: 13, uv_desc: 'Extreme', aqi: 260, aqi_cat: 'Hazardous',
   });
-  assert.equal((html.match(/style="width:100%"/g) || []).length, 2,
-    'both the UV and AQI meters cap at 100% width');
-  // no meter overflows past 100% (a width of 101%+ would be 3 digits > 100)
-  const widths = [...html.matchAll(/style="width:(\d+)%"/g)].map((m) => Number(m[1]));
-  assert.ok(widths.every((w) => w <= 100), `all meter widths <= 100 (saw ${widths})`);
+  assert.equal((html.match(/stroke-dasharray="119\.4 120"/g) || []).length, 2,
+    'both the UV and AQI rings cap at the full circumference');
+  // no ring overflows past the circumference
+  const fills = [...html.matchAll(/stroke-dasharray="([\d.]+) /g)].map((m) => Number(m[1]));
+  assert.ok(fills.every((f) => f <= 119.4), `all ring fills <= 119.4 (saw ${fills})`);
 });
 
 test('weather card: UV/AQI color follow the NUMBER, not the category text', () => {
-  // The band (color + meter) is driven by the numeric reading — the standard EPA/
+  // The band (color + ring) is driven by the numeric reading — the standard EPA/
   // AQI scale — while the category string is shown only as the label. So a feed
   // whose text disagrees with its number is colored by the number.
   const { html } = renderWeatherHtml({
     ...WX_GOOD, aqi: 200, aqi_cat: 'Good', uv: 3, uv_desc: 'Extreme',
   });
   // aqi 200 is unhealthy -> red, even though the category says "Good"
-  assert.match(html, /<div class="v num st-crit">200<span class="wx-band">Good<\/span>/);
+  assert.match(html, /<div class="g-num num st-crit">200<\/div><\/div><div class="k">Air Quality<\/div><span class="wx-band">Good<\/span>/);
   // uv 3 is moderate -> neutral (no st- tint), even though the desc says "Extreme"
-  assert.match(html, /<div class="v num">3<span class="wx-band">Extreme<\/span>/);
+  assert.match(html, /<div class="g-num num">3<\/div><\/div><div class="k">UV Index<\/div><span class="wx-band">Extreme<\/span>/);
 });
 
-test('weather card: a fully missing UV/AQI reading shows a dash, no color, an empty meter', () => {
+test('weather card: a fully missing UV/AQI reading shows a dash, no color, an empty ring', () => {
   const { html } = renderWeatherHtml({ ...WX_GOOD, uv: null, uv_desc: '', aqi: null, aqi_cat: '' });
-  // no number AND no category -> en-dash, no st- class, zero-width meter
-  assert.match(html, /UV Index<\/div><div class="v num">–<\/div>/);
-  assert.match(html, /Air Quality<\/div><div class="v num">–<\/div>/);
-  assert.match(html, /<i class="bar-fill" style="width:0%"><\/i>/);
+  // no number AND no category -> en-dash, no st- class, no label, zero fill
+  assert.match(html, /<div class="g-num num">–<\/div><\/div><div class="k">UV Index<\/div><\/div>/);
+  assert.match(html, /<div class="g-num num">–<\/div><\/div><div class="k">Air Quality<\/div><\/div>/);
+  assert.match(html, /class="g-fill"[^>]*stroke-dasharray="0 120"/);
 });
 
 test('weather card: a danger CATEGORY with a missing number still colors (regression guard)', () => {
@@ -3003,45 +3170,82 @@ test('weather card: a danger CATEGORY with a missing number still colors (regres
   const { html } = renderWeatherHtml({
     ...WX_GOOD, uv: null, uv_desc: 'Extreme', aqi: null, aqi_cat: 'Unhealthy',
   });
-  assert.match(html, /UV Index<\/div><div class="v num st-crit">–<span class="wx-band st-crit">Extreme<\/span>/);
-  assert.match(html, /Air Quality<\/div><div class="v num st-crit">–<span class="wx-band st-crit">Unhealthy<\/span>/);
+  assert.match(html, /<div class="g-num num st-crit">–<\/div><\/div><div class="k">UV Index<\/div><span class="wx-band st-crit">Extreme<\/span>/);
+  assert.match(html, /<div class="g-num num st-crit">–<\/div><\/div><div class="k">Air Quality<\/div><span class="wx-band st-crit">Unhealthy<\/span>/);
 });
 
 test('weather card draws the temp chart with an observed/forecast split and a "now" marker', () => {
   const { html } = renderWeatherHtml(WX_GOOD);   // 8 pts, now at index 4
   assert.ok(html.includes('<svg class="spark"'), 'the temp chart svg is present');
-  assert.match(html, /viewBox="0 0 300 46"/, 'normalized to the 0 0 300 46 viewBox');
+  assert.match(html, /viewBox="0 0 300 64"/, 'normalized to the 0 0 300 64 viewBox');
   assert.match(html, /<path d="M[^"]*Z" fill="url\(#sg\)"/, 'gradient area under the curve');
-  // the observed-past line is solid (full opacity, no stroke-opacity attr) —
-  // it's the chart's primary content, so pin it against accidental removal
-  assert.match(html, /fill="none" stroke="var\(--accent\)" stroke-width="2"\/>/,
-    'solid observed-past line');
-  // the forecast-ahead segment is drawn fainter than the observed past
-  assert.match(html, /fill="none" stroke="var\(--accent\)" stroke-width="2" stroke-opacity="\.38"/,
-    'faded forecast segment');
-  // now marker: a dot + a faint vertical guide at the current hour (i=4 of 8 -> x=171.4)
-  assert.match(html, /<circle cx="171\.4"[^>]*fill="var\(--accent\)"/, 'dot on the current hour');
-  assert.match(html, /<line x1="171\.4"[^>]*stroke-opacity="\.2"/, 'faint "now" guide line');
+  // the observed-past line is the chart's primary content, so pin it against
+  // accidental removal; the forecast-ahead segment draws in its faded class
+  assert.match(html, /<path class="sp-past" d="M/, 'solid observed-past line');
+  assert.match(html, /<path class="sp-future" d="M/, 'faded forecast segment');
+  // now marker: a pulsing dot + a faint vertical guide at the current hour
+  // (i=4 of 8 -> x=171.4)
+  assert.match(html, /<circle class="sp-dot sp-nowdot" cx="171\.4"/, 'dot on the current hour');
+  assert.match(html, /<circle class="sp-halo" cx="171\.4"/, 'pulse halo on the current hour');
+  assert.match(html, /<line class="sp-guide" x1="171\.4"/, 'faint "now" guide line');
+  // the high/low points carry small value labels (80/70 in this series)
+  assert.match(html, /class="sp-hilo"[^>]*>80°</, 'labeled high point');
+  assert.match(html, /class="sp-hilo"[^>]*>70°</, 'labeled low point');
+  // the anchor tick reads "now"
+  assert.match(html, /class="sp-tick sp-now"[^>]*>now</, 'the "now" time tick');
+});
+
+test('temp chart labels real clock times every 6 hours around the now anchor', () => {
+  const { sandbox } = newHub();
+  // 24 hourly points, min at i=9 and max at i=15 (clear of every tick x), now
+  // at i=12, local hour 14 (2pm) -> ticks at i=0/6/12/18 = 2a, 8a, now, 8p
+  const spark = [75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 68, 70,
+    72, 74, 76, 78, 77, 76, 75, 74, 73, 72, 71, 70];
+  const svg = sandbox.sparkSvg(spark, 12, 14);
+  assert.match(svg, /class="sp-tick"[^>]*>2a</);
+  assert.match(svg, /class="sp-tick"[^>]*>8a</);
+  assert.match(svg, /class="sp-tick sp-now"[^>]*>now</);
+  assert.match(svg, /class="sp-tick"[^>]*>8p</);
+  // midnight and noon read 12a / 12p (hour 18 + 6 -> 12a)
+  assert.match(sandbox.sparkSvg(spark, 12, 18), /class="sp-tick"[^>]*>12a</);
+  // a pre-now tick in the early morning wraps a NEGATIVE hour correctly
+  // (hour 2, tick at now-6 -> 8p yesterday, never "-4a")
+  assert.match(sandbox.sparkSvg(spark, 12, 2), /class="sp-tick"[^>]*>8p</);
+});
+
+test('temp chart drops a time tick that would collide with the low-point label', () => {
+  const { sandbox } = newHub();
+  // min at i=1 sits under the i=0 tick (x=0 clamps to 10, low label at x=13):
+  // that tick is dropped; the i=6/12/18 ticks and "now" survive
+  const spark = [70, 66, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78,
+    79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68];
+  const svg = sandbox.sparkSvg(spark, 12, 14);
+  assert.ok(!/class="sp-tick"[^>]*>2a</.test(svg), 'the colliding leftmost tick is dropped');
+  assert.match(svg, /class="sp-tick"[^>]*>8a</, 'clear ticks still render');
+  assert.match(svg, /class="sp-tick sp-now"[^>]*>now</);
 });
 
 test('temp chart falls back to a last-point dot, all solid, when no now index is given', () => {
   const { html } = renderWeatherHtml({ ...WX_GOOD, spark_now: undefined });
-  assert.match(html, /<circle cx="300"[^>]*fill="var\(--accent\)"/, 'dot on the last point');
-  assert.ok(!html.includes('stroke-opacity=".38"'), 'no separate forecast segment when now is unknown');
+  assert.match(html, /<circle class="sp-dot sp-nowdot" cx="300"/, 'dot on the last point');
+  assert.ok(!html.includes('sp-future'), 'no separate forecast segment when now is unknown');
+  // without a real anchor the clock labels would be confidently WRONG (the
+  // fallback anchor is the forecast endpoint, ~12h ahead) — no ticks at all
+  assert.ok(!html.includes('sp-tick'), 'no time ticks without a valid now anchor');
 });
 
 test('temp chart with an out-of-range integer now index falls back to the last point (no throw)', () => {
   let out;
   assert.doesNotThrow(() => { out = renderWeatherHtml({ ...WX_GOOD, spark_now: 99 }); });
-  assert.match(out.html, /<circle cx="300"[^>]*fill="var\(--accent\)"/, 'dot on the last point');
-  assert.ok(!out.html.includes('stroke-opacity=".38"'), 'no forecast segment when now is out of range');
+  assert.match(out.html, /<circle class="sp-dot sp-nowdot" cx="300"/, 'dot on the last point');
+  assert.ok(!out.html.includes('sp-future'), 'no forecast segment when now is out of range');
+  assert.ok(!out.html.includes('sp-tick'), 'no time ticks on an out-of-range anchor');
 });
 
 test('temp chart with now at index 0 renders an all-forecast curve with the dot at the start', () => {
   const { html } = renderWeatherHtml({ ...WX_GOOD, spark_now: 0 });   // 8 pts, now at index 0
-  assert.match(html, /fill="none" stroke="var\(--accent\)" stroke-width="2" stroke-opacity="\.38"/,
-    'the whole curve is drawn as forecast');
-  assert.match(html, /<circle cx="0"[^>]*fill="var\(--accent\)"/, 'dot at the first point (x=0)');
+  assert.match(html, /<path class="sp-future" d="M/, 'the whole curve is drawn as forecast');
+  assert.match(html, /<circle class="sp-dot sp-nowdot" cx="0"/, 'dot at the first point (x=0)');
 });
 
 test('weather card HIDES the sparkline when spark is empty (fewer than 2 points)', () => {
@@ -3049,7 +3253,7 @@ test('weather card HIDES the sparkline when spark is empty (fewer than 2 points)
   assert.ok(!html.includes('<svg class="spark"'), 'no sparkline with an empty series');
   // the rest of the card still renders
   assert.match(html, /class="temp num">90</);
-  assert.match(html, /Humidity<\/div><div class="v num">70%/);
+  assert.match(html, /<div class="g-num num">70%<\/div><\/div><div class="k">Humidity<\/div>/);
 });
 
 test('weather card shows a quiet stale mark when stale is truthy', () => {
@@ -3134,18 +3338,21 @@ test('fetchClimate: keeps the last good rooms through transient failures, gives 
   assert.match(slot.innerHTML, /unavailable/i, 'gives up after TILE_FAIL_LIMIT');
 });
 
-test('climate card renders one .room per INDOOR room with temp + humidity', () => {
+test('climate card renders one .room tile per INDOOR room with temp + humidity', () => {
   const { html } = renderClimateHtml(CLIMATE);
   // header carries the full-climate overlay hook (the "Full climate" button)
   assert.match(html, /class="expand"[^>]*data-overlay="panel:climate"/);
   assert.match(html, /⛶ Full climate/);
-  // the units header (blank key col + Temp + Humidity)
-  assert.match(html, /<span class="u">Temp<\/span><span class="u">Humidity<\/span>/);
-  // one row per indoor room (Living Room, Bedroom, Garage, Attic) — NOT Outside
-  assert.equal((html.match(/<div class="room/g) || []).length, 4);
-  // temp rounded to whole degrees, humidity as a percent
-  assert.match(html, /Living Room<\/span><span class="rv num">72°<\/span><span class="rh num">45%<\/span>/);
-  assert.match(html, /Bedroom<\/span><span class="rv num">74°<\/span><span class="rh num">50%<\/span>/);
+  // one tile per indoor room (Living Room, Bedroom, Garage, Attic) — NOT
+  // Outside. (Match the tile class exactly: "roomgrid" must not count.)
+  assert.equal((html.match(/<div class="room[" ]/g) || []).length, 4);
+  // each tile carries a thermometer whose mercury maps the temperature: the
+  // comfortable 72.5° Living Room draws a good-green mercury column
+  assert.match(html, /<rect class="t-merc st-good" x="6" y="17" width="4" height="21" rx="2"\/>/);
+  // temp rounded to whole degrees, humidity as a percent (name between them)
+  assert.match(html, /<div class="rv num">72°<\/div><div class="rk">Living Room<\/div>/);
+  assert.match(html, /<div class="rv num">74°<\/div><div class="rk">Bedroom<\/div>/);
+  assert.match(html, /Bedroom<\/div><div class="rh num"><svg class="drop"[^]*?<\/svg>50%<\/div>/);
 });
 
 test('climate card FILTERS OUT the Outside sensor (its temp lives in Weather)', () => {
@@ -3165,42 +3372,49 @@ test('climate card KEEPS a real room whose CHANNEL is outdoor (only NAME filters
     { name: 'Outdoor', channel: 'ch0', temp_f: 91, humidity: 30, stale: false },
   ] };
   const { html } = renderClimateHtml(payload);
-  assert.equal((html.match(/<div class="room/g) || []).length, 2);
+  assert.equal((html.match(/<div class="room[" ]/g) || []).length, 2);
   assert.ok(html.includes('Crawl Space'), 'a real room on an outdoor channel is kept');
   assert.ok(!html.includes('Outdoor'), 'a room NAMED outdoor is filtered');
   assert.ok(!html.includes('91°'), 'and its redundant outdoor temperature is gone');
 });
 
-test('climate card marks a HOT room warn with an amber dot + tinted temp cell', () => {
+test('climate card marks a HOT room warn with an amber tile wash + tinted temp cell', () => {
   const { html } = renderClimateHtml(CLIMATE);
-  // Garage 82° is in the warm band -> row warn, amber status dot, amber temp cell
-  assert.match(html, /<div class="room warn"><span class="dot st-warn"><\/span><span class="rk">Garage<\/span>/);
-  assert.match(html, /Garage<\/span><span class="rv num st-warn">82°<\/span>/);
-  // a comfortable room is NOT warned and gets a calm green (st-good) dot, untinted cells
-  assert.match(html, /<div class="room"><span class="dot st-good"><\/span><span class="rk">Living Room<\/span>/);
-  assert.match(html, /Living Room<\/span><span class="rv num">72°<\/span><span class="rh num">45%<\/span>/);
+  // Garage 82° is in the warm band -> tile warn wash, amber mercury, amber temp
+  assert.match(html, /<div class="room warn"><svg class="thermo"[^]*?class="t-merc st-warn"[^]*?<div class="rv num st-warn">82°<\/div><div class="rk">Garage<\/div>/);
+  // a comfortable room is NOT washed and draws a calm green mercury, untinted cells
+  assert.match(html, /<div class="room"><svg class="thermo"[^]*?class="t-merc st-good"[^]*?<div class="rv num">72°<\/div><div class="rk">Living Room<\/div>/);
 });
 
 test('climate card tints a HUMID room red on the humidity cell (mold risk)', () => {
   // 68% RH is over the 60% ceiling -> crit; temp 70 is comfortable -> only the
-  // humidity cell reddens, and the worst-of drives a red row/dot.
+  // humidity cell reddens, and the worst-of drives a red tile wash.
   const { html } = renderClimateHtml({ available: true, rooms: [
     { name: 'Bathroom', channel: 'ch1', temp_f: 70, humidity: 68, stale: false }] });
-  assert.match(html, /<div class="room crit"><span class="dot st-crit"><\/span><span class="rk">Bathroom<\/span>/);
-  assert.match(html, /<span class="rv num">70°<\/span><span class="rh num st-crit">68%<\/span>/);
+  assert.match(html, /<div class="room crit"><svg class="thermo"/);
+  assert.match(html, /<div class="rv num">70°<\/div><div class="rk">Bathroom<\/div><div class="rh num st-crit">/);
+  assert.match(html, /68%<\/div>/);
 });
 
 test('climate card tints a COLD room red on the temp cell', () => {
   const { html } = renderClimateHtml({ available: true, rooms: [
     { name: 'Basement', channel: 'ch1', temp_f: 55, humidity: 45, stale: false }] });
   assert.match(html, /<div class="room crit">/);
-  assert.match(html, /<span class="rv num st-crit">55°<\/span>/);
+  assert.match(html, /<div class="rv num st-crit">55°<\/div>/);
+  // the cold room's mercury reddens too
+  assert.match(html, /class="t-merc st-crit"/);
 });
 
 test('climate card marks a STALE room warn (regardless of temperature)', () => {
   const { html } = renderClimateHtml(CLIMATE);
-  // Attic is only 70° but its sensor is stale -> warn, amber dot
-  assert.match(html, /<div class="room warn"><span class="dot st-warn"><\/span><span class="rk">Attic<\/span>/);
+  // Attic is fully comfortable (70°, 45%) but its sensor is stale -> the tile
+  // washes warn AND announces itself with a "stale" tag on the TEMP line
+  // (never inside .rk, whose ellipsis would clip it on a long room name)
+  assert.match(html, /<div class="room warn">[^]*?70°<span class="rstale">stale<\/span><\/div><div class="rk">Attic<\/div>/);
+  // exactly two warn tiles in this fixture: Garage (hot) + Attic (stale)
+  assert.equal((html.match(/<div class="room warn">/g) || []).length, 2);
+  // fresh rooms never show the tag
+  assert.equal((html.match(/class="rstale"/g) || []).length, 1);
 });
 
 test('climate card handles missing temp/humidity gracefully (-- / —), never warns on non-finite temp', () => {
@@ -3208,11 +3422,13 @@ test('climate card handles missing temp/humidity gracefully (-- / —), never wa
     { name: 'Nursery', channel: 'ch9', temp_f: null, humidity: null, stale: false },
   ] };
   const { html } = renderClimateHtml(payload);
-  assert.match(html, /Nursery<\/span><span class="rv num">--<\/span><span class="rh num">—<\/span>/);
+  assert.match(html, /<div class="rv num">--<\/div><div class="rk">Nursery<\/div>/);
+  assert.match(html, /—<\/div>/);
   assert.ok(!html.includes('room warn'), 'a missing (non-finite) temp never triggers the hot warn');
-  // a room with NO readings gets a neutral, classless dot — never a false
-  // st-good "all fine" green, which would misread as a healthy sensor.
-  assert.match(html, /<span class="dot"><\/span><span class="rk">Nursery/);
+  // a room with NO readings gets an empty tube and a neutral bulb — never a
+  // false st-good "all fine" green, which would misread as a healthy sensor.
+  assert.ok(!html.includes('t-merc'), 'no mercury without a reading');
+  assert.match(html, /<circle class="t-bulb t-none"/);
 });
 
 test('climate card escapes room names (markup is inert)', () => {
@@ -3239,6 +3455,11 @@ test('climate card shows the indoor RH + dew aggregate footer (labeled, fail-sof
   assert.match(html, /class="rk">Indoor<\/span>/);
   assert.match(html, /48%<\/b> RH/);
   assert.match(html, /55°<\/b> dew/);
+  // the comfort track marks the indoor RH (48% is in range -> neutral marker)
+  assert.match(html, /<div class="htrack" aria-hidden="true"><i class="hzone"><\/i><i class="hdot" style="left:48%"><\/i><\/div>/);
+  // an out-of-range indoor RH tints the marker (66% > 60 ceiling -> crit)
+  const humid = renderClimateHtml({ ...CLIMATE, indoor_rh: 66 });
+  assert.match(humid.html, /<i class="hdot st-crit" style="left:66%"><\/i>/);
   // fail-soft: no indoor_rh/indoor_dp -> no footer
   const noAgg = renderClimateHtml({ available: true, rooms: [
     { name: 'Bedroom', channel: 'ch1', temp_f: 70, humidity: 50, stale: false }] });
