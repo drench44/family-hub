@@ -4,13 +4,14 @@ A self-hosted **family wall display** built for a touchscreen on the kitchen
 wall, with the same page mobile-optimized for phones. Google Calendar and
 Apple/ICS calendars front and center, a per-person daily chore tracker with
 one-tap check-off, live security-camera tiles (UniFi Protect, Wyze, anything
-go2rtc speaks), and at-a-glance weather and per-room climate cards that
-expand to your full dashboards on a tap, all in a light or dark theme with
-an accent color you pick.
+go2rtc speaks), at-a-glance weather and per-room climate cards that
+expand to your full dashboards on a tap, and a laundry card that counts a
+washer or dryer cycle down and remembers when the load finished, all in a
+light or dark theme with an accent color you pick.
 
 ![family-hub](docs/hub.png)
 
-*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, and at-a-glance weather + per-room climate. Shown in the default grey theme with a green accent and sample data.*
+*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, at-a-glance weather + per-room climate, and the laundry portholes. Shown in the default grey theme with a green accent and sample data.*
 
 ![family-hub on a phone](docs/phone.png)
 
@@ -23,7 +24,7 @@ at one URL.
 ## What it looks like
 
 - **Wall (1920×1080):** chores | calendar + to-dos | cameras | weather +
-  climate, all in one card system. **Five display modes** (light, soft, blue,
+  climate + laundry, all in one card system. **Five display modes** (light, soft, blue,
   grey, black) **with a pick-your-accent color** (cyan, violet, amber, or green)
   and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
