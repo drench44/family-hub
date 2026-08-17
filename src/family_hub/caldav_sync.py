@@ -26,6 +26,14 @@ log = logging.getLogger("family_hub.caldav")
 # before accepting the emptiness — mirrors calendar_sync's guard for Google/ICS.
 _EMPTY_KEEP_HOURS = 24
 
+# Surface a NON-auth sync error on the wall only after it has failed continuously
+# for this long. A transient network/5xx/TLS flap self-heals within a tick or two
+# and the wall keeps serving cached events, so warning on the first failure would
+# just flicker a banner on and off. Long enough to ride out an iCloud maintenance
+# window, short enough to surface a genuinely stuck feed within a quarter-day.
+# (needs_auth is surfaced immediately elsewhere — a dead app password won't heal.)
+_ERROR_SURFACE_HOURS = 6
+
 
 def _is_auth_error(exc) -> bool:
     """True if the exception chain is a CalDAV authentication failure — a
@@ -56,6 +64,38 @@ def _is_auth_error(exc) -> bool:
         e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
         seen += 1
     return False
+
+
+def _apply_error_persistence(conn, st, now, hard_error: bool) -> None:
+    """Track how long a HARD sync error has run and mark the status `sustained`
+    once it crosses _ERROR_SURFACE_HOURS. A hard error is a genuine fetch/discover
+    EXCEPTION (a collection/list raised, or the whole sync did) — NOT a protective
+    'kept last-synced' soft state: an empty-but-cached window or a discover blip
+    keeps the cache and is not a stuck feed, so it must not feed this clock (or a
+    calendar that simply has no upcoming events would falsely read 'trouble
+    syncing'). An ok sync, a disabled/not-configured state, or an auth failure
+    (surfaced immediately on its own) all clear the clock too — so only a
+    genuinely stuck source ever reads as sustained, never a one-tick blip. Mutates
+    st in place; call it right before persisting caldav_status."""
+    if not (hard_error and not st.get("needs_auth")):
+        fdb.kv_set(conn, "caldav_error_since", None)   # recovered / not a hard error
+        return
+    since = fdb.kv_get(conn, "caldav_error_since")
+    if not since:
+        fdb.kv_set(conn, "caldav_error_since", now.isoformat())
+        return                       # first failure: start the clock, not yet sustained
+    try:
+        age_h = (now - dt.datetime.fromisoformat(since)).total_seconds() / 3600.0
+    except Exception:
+        # A corrupt/unparseable stored timestamp: log it (never swallow silently)
+        # and restart the clock so a genuinely stuck feed still surfaces after a
+        # fresh window, rather than the wall reading healthy forever.
+        log.warning("caldav_error_since unparseable (%r); resetting clock", since,
+                    exc_info=True)
+        fdb.kv_set(conn, "caldav_error_since", now.isoformat())
+        return
+    if age_h >= _ERROR_SURFACE_HOURS:
+        st["sustained"] = True
 
 
 def _object_meta(raw_ics: str):
@@ -192,6 +232,8 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
 
     def _status(**kw):
         st = {"last_sync": prior.get("last_sync"), **kw}
+        # config states (not-configured / disabled) are never a hard error
+        _apply_error_persistence(conn, st, now, hard_error=False)
         fdb.kv_set(conn, "caldav_status", st)
         return st
 
@@ -359,6 +401,12 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             st["error"] = "; ".join(errors)
         if needs_auth:
             st["needs_auth"] = True
+        # Only a genuine fetch/discover EXCEPTION (a collection or reminder list
+        # that raised) feeds the sustained clock — not the empty-window / discover
+        # "kept last-synced" soft states, which keep the cache and aren't a stuck
+        # feed. Push (outbox) failures surface via `pending`, not this banner.
+        _apply_error_persistence(conn, st, now,
+                                 hard_error=bool(failed or vtodo_failed))
         fdb.kv_set(conn, "caldav_status", st)
         return st
     except Exception as e:      # never kill the sync thread; keep the cache
@@ -371,5 +419,8 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
               "pending": len(fdb.caldav_pending(conn))}
         if _is_auth_error(e):
             st["needs_auth"] = True
+        # reaching here means the whole sync raised — a hard error (unless it was
+        # auth, which _apply_error_persistence excludes)
+        _apply_error_persistence(conn, st, now, hard_error=True)
         fdb.kv_set(conn, "caldav_status", st)
         return st

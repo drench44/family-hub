@@ -651,6 +651,13 @@ function calStatusMessage(status) {
       ? 'A calendar sign-in expired — reconnect it in settings.'
       : 'A calendar sign-in expired — reconnect it in settings. Showing the last events we saw.';
   }
+  if (st.degraded) {
+    // A source has been failing to sync for a while (not an auth problem — a
+    // stuck feed, not a momentary blip). Tell the family their calendar may be
+    // behind, without the flicker of a banner on every transient hiccup. Shown
+    // even when st.ok is true (another source is still healthy and rendering).
+    return 'A calendar is having trouble syncing — showing the last events we saw.';
+  }
   if (st.ok !== false) return '';
   if (String(st.error || '').includes('not configured')) {
     return 'No calendar is connected yet — add one in settings and the family’s events show up here.';
