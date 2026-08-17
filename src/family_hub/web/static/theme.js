@@ -2,22 +2,33 @@
    FAMILY HUB - theme.js
 
    Runs SYNCHRONOUSLY from <head>, before the body paints, so the wall
-   never flashes the wrong theme. It reads the persisted preferences and
-   stamps three attributes on <html>:
+   never flashes the wrong theme (or the wrong layout). It reads the
+   persisted preferences and stamps four attributes on <html>:
 
      data-theme   light | soft | dark | grey | black
      data-accent  cyan | violet | amber | green
      data-cols    none | wells | lines
+     data-layout  auto | desktop            (the per-device layout CHOICE)
+
+   data-layout is the ONLY layout attribute. In "auto" the phone/wall split
+   is decided by a pure-CSS width media query (max-width:1000px) — no JS
+   needed, so a phone still gets the mobile layout even if this script never
+   runs. Choosing "desktop" forces the full wall at ANY width by suppressing
+   that media query (the CSS keys the shell off :root:not([data-layout=
+   "desktop"])); this is the escape hatch for a TV browser that mis-reports a
+   phone-narrow width (e.g. a Fire TV) and would otherwise be stuck in the
+   phone layout. Stamping data-layout before paint keeps the wall from
+   flashing the phone shell first on such a device.
 
    Fallback order for each preference:
-     1. localStorage  (fh.theme / fh.accent / fh.cols)
-     2. window.FH_THEME  { mode, accent, columns }, injected by the
-        page from server config (arrives in a later task; may be undefined now)
-     3. hardcoded default  grey / green / none
+     1. localStorage  (fh.theme / fh.accent / fh.cols / fh.layout)
+     2. window.FH_THEME  { mode, accent, columns, layout }, injected by the
+        page from server config (may be undefined)
+     3. hardcoded default  grey / green / none / auto
 
-   Exposes setTheme(mode) / setAccent(name) / setColumns(name): each
-   validates its value, writes the localStorage key, and re-stamps the
-   attribute on <html> live, so a control can apply a change without a reload.
+   Exposes setTheme / setAccent / setColumns / setLayout: each validates its
+   value, writes the localStorage key, and re-stamps live, so a control can
+   apply a change without a reload.
 
    Dependency-free, no network, no house data. LAN wall display safe.
    ================================================================ */
@@ -29,10 +40,12 @@
   var THEMES = ["light", "soft", "dark", "grey", "black"];
   var ACCENTS = ["cyan", "violet", "amber", "green"];
   var COLUMNS = ["none", "wells", "lines"];
+  var LAYOUTS = ["auto", "desktop"];
 
   var DEFAULT_THEME = "grey";
   var DEFAULT_ACCENT = "green";
   var DEFAULT_COLUMNS = "none";
+  var DEFAULT_LAYOUT = "auto";
 
   // localStorage can throw (private mode / disabled storage); never let that
   // break first paint.
@@ -48,7 +61,12 @@
     try {
       window.localStorage.setItem(key, value);
     } catch (e) {
-      /* storage unavailable; the live attribute still updates below */
+      // Storage unavailable/locked-down (e.g. a kiosk TV WebView). The live
+      // attribute still updates below, so the CURRENT session is correct — but
+      // the choice won't survive a reload. Leave a breadcrumb so a
+      // "my forced-Desktop TV reverted after reboot" report is diagnosable
+      // rather than silent; never rethrow (that would break first paint).
+      try { console.warn("family-hub: could not persist " + key + " (storage unavailable)"); } catch (e2) { /* no console */ }
     }
   }
 
@@ -76,6 +94,15 @@
     root.setAttribute("data-cols", name);
   }
 
+  // ---- layout: a single data-layout attribute (auto | desktop) ----
+  // The CSS does the rest: a width media query handles "auto", and
+  // :root:not([data-layout="desktop"]) lets "desktop" suppress the phone shell
+  // at any width. No matchMedia and no computed "mode" — keeping the phone
+  // layout a pure-CSS concern is what makes it survive this script not running.
+  function stampLayout(layout) {
+    root.setAttribute("data-layout", layout);
+  }
+
   // ---- public setters: validate, persist, re-stamp live ----
   function setTheme(mode) {
     if (THEMES.indexOf(mode) === -1) return;
@@ -92,10 +119,16 @@
     writeStored("fh.cols", name);
     stampColumns(name);
   }
+  function setLayout(layout) {
+    if (LAYOUTS.indexOf(layout) === -1) return;
+    writeStored("fh.layout", layout);
+    stampLayout(layout);
+  }
 
   window.setTheme = setTheme;
   window.setAccent = setAccent;
   window.setColumns = setColumns;
+  window.setLayout = setLayout;
 
   // ---- stamp-only appliers: validate + re-stamp live, WITHOUT persisting ----
   // The house default from server config (window.FH_THEME / /api/hub) is applied
@@ -113,12 +146,17 @@
   function stampColumnsIf(name) {
     if (COLUMNS.indexOf(name) !== -1) stampColumns(name);
   }
+  function stampLayoutIf(layout) {
+    if (LAYOUTS.indexOf(layout) !== -1) stampLayout(layout);
+  }
   window.stampTheme = stampThemeIf;
   window.stampAccent = stampAccentIf;
   window.stampColumns = stampColumnsIf;
+  window.stampLayout = stampLayoutIf;
 
   // ---- initial stamp (synchronous, before paint) ----
   stampTheme(resolve(THEMES, "fh.theme", "mode", DEFAULT_THEME));
   stampAccent(resolve(ACCENTS, "fh.accent", "accent", DEFAULT_ACCENT));
   stampColumns(resolve(COLUMNS, "fh.cols", "columns", DEFAULT_COLUMNS));
+  stampLayout(resolve(LAYOUTS, "fh.layout", "layout", DEFAULT_LAYOUT));
 })();

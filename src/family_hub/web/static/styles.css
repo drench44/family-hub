@@ -680,7 +680,7 @@ body {
 .tile-camera { grid-column: 1 / -1; position: relative; }
 
 /* Cameras-tab 2x2 live grid. Hidden by default — it only appears under the
-   mobile Cameras tab (see the max-width rules below); the wall keeps its
+   mobile Cameras tab (see the phone-shell rules below); the wall keeps its
    .tiles column. Its camera tiles sit two-up rather than spanning full width. */
 .camgrid { display: none; grid-template-columns: 1fr 1fr; gap: 12px; }
 .camgrid .tile-camera { grid-column: auto; }
@@ -1227,6 +1227,16 @@ body.overlay-open { overflow: hidden; }
    (operator request 2026-08-13), with bottom tabs slicing off Cameras and
    Weather. The breakpoint is high on purpose — portrait tablets and half
    -screen windows get the phone layout, the 1920 wall never does. */
+/* >>> phone shell (max-width:1000px unless forced desktop) >>> */
+/* The phone reflow is a width media query, so a phone gets it with ZERO
+   JavaScript — the layout must never depend on theme.js running. data-layout is
+   the only override: forcing "desktop" (Settings → Display) suppresses the shell
+   at any width via the :root:not([data-layout="desktop"]) guard on every rule.
+   That one attribute is the escape hatch for a TV that mis-reports a phone
+   -narrow width (e.g. a Fire TV) and would otherwise be stuck in the phone
+   layout. Flat selectors (no CSS nesting — the wall/TV browsers can't be assumed
+   to support it). Keep these between the >>> / <<< markers; test_static.py bounds
+   the phone-shell guards to this block by them. */
 @media (max-width: 1000px) {
   /* Phone app shell. The body is a fixed-height flex column: the content
      (.wrap) scrolls in its OWN region and the tab bar sits BELOW it in normal
@@ -1234,92 +1244,99 @@ body.overlay-open { overflow: hidden; }
      going untappable on iOS Safari when scrolled to the bottom (its hit area
      misaligns / taps fall through); an in-flow bar is reliably tappable at any
      scroll position, and "scroll to top" is just resetting .wrap. */
-  html, body { height: 100%; }
-  /* min-height:0 REQUIRED here: the base body carries min-height:100vh, and on
-     iOS 100vh (address bar hidden) is TALLER than 100dvh (address bar shown).
-     Left in, that floor forces the body past the visible area and pushes the
-     in-flow tab bar below the fold — the exact untappable-bottom bug. Clear it
-     so height:100dvh (fallback: html/body height:100%) governs. */
-  body { height: 100dvh; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-  .wrap {
+  :root:not([data-layout="desktop"]),
+  :root:not([data-layout="desktop"]) body { height: 100%; }
+  /* Body height: the innerHeight-backed --app-h var (set by hub.js, refreshed on
+     pageshow/visibilitychange/resize/orientation) with a 100dvh fallback. iOS
+     left a stale 100dvh after a bfcache/app-switch restore, so the in-flow tab
+     bar floated above a gap until a full reload — the var is re-measured on
+     those events and closes the gap. min-height:0 REQUIRED: the base body
+     carries min-height:100vh, and on iOS 100vh (address bar hidden) is TALLER
+     than the visible area; left in, that floor pushes the tab bar below the
+     fold. */
+  :root:not([data-layout="desktop"]) body { height: var(--app-h, 100dvh); min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  :root:not([data-layout="desktop"]) .wrap {
     flex: 1; min-height: 0;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
     width: auto; max-width: 640px; padding: 0 14px 16px;
   }
   /* An open overlay covers the viewport; also stop the content region behind it
      from touch-scrolling (iOS can bleed scroll through the fixed overlay). */
-  body.overlay-open .wrap { overflow: hidden; }
-  .topbar { padding: 14px 2px 12px; }
-  .clock .clock-date { display: none; }
+  :root:not([data-layout="desktop"]) body.overlay-open .wrap { overflow: hidden; }
+  :root:not([data-layout="desktop"]) .topbar { padding: 14px 2px 12px; }
+  :root:not([data-layout="desktop"]) .clock .clock-date { display: none; }
   /* the refresh button is a wall/kiosk affordance (no keyboard there); phones
      reload natively, and keeping it would overflow the narrow topbar and clip
      the gear off-screen. Hide it on the phone reflow. */
-  .wall-refresh { display: none; }
+  :root:not([data-layout="desktop"]) .wall-refresh { display: none; }
   /* stretch overrides the wall grid's align-items:start — without it every
      section shrinks to content width (caught on the phone 2026-08-13) */
-  .hub-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+  :root:not([data-layout="desktop"]) .hub-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
   /* column separation is a wall-only, 4-column concern; on the phone reflow
      (one stacked flex column) the "lines" rules would hang stray 1px ticks off
      a full-width section, so neutralize them here */
-  :root[data-cols="lines"] .people-col::after,
-  :root[data-cols="lines"] .tiles::before,
-  :root[data-cols="lines"] .panels::before { display: none; }
+  :root:not([data-layout="desktop"])[data-cols="lines"] .people-col::after,
+  :root:not([data-layout="desktop"])[data-cols="lines"] .tiles::before,
+  :root:not([data-layout="desktop"])[data-cols="lines"] .panels::before { display: none; }
   /* the wall's under-calendar to-do card has no phone equivalent — the
      dedicated To-Dos tab already covers phones (operator, 2026-08-14) */
-  .todo-slot { display: none; }
+  :root:not([data-layout="desktop"]) .todo-slot { display: none; }
   /* in-flow (static), not fixed: it's the last row of the body flex column, so
      it's always pinned below the scrolling .wrap and never overlaps content */
-  .tabbar { display: flex; position: static; flex: none; }
+  :root:not([data-layout="desktop"]) .tabbar { display: flex; position: static; flex: none; }
   /* the add row shares one flex line with the Now/Soon/Later segmented
      control and Add button — on narrow phones that squeezes the input to
      a stub, so let it wrap to its own full-width row */
-  .todo-add { flex-wrap: wrap; }
-  .todo-add input { flex: 1 1 100%; }
+  :root:not([data-layout="desktop"]) .todo-add { flex-wrap: wrap; }
+  :root:not([data-layout="desktop"]) .todo-add input { flex: 1 1 100%; }
   /* each tab shows exactly one surface of the one page */
-  body[data-tab="chores"] .cal,
-  body[data-tab="chores"] .tiles,
-  body[data-tab="chores"] .panels,
-  body[data-tab="chores"] .todos-page { display: none; }
-  body[data-tab="cal"] .people-col,
-  body[data-tab="cal"] .tiles,
-  body[data-tab="cal"] .panels,
-  body[data-tab="cal"] .todos-page { display: none; }
-  body[data-tab="cams"] .people-col,
-  body[data-tab="cams"] .cal,
-  body[data-tab="cams"] .panels,
-  body[data-tab="cams"] .todos-page,
-  body[data-tab="cams"] .tiles { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="chores"] .cal,
+  :root:not([data-layout="desktop"]) body[data-tab="chores"] .tiles,
+  :root:not([data-layout="desktop"]) body[data-tab="chores"] .panels,
+  :root:not([data-layout="desktop"]) body[data-tab="chores"] .todos-page { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="cal"] .people-col,
+  :root:not([data-layout="desktop"]) body[data-tab="cal"] .tiles,
+  :root:not([data-layout="desktop"]) body[data-tab="cal"] .panels,
+  :root:not([data-layout="desktop"]) body[data-tab="cal"] .todos-page { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="cams"] .people-col,
+  :root:not([data-layout="desktop"]) body[data-tab="cams"] .cal,
+  :root:not([data-layout="desktop"]) body[data-tab="cams"] .panels,
+  :root:not([data-layout="desktop"]) body[data-tab="cams"] .todos-page,
+  :root:not([data-layout="desktop"]) body[data-tab="cams"] .tiles { display: none; }
   /* Cameras tab: on the phone the 2x2 grid is too small to read — stack the
      cameras one per row and scroll, with a gap between each. */
-  body[data-tab="cams"] .camgrid { display: grid; grid-template-columns: 1fr; gap: 14px; }
-  body[data-tab="weather"] .people-col,
-  body[data-tab="weather"] .cal,
-  body[data-tab="weather"] .tiles,
-  body[data-tab="weather"] .todos-page { display: none; }
-  body[data-tab="todos"] .people-col,
-  body[data-tab="todos"] .cal,
-  body[data-tab="todos"] .tiles,
-  body[data-tab="todos"] .panels { display: none; }
-  body[data-tab="todos"] .todos-page { display: block; padding: 12px; }
+  :root:not([data-layout="desktop"]) body[data-tab="cams"] .camgrid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  :root:not([data-layout="desktop"]) body[data-tab="weather"] .people-col,
+  :root:not([data-layout="desktop"]) body[data-tab="weather"] .cal,
+  :root:not([data-layout="desktop"]) body[data-tab="weather"] .tiles,
+  :root:not([data-layout="desktop"]) body[data-tab="weather"] .todos-page { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="todos"] .people-col,
+  :root:not([data-layout="desktop"]) body[data-tab="todos"] .cal,
+  :root:not([data-layout="desktop"]) body[data-tab="todos"] .tiles,
+  :root:not([data-layout="desktop"]) body[data-tab="todos"] .panels { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="todos"] .todos-page { display: block; padding: 12px; }
   /* full-screen views on a small screen */
-  .overlay-panel { padding: 64px 12px 20px; }
-  .cal-nav { flex-wrap: wrap; row-gap: 8px; }
-  .cal-nav-title { font-size: 17px; }
-  .mgrid { gap: 3px; }
-  .mg-day { min-height: 52px; padding: 4px 5px; border-radius: 7px; }
-  .mg-ev-title { display: none; }   /* dots only — titles are one tap away */
-  .ev-card { padding: 20px 18px 22px 24px; }
-  .ev-title { font-size: 21px; }
+  :root:not([data-layout="desktop"]) .overlay-panel { padding: 64px 12px 20px; }
+  :root:not([data-layout="desktop"]) .cal-nav { flex-wrap: wrap; row-gap: 8px; }
+  :root:not([data-layout="desktop"]) .cal-nav-title { font-size: 17px; }
+  :root:not([data-layout="desktop"]) .mgrid { gap: 3px; }
+  :root:not([data-layout="desktop"]) .mg-day { min-height: 52px; padding: 4px 5px; border-radius: 7px; }
+  :root:not([data-layout="desktop"]) .mg-ev-title { display: none; }   /* dots only — titles are one tap away */
+  :root:not([data-layout="desktop"]) .ev-card { padding: 20px 18px 22px 24px; }
+  :root:not([data-layout="desktop"]) .ev-title { font-size: 21px; }
   /* Now/Soon/Later collapse to one stacked column on the phone; keep a gap so
      the three cards don't butt together (they carry no margin of their own). */
-  .todo-cols { grid-template-columns: 1fr; gap: 12px; }
-  .tab-btn { min-width: 0; }
+  :root:not([data-layout="desktop"]) .todo-cols { grid-template-columns: 1fr; gap: 12px; }
+  :root:not([data-layout="desktop"]) .tab-btn { min-width: 0; }
 }
 
-/* five tabs need to fit down to 320px with no horizontal scroll */
+/* Five tabs need to fit down to 380px with no horizontal scroll. Sibling media
+   query (not nested — older engines), same not-desktop guard so a forced-desktop
+   TV never picks up the smaller phone type. */
 @media (max-width: 380px) {
-  .tab-btn { font-size: 9px; letter-spacing: 0.08em; padding: 6px 2px; }
+  :root:not([data-layout="desktop"]) .tab-btn { font-size: 9px; letter-spacing: 0.08em; padding: 6px 2px; }
 }
+/* <<< phone shell (max-width:1000px unless forced desktop) <<< */
 
 /* ==================== reduced motion ========================= */
 @media (prefers-reduced-motion: reduce) {

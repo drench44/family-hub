@@ -164,3 +164,71 @@ test('a stored override beats the FH_THEME config default', () => {
   assert.equal(root.getAttribute('data-accent'), 'violet');   // device choice wins
   assert.equal(root.getAttribute('data-theme'), 'light');     // config fills the rest
 });
+
+// ---- Layout choice (data-layout) ----
+// data-layout is the per-device CHOICE: "auto" (the phone/wall split is decided
+// by a pure-CSS width media query — no JS needed) or "desktop" (force the full
+// wall at any width, the escape hatch for a TV that mis-reports a phone-narrow
+// width). theme.js stamps ONLY this attribute; the CSS keys off it plus the
+// media query. There is deliberately no JS-computed "mode" and no matchMedia —
+// the layout must survive theme.js not running.
+
+test('fresh device defaults to layout=auto and persists nothing', () => {
+  const { root, localStorage } = loadTheme();
+  assert.equal(root.getAttribute('data-layout'), 'auto');
+  assert.equal(localStorage.getItem('fh.layout'), null);   // a default, not a choice
+});
+
+test('setLayout(desktop) stamps data-layout=desktop and persists (Firestick TV)', () => {
+  // The driving case: a TV browser reports a phone-narrow width, so the CSS
+  // media query would pick the phone shell. Forcing desktop suppresses it.
+  const { root, localStorage, win } = loadTheme();
+  win.setLayout('desktop');
+  assert.equal(root.getAttribute('data-layout'), 'desktop');
+  assert.equal(localStorage.getItem('fh.layout'), 'desktop');
+});
+
+test('setLayout(auto) hands control back to the width media query', () => {
+  const { root, localStorage, win } = loadTheme({ storage: { 'fh.layout': 'desktop' } });
+  assert.equal(root.getAttribute('data-layout'), 'desktop');   // started forced-desktop
+  win.setLayout('auto');
+  assert.equal(root.getAttribute('data-layout'), 'auto');
+  assert.equal(localStorage.getItem('fh.layout'), 'auto');
+});
+
+test('an invalid layout is rejected: no stamp change, no persist', () => {
+  // "mobile" is no longer a valid value (Auto/Desktop only); neither is garbage.
+  const { root, localStorage, win } = loadTheme();
+  win.setLayout('mobile');
+  win.setLayout('sideways');
+  assert.equal(root.getAttribute('data-layout'), 'auto');    // unchanged
+  assert.equal(localStorage.getItem('fh.layout'), null);
+});
+
+test('a persisted fh.layout=desktop survives a reload (the Firestick keeps its choice)', () => {
+  const { root } = loadTheme({ storage: { 'fh.layout': 'desktop' } });
+  assert.equal(root.getAttribute('data-layout'), 'desktop');
+});
+
+test('window.FH_THEME.layout is the fallback when no localStorage override exists', () => {
+  const { root, localStorage } = loadTheme({
+    fhTheme: { mode: 'grey', accent: 'green', columns: 'none', layout: 'desktop' },
+  });
+  assert.equal(root.getAttribute('data-layout'), 'desktop');
+  assert.equal(localStorage.getItem('fh.layout'), null);     // config default, not stored
+});
+
+test('a stored fh.layout beats the FH_THEME.layout config default', () => {
+  const { root } = loadTheme({
+    storage: { 'fh.layout': 'auto' },
+    fhTheme: { layout: 'desktop' },
+  });
+  assert.equal(root.getAttribute('data-layout'), 'auto');   // device choice wins
+});
+
+test('stampLayout applies the choice WITHOUT persisting (house-default path)', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.stampLayout('desktop');
+  assert.equal(root.getAttribute('data-layout'), 'desktop');
+  assert.equal(localStorage.getItem('fh.layout'), null);     // but NOT stored
+});

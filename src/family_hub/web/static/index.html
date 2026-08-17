@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=65">
+  <link rel="stylesheet" href="styles.css?v=66">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
-  <script src="theme.js?v=5"></script>
+  <script src="theme.js?v=6"></script>
 </head>
 <body class="wall" data-conn="up" data-tab="chores">
   <div class="wrap">
@@ -52,6 +52,18 @@
               <button type="button" data-cols-set="none">None</button>
               <button type="button" data-cols-set="wells">Wells</button>
               <button type="button" data-cols-set="lines">Lines</button>
+            </div>
+          </div>
+          <!-- Layout: Auto follows the screen width (a phone gets the phone
+               layout, the wall gets the full wall). Desktop forces the full wall
+               at any width — the escape hatch for a TV browser that mis-reports a
+               phone-narrow width (e.g. a Fire TV) and so gets stuck in the phone
+               layout. -->
+          <div class="theme-pop-row">
+            <span class="theme-pop-k">Layout</span>
+            <div class="seg" role="group" aria-label="Layout mode">
+              <button type="button" data-layout-set="auto">Auto</button>
+              <button type="button" data-layout-set="desktop">Desktop</button>
             </div>
           </div>
         </div>
@@ -130,6 +142,6 @@
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
   <script src="osk.js?v=1"></script>
-  <script src="hub.js?v=63"></script>
+  <script src="hub.js?v=64"></script>
 </body>
 </html>

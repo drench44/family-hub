@@ -1415,7 +1415,31 @@ function fitWall() {
 }
 fitWall();
 
+/* Phone-shell height. The shell body is `height: var(--app-h, 100dvh)`; we drive
+   --app-h from window.innerHeight because iOS Safari leaves a STALE 100dvh after
+   a bfcache / app-switch restore (returning to an already-open tab): the in-flow
+   tab bar then floats above a black gap until a full reload (operator report,
+   2026-08-17). Re-measured on the lifecycle events iOS doesn't reliably relayout
+   for — pageshow (incl. bfcache `persisted`), visibilitychange back to visible,
+   resize, orientationchange. Only the mobile-mode body consumes the var, so
+   setting it on the wall/desktop is a harmless no-op. */
+function syncAppHeight() {
+  // iOS Safari can transiently report innerHeight:0 on these very lifecycle
+  // events; a literal --app-h:0px would collapse the shell to a black screen
+  // (0px is a "valid" value, so the 100dvh fallback would NOT save it). Ignore a
+  // non-positive reading and leave the last good height standing.
+  const h = window.innerHeight;
+  if (h > 0) document.documentElement.style.setProperty('--app-h', `${h}px`);
+}
+syncAppHeight();
+window.addEventListener('pageshow', syncAppHeight);
+window.addEventListener('orientationchange', syncAppHeight);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') syncAppHeight();
+});
+
 window.addEventListener('resize', () => {
+  syncAppHeight();
   fitWall();
   clearTimeout(fitDebounce);
   // wirePanels too: growing past the mobile breakpoint reveals panels that
@@ -1892,12 +1916,17 @@ function reflectThemeControls() {
   const mode = el.getAttribute('data-theme');
   const accent = el.getAttribute('data-accent');
   const cols = el.getAttribute('data-cols');
+  const layout = el.getAttribute('data-layout');
   pop.querySelectorAll('[data-theme-set]').forEach((b) =>
     b.classList.toggle('on', b.dataset.themeSet === mode));
   pop.querySelectorAll('[data-c]').forEach((b) =>
     b.classList.toggle('on', b.dataset.c === accent));
   pop.querySelectorAll('[data-cols-set]').forEach((b) =>
     b.classList.toggle('on', b.dataset.colsSet === cols));
+  // Layout marks the active choice (auto/desktop) — the control reflects what
+  // the operator picked (data-layout on <html>, stamped by theme.js).
+  pop.querySelectorAll('[data-layout-set]').forEach((b) =>
+    b.classList.toggle('on', b.dataset.layoutSet === layout));
 }
 
 function closeThemePop() {
@@ -1925,6 +1954,8 @@ document.addEventListener('click', (e) => {
   if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
   const c = e.target.closest('#theme-pop [data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
+  const ly = e.target.closest('#theme-pop [data-layout-set]');
+  if (ly) { setLayout(ly.dataset.layoutSet); reflectThemeControls(); return; }
   // a tap anywhere outside an open popover dismisses it
   if (pop && pop.classList.contains('open') && !e.target.closest('#theme-pop')) {
     closeThemePop();
