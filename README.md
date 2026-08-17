@@ -126,6 +126,11 @@ it boots straight into the dashboard, fullscreen, no browser chrome, no
 cursor, and never sleeps. See **[docs/raspberry-pi-kiosk.md](docs/raspberry-pi-kiosk.md)**
 for the full walkthrough, with copy-paste files in [`docs/kiosk/`](docs/kiosk/).
 
+**No Pi required.** Any always-on browser works — a cheap **all-in-one
+touchscreen PC** (or a touch monitor on a mini-PC) is a great no-fuss option:
+one device, nothing to wire up, just open the dashboard fullscreen in its
+browser.
+
 ## config.json reference
 
 | Key | What it is |
