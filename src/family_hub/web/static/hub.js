@@ -1101,6 +1101,14 @@ const TAB_FEATURES = {
   weather: ['weather', 'climate'],
 };
 
+// A custom dashboard panel (links.panels entry that isn't the weather/climate
+// slot) has no toggle of its own: it keeps the panels column, the phone's
+// Weather tab, and the not-empty state alive even with weather+climate off.
+function customPanelExists() {
+  return ((links && links.panels) || [])
+    .some((p) => p.id !== 'weather' && p.id !== 'climate');
+}
+
 // True unless the integration is present AND disabled. Fail-open: an id absent
 // from the payload (older server, transient gap) is treated as on, never
 // blanking a surface on a hiccup.
@@ -1129,9 +1137,14 @@ function updateTabVisibility(list) {
   const featureOn = (id) => ALWAYS_ON_FEATURES.has(id) ? featureEnabled(id) : on.has(id);
   // A tab with no TAB_FEATURES mapping (e.g. a future tab shipped before its
   // mapping lands) fails OPEN too, consistent with the fail-open posture —
-  // never silently hide a tab nobody told this function about.
+  // never silently hide a tab nobody told this function about. The weather
+  // tab gets the same custom-panel rescue as applyWallLayout's `dash` column
+  // below: it's the tab that shows .panels, so a live custom panel (no
+  // toggle of its own) must keep it reachable on the phone even with
+  // weather+climate both off — and keeping it visible also keeps `any` true,
+  // so hub-empty doesn't hide a live custom panel behind "all features off".
   const visible = (tab) => !(tab in TAB_FEATURES) ? true
-    : TAB_FEATURES[tab].some(featureOn);
+    : TAB_FEATURES[tab].some(featureOn) || (tab === 'weather' && customPanelExists());
   const btns = [...document.querySelectorAll('.tab-btn')];
   let any = false;
   btns.forEach((b) => {
@@ -1173,8 +1186,7 @@ function applyWallLayout(list) {
   // buildPanels renders those via panelHtml, and they have no toggle of
   // their own, so the column must survive even with weather+climate both
   // off or an operator's custom panel would silently lose its column).
-  const dash = has('weather', 'climate')
-    || ((links && links.panels) || []).some((p) => p.id !== 'weather' && p.id !== 'climate');
+  const dash = has('weather', 'climate') || customPanelExists();
   const setDisp = (sel, show) => {
     const el = document.querySelector(sel);
     if (el) el.style.display = show ? '' : 'none';
