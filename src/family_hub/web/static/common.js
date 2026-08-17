@@ -622,6 +622,13 @@ function reminderFailMessage(error) {
   if (s.includes('not connected')) {
     return 'iCloud isn’t connected — add it in Settings.';
   }
+  // 'unknown reminder list' (a 404 from add when the target list was deleted/
+  // disabled on iCloud) MUST be tested before 'unknown reminder' — the former
+  // contains the latter as a substring, so the order is load-bearing: a bare
+  // 'unknown reminder' check would misread a dead-list add as an edit collision.
+  if (s.includes('unknown reminder list')) {
+    return 'That list is no longer available — pick another in Settings.';
+  }
   if (s.includes('unknown reminder')) {
     return 'That reminder was already changed on another device.';
   }
@@ -761,9 +768,18 @@ function caldavPanelHtml(integ, ui) {
   const readonly = integ.readonly !== false;   // server default is 1-way (true)
   const resultMsg = st.testResult ? caldavTestMessage(st.testResult) : '';
   const resultCls = st.testResult ? (st.testResult.ok ? ' ok' : ' err') : '';
+  // Wall edits (reminder check-off/add/delete) queue in an outbox and flush on
+  // the next sync. Normally 0; a non-zero count means writes are still waiting
+  // to reach iCloud (a paused sync, a transient outage). Invisible when 0/absent
+  // so the panel stays quiet in the common case.
+  const pending = Number(integ.pending) || 0;
+  const pendingNote = pending > 0
+    ? `<div class="caldav-pending">${pending} change${pending === 1 ? '' : 's'} not yet synced</div>`
+    : '';
   return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong>`
     + (warn ? `<span class="integ-warn">${warn}</span>` : '')
     + `</div>`
+    + pendingNote
     + `<div class="settings-row">`
     + `<span class="settings-k">Sync direction</span>`
     + `<div class="segmented" role="group" aria-label="Sync direction">`

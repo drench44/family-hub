@@ -127,6 +127,19 @@ def test_reminder_list_picker_avoids_ios_zoom_and_is_a_tap_target():
     assert mh and int(mh.group(1)) >= 44, "list picker must be a >= 44px tap target"
 
 
+def test_todo_and_reminder_rows_and_actions_are_big_tap_targets():
+    # The to-do / reminder rows and the delete/move action pills are all real
+    # touch targets on the wall and the phone. Only .chore-row was guarded; pin
+    # these too so a future compaction can't quietly shrink them below the
+    # ~44px floor (CLAUDE.md). Rows share one rule; the action pills another.
+    row = _css_rule(".todo-row, .todo-row-full")
+    rm = re.search(r"min-height:\s*(\d+)px", row)
+    assert rm and int(rm.group(1)) >= 44, ".todo-row(-full) must be a >= 44px tap target"
+    act = _css_rule(".todo-act")
+    am = re.search(r"min-height:\s*(\d+)px", act)
+    assert am and int(am.group(1)) >= 44, ".todo-act (delete/move) must be a >= 44px tap target"
+
+
 def test_reminder_bucket_list_reuses_the_shared_row_and_box_classes():
     # The iCloud reminders view is built from the same .todo-row(-full)/.card
     # chrome as the local list — not a parallel styling system that could drift.

@@ -490,6 +490,17 @@ test('caldavPanelHtml: connected + needs_auth/error status shows the reconnect/e
   assert.match(errored, /integ-warn">error</);
 });
 
+test('caldavPanelHtml: an outbox backlog shows a quiet "not yet synced" note; 0/absent shows nothing', () => {
+  const none = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true }, {});
+  assert.doesNotMatch(none, /not yet synced/, 'no note when pending is absent');
+  const zero = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, pending: 0 }, {});
+  assert.doesNotMatch(zero, /not yet synced/, 'no note when pending is 0');
+  const one = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, pending: 1 }, {});
+  assert.match(one, /caldav-pending">1 change not yet synced/, 'singular copy');
+  const many = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, pending: 3 }, {});
+  assert.match(many, /caldav-pending">3 changes not yet synced/, 'plural copy');
+});
+
 test('caldavPanelHtml: connected + testing shows progress text and disables the Test button', () => {
   const html = caldavPanelHtml(
     { id: 'icloud_caldav', account: 'a@b.com', enabled: true }, { testing: true });
@@ -631,10 +642,14 @@ test('todoFailMessage: distinguishes a concurrent-edit 404 from a generic failur
     'Couldn’t save — check the hub and tap again.');
 });
 
-test('reminderFailMessage: read-only / not-connected / already-changed / generic each get their own copy', () => {
+test('reminderFailMessage: read-only / not-connected / dead-list / already-changed / generic each get their own copy', () => {
   assert.match(sandbox.reminderFailMessage('iCloud reminders are read-only (enable two-way in settings)'),
     /2-way in Settings/);
   assert.match(sandbox.reminderFailMessage('iCloud is not connected'), /isn’t connected/);
+  // A dead-list add 404 ('unknown reminder list') must NOT fall into the
+  // 'unknown reminder' edit-collision branch (the former contains the latter).
+  assert.equal(sandbox.reminderFailMessage('unknown reminder list'),
+    'That list is no longer available — pick another in Settings.');
   assert.equal(sandbox.reminderFailMessage('unknown reminder'),
     'That reminder was already changed on another device.');
   assert.equal(sandbox.reminderFailMessage('/api/reminders/toggle -> HTTP 500'),

@@ -1854,6 +1854,226 @@ test('renderTodoSourcePicker: hidden without CalDAV; shown with a read-only hint
   assert.doesNotMatch(host.innerHTML, /read-only until/);
 });
 
+// ---- reminders driven through the REAL delegated click/submit handlers ----
+// The tests above call toggleReminder/addReminder/deleteReminder directly, which
+// skips the optimistic .done flip, the revert-on-failure, and the submit
+// routing. This harness captures hub.js's delegated listeners (same pattern as
+// mountChoresFull) and taps rendered nodes so those paths run for real.
+function mountReminders({ surface = 'full', writable = true, lists = [],
+  reminders = REMINDERS, fetch } = {}) {
+  const registry = {};
+  const clickHandlers = [];
+  const submitHandlers = [];
+  const document = {
+    getElementById: (id) => registry[id] || null,
+    createElement: (tag) => new FakeEl(registry, tag),
+    addEventListener: (type, fn) => {
+      if (type === 'click') clickHandlers.push(fn);
+      if (type === 'submit') submitHandlers.push(fn);
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  SEEDED_IDS.forEach((id) => { const el = new FakeEl(registry); el._id = id; registry[id] = el; });
+  document.body = new FakeEl(registry, 'body');
+  // The full view paints into #todos-page (not in SEEDED_IDS); the add flow reads
+  // #todo-add-input by id (parsed innerHTML nodes aren't id-registered, so seed a
+  // real one). Only the full surface needs these.
+  if (surface === 'full') {
+    const page = new FakeEl(registry); page._id = 'todos-page'; registry['todos-page'] = page;
+    const inp = new FakeEl(registry, 'input'); inp._id = 'todo-add-input'; registry['todo-add-input'] = inp;
+  }
+  const sandbox = {
+    document,
+    window: { addEventListener: () => {}, innerWidth: 1280, innerHeight: 800 },
+    innerWidth: 1280, innerHeight: 800,
+    location: { host: 'hub.example:8138', protocol: 'http:' },
+    scrollTo: () => {}, setTimeout: () => 0, setInterval: () => 0,
+    clearTimeout: () => {}, clearInterval: () => {},
+    fetch: fetch || (async () => { throw new Error('offline in test'); }),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(commonSrc, sandbox);
+  vm.runInContext(hubSrc, sandbox);
+
+  const hub = {
+    todo_source: 'icloud', reminders_writable: writable, reminders,
+    reminder_lists: lists,
+    integrations: [{ id: 'icloud_caldav', enabled: true, readonly: !writable }],
+  };
+  vm.runInContext(
+    "data_date = '2026-08-17';"
+    + ` hubData = ${JSON.stringify(hub)};`
+    + " todoState.source = 'icloud';"
+    + ` todoState.reminders = ${JSON.stringify({ buckets: reminders, configured: true, writable })};`
+    + " openView = 'todos'; document.body.dataset.tab = 'todos';",
+    sandbox);
+
+  if (surface === 'home') sandbox.renderTodoSlot(hub);
+  else sandbox.renderTodosPaint();
+
+  const host = registry[surface === 'home' ? 'todo-slot' : 'todos-page'];
+  const fireClick = (target) => clickHandlers.forEach((fn) => fn({ target }));
+  const fireSubmit = (target) =>
+    submitHandlers.forEach((fn) => fn({ target, preventDefault: () => {} }));
+  const tap = (sel) => {
+    const node = queryFirst(host._queryChildren, sel);
+    assert.ok(node, `a node matching ${sel} exists to tap`);
+    node.closest = (s) => (selectorMatches(node, s) ? node : null);
+    fireClick(node);
+    return node;
+  };
+  const read = (expr) => vm.runInContext(expr, sandbox);
+  return { sandbox, document, registry, host, tap, fireSubmit, read };
+}
+
+test('reminder tap (home): the row flips to .done immediately and the write carries completed:true', () => {
+  const calls = [];
+  const { tap } = mountReminders({ surface: 'home', fetch: async (url, opts) => {
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/reminders/toggle') return okResp({ id: 'caldav:g/1', completed: true });
+    throw new Error('offline in test');
+  } });
+  const row = tap('[data-reminder]');                 // the overdue "Renew car tags" row
+  assert.ok(row.classList.contains('done'), 'the tapped row is optimistically marked done');
+  const post = calls.find((c) => c.url === '/api/reminders/toggle');
+  assert.deepEqual(post.body, { id: 'caldav:g/1', completed: true });
+});
+
+test('reminder tap (home): a FAILED toggle reverts the optimistic .done and toasts (no strand offline)', async () => {
+  const { tap, host, document } = mountReminders({ surface: 'home', fetch: async (url) => {
+    if (url === '/api/reminders/toggle') return failResp(500, 'boom');
+    throw new Error('offline in test');   // the follow-up isn't reached — we revert and return
+  } });
+  const row = tap('[data-reminder]');
+  assert.ok(row.classList.contains('done'), 'optimistic flip happens first');
+  await flush();                                       // let toggleReminder settle
+  // The home card must repaint from the UNCHANGED cache: re-query the LIVE row
+  // (the optimistic flip mutated the node's classList, not the innerHTML string,
+  // so a string check wouldn't catch a strand). Without the revert, this is the
+  // same stranded node still carrying .done; with it, it's a fresh open row.
+  const after = queryFirst(host._queryChildren, '[data-reminder]');
+  assert.ok(after && !after.classList.contains('done'), 'the stranded .done is reverted');
+  assert.match(document.getElementById('toast').textContent, /Couldn.t save/);
+});
+
+test('reminder open (full): tapping the body flips openId and reveals the delete affordance', () => {
+  const { tap, host, read } = mountReminders({ surface: 'full',
+    lists: [{ id: 'caldav:g', name: 'Groceries' }] });
+  assert.doesNotMatch(host.innerHTML, /data-reminder-del=/, 'no delete button until opened');
+  tap('[data-reminder-open]');
+  assert.equal(read('todoState.openId'), 'caldav:g/1');
+  assert.match(host.innerHTML, /data-reminder-del="caldav:g\/1"/, 'delete affordance now shown');
+});
+
+test('reminder add (full): submitting #todo-add-form in iCloud mode routes to addReminder, not addTodo', async () => {
+  const calls = [];
+  const { fireSubmit, registry } = mountReminders({ surface: 'full',
+    lists: [{ id: 'caldav:g', name: 'Groceries' }],
+    fetch: async (url, opts) => {
+      calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+      if (url === '/api/reminders/add') return okResp({ id: 'caldav:g/new', title: 'Buy milk', due: null });
+      throw new Error('offline in test');
+    } });
+  registry['todo-add-input'].value = 'Buy milk';
+  fireSubmit({ id: 'todo-add-form' });
+  await flush();
+  assert.ok(calls.some((c) => c.url === '/api/reminders/add'), 'routed to the reminders endpoint');
+  assert.ok(!calls.some((c) => c.url === '/api/todos'), 'the local todo endpoint is never hit');
+  assert.deepEqual(calls.find((c) => c.url === '/api/reminders/add').body,
+    { list_id: 'caldav:g', title: 'Buy milk' });
+});
+
+test('renderTodosFull: fetches the endpoint that matches the active source', async () => {
+  const { sandbox } = newHub();
+  const urls = [];
+  sandbox.fetch = async (url) => {
+    urls.push(url);
+    return okResp(url === '/api/reminders'
+      ? { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true }
+      : { now: [], soon: [], later: [] });
+  };
+  vm.runInContext("hubData = { todo_source: 'icloud' };", sandbox);
+  await sandbox.renderTodosFull();
+  assert.ok(urls.includes('/api/reminders') && !urls.includes('/api/todos'), 'iCloud -> /api/reminders');
+  urls.length = 0;
+  vm.runInContext("hubData = { todo_source: 'local' };", sandbox);
+  await sandbox.renderTodosFull();
+  assert.ok(urls.includes('/api/todos') && !urls.includes('/api/reminders'), 'local -> /api/todos');
+});
+
+test('renderTodosFull: a failed refresh toasts only when data was already loaded (not on first load)', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.fetch = async () => { throw new Error('down'); };
+  vm.runInContext("hubData = { todo_source: 'icloud' }; todoState.reminders = null;", sandbox);
+  await sandbox.renderTodosFull();
+  assert.equal(document.getElementById('toast'), null, 'no toast on the first, empty load');
+  vm.runInContext("todoState.reminders = { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true };", sandbox);
+  await sandbox.renderTodosFull();
+  assert.match(document.getElementById('toast').textContent, /Couldn.t refresh/, 'a failed REFRESH surfaces');
+});
+
+test('setTodoSource: re-polls, repaints the picker to the new source, and refreshes the open view on the new endpoint', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div'); host._id = 'todo-source-ctl';
+  document.body.appendChild(host);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, readonly: false }], todo_source: 'local' }; openView = 'todos';",
+    sandbox);
+  const urls = [];
+  sandbox.fetch = async (url) => {
+    urls.push(url);
+    if (url === '/api/todo-source') return okResp({ source: 'icloud' });
+    if (url === '/api/hub') {
+      return okResp({
+        date: '2026-08-17', people: [], todos: { now: [], soon: [], later: [] }, todos_ok: true,
+        reminders: { overdue: [], today: [], upcoming: [], no_date: [] },
+        reminders_writable: true, reminder_lists: [], todo_source: 'icloud',
+        calendar: { status: { ok: true }, events: [] }, links: {},
+        integrations: [{ id: 'icloud_caldav', enabled: true, readonly: false }],
+      });
+    }
+    if (url === '/api/reminders') return okResp({ buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true });
+    throw new Error('offline in test');
+  };
+  await sandbox.setTodoSource('icloud');
+  assert.ok(urls.includes('/api/todo-source'), 'the source was PATCHed');
+  assert.ok(urls.includes('/api/reminders'), 'the open view refreshed against the iCloud endpoint');
+  assert.match(host.innerHTML, /seg-btn active" type="button" data-todo-source="icloud"/, 'picker repainted to iCloud');
+});
+
+test('reminders (full): zero enabled lists hides the add form AND addReminder posts nothing', async () => {
+  const { host, sandbox, registry } = mountReminders({ surface: 'full', writable: true, lists: [] });
+  assert.doesNotMatch(host.innerHTML, /id="todo-add-form"/, 'no add form without a target list');
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp({}); };
+  registry['todo-add-input'].value = 'Orphan';
+  await sandbox.addReminder();
+  assert.equal(urls.length, 0, 'addReminder early-returns with no POST when there are no lists');
+});
+
+test('reminders (full): iCloud-supplied title and list name are escaped, never live markup', () => {
+  const { host } = mountReminders({ surface: 'full', writable: true,
+    lists: [{ id: 'caldav:g', name: 'Home <script>' }],
+    reminders: { overdue: [], today: [{ id: 'caldav:g/x', title: 'A <b>x</b>', due: '2026-08-17' }], upcoming: [], no_date: [] } });
+  assert.match(host.innerHTML, /A &lt;b&gt;x&lt;\/b&gt;/, 'title markup is escaped');
+  assert.ok(!host.innerHTML.includes('<b>x</b>'), 'no live <b> tag');
+  assert.match(host.innerHTML, /Add to Home &lt;script&gt;/, 'list name in the placeholder is escaped');
+  assert.ok(!host.innerHTML.includes('<script>'), 'no live <script> tag');
+});
+
+test('reminderPriHtml / reminderDueHtml: the "!" is high-only, the due date is upcoming/overdue-only', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("data_date = '2026-08-17';", sandbox);
+  assert.match(sandbox.reminderPriHtml(4), /rem-pri/, 'priority 1-4 marks high');
+  assert.equal(sandbox.reminderPriHtml(5), '', 'priority 5 (medium) is unmarked');
+  assert.equal(sandbox.reminderPriHtml(null), '', 'no priority is unmarked');
+  assert.match(sandbox.reminderDueHtml('upcoming', '2026-09-01'), /rem-due/, 'upcoming shows the date');
+  assert.match(sandbox.reminderDueHtml('overdue', '2026-08-10'), /rem-due/, 'overdue shows the date');
+  assert.equal(sandbox.reminderDueHtml('today', '2026-08-17'), '', 'today suppresses the redundant date');
+  assert.equal(sandbox.reminderDueHtml('no_date', null), '', 'no_date has nothing to show');
+});
+
 // links is module-level `let` state in hub.js, set for real by poll() from
 // /api/hub's response. A plain `sandbox.links = ...` from out here would only
 // add an own property to the sandbox object — it wouldn't touch the separate

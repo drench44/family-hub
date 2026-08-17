@@ -875,7 +875,19 @@ async function deleteTodo(id) {
    out of the open buckets on the next read, so a checked row simply disappears. */
 async function toggleReminder(id, completed) {
   const r = await attemptTodo('/api/reminders/toggle', 'POST', { id, completed });
-  if (!r.ok) showToast(reminderFailMessage(r.error));
+  if (!r.ok) {
+    showToast(reminderFailMessage(r.error));
+    // The write failed, so UNDO the click handler's optimistic .done flip. Can't
+    // lean on refreshTodos()'s repaint: its poll() only repaints the home card
+    // inside a successful try, so offline (write fails AND the poll fails too)
+    // the flipped row would strand looking "done". Repaint both surfaces from
+    // the UNCHANGED cache instead — same as the chore/todo paths, which show the
+    // unchanged row offline (they just never optimistically flip in the first
+    // place). renderTodosPaint no-ops when no full view is mounted.
+    if (hubData) renderTodoSlot(hubData);
+    renderTodosPaint();
+    return;
+  }
   await refreshTodos();
 }
 
