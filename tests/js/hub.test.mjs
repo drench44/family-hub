@@ -375,6 +375,18 @@ test('calStatusMessage: needs_auth wins over a not-configured error string', () 
   assert.match(m, /sign-in expired/);
 });
 
+test('calStatusMessage: an expired source still warns even when another source is ok', () => {
+  // Mixed setup: Google ok, iCloud password revoked -> agg is {ok:true,
+  // needs_auth:true}. The reconnect banner must still show; otherwise the iCloud
+  // half silently goes stale behind a "connected" wall and nobody reconnects it.
+  const m = sandbox.calStatusMessage({ ok: true, needs_auth: true });
+  assert.match(m, /sign-in expired/);
+  assert.match(m, /reconnect it in settings/);
+  // ...but don't claim we're "showing the last events we saw" — the healthy
+  // source is fresh, only the expired one is stale.
+  assert.doesNotMatch(m, /last events/);
+});
+
 test('caldavTestMessage: a successful test reports events + reminders counts', () => {
   assert.equal(caldavTestMessage({ ok: true, events: 12, reminders: 3 }),
     'Connected - 12 events, 3 reminders.');

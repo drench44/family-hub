@@ -297,7 +297,15 @@ def _calendar_status_agg(c) -> dict:
     if not statuses:
         return {"ok": False, "error": "not configured"}
     if any(s.get("ok") for s in statuses):
-        return {"ok": True}
+        # One healthy source must NOT hide another's expired sign-in. On a mixed
+        # setup (Google ok + iCloud's app password revoked) the aggregate is still
+        # ok — Google renders — but needs_auth has to survive so the wall shows the
+        # reconnect banner; otherwise the iCloud half silently drifts stale behind
+        # a "connected" wall and nobody ever reconnects it.
+        agg = {"ok": True}
+        if any(s.get("needs_auth") for s in statuses):
+            agg["needs_auth"] = True
+        return agg
     if any(s.get("needs_auth") for s in statuses):
         return {"ok": False, "needs_auth": True}
     errs = [s.get("error") for s in statuses if s.get("error")

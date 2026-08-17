@@ -1588,6 +1588,24 @@ def test_integration_status_surfaces_needs_auth(tmp_path, monkeypatch):
         assert integ["icloud_caldav"]["status"] == "needs_auth"
 
 
+def test_calendar_status_agg_surfaces_needs_auth_even_when_a_source_is_ok(tmp_path, monkeypatch):
+    # Mixed setup: Google/ICS healthy, iCloud app password revoked. The aggregate
+    # is still ok (Google renders), but needs_auth must survive so the wall shows
+    # the reconnect banner — otherwise the iCloud half silently drifts stale
+    # behind a "connected" wall and nobody ever reconnects it.
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": True})
+        appmod.fdb.kv_set(c, "caldav_status", {"ok": False, "needs_auth": True})
+        status = tc.get("/api/calendar").json()["status"]
+        assert status["ok"] is True
+        assert status.get("needs_auth") is True
+
+
 def test_disabling_ics_calendar_hides_its_events(tmp_path, monkeypatch):
     appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
         {"id": "holidays", "kind": "ics", "label": "Holidays", "url": "http://x/h.ics"}]})

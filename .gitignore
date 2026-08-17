@@ -4,6 +4,7 @@ config.json
 .env
 scripts/token.json
 scripts/client_secret.json
+.mcp.json
 
 # Python / test cruft
 __pycache__/

@@ -30,17 +30,20 @@ _EMPTY_KEEP_HOURS = 24
 def _is_auth_error(exc) -> bool:
     """True if the exception chain is a CalDAV authentication failure — a
     revoked or expired app-specific password, or wrong credentials. Matched by
-    class name / 401 / 'unauthorized' so it works without the caldav library
-    imported and across its version churn (mirrors calendar_sync._is_auth_error
-    for Google). Distinct from a transient network/throttle error: an auth
-    failure is surfaced as needs_auth so the wall shows 'Reconnect iCloud' and
-    keeps serving the cached view, instead of silently going stale."""
+    class name / 401 / 403 / 'unauthorized' / 'forbidden' so it works without the
+    caldav library imported and across its version churn (mirrors
+    calendar_sync._is_auth_error for Google). iCloud answers a dead app password
+    with 401 OR 403 depending on the path, so both must flag needs_auth. Distinct
+    from a transient network/throttle error: an auth failure is surfaced as
+    needs_auth so the wall shows 'Reconnect iCloud' and keeps serving the cached
+    view, instead of silently going stale."""
     e, seen = exc, 0
     while e is not None and seen < 10:
         name = type(e).__name__
         msg = str(e).lower()
-        if name in ("AuthorizationError",) or "unauthorized" in msg \
-                or re.search(r"\b401\b", msg):   # \b so an id like 'room401' doesn't match
+        if name in ("AuthorizationError", "ForbiddenError") \
+                or "unauthorized" in msg or "forbidden" in msg \
+                or re.search(r"\b40[13]\b", msg):   # \b so an id like 'room4012' doesn't match
             return True
         e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
         seen += 1
@@ -213,8 +216,16 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             try:
                 for obj in client.fetch_ics(col, lo_dt.date(), hi_dt.date()):
                     _store_object(conn, cal_id, "VEVENT", obj, seen_objs)
-                    events.extend(
-                        ics_events(obj["ics"], cal_id, lo_dt.date(), hi_dt.date()))
+                    try:
+                        events.extend(ics_events(
+                            obj["ics"], cal_id, lo_dt.date(), hi_dt.date()))
+                    except Exception:
+                        # One unparseable event must not freeze the whole
+                        # calendar behind a collection error (which would keep
+                        # every other event stale); skip it and log, letting the
+                        # rest of the collection sync.
+                        log.warning("caldav event parse skipped (%s)", cal_id,
+                                    exc_info=True)
                 if seen_objs:   # prune only when the collection returned objects
                     fdb.prune_cal_objects(conn, cal_id, seen_objs)
             except Exception as e:  # isolate one bad collection
@@ -232,8 +243,14 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             try:
                 for obj in client.fetch_todos(col):
                     _store_object(conn, list_id, "VTODO", obj, seen_todos)
-                    rem.extend(remlogic.parse_vtodo(obj["ics"], list_id,
-                                                    col.get("name", "")))
+                    try:
+                        rem.extend(remlogic.parse_vtodo(
+                            obj["ics"], list_id, col.get("name", "")))
+                    except Exception:
+                        # Skip one unparseable reminder rather than failing the
+                        # whole list and freezing the rest behind an error.
+                        log.warning("caldav reminder parse skipped (%s)", list_id,
+                                    exc_info=True)
                 if seen_todos:
                     fdb.prune_cal_objects(conn, list_id, seen_todos)
             except Exception as e:

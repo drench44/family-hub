@@ -640,13 +640,18 @@ function reminderFailMessage(error) {
    hub.js's calStatusNote wraps the result in markup. */
 function calStatusMessage(status) {
   const st = status || {};
-  if (st.ok !== false) return '';
   if (st.needs_auth) {
     // A revoked/expired calendar sign-in needs the owner to reconnect it (in the
     // settings menu), unlike a transient blip (the generic message below). The
     // hub now has several calendar sources, so this copy stays source-neutral.
-    return 'A calendar sign-in expired — reconnect it in settings. Showing the last events we saw.';
+    // This fires even when st.ok is true: on a mixed setup one source can be
+    // healthy while another's sign-in expired, and that expiry must stay visible
+    // rather than hide behind the working source.
+    return st.ok
+      ? 'A calendar sign-in expired — reconnect it in settings.'
+      : 'A calendar sign-in expired — reconnect it in settings. Showing the last events we saw.';
   }
+  if (st.ok !== false) return '';
   if (String(st.error || '').includes('not configured')) {
     return 'No calendar is connected yet — add one in settings and the family’s events show up here.';
   }

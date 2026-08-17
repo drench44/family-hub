@@ -144,6 +144,20 @@ def test_is_auth_error_detects_401_and_ignores_transient():
     assert caldav_sync._is_auth_error(RuntimeError("connection reset")) is False
 
 
+def test_is_auth_error_detects_403_and_forbidden():
+    # iCloud answers a dead app password with 403 on some paths, not only 401;
+    # both must flag needs_auth so the wall prompts a reconnect (not a generic
+    # "snag" that nobody acts on).
+    assert caldav_sync._is_auth_error(RuntimeError("HTTP 403 Forbidden")) is True
+    assert caldav_sync._is_auth_error(RuntimeError("403")) is True
+
+    class ForbiddenError(Exception):
+        pass
+    assert caldav_sync._is_auth_error(ForbiddenError("nope")) is True
+    # a bare id containing 403 must NOT false-positive (word-boundary guard)
+    assert caldav_sync._is_auth_error(RuntimeError("event room4030")) is False
+
+
 def test_caldav_sync_flags_needs_auth_and_keeps_cache(conn):
     # a previously-cached CalDAV event; an expired login must NOT wipe it
     fdb.replace_events_caldav(conn, [{"id": "old", "calendar_id": "caldav:cal",
@@ -205,6 +219,21 @@ def test_caldav_sync_keeps_cache_of_a_failing_collection(conn):
         {"id": "bad", "name": "Bad", "comp": "VEVENT", "ics": []},
     ]), conn, _CFG, _NOW)
     assert {r["title"] for r in fdb.list_events(conn)} == {"Fresh", "Kept"}
+
+
+def test_caldav_sync_one_bad_object_does_not_freeze_the_collection(conn):
+    # A single unparseable object in a collection must be skipped, not fail the
+    # whole calendar (which would keep every other event stale behind an error).
+    st = caldav_sync.sync_once(FakeCalDav([
+        {"id": "cal", "name": "Family", "comp": "VEVENT", "ics": [
+            _ics("u1", "Before", "20260820", "20260821"),
+            "THIS IS NOT ICS",                       # raises in ics_events
+            _ics("u2", "After", "20260822", "20260823"),
+        ]},
+    ]), conn, _CFG, _NOW)
+    # the two good events synced; the collection is NOT marked failed
+    assert {r["title"] for r in fdb.list_events(conn)} == {"Before", "After"}
+    assert st["ok"] is True
 
 
 def test_caldav_sync_inner_401_sets_needs_auth(conn):
