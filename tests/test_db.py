@@ -214,6 +214,44 @@ def test_schema_migrates_single_id_pk_events_to_composite(tmp_path):
     c.close()
 
 
+def test_deleted_person_id_is_not_reused(conn):
+    """Regression for issue #31: a deleted person's id must not be handed to the
+    next person, or the newcomer inherits the deleted one's frozen history."""
+    a = fdb.add_person(conn, "Ann", "#111111")
+    assert fdb.delete_person(conn, a) is True
+    b = fdb.add_person(conn, "Bea", "#222222")
+    assert b > a
+
+
+def test_deleted_chore_id_is_not_reused(conn):
+    """Regression for issue #31: same guarantee for chores (occurrence_log keeps
+    frozen rows keyed by chore id)."""
+    mk = lambda t: fdb.add_chore(
+        conn, title=t, icon="", schedule_kind="daily", days_mask=0,
+        assign_kind="rotation", fixed_person_id=None, rotation_order=[],
+        rotation_epoch="2026-08-01")
+    a = mk("A")
+    assert fdb.delete_chore(conn, a) is True
+    assert mk("B") > a
+
+
+def test_schema_adds_autoincrement_to_legacy_people(tmp_path):
+    """A DB whose people table predates AUTOINCREMENT is rebuilt on ensure_schema
+    with the id counter pinned to the max preserved id, so a later delete+add
+    gets max+1 and never reuses the freed id (issue #31)."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.execute("""CREATE TABLE people(
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)""")
+    c.execute("INSERT INTO people(id, name, color) VALUES(5, 'Old', '#abcabc')")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.list_people(c, include_inactive=True)[0]["id"] == 5   # row preserved
+    fdb.delete_person(c, 5)
+    assert fdb.add_person(c, "New", "#defdef") == 6                  # max+1, not reused
+    c.close()
+
+
 def test_kv(conn):
     assert fdb.kv_get(conn, "calendar_status") is None
     fdb.kv_set(conn, "calendar_status", {"ok": True})

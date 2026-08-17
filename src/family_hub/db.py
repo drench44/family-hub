@@ -14,10 +14,10 @@ from typing import Any
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people(
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS chores(
-  id INTEGER PRIMARY KEY, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+  id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
   schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
   days_mask INTEGER NOT NULL DEFAULT 0,
   assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
@@ -116,6 +116,34 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if chores_sql and "'once'" not in chores_sql["sql"]:
         _widen_chore_schedule_check(conn)
+    # 2026-08-16: people/chores used INTEGER PRIMARY KEY without AUTOINCREMENT,
+    # so SQLite reused a deleted row's id. completions/occurrence_log deliberately
+    # keep frozen-history rows keyed by that id, so a new person/chore silently
+    # inherited a deleted one's history (issue #31). Rebuild with AUTOINCREMENT so
+    # ids are never reused. A DB created before this keeps its old id column, and
+    # so does one the chores-widen rebuild just produced -> detect and rebuild.
+    _people_ai = """CREATE TABLE people_new(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)"""
+    _chores_ai = """CREATE TABLE chores_new(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+      icon TEXT NOT NULL DEFAULT '',
+      schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+      days_mask INTEGER NOT NULL DEFAULT 0,
+      assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+      fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+      rotation_epoch TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)"""
+    for tbl, ddl, cols in (
+            ("people", _people_ai, "id, name, color, sort, active"),
+            ("chores", _chores_ai,
+             "id, title, icon, schedule_kind, days_mask, assign_kind, "
+             "fixed_person_id, rotation_order, rotation_epoch, sort, active")):
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (tbl,)).fetchone()
+        if row and "AUTOINCREMENT" not in row["sql"].upper():
+            _rebuild_with_autoincrement(conn, tbl, ddl, cols)
 
 
 def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
@@ -231,6 +259,40 @@ def _rebuild_events_composite_pk(conn: sqlite3.Connection) -> None:
           location, description, color_id FROM events""")
         conn.execute("DROP TABLE events")
         conn.execute("ALTER TABLE events_new RENAME TO events")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
+
+
+def _rebuild_with_autoincrement(conn: sqlite3.Connection, table: str,
+                                create_ddl: str, cols: str) -> None:
+    """Rebuild `table` (people/chores) so its INTEGER PRIMARY KEY is
+    AUTOINCREMENT, preserving every row and its id (issue #31). `create_ddl` must
+    create `<table>_new`; `cols` is the shared column list. Same atomic-rebuild
+    contract as the other helpers. After the swap the AUTOINCREMENT counter
+    (sqlite_sequence) is pinned to the max preserved id, so the next insert is
+    max+1 and never a reused id — independent of whether this SQLite propagates
+    sqlite_sequence across the RENAME."""
+    prior_iso = conn.isolation_level
+    try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute(f"DROP TABLE IF EXISTS {table}_new")
+        conn.execute(create_ddl)                       # creates <table>_new (AUTOINCREMENT)
+        conn.execute(f"INSERT INTO {table}_new({cols}) SELECT {cols} FROM {table}")
+        conn.execute(f"DROP TABLE {table}")
+        conn.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+        conn.execute("DELETE FROM sqlite_sequence WHERE name IN (?, ?)",
+                     (table, f"{table}_new"))
+        conn.execute(
+            "INSERT INTO sqlite_sequence(name, seq) "
+            f"SELECT ?, COALESCE(MAX(id), 0) FROM {table}", (table,))
         conn.execute("COMMIT")
     except Exception:
         if conn.in_transaction:
