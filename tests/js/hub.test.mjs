@@ -21,7 +21,7 @@ const {
   idleReturnMs, nightClass,
   fmtTimeRange, monthName, eventColor, wallZoom,
   isDayOutsideWindow,
-  caldavTestMessage, caldavPanelHtml,
+  caldavTestMessage, caldavPanelHtml, caldavCollectionsHtml,
 } = sandbox;
 const panelFit = (...a) => ({ ...sandbox.panelFit(...a) });
 const monthGrid = (...a) => JSON.parse(JSON.stringify(sandbox.monthGrid(...a)));
@@ -504,6 +504,74 @@ test('caldavPanelHtml: connected + a test result shows the formatted message wit
   const err = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true },
     { testResult: { ok: false, error: 'boom' } });
   assert.match(err, /caldav-test-result err">boom</);
+});
+
+test('caldavCollectionsHtml: empty/null/undefined all show the same "try Test connection" empty state', () => {
+  assert.match(caldavCollectionsHtml([]), /integ-empty">No calendars found yet - try Test connection</);
+  assert.match(caldavCollectionsHtml(null), /integ-empty/);
+  assert.match(caldavCollectionsHtml(undefined), /integ-empty/);
+});
+
+test('caldavCollectionsHtml: a VEVENT row labels "Calendar", a VTODO row labels "Reminders"', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'caldav:ev1', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+    { id: 'caldav:rm1', name: 'Groceries', color: null, comp_type: 'VTODO', enabled: true },
+  ]);
+  assert.match(html, /Family<span class="caldav-cal-kind">Calendar<\/span>/);
+  assert.match(html, /Groceries<span class="caldav-cal-kind">Reminders<\/span>/);
+});
+
+test('caldavCollectionsHtml: the switch reflects each row\'s own enabled state', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'a', name: 'On', color: null, comp_type: 'VEVENT', enabled: true },
+    { id: 'b', name: 'Off', color: null, comp_type: 'VEVENT', enabled: false },
+  ]);
+  assert.match(html, /aria-checked="true"[^>]*data-caldav-collection-toggle="a"/s);
+  assert.match(html, /On<span class="caldav-cal-kind">Calendar<\/span><\/span>\s*<span class="integ-switch on"/);
+  assert.match(html, /aria-checked="false"[^>]*data-caldav-collection-toggle="b"/s);
+  assert.match(html, /Off<span class="caldav-cal-kind">Calendar<\/span><\/span>\s*<span class="integ-switch" aria-hidden/,
+    'no " on" class when disabled');
+});
+
+test('caldavCollectionsHtml: each row carries its id for the click handler', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+  ]);
+  assert.match(html, /data-caldav-collection-toggle="caldav:ab12"/);
+});
+
+test('caldavCollectionsHtml: a non-null hex color renders a swatch dot; a null color omits it', () => {
+  const withColor = caldavCollectionsHtml([
+    { id: 'a', name: 'Family', color: '#ff8800', comp_type: 'VEVENT', enabled: true },
+  ]);
+  assert.match(withColor, /caldav-cal-dot" style="background:#ff8800"/);
+  const noColor = caldavCollectionsHtml([
+    { id: 'b', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+  ]);
+  assert.doesNotMatch(noColor, /caldav-cal-dot/);
+});
+
+test('caldavCollectionsHtml: a name with an emoji and a `<` is escaped (XSS-safe)', () => {
+  const html = caldavCollectionsHtml([
+    { id: 'a', name: 'Reminders ⚠️ <script>alert(1)</script>', color: null, comp_type: 'VTODO', enabled: true },
+  ]);
+  assert.match(html, /Reminders ⚠️ &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+});
+
+test('caldavPanelHtml: connected embeds the Calendars section with its caption and the collections list', () => {
+  const html = caldavPanelHtml(
+    { id: 'icloud_caldav', account: 'a@b.com', enabled: true },
+    { collections: [{ id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true }] });
+  assert.match(html, /<div class="settings-k">Calendars<\/div>/);
+  assert.match(html, /Pick which iCloud calendars and reminder lists show on the wall\./);
+  assert.match(html, /data-caldav-collection-toggle="caldav:ab12"/);
+});
+
+test('caldavPanelHtml: not connected never renders the Calendars section', () => {
+  const html = caldavPanelHtml(null, { collections: [{ id: 'a', name: 'X', comp_type: 'VEVENT', enabled: true }] });
+  assert.doesNotMatch(html, /caldav-collections/);
+  assert.doesNotMatch(html, /Calendars</);
 });
 
 test('chore round-trips: choreToModel -> buildChorePayload preserves schedule/assign', () => {

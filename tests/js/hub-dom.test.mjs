@@ -495,6 +495,12 @@ test('safeColor is applied at the color sinks: a hostile color can NOT inject ex
     { readonly: true });
   assert.doesNotMatch(card, /background:url/, 'no injected declaration at the person color sink');
   assert.match(card, /--pc:transparent/);
+  // CalDAV Calendars-picker swatch sink: `color` comes straight from the
+  // iCloud server's response, an untrusted-input sink like the two above.
+  const picker = sandbox.caldavCollectionsHtml(
+    [{ id: 'a', name: 'Hostile', color: hostile, comp_type: 'VEVENT', enabled: true }]);
+  assert.doesNotMatch(picker, /background:url/, 'no injected declaration at the caldav-cal-dot color sink');
+  assert.match(picker, /caldav-cal-dot" style="background:transparent"/);
 });
 
 test('scheduledPoll: skips a second tick while a poll is still in flight (no stacked requests)', async () => {
@@ -2903,9 +2909,15 @@ test('testCaldavConnection: shows a testing state in flight, then the formatted 
     + "enabled: true, status: null, account: 'bot@example.com', readonly: true }] };",
     sandbox);
   let sawTesting = false;
-  sandbox.fetch = async () => {
-    sawTesting = /Testing…/.test(document.getElementById('caldav-panel').innerHTML);
-    return { ok: true, status: 200, json: async () => ({ needs_auth: true }) };
+  sandbox.fetch = async (url) => {
+    // Only the /test call itself proves the in-flight "Testing…" state; the
+    // Calendars-picker refresh testCaldavConnection fires afterward (see
+    // below) reuses this same mock and must not overwrite the capture.
+    if (String(url).includes('/test')) {
+      sawTesting = /Testing…/.test(document.getElementById('caldav-panel').innerHTML);
+      return { ok: true, status: 200, json: async () => ({ needs_auth: true }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ collections: [] }) };
   };
 
   await sandbox.testCaldavConnection();
@@ -2927,25 +2939,39 @@ test('testCaldavConnection: a network failure folds into the same {ok:false,erro
   assert.match(document.getElementById('caldav-panel').innerHTML, /caldav-test-result err">network down/);
 });
 
-test('disconnectCaldav: DELETEs credentials, clears the stale test result, and re-polls back to the form', async () => {
-  const { document, sandbox } = newHub();
-  seedCaldavPanel(document);
-  vm.runInContext("caldavUi.testResult = { ok: true, events: 1, reminders: 0 };", sandbox);
-  const calls = [];
-  sandbox.fetch = async (url, opts) => {
-    calls.push({ url: String(url), method: opts && opts.method });
-    if (String(url).includes('/credentials')) return { ok: true, status: 200, json: async () => ({ ok: true }) };
-    if (String(url) === '/api/hub') return { ok: true, status: 200, json: async () => ({ integrations: [] }) };
-    return { ok: true, status: 200, json: async () => ({}) };
-  };
+test('disconnectCaldav: DELETEs credentials, clears the stale test result + Calendars picker, and re-polls back to the form',
+  async () => {
+    const { document, sandbox } = newHub();
+    seedCaldavPanel(document);
+    vm.runInContext("caldavUi.testResult = { ok: true, events: 1, reminders: 0 };", sandbox);
+    vm.runInContext(
+      "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+      + "comp_type: 'VEVENT', enabled: true }]; caldavUi.collectionsError = true;",
+      sandbox);
+    const calls = [];
+    sandbox.fetch = async (url, opts) => {
+      calls.push({ url: String(url), method: opts && opts.method });
+      if (String(url).includes('/credentials')) return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      if (String(url) === '/api/hub') return { ok: true, status: 200, json: async () => ({ integrations: [] }) };
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
 
-  await sandbox.disconnectCaldav();
+    await sandbox.disconnectCaldav();
 
-  const del = calls.find((c) => c.url.includes('/credentials'));
-  assert.equal(del.method, 'DELETE');
-  assert.equal(vm.runInContext('caldavUi.testResult', sandbox), null, 'a stale "connected" result would be misleading now');
-  assert.match(document.getElementById('caldav-panel').innerHTML, /data-caldav-connect/, 'back to the not-connected form');
-});
+    const del = calls.find((c) => c.url.includes('/credentials'));
+    assert.equal(del.method, 'DELETE');
+    assert.equal(vm.runInContext('caldavUi.testResult', sandbox), null,
+      'a stale "connected" result would be misleading now');
+    // vm.runInContext values live in a different realm, so a plain deepEqual
+    // against a main-realm [] fails on prototype identity alone (same
+    // JSON-round-trip workaround hub.test.mjs's monthGrid/panelFit use) -
+    // .length is realm-agnostic and just as conclusive here.
+    assert.equal(vm.runInContext('caldavUi.collections.length', sandbox), 0,
+      'a stale calendar list would be misleading too');
+    assert.equal(vm.runInContext('caldavUi.collectionsError', sandbox), false);
+    assert.match(document.getElementById('caldav-panel').innerHTML, /data-caldav-connect/,
+      'back to the not-connected form');
+  });
 
 test('disconnectCaldav: a failed DELETE shows a toast and does not touch the state', async () => {
   const { document, sandbox } = newHub();
@@ -2989,4 +3015,196 @@ test('setCaldavReadonly: a failed PATCH shows a toast', async () => {
 
   const toast = document.getElementById('toast');
   assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+});
+
+/* ------------------------------------- Calendars picker (caldav collections) */
+
+test('renderSettingsFull: refreshes the Calendars picker every time the Settings overlay opens', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.getAttribute = () => null;
+  let called = false;
+  // Same "swap the sandbox global for a spy" trick used throughout this file
+  // (e.g. sandbox.attemptToggle above) - hub.js's functions are plain global
+  // bindings in the vm context, so renderSettingsFull's internal call to
+  // fetchCaldavCollections resolves to this override.
+  sandbox.fetchCaldavCollections = () => { called = true; };
+
+  sandbox.renderSettingsFull();
+
+  assert.ok(called, 'new calendars/reminder lists can appear between visits - always refetch on open');
+});
+
+test('testCaldavConnection: refreshes the Calendars picker after a test runs (a sync can surface new calendars)', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  sandbox.fetch = async () => (
+    { ok: true, status: 200, json: async () => ({ ok: true, events: 0, reminders: 0 }) });
+  let called = false;
+  sandbox.fetchCaldavCollections = () => { called = true; };
+
+  await sandbox.testCaldavConnection();
+
+  assert.ok(called);
+});
+
+test('fetchCaldavCollections: GETs the collections when connected and paints the picker', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  const calls = [];
+  sandbox.fetch = async (url) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ collections: [
+      { id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true },
+    ] }) };
+  };
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.deepEqual(calls, ['/api/integrations/icloud_caldav/collections']);
+  assert.match(document.getElementById('caldav-panel').innerHTML,
+    /data-caldav-collection-toggle="caldav:ab12"/);
+});
+
+test('fetchCaldavCollections: not connected never calls the API and the picker stays empty', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext("hubData = { integrations: [] };", sandbox);
+  let fetchCalled = false;
+  sandbox.fetch = async () => { fetchCalled = true; return { ok: true, status: 200, json: async () => ({}) }; };
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.equal(fetchCalled, false, 'no network call when icloud_caldav has no stored credentials');
+});
+
+test('fetchCaldavCollections: a failed GET never throws and shows a distinct "couldn\'t load" message, ' +
+  'NOT the same copy a genuinely empty account gets', async () => {
+  // Regression pin: a silent-failure-hunter review caught the original
+  // implementation folding "GET failed" into the exact same "No calendars
+  // found yet" text a truly empty account renders - an operator with a real
+  // connection problem would conclude they simply have zero calendars.
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.fetchCaldavCollections();   // must not throw
+
+  const html = document.getElementById('caldav-panel').innerHTML;
+  assert.match(html, /Couldn.t load calendars - try Test connection/);
+  assert.doesNotMatch(html, /No calendars found yet/,
+    'a fetch failure must never be confused with a genuinely empty account');
+});
+
+test('fetchCaldavCollections: a failed GET keeps the last good list on screen instead of wiping it', async () => {
+  // Same "keep cached data, don't paint a real problem as an empty state"
+  // rule fetchCalWindow already follows for the main calendar feed.
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext(
+    "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+    + "comp_type: 'VEVENT', enabled: true }];",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.match(document.getElementById('caldav-panel').innerHTML,
+    /data-caldav-collection-toggle="caldav:ab12"/, 'the previously-fetched row is still shown');
+});
+
+test('fetchCaldavCollections: a successful fetch clears a prior error flag', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext('caldavUi.collectionsError = true;', sandbox);
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ collections: [] }) });
+
+  await sandbox.fetchCaldavCollections();
+
+  assert.equal(vm.runInContext('caldavUi.collectionsError', sandbox), false);
+  assert.match(document.getElementById('caldav-panel').innerHTML, /No calendars found yet - try Test connection/);
+});
+
+test('toggleCaldavCollection: PATCHes the opposite of the current state (id is URI-encoded) and refetches', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext(
+    "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+    + "comp_type: 'VEVENT', enabled: true }];",
+    sandbox);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: opts && opts.method,
+      body: opts && opts.body ? JSON.parse(opts.body) : undefined });
+    if (String(url).includes('/collections/')) {
+      return { ok: true, status: 200, json: async () => ({ id: 'caldav:ab12', enabled: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ collections: [
+      { id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: false },
+    ] }) };
+  };
+
+  await sandbox.toggleCaldavCollection('caldav:ab12');
+
+  const patch = calls.find((c) => c.method === 'PATCH');
+  assert.equal(patch.url, '/api/integrations/icloud_caldav/collections/caldav%3Aab12',
+    'the colon in the id is encodeURIComponent\'d into the URL');
+  assert.deepEqual(patch.body, { enabled: false });   // was on -> turn off
+  assert.ok(calls.some((c) => c.url === '/api/integrations/icloud_caldav/collections' && c.method === undefined),
+    'refetched the collections list afterward, same as toggleIntegration/setCaldavReadonly do');
+  assert.match(document.getElementById('caldav-panel').innerHTML, /integ-switch" aria-hidden/,
+    'the picker repainted with the refreshed (now off) state');
+});
+
+test('toggleCaldavCollection: a failed PATCH shows a toast and does not flip or refetch', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] };",
+    sandbox);
+  vm.runInContext(
+    "caldavUi.collections = [{ id: 'caldav:ab12', name: 'Family', color: null, "
+    + "comp_type: 'VEVENT', enabled: true }];",
+    sandbox);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+
+  await sandbox.toggleCaldavCollection('caldav:ab12');
+
+  const toast = document.getElementById('toast');
+  assert.ok(toast && toast.classList.contains('hub-toast-visible'));
+  assert.equal(vm.runInContext('caldavUi.collections[0].enabled', sandbox), true,
+    'a failed write must not flip the cached state - the next repaint would show the wrong thing');
+});
+
+test('toggleCaldavCollection: an unknown id is a no-op (no PATCH, no toast)', async () => {
+  const { document, sandbox } = newHub();
+  seedCaldavPanel(document);
+  vm.runInContext('caldavUi.collections = [];', sandbox);
+  let fetchCalled = false;
+  sandbox.fetch = async () => { fetchCalled = true; return { ok: true, status: 200, json: async () => ({}) }; };
+
+  await sandbox.toggleCaldavCollection('missing');
+
+  assert.equal(fetchCalled, false);
+  assert.equal(document.getElementById('toast'), null);
 });

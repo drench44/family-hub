@@ -1270,6 +1270,20 @@ body.overlay-open { overflow: hidden; }
 .caldav-test-result { font-size: 13px; color: var(--dim); }
 .caldav-test-result.ok { color: var(--good); }
 .caldav-test-result.err { color: var(--crit); }
+/* The Calendars picker: same heading/caption pair as the Display rows above
+   (.settings-k / .hint), then a plain list of .integ-row toggles - gap:0 so
+   only the shared .integ-row + .integ-row border-top separates them, same as
+   .integrations-ctl higher up the overlay. */
+.caldav-collections { display: flex; flex-direction: column; gap: 8px; }
+.caldav-collections-list { display: flex; flex-direction: column; gap: 0; }
+.caldav-cal-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 8px; vertical-align: middle;
+}
+.caldav-cal-kind {
+  margin-left: 8px; font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint);
+}
 
 /* Tile gating: hide a disabled integration's tile. Cameras are also blanked
    server-side (links), so this is belt-and-suspenders + covers the Cameras tab. */

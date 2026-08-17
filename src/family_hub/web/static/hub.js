@@ -37,8 +37,19 @@ const celebrated = new Set();
    Connecting…/Testing… state, a form error, or the last test result doesn't
    get wiped mid-interaction (or mid-typing) by a background poll tick;
    it's reset explicitly where that's the right call (disconnect, a fresh
-   Settings-overlay open). */
-let caldavUi = { connecting: false, testing: false, testResult: null, formError: '' };
+   Settings-overlay open). `collections` is the Calendars picker's discovered
+   iCloud calendars + reminder lists (fetchCaldavCollections), starting empty
+   until the first fetch resolves - the same empty state a genuinely empty
+   account shows (see caldavCollectionsHtml in common.js), UNLESS
+   `collectionsError` is set: a failed refresh keeps the last list shown
+   (never wipes it to empty on a transient blip) and flags it so the empty
+   state, if the list really is empty, reads as "couldn't load" rather than
+   "you have zero calendars" - same rule fetchCalWindow follows for the main
+   calendar feed. */
+let caldavUi = {
+  connecting: false, testing: false, testResult: null, formError: '',
+  collections: [], collectionsError: false,
+};
 
 /* ----------------------------------------------------------- clock + night */
 
@@ -2094,6 +2105,16 @@ function renderSettingsFull() {
   reflectThemeControls();
   renderIntegrations(hubData || { integrations: lastIntegrations });
   renderCaldavPanel();
+  fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
+}
+
+/* The live icloud_caldav entry from /api/hub's `integrations` list (or
+   lastIntegrations before the first poll lands), or null when no credentials
+   are stored yet. Shared by renderCaldavPanel and fetchCaldavCollections so
+   both agree on what "connected" means. */
+function caldavIntegration() {
+  const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  return list.find((it) => it.id === 'icloud_caldav') || null;
 }
 
 /* The iCloud (CalDAV) account panel inside the Integrations card. Markup
@@ -2104,14 +2125,62 @@ function renderSettingsFull() {
    live text-input fields the operator may be mid-typing into, and refreshing
    it on a timer would wipe an in-progress Apple ID / password. It's refreshed
    explicitly instead, after every action that can change what it should show
-   (connect, disconnect, test, the enable switch, the readonly toggle) and
-   once up front when the Settings overlay opens. */
+   (connect, disconnect, test, the enable switch, the readonly toggle, a
+   Calendars-picker fetch/toggle) and once up front when the Settings overlay
+   opens. */
 function renderCaldavPanel() {
   const host = document.getElementById('caldav-panel');
   if (!host) return;
-  const list = (hubData && hubData.integrations) || lastIntegrations || [];
-  const integ = list.find((it) => it.id === 'icloud_caldav') || null;
-  host.innerHTML = caldavPanelHtml(integ, caldavUi);
+  host.innerHTML = caldavPanelHtml(caldavIntegration(), caldavUi);
+}
+
+/* GET the discovered iCloud calendars + reminder lists for the connected
+   panel's Calendars picker. Fire-and-forget from renderSettingsFull (panel
+   open) and testCaldavConnection (a test just ran a sync, which can surface
+   new calendars), the same un-awaited "refresh a data source in the
+   background" pattern this file already uses for fetchWeather/fetchClimate,
+   and awaited directly by toggleCaldavCollection, which needs the refreshed
+   list before it re-renders. Guarded: not connected, or any fetch failure,
+   just leaves the list empty, which caldavCollectionsHtml renders as its own
+   empty state - never throws out of a render-triggering call. */
+async function fetchCaldavCollections() {
+  if (!caldavIntegration()) {
+    caldavUi.collections = [];
+    caldavUi.collectionsError = false;
+    renderCaldavPanel();
+    return;
+  }
+  try {
+    const r = await j('/api/integrations/icloud_caldav/collections');
+    caldavUi.collections = (r && Array.isArray(r.collections)) ? r.collections : [];
+    caldavUi.collectionsError = false;
+  } catch (e) {
+    // Same rule fetchCalWindow (above) follows for the calendar feed: keep
+    // whatever list was last shown rather than wiping it to empty, and log +
+    // flag the failure so it can't be confused with a genuinely empty
+    // account. Without this, a transient network blip renders the exact same
+    // "No calendars found yet" copy as zero calendars actually existing -
+    // caldavCollectionsHtml uses collectionsError to tell the two apart.
+    console.warn('caldav collections refresh failed; keeping the last list shown', e);
+    caldavUi.collectionsError = true;
+  }
+  renderCaldavPanel();
+}
+
+/* Show/hide one iCloud calendar or reminder list on the wall. id contains a
+   colon (e.g. "caldav:ab12"), so it's encodeURIComponent'd into the URL path;
+   caldavCollectionsHtml separately escapeHtml's it into the data attribute
+   this reads from - two different sinks, two different encodings. On a
+   failed PATCH the switch must NOT flip (attemptTodo never throws, so the
+   check reads .ok, same fix as toggleIntegration above). */
+async function toggleCaldavCollection(id) {
+  const cur = (caldavUi.collections || []).find((c) => String(c.id) === id);
+  if (!cur) return;
+  const r = await attemptTodo(
+    '/api/integrations/icloud_caldav/collections/' + encodeURIComponent(id),
+    'PATCH', { enabled: !cur.enabled });
+  if (!r.ok) { showToast('Couldn’t save — check the hub and tap again.'); return; }
+  await fetchCaldavCollections();
 }
 
 /* Store the operator-entered iCloud credentials (POST, server-side file,
@@ -2168,6 +2237,10 @@ async function testCaldavConnection() {
   caldavUi.testing = false;
   caldavUi.testResult = result;
   renderCaldavPanel();
+  // A test just ran (or attempted) a sync server-side, which can surface new
+  // calendars/reminder lists - refresh the Calendars picker independently of
+  // the result text above, which is already showing.
+  fetchCaldavCollections();
 }
 
 async function disconnectCaldav() {
@@ -2175,6 +2248,8 @@ async function disconnectCaldav() {
   if (!r.ok) { showToast('Couldn’t disconnect - check the hub and try again.'); return; }
   caldavUi.testResult = null;   // stale "connected" test result would be misleading now
   caldavUi.formError = '';
+  caldavUi.collections = [];   // stale calendar list would be misleading too
+  caldavUi.collectionsError = false;
   await poll();
   renderCaldavPanel();
 }
@@ -2240,6 +2315,8 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('[data-caldav-test]')) { testCaldavConnection(); return; }
   const ro = e.target.closest('[data-caldav-readonly]');
   if (ro) { setCaldavReadonly(ro.dataset.caldavReadonly === '1'); return; }
+  const cc = e.target.closest('[data-caldav-collection-toggle]');
+  if (cc) { toggleCaldavCollection(cc.dataset.caldavCollectionToggle); return; }
   // a tap anywhere outside an open popover dismisses it
   if (pop && pop.classList.contains('open') && !e.target.closest('#theme-pop')) {
     closeThemePop();

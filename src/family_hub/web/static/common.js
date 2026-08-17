@@ -644,16 +644,61 @@ function caldavTestMessage(result) {
   return 'Couldn’t connect - check the hub and try again.';
 }
 
+/* The "Calendars" sub-section inside the connected iCloud (CalDAV) panel: one
+   row per discovered calendar / reminder list, each with its own visibility
+   toggle. Reuses the same .integ-row / .integ-switch / role="switch" /
+   aria-checked markup as the top-level Integrations list above it, so it
+   reads as the same control, not a bespoke one. Pure (no DOM) so it's
+   unit-testable; hub.js's caldavPanelHtml (below) embeds the result, and
+   renderCaldavPanel wires the toggle taps (data-caldav-collection-toggle)
+   through hub.js's delegated click listener.
+   `collections` is the icloud_caldav collections list from GET
+   /api/integrations/icloud_caldav/collections - each {id, name,
+   color(string|null), comp_type('VEVENT'|'VTODO'), enabled} - or
+   null/undefined before the first fetch resolves, which renders the same
+   empty state as a genuinely empty account (this panel has no separate
+   "loading" state of its own). `opts.error` (set when hub.js's
+   fetchCaldavCollections's GET failed) swaps the EMPTY-list message for a
+   distinct "couldn't load" one, so a real fetch failure can never be
+   confused with an account that truly has zero calendars - see
+   fetchCaldavCollections's comment for why that distinction matters. */
+function caldavCollectionsHtml(collections, opts) {
+  const list = Array.isArray(collections) ? collections : [];
+  if (!list.length) {
+    const msg = (opts && opts.error)
+      ? 'Couldn’t load calendars - try Test connection'
+      : 'No calendars found yet - try Test connection';
+    return `<div class="integ-empty">${msg}</div>`;
+  }
+  return list.map((c) => {
+    const kind = c.comp_type === 'VTODO' ? 'Reminders' : 'Calendar';
+    // A null color (some iCloud calendars/lists don't set one) omits the dot
+    // rather than faking a neutral one. safeColor (above) keeps a stray
+    // server value from injecting extra CSS through this style attribute.
+    const dot = c.color
+      ? `<span class="caldav-cal-dot" style="background:${safeColor(c.color)}" aria-hidden="true"></span>`
+      : '';
+    return `<button class="integ-row" type="button" role="switch"`
+      + ` aria-checked="${c.enabled ? 'true' : 'false'}"`
+      + ` data-caldav-collection-toggle="${escapeHtml(String(c.id))}">`
+      + `<span class="integ-name">${dot}${escapeHtml(c.name)}`
+      + `<span class="caldav-cal-kind">${kind}</span>`
+      + `</span>`
+      + `<span class="integ-switch${c.enabled ? ' on' : ''}" aria-hidden="true"></span>`
+      + `</button>`;
+  }).join('');
+}
+
 /* The iCloud (CalDAV) settings panel body, pure (no DOM) so both branches are
    unit-testable: hub.js's renderCaldavPanel assigns the result to a host's
    innerHTML and wires the buttons/inputs.
    `integ` is the icloud_caldav entry from /api/hub's `integrations` list, or
    null/undefined when no credentials are stored yet (the not-connected form).
    `ui` is the transient view state hub.js keeps between polls: {connecting,
-   testing, testResult, formError}, NEVER the password itself. The password
-   only ever lives in the password input's own value; it is read at submit
-   time, sent once in the POST body, and never stored in JS state, a DOM
-   attribute/dataset, or a log/toast. */
+   testing, testResult, formError, collections, collectionsError}, NEVER the
+   password itself. The password only ever lives in the password input's own
+   value; it is read at submit time, sent once in the POST body, and never
+   stored in JS state, a DOM attribute/dataset, or a log/toast. */
 function caldavPanelHtml(integ, ui) {
   const st = ui || {};
   // A bare HTML "disabled" attribute, not a CSS class fragment. Written as a
@@ -710,5 +755,11 @@ function caldavPanelHtml(integ, ui) {
     + `${st.testing ? 'Testing…' : 'Test connection'}</button>`
     + `<button class="padmin-btn padmin-del" type="button" data-caldav-disconnect>Disconnect</button>`
     + `</div>`
-    + (resultMsg ? `<div class="caldav-test-result${resultCls}">${escapeHtml(resultMsg)}</div>` : '');
+    + (resultMsg ? `<div class="caldav-test-result${resultCls}">${escapeHtml(resultMsg)}</div>` : '')
+    + `<div class="caldav-collections">`
+    + `<div class="settings-k">Calendars</div>`
+    + `<div class="hint">Pick which iCloud calendars and reminder lists show on the wall.</div>`
+    + `<div class="caldav-collections-list">`
+    + `${caldavCollectionsHtml(st.collections, { error: st.collectionsError })}</div>`
+    + `</div>`;
 }
