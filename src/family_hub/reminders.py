@@ -108,10 +108,11 @@ def set_completed(ics_data, completed: bool, now: dt.datetime) -> str:
         seq = int(todo.get("SEQUENCE") or 0)
     except Exception:
         seq = 0
-    for k in _COMPLETION_PROPS:
+    for k in (*_COMPLETION_PROPS, "DTSTAMP"):
         if k in todo:
             del todo[k]
     now = _utc(now)
+    todo.add("DTSTAMP", now)   # RFC 5545: bump on every revision we send
     if completed:
         todo.add("STATUS", "COMPLETED")
         todo.add("PERCENT-COMPLETE", 100)

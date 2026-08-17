@@ -343,23 +343,31 @@ _UTC_NOW = dt.datetime(2026, 8, 17, 12, 0, 0, tzinfo=dt.timezone.utc)
 
 
 class WriteFake(FakeCalDav):
-    """FakeCalDav plus a recording write side — an in-memory 'server' so the
-    outbox flush is testable without a network."""
+    """FakeCalDav plus a recording write side + a tiny in-memory 'server' (href ->
+    ics) so the outbox flush AND conflict resolution are testable without a
+    network."""
     def __init__(self, collections):
         super().__init__(collections)
         self.puts = []      # (collection_id, href_or_None, ics)
         self.deletes = []   # (collection_id, href)
+        self.server = {}    # href -> ics, for get_object (server-wins resolve)
         self._n = 0
 
-    def put_object(self, collection, href, ics):
+    def put_object(self, collection, href, ics, base_etag=None, uid=None):
         self.puts.append((collection["id"], href, ics))
         if href is None:                       # create -> server assigns a URL
             self._n += 1
             href = f"h/{collection['id']}/new{self._n}"
+        self.server[href] = ics
         return {"href": href, "etag": "srv-etag"}
 
-    def delete_object(self, collection, href):
+    def delete_object(self, collection, href, base_etag=None):
         self.deletes.append((collection["id"], href))
+        self.server.pop(href, None)
+
+    def get_object(self, collection, href):
+        ics = self.server.get(href)
+        return {"href": href, "etag": "srv-etag2", "ics": ics} if ics else None
 
 
 def _seed_vtodo_collection(conn, cid="rem", name="Groceries"):
@@ -433,7 +441,7 @@ def test_flush_isolates_and_records_error_keeping_pending(conn):
         "uid": "U1", "summary": "x", "raw_ics": remlogic.build_vtodo("U1", "x", _UTC_NOW)}, "t0")
 
     class Boom(WriteFake):
-        def put_object(self, collection, href, ics):
+        def put_object(self, collection, href, ics, base_etag=None, uid=None):
             raise RuntimeError("HTTP 401 Unauthorized")
 
     client = Boom([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
@@ -460,3 +468,231 @@ def test_sync_once_skips_flush_when_readonly(conn):
     caldav_sync.sync_once(client, conn, _CFG, _NOW)
     assert len(client.puts) == 1
     assert fdb.get_cal_object(conn, "caldav:rem/U1")["sync_state"] == "SYNCED"
+
+
+# --- conditional writes (If-Match / If-None-Match) adapter, P1 -------------
+# The real CalDavClient.put/delete/get_object go through the low-level DAV
+# request; exercise the ADAPTER (header construction, create URL, status
+# handling, etag extraction) with a fake DAVClient — the only part a live server
+# is needed for is the socket transport itself.
+
+class _Resp:
+    def __init__(self, status, headers=None, raw=b""):
+        self.status = status
+        self.headers = headers or {}
+        self.raw = raw
+        self.reason = ""
+
+
+class _DAV:
+    def __init__(self, put_resp=None, req_resp=None):
+        self.calls = []
+        self._put_resp = put_resp or _Resp(201, {"ETag": "srv-1"})
+        self._req_resp = req_resp
+
+    def put(self, url, body, headers=None):
+        self.calls.append(("PUT", url, dict(headers or {}), body))
+        return self._put_resp
+
+    def request(self, url, method="GET", body="", headers=None):
+        self.calls.append((method, url, dict(headers or {}), body))
+        if self._req_resp is not None:
+            return self._req_resp
+        if method == "GET":
+            return _Resp(200, {"ETag": "g1"}, _VTODO.encode())
+        return _Resp(204)
+
+
+class _Cal:
+    def __init__(self, client, url):
+        self.client = client
+        self.url = url
+
+
+def _client_and_col(dav):
+    return caldav_service.CalDavClient("u", "p"), {"_cal": _Cal(dav, "https://x/cal/")}
+
+
+def test_put_object_update_sends_if_match():
+    dav = _DAV()
+    cl, col = _client_and_col(dav)
+    res = cl.put_object(col, "https://x/cal/t1.ics", "ICS", base_etag="e0")
+    assert res == {"href": "https://x/cal/t1.ics", "etag": "srv-1"}
+    method, url, headers, _ = dav.calls[0]
+    assert method == "PUT" and headers.get("If-Match") == "e0"
+
+
+def test_put_object_create_builds_url_and_if_none_match():
+    dav = _DAV()
+    cl, col = _client_and_col(dav)
+    res = cl.put_object(col, None, "ICS", uid="U1")
+    method, url, headers, _ = dav.calls[0]
+    assert url == "https://x/cal/U1.ics"                 # UID-derived resource URL
+    assert headers.get("If-None-Match") == "*" and "If-Match" not in headers
+    assert res["href"] == "https://x/cal/U1.ics"
+
+
+def test_put_object_412_raises_conflict():
+    dav = _DAV(put_resp=_Resp(412))
+    cl, col = _client_and_col(dav)
+    try:
+        cl.put_object(col, "https://x/cal/t1.ics", "ICS", base_etag="e0")
+        assert False, "expected CalDavConflict"
+    except caldav_service.CalDavConflict:
+        pass
+
+
+def test_delete_object_sends_if_match_and_404_is_ok():
+    dav = _DAV(req_resp=_Resp(404))
+    cl, col = _client_and_col(dav)
+    cl.delete_object(col, "https://x/cal/t1.ics", base_etag="e0")   # 404 = fine
+    method, url, headers, _ = dav.calls[0]
+    assert method == "DELETE" and headers.get("If-Match") == "e0"
+
+
+def test_delete_object_412_raises_conflict():
+    dav = _DAV(req_resp=_Resp(412))
+    cl, col = _client_and_col(dav)
+    try:
+        cl.delete_object(col, "https://x/cal/t1.ics", base_etag="e0")
+        assert False, "expected CalDavConflict"
+    except caldav_service.CalDavConflict:
+        pass
+
+
+def test_get_object_none_on_404_and_body_on_200():
+    cl, col = _client_and_col(_DAV(req_resp=_Resp(404)))
+    assert cl.get_object(col, "https://x/cal/t1.ics") is None
+    cl2, col2 = _client_and_col(_DAV())               # default GET -> 200 + body
+    got = cl2.get_object(col2, "https://x/cal/t1.ics")
+    assert got["etag"] == "g1" and "Buy milk" in got["ics"]
+
+
+# --- conflict resolution in flush (server-wins), P + silent-failure F3 -----
+
+_SERVER_NEWER = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t1\r\n"
+                 "SUMMARY:Milk (edited on phone)\r\nSTATUS:NEEDS-ACTION\r\n"
+                 "END:VTODO\r\nEND:VCALENDAR\r\n")
+
+
+def _seed_synced_todo(conn):
+    _seed_vtodo_collection(conn)
+    fdb.upsert_cal_object_synced(conn, {
+        "id": "caldav:rem/t1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "href": "h/rem/0", "etag": "e0", "summary": "Buy milk",
+        "raw_ics": _VTODO, "sequence": 0, "last_modified": None})
+
+
+def test_flush_conflict_server_wins(conn):
+    _seed_synced_todo(conn)
+    done = remlogic.set_completed(_VTODO, True, _UTC_NOW)
+    fdb.queue_cal_object_update(conn, "caldav:rem/t1", done, "Buy milk", "t0")
+
+    class Conflict(WriteFake):
+        def put_object(self, collection, href, ics, base_etag=None, uid=None):
+            raise caldav_service.CalDavConflict(href)
+
+    client = Conflict([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    client.server["h/rem/0"] = _SERVER_NEWER          # the concurrent phone edit
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["conflicts"] == 1 and res["errors"] == []
+    row = fdb.get_cal_object(conn, "caldav:rem/t1")
+    assert row["sync_state"] == "SYNCED"
+    assert "edited on phone" in row["raw_ics"]         # server won, not our edit
+    assert row["etag"] == "srv-etag2"
+
+
+def test_flush_conflict_server_gone_drops_row(conn):
+    _seed_synced_todo(conn)
+    fdb.queue_cal_object_delete(conn, "caldav:rem/t1", "t0")   # PENDING_DELETE
+
+    class Conflict(WriteFake):
+        def delete_object(self, collection, href, base_etag=None):
+            raise caldav_service.CalDavConflict(href)
+
+    client = Conflict([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    # server has nothing at that href -> get_object None -> drop local row
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["conflicts"] == 1
+    assert fdb.get_cal_object(conn, "caldav:rem/t1") is None
+
+
+# --- P2: create-then-prune race driven through sync_once ------------------
+
+def test_sync_once_create_survives_prune_and_pushes(conn):
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    fdb.upsert_caldav_collection(conn, "caldav:rem", "VTODO", "Groceries", None, "t")
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "U1", "summary": "new", "raw_ics": remlogic.build_vtodo("U1", "new", _UTC_NOW)}, "t0")
+    # the pull returns a DIFFERENT todo, so prune fires for this collection...
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO",
+                         "todos": [_VTODO]}])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    # ...and the un-pushed PENDING_CREATE must have survived the prune AND pushed
+    assert len(client.puts) == 1
+    assert fdb.get_cal_object(conn, "caldav:rem/U1")["sync_state"] == "SYNCED"
+
+
+# --- P3: flush skips + records when the collection isn't discovered --------
+
+def test_flush_records_when_collection_not_discovered(conn):
+    _seed_vtodo_collection(conn)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "U1", "summary": "x", "raw_ics": remlogic.build_vtodo("U1", "x", _UTC_NOW)}, "t0")
+    client = WriteFake([{"id": "other", "name": "Other", "comp": "VTODO"}])  # NOT rem
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert client.puts == [] and res["pushed"] == 0 and res["errors"] == []
+    row = fdb.get_cal_object(conn, "caldav:rem/U1")
+    assert row["sync_state"] == "PENDING_CREATE"          # still queued, retries
+    assert row["sync_attempts"] == 1
+    assert "not discovered" in row["last_sync_error"]
+
+
+# --- P6: PENDING_DELETE with no href skips the server DELETE ---------------
+
+def test_flush_delete_without_href_drops_locally(conn):
+    _seed_vtodo_collection(conn)
+    fdb.upsert_cal_object_synced(conn, {
+        "id": "caldav:rem/t1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "href": None, "etag": None, "summary": "x",
+        "raw_ics": _VTODO, "sequence": 0, "last_modified": None})
+    fdb.queue_cal_object_delete(conn, "caldav:rem/t1", "t0")   # SYNCED->PENDING_DELETE
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert client.deletes == []                               # no server call
+    assert fdb.get_cal_object(conn, "caldav:rem/t1") is None  # dropped locally
+
+
+# --- P7: full reconciliation loop (push -> SYNCED -> re-pull adopts body) ---
+
+def test_reconciliation_repull_adopts_server_body(conn):
+    _seed_synced_todo(conn)
+    done = remlogic.set_completed(_VTODO, True, _UTC_NOW)
+    fdb.queue_cal_object_update(conn, "caldav:rem/t1", done, "Buy milk", "t0")
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO",
+                         "todos": [_SERVER_NEWER]}])
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)          # pull(t1 old) -> flush(push)
+    assert fdb.get_cal_object(conn, "caldav:rem/t1")["sync_state"] == "SYNCED"
+    # a later pull with the server's canonical body reconciles raw_ics
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    row = fdb.get_cal_object(conn, "caldav:rem/t1")
+    assert "edited on phone" in row["raw_ics"]               # server body adopted
+
+
+# --- P4: set_integration_config fails loud on a missing row ----------------
+
+def test_set_integration_config_raises_on_missing_row(conn):
+    raised = False
+    try:
+        fdb.set_integration_config(conn, "nope", {"readonly": False})
+    except KeyError:
+        raised = True
+    assert raised, "silent no-op would let a two-way toggle appear-to-save yet not apply"
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    assert fdb.integration_config(conn, "icloud_caldav")["readonly"] is False

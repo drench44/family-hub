@@ -432,40 +432,29 @@ def _integration_on(c, iid: str) -> bool:
     return available and fdb.integration_enabled(c, iid, default=True)
 
 
-def _overlay_pending_reminders(c, rem: list) -> list:
-    """Layer the outbox (PENDING cal_objects VTODOs) over the last-synced reminders
-    so a wall-side edit shows instantly and across the iCloud-lag window: a
-    PENDING_UPDATE/CREATE replaces/adds the reminder by id (re-parsed from its
-    local raw_ics), a PENDING_DELETE drops it. cal_objects is the source of truth
-    for anything edited locally; the pulled cache covers everything else."""
-    pending = [o for o in fdb.caldav_pending(c) if o["comp_type"] == "VTODO"]
-    if not pending:
-        return rem
-    names = {col["id"]: col["display_name"]
-             for col in fdb.list_caldav_collections(c)}
-    by_id = {r["id"]: r for r in rem}
-    for o in pending:
-        if o["sync_state"] == "PENDING_DELETE":
-            by_id.pop(o["id"], None)
+def _visible_reminders(c) -> list:
+    """iCloud reminders for the wall, rendered from cal_objects — the SINGLE
+    source of truth that holds both the synced server state AND un-pushed wall
+    edits (PENDING_*). Rendering from it (rather than a separate kv snapshot plus
+    an overlay) is what makes a wall edit show instantly AND stay put: there's no
+    stale pulled-snapshot to transiently revert to once the push lands and the row
+    flips back to SYNCED. Respects the calendar picker (a reminder list unchecked
+    in settings is hidden) and skips objects queued for deletion."""
+    cols = fdb.list_caldav_collections(c)
+    names = {col["id"]: col["display_name"] for col in cols}
+    disabled = {col["id"] for col in cols if not col["enabled"]}
+    out = []
+    for o in fdb.list_cal_objects(c, "VTODO"):
+        if o["sync_state"] == "PENDING_DELETE" or o["collection_id"] in disabled:
+            continue
+        if not o.get("raw_ics"):
             continue
         try:
-            for r in remlogic.parse_vtodo(o["raw_ics"], o["collection_id"],
-                                          names.get(o["collection_id"], "")):
-                by_id[r["id"]] = r
+            out.extend(remlogic.parse_vtodo(o["raw_ics"], o["collection_id"],
+                                            names.get(o["collection_id"], "")))
         except Exception:
-            log.warning("pending reminder overlay skipped: %s", o["id"],
-                        exc_info=True)
-    return list(by_id.values())
-
-
-def _visible_reminders(c) -> list:
-    """iCloud reminders from ENABLED collections only — respects the calendar
-    picker (a reminder list unchecked in settings hides its reminders) — with
-    un-pushed local edits overlaid so wall-side changes show immediately."""
-    rem = _overlay_pending_reminders(c, fdb.kv_get(c, "caldav_reminders") or [])
-    disabled = {col["id"] for col in fdb.list_caldav_collections(c)
-                if not col["enabled"]}
-    return [r for r in rem if r.get("list_id") not in disabled]
+            log.warning("reminder render skipped: %s", o["id"], exc_info=True)
+    return out
 
 
 def _reminder_lists(c) -> list:
@@ -517,6 +506,9 @@ def _integrations_state(c) -> dict:
             entry["account"] = caldav_service.caldav_credentials(os.environ)[0]
             entry["readonly"] = fdb.integration_config(
                 c, "icloud_caldav").get("readonly", True)
+            # un-pushed wall edits still queued (0 normally); lets settings warn
+            # "N changes not yet synced" instead of the backlog being invisible.
+            entry["pending"] = caldav_status.get("pending", 0)
         lst.append(entry)
     return {"list": lst, "enabled_ids": enabled_ids}
 

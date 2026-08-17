@@ -1522,6 +1522,23 @@ def test_calendar_renders_caldav_events_with_color_and_gating(tmp_path, monkeypa
                    for e in tc.get("/api/calendar").json()["events"])
 
 
+def _seed_reminder_object(appmod, c, list_id, uid, title, due=None, completed=False,
+                          list_name="List", seed_collection=True):
+    """Seed one iCloud reminder as a cal_objects VTODO row — the render source of
+    truth — (and, by default, its collection). `due` is a date or None."""
+    from family_hub import reminders as remlogic
+    now = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    ics = remlogic.build_vtodo(uid, title, now, due=due)
+    if completed:
+        ics = remlogic.set_completed(ics, True, now)
+    if seed_collection:
+        appmod.fdb.upsert_caldav_collection(c, list_id, "VTODO", list_name, None, "t")
+    appmod.fdb.upsert_cal_object_synced(c, {
+        "id": f"{list_id}/{uid}", "collection_id": list_id, "comp_type": "VTODO",
+        "uid": uid, "href": f"h/{uid}", "etag": "e", "summary": title,
+        "raw_ics": ics, "sequence": 0, "last_modified": None})
+
+
 def test_reminders_api_and_hub_block(tmp_path, monkeypatch):
     monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
     monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
@@ -1529,14 +1546,12 @@ def test_reminders_api_and_hub_block(tmp_path, monkeypatch):
     with TestClient(appmod.app) as tc:
         c = appmod._db()
         today = appmod._today()
-        appmod.fdb.kv_set(c, "caldav_reminders", [
-            {"id": "r1", "title": "Buy milk", "completed": False, "list_id": "caldav:x",
-             "due": (today + dt.timedelta(days=2)).isoformat()},
-            {"id": "r2", "title": "Old thing", "completed": False, "list_id": "caldav:x",
-             "due": (today - dt.timedelta(days=1)).isoformat()},
-            {"id": "r3", "title": "Done", "completed": True, "list_id": "caldav:x",
-             "due": today.isoformat()},
-        ])
+        _seed_reminder_object(appmod, c, "caldav:x", "r1", "Buy milk",
+                              due=today + dt.timedelta(days=2))
+        _seed_reminder_object(appmod, c, "caldav:x", "r2", "Old thing",
+                              due=today - dt.timedelta(days=1))
+        _seed_reminder_object(appmod, c, "caldav:x", "r3", "Done",
+                              due=today, completed=True)
         data = tc.get("/api/reminders").json()
         assert data["configured"] is True
         assert [r["title"] for r in data["buckets"]["upcoming"]] == ["Buy milk"]
@@ -1690,8 +1705,8 @@ def test_caldav_collection_picker_hides_calendar_and_reminders(tmp_path, monkeyp
         appmod.fdb.replace_events_caldav(c, [{"id": "u1", "calendar_id": "caldav:fam",
             "title": "Dentist", "start_ts": f"{soon}T10:00:00",
             "end_ts": f"{soon}T11:00:00", "all_day": 0}])
-        appmod.fdb.kv_set(c, "caldav_reminders", [{"id": "r1", "title": "Buy milk",
-            "due": None, "completed": False, "list_id": "caldav:groc"}])
+        _seed_reminder_object(appmod, c, "caldav:groc", "r1", "Buy milk",
+                              seed_collection=False)   # groc collection seeded above
         # picker lists both, enabled; event + reminder show
         cols = {x["id"]: x for x in tc.get(
             "/api/integrations/icloud_caldav/collections").json()["collections"]}
@@ -1868,3 +1883,21 @@ def test_hub_exposes_reminder_lists_and_writable(tmp_path, monkeypatch):
         fdb.set_caldav_collection_enabled(c, "caldav:rem", False)
         c.close()
         assert tc.get("/api/hub").json()["reminder_lists"] == []
+
+
+def test_disabled_list_hides_pulled_and_pending_reminders(tmp_path, monkeypatch):
+    """A reminder list unchecked in the picker hides BOTH its synced reminders and
+    any un-pushed wall edit queued for it (the render filters by collection before
+    parsing, so a PENDING create for a disabled list can't leak into the view)."""
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)                 # caldav:rem, "Buy milk"
+        tc.post("/api/reminders/add", json={"list_id": "caldav:rem", "title": "Eggs"})
+        before = _titles(tc.get("/api/reminders").json()["buckets"])
+        assert "Buy milk" in before and "Eggs" in before         # pulled + PENDING create
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        fdb.set_caldav_collection_enabled(c, "caldav:rem", False)
+        c.close()
+        after = _titles(tc.get("/api/reminders").json()["buckets"])
+        assert "Buy milk" not in after and "Eggs" not in after   # both hidden

@@ -16,6 +16,7 @@ import re
 
 from . import db as fdb
 from . import reminders as remlogic
+from .caldav_service import CalDavConflict
 from .calendar_sync import ics_events
 
 log = logging.getLogger("family_hub.caldav")
@@ -88,37 +89,91 @@ def _store_object(conn, collection_id: str, comp_type: str, obj: dict,
         log.warning("caldav object store skipped (%s)", collection_id, exc_info=True)
 
 
+def _resolve_conflict(client, conn, col, row) -> None:
+    """Server-wins resolution for a 412: adopt the server's current copy over our
+    losing local edit — instead of silently clobbering the concurrent phone/Siri
+    change — and log the dropped edit so it's never lost silently. If the object
+    is gone on the server, drop the local row to match. (Field-level auto-merge —
+    re-applying the wall's completion onto the server's newer body — is a
+    documented future step, TECHNICAL_DESIGN §5.6.)"""
+    href = row.get("href")
+    fresh = client.get_object(col, href) if href else None
+    if not fresh or not fresh.get("ics"):
+        fdb.delete_cal_object_row(conn, row["id"])
+        log.warning("caldav conflict on %s: server object gone; dropped local edit",
+                    row["id"])
+        return
+    meta = _object_meta(fresh["ics"]) or {}
+    fdb.upsert_cal_object_synced(conn, {
+        "id": row["id"], "collection_id": row["collection_id"],
+        "comp_type": row["comp_type"], "uid": row["uid"],
+        "href": fresh.get("href") or href, "etag": fresh.get("etag"),
+        "summary": meta.get("summary", row.get("summary", "")),
+        "raw_ics": fresh["ics"], "sequence": meta.get("sequence", 0),
+        "last_modified": meta.get("last_modified")}, force=True)
+    log.warning("caldav conflict on %s: server wins; dropped losing local edit",
+                row["id"])
+
+
 def flush_pending(client, conn, collections, now_iso: str) -> dict:
     """Push the outbox — locally-edited cal_objects (wall edits) — to iCloud: PUT
-    creates/updates, DELETE removals. Only collections discovered this round are
-    flushable; a row whose collection wasn't seen this pull waits for the next.
-    Per-row failures are isolated and recorded (the row stays PENDING and retries
-    next sync); an auth failure is surfaced so the wall shows Reconnect. Returns
-    {pushed, errors, needs_auth}. Never raises — a bad push must not blank the
-    calendar, same fails-soft rule as the read path."""
+    creates/updates (conditional on If-Match/If-None-Match), DELETE removals. Only
+    collections discovered this round are flushable; a row whose collection wasn't
+    seen this pull records why and waits for the next. Per-row failures are
+    isolated and recorded (the row stays PENDING and retries next sync); a 412 is
+    resolved server-wins; an auth failure is surfaced so the wall shows Reconnect.
+    Returns {pushed, conflicts, errors, needs_auth}. Never raises — a bad push
+    must not blank the calendar, same fails-soft rule as the read path."""
     col_by_id = {"caldav:" + c["id"]: c for c in collections}
-    pushed, errors, needs_auth = 0, [], False
+    pushed, conflicts, errors, needs_auth = 0, 0, [], False
     for row in fdb.caldav_pending(conn):
         col = col_by_id.get(row["collection_id"])
         if col is None:
-            continue   # collection not in this discover; retry next round
+            # not discovered this round: record why so a permanently-unroutable
+            # row is VISIBLE (per-row error + it keeps counting toward the pending
+            # backlog) instead of silently optimistic forever. Retries next sync.
+            fdb.record_cal_object_error(
+                conn, row["id"], "collection not discovered this sync", now_iso)
+            continue
         try:
             if row["sync_state"] == "PENDING_DELETE":
                 if row.get("href"):
-                    client.delete_object(col, row["href"])
+                    client.delete_object(col, row["href"],
+                                         base_etag=row.get("base_etag"))
+                else:
+                    log.warning("caldav delete of %s had no href; dropped locally",
+                                row["id"])
                 fdb.delete_cal_object_row(conn, row["id"])
             else:   # PENDING_CREATE | PENDING_UPDATE
-                res = client.put_object(col, row.get("href"), row["raw_ics"])
-                fdb.mark_cal_object_pushed(
-                    conn, row["id"], (res or {}).get("href") or row.get("href"),
-                    (res or {}).get("etag"))
+                res = client.put_object(col, row.get("href"), row["raw_ics"],
+                                        base_etag=row.get("base_etag"),
+                                        uid=row.get("uid")) or {}
+                href = res.get("href") or row.get("href")
+                if not href:
+                    # a create that came back with no resource URL: do NOT mark it
+                    # SYNCED — a later delete would then skip the server and
+                    # silently drop it. Keep PENDING_CREATE and retry.
+                    raise RuntimeError("create returned no href")
+                fdb.mark_cal_object_pushed(conn, row["id"], href, res.get("etag"))
             pushed += 1
+        except CalDavConflict:
+            try:
+                _resolve_conflict(client, conn, col, row)
+                conflicts += 1
+            except Exception as e:
+                fdb.record_cal_object_error(
+                    conn, row["id"], f"conflict-resolve failed: {e}", now_iso)
+                errors.append(f"{row['id']}: conflict-resolve failed: {e}")
+                needs_auth = needs_auth or _is_auth_error(e)
+                log.warning("caldav conflict-resolve failed for %s", row["id"],
+                            exc_info=True)
         except Exception as e:
             fdb.record_cal_object_error(conn, row["id"], str(e), now_iso)
             errors.append(f"{row['id']}: {e}")
             needs_auth = needs_auth or _is_auth_error(e)
             log.warning("caldav push failed for %s", row["id"], exc_info=True)
-    return {"pushed": pushed, "errors": errors, "needs_auth": needs_auth}
+    return {"pushed": pushed, "conflicts": conflicts, "errors": errors,
+            "needs_auth": needs_auth}
 
 
 def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
@@ -253,7 +308,11 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             needs_auth = needs_auth or flushed["needs_auth"]
 
         st = {"ok": not errors, "last_sync": now.isoformat(),
-              "events": len(events), "reminders": remlogic.open_count(rem)}
+              "events": len(events), "reminders": remlogic.open_count(rem),
+              # outbox backlog after this flush: un-pushed wall edits still queued
+              # (0 in the normal case). Non-zero + not moving => something stuck;
+              # the settings menu can surface it instead of it being invisible.
+              "pending": len(fdb.caldav_pending(conn))}
         if errors:
             st["error"] = "; ".join(errors)
         if needs_auth:

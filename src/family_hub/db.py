@@ -696,14 +696,16 @@ def set_integration_enabled(conn, iid: str, enabled: bool) -> bool:
 
 # --- caldav object store (two-way foundation) -----------------------------
 
-def upsert_cal_object_synced(conn, obj: dict) -> None:
-    """Store an object pulled from the server as SYNCED. NEVER overwrites a row
-    that has un-pushed local changes (sync_state PENDING_*) — that is the write
-    slice's conflict path (spec 5.2); today nothing is PENDING so it's a plain
-    upsert. base_etag is set to the server etag (the base a future edit builds on)."""
+def upsert_cal_object_synced(conn, obj: dict, force: bool = False) -> None:
+    """Store an object pulled from the server as SYNCED. By default NEVER
+    overwrites a row that has un-pushed local changes (sync_state PENDING_*), so
+    a routine pull can't stomp a queued edit. `force=True` is the conflict
+    resolver's server-wins path: a 412 means the server changed under our edit, so
+    we deliberately adopt the server copy over the losing local edit. base_etag is
+    set to the server etag (the base a future edit builds on)."""
     row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
                        (obj["id"],)).fetchone()
-    if row is not None and row["sync_state"] != "SYNCED":
+    if row is not None and row["sync_state"] != "SYNCED" and not force:
         return
     conn.execute(
         "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "

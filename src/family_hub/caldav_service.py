@@ -89,6 +89,47 @@ def _slug(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
 
 
+class CalDavConflict(Exception):
+    """A conditional write was rejected 412: the server object changed under us
+    (If-Match no longer matches, or If-None-Match:* found the resource present).
+    flush_pending resolves this server-wins rather than silently overwriting the
+    other writer's change — the TECHNICAL_DESIGN §5.6 optimistic-concurrency path."""
+
+
+_ICAL_CT = "text/calendar; charset=utf-8"
+
+
+def _resp_status(resp) -> int:
+    try:
+        return int(getattr(resp, "status", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _resp_etag(resp):
+    """The ETag the server assigned this write, from the response headers
+    (case-insensitively). None if absent — the next pull reconciles it."""
+    h = getattr(resp, "headers", None) or {}
+    getter = getattr(h, "get", None)
+    if getter:
+        return getter("ETag") or getter("etag")
+    try:
+        return dict(h).get("ETag")
+    except Exception:
+        return None
+
+
+def _uid_from_ics(ics: str) -> str:
+    """The first component UID, for the create resource filename. Lazy icalendar
+    so the module imports without it."""
+    import icalendar
+    cal = icalendar.Calendar.from_ical(ics)
+    for comp in cal.walk():
+        if comp.name in ("VTODO", "VEVENT"):
+            return str(comp.get("UID") or "")
+    return ""
+
+
 def client_from_env(env=None):
     """A CalDavClient from the environment, or None when not configured."""
     user, pw = caldav_credentials(env)
@@ -187,26 +228,63 @@ class CalDavClient:
                 if getattr(t, "data", None)]
 
     # --- write side (two-way) ---------------------------------------------
+    #
+    # These issue the DAV requests at the low level (client.put / client.request)
+    # rather than via the library's high-level save()/delete(), for one reason:
+    # explicit conditional headers. save() only emits If-Match when the resource
+    # object happens to carry an .etag, which a freshly-built one never does — so
+    # every high-level write is an unconditional overwrite. Sending If-Match /
+    # If-None-Match ourselves gives real optimistic concurrency (a 412 on a
+    # concurrent phone/Siri edit) instead of a silent last-write-wins clobber.
 
-    def put_object(self, collection: dict, href, ics: str) -> dict:
-        """Create (href=None) or update (href set) one object in `collection`;
-        returns {href, etag}. The caldav library's high-level save issues the PUT
-        and, on create, iCloud assigns the resource URL. A None etag back is fine
-        — the next pull reconciles it (upsert stores the server's etag)."""
-        import caldav
+    def put_object(self, collection: dict, href, ics: str,
+                   base_etag=None, uid=None) -> dict:
+        """Create (href=None) or update (href set) one object; returns {href,etag}.
+        Update sends If-Match: base_etag; create sends If-None-Match:* to a
+        UID-derived URL under the collection. Raises CalDavConflict on 412 (the
+        server changed under us). A None etag back is fine — the next pull
+        reconciles it."""
         cal = collection["_cal"]
+        client = cal.client
         if href:
-            obj = caldav.CalendarObjectResource(
-                client=cal.client, url=href, parent=cal, data=ics)
-            obj.save()
+            headers = {"Content-Type": _ICAL_CT}
+            if base_etag:
+                headers["If-Match"] = base_etag
+            resp = client.put(href, ics, headers=headers)
+            url = href
         else:
-            obj = cal.save_todo(ics)   # reminders write path is VTODO-only
-        return {"href": str(getattr(obj, "url", href) or href) or None,
-                "etag": getattr(obj, "etag", None)}
+            base = str(getattr(cal, "url", "") or "").rstrip("/")
+            url = f"{base}/{uid or _uid_from_ics(ics)}.ics"
+            resp = client.put(url, ics, headers={"Content-Type": _ICAL_CT,
+                                                 "If-None-Match": "*"})
+        status = _resp_status(resp)
+        if status == 412:
+            raise CalDavConflict(url)
+        if status and not (200 <= status < 300):
+            raise RuntimeError(f"PUT {url} -> {status} {getattr(resp, 'reason', '')}")
+        return {"href": url, "etag": _resp_etag(resp)}
 
-    def delete_object(self, collection: dict, href: str) -> None:
-        """DELETE one object by its server href."""
-        import caldav
-        cal = collection["_cal"]
-        caldav.CalendarObjectResource(
-            client=cal.client, url=href, parent=cal).delete()
+    def delete_object(self, collection: dict, href: str, base_etag=None) -> None:
+        """DELETE one object by href, conditional on If-Match when we have a base
+        etag. Raises CalDavConflict on 412; a 404 (already gone) is success."""
+        headers = {"If-Match": base_etag} if base_etag else None
+        resp = collection["_cal"].client.request(href, "DELETE", "", headers)
+        status = _resp_status(resp)
+        if status == 412:
+            raise CalDavConflict(href)
+        if status and status not in (200, 202, 204, 404):
+            raise RuntimeError(f"DELETE {href} -> {status} {getattr(resp, 'reason', '')}")
+
+    def get_object(self, collection: dict, href: str):
+        """Fetch one object's current server state as {href, etag, ics}, or None
+        if it's gone (404). Used to resolve a write conflict server-wins."""
+        resp = collection["_cal"].client.request(href, "GET")
+        status = _resp_status(resp)
+        if status == 404:
+            return None
+        if status and not (200 <= status < 300):
+            raise RuntimeError(f"GET {href} -> {status} {getattr(resp, 'reason', '')}")
+        body = getattr(resp, "raw", None)
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "replace")
+        return {"href": href, "etag": _resp_etag(resp), "ics": body}
