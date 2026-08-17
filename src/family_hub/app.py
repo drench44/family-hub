@@ -333,6 +333,12 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     lo = (today - dt.timedelta(days=past_days)).isoformat()
     horizon = (today + dt.timedelta(days=days)).isoformat()
     events = []
+    # An event configured on two calendars is stored as two rows sharing the same
+    # event id (composite events PK, issue #30) — render it ONCE. Keyed on
+    # identity (id + span) so genuinely distinct events never collapse; the first
+    # VISIBLE copy wins its calendar's color (a copy hidden by the picker doesn't
+    # claim the row).
+    seen_keys: set = set()
     for e in fdb.list_events(c):
         # Keep an event whose SPAN overlaps [lo, horizon] — not just its start.
         # A multi-day event that began before the window but is still running
@@ -369,6 +375,10 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
                 continue
             color = google_colors.get(cid) or cal.get("color")
             label = cal.get("label")
+        dedup_key = (e["id"], e["start_ts"], e["end_ts"])
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
         events.append({
             **e,
             "color": color,

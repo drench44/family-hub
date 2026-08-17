@@ -1606,6 +1606,27 @@ def test_calendar_status_agg_surfaces_needs_auth_even_when_a_source_is_ok(tmp_pa
         assert status.get("needs_auth") is True
 
 
+def test_event_on_two_calendars_renders_once(tmp_path, monkeypatch):
+    # Composite events PK (issue #30) stores an event shared by two calendars as
+    # two rows with the same id; the wall must render it ONCE, not twice.
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "cal_a", "kind": "google", "label": "A", "color": "#f00"},
+        {"id": "cal_b", "kind": "google", "label": "B", "color": "#00f"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        soon = (appmod._today() + dt.timedelta(days=2)).isoformat()
+        row = {"id": "shared1", "title": "Dinner",
+               "start_ts": f"{soon}T18:00:00", "end_ts": f"{soon}T19:00:00",
+               "all_day": 0}
+        appmod.fdb.replace_events(c, [{**row, "calendar_id": "cal_a"},
+                                      {**row, "calendar_id": "cal_b"}])
+        events = tc.get("/api/calendar").json()["events"]
+        dinners = [e for e in events if e["title"] == "Dinner"]
+        assert len(dinners) == 1
+        # the first visible copy wins its calendar's color
+        assert dinners[0]["color"] == "#f00"
+
+
 def test_disabling_ics_calendar_hides_its_events(tmp_path, monkeypatch):
     appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
         {"id": "holidays", "kind": "ics", "label": "Holidays", "url": "http://x/h.ics"}]})
