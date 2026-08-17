@@ -1549,6 +1549,21 @@ test('initCamGrid renders the camera_page cameras into #camgrid (config order, n
     'camera_page order preserved');
 });
 
+test('initCamGrid renders more than four cameras (all six, row-major)', () => {
+  // The camera page supports any count, not just the historical four. Six
+  // cameras must all render in order, so the CSS two-wide grid gets six cells
+  // (a 2x3). Guards the render path the grid-auto-rows CSS change depends on.
+  const { document, sandbox } = newHub();
+  const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((s, i) => (
+    { src: s, label: 'C' + i, tile: '/t/' + s, full: '/f/' + s }));
+  vm.runInContext('links = { camera_page: ' + JSON.stringify(six) + ' };', sandbox);
+  sandbox.initCamGrid();
+  const html = document.getElementById('camgrid').innerHTML;
+  const cams = [...html.matchAll(/data-cam="([a-f])"/g)].map((m) => m[1]);
+  assert.deepEqual(cams, ['a', 'b', 'c', 'd', 'e', 'f'],
+    'all six cameras render in config (row-major) order');
+});
+
 test('initCamGrid is a no-op until links arrive (does not latch built early)', () => {
   const { document, sandbox } = newHub();
   vm.runInContext('links = {};', sandbox);   // links payload not in yet
