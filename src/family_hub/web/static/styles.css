@@ -615,19 +615,23 @@ body {
 .ln-m { display: flex; flex-direction: column; align-items: center; text-align: center;
   min-width: 0; }
 .ln-door { width: 104px; height: 104px; }
-.ln-bezel { fill: var(--surface-2); stroke: var(--edge); stroke-width: 5; }
+/* Bezel reads clearly in every state and theme: --edge alone is near-invisible
+   against the card on the dark themes (and the wall panel's gamma crushes it
+   further — operator feedback 2026-08-17: "kind of faint"). */
+.ln-bezel { fill: var(--surface-2);
+  stroke: color-mix(in srgb, var(--faint) 55%, var(--edge)); stroke-width: 5; }
 /* timer dial: minutes left, drawn from 12 o'clock (the -90° spin) */
 .ln-arc { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round;
   transform: rotate(-90deg); transform-origin: 50px 50px; }
 .ln-ph-paused .ln-arc { stroke: var(--warn); }
 .ln-ph-done .ln-arc { stroke: var(--good); }
-.ln-glass { fill: color-mix(in srgb, var(--ground) 55%, var(--surface-2)); }
-.ln-glint { stroke: var(--ink); opacity: .14; stroke-width: 3; stroke-linecap: round; }
+.ln-glass { fill: color-mix(in srgb, var(--ground) 85%, var(--surface-2)); }
+.ln-glint { stroke: var(--ink); opacity: .22; stroke-width: 3; stroke-linecap: round; }
 /* drum contents: garments tint by machine (washer cool / dryer warm) */
 .ln-g { fill: var(--p2); }
-.ln-g1 { opacity: .62; } .ln-g2 { opacity: .46; } .ln-g3 { opacity: .36; }
+.ln-g1 { opacity: .8; } .ln-g2 { opacity: .62; } .ln-g3 { opacity: .5; }
 .ln-dryer .ln-g { fill: var(--p3); }
-.ln-sud { fill: var(--ink); opacity: .25; }
+.ln-sud { fill: var(--ink); opacity: .38; }
 .ln-dryer .ln-sud { display: none; }   /* suds are a washer thing */
 .ln-tumble { transform-origin: 50px 50px; animation: ln-spin 3.4s linear infinite; }
 .ln-ph-paused .ln-tumble { animation-play-state: paused; }
@@ -636,8 +640,9 @@ body {
 .ln-check { fill: none; stroke: var(--good); stroke-width: 7;
   stroke-linecap: round; stroke-linejoin: round; }
 .ln-bang { fill: var(--crit); font: 700 34px var(--sans); }
-/* quiet phases quiet the whole machine block */
-.ln-ph-idle .ln-door, .ln-ph-offline .ln-door { opacity: .55; }
+/* quiet phases quiet the whole machine block — gently: below ~.7 the door
+   disappears entirely on the wall panel (operator feedback 2026-08-17) */
+.ln-ph-idle .ln-door, .ln-ph-offline .ln-door { opacity: .75; }
 .ln-label { margin-top: 8px; font-size: 10px; letter-spacing: .12em;
   text-transform: uppercase; color: var(--faint); }
 .ln-big { margin-top: 2px; font-size: 25px; font-weight: 650; color: var(--ink);
