@@ -50,6 +50,8 @@ def test_chores_and_todos_are_always_available_features():
     assert ids["todos"]["available"] is True
     assert ids["chores"]["group"] == "feature"
     assert ids["todos"]["group"] == "feature"
+    assert ids["chores"]["kind"] == "chores"
+    assert ids["todos"]["kind"] == "todos"
     # external services are tagged as integrations
     assert ids["weather"]["group"] == "integration"
     assert ids["cameras"]["group"] == "integration"

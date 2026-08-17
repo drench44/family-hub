@@ -7,6 +7,7 @@ the box, so the runner falls back to a disposable node:20-alpine container
 neither exists the module skips loudly — a skip here means the JS layer went
 unverified, not that it passed.
 """
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -38,6 +39,14 @@ def test_js_suite_passes():
     assert rel_files, "no JS test files found — tests/js went missing"
     cmd = _command(rel_files)
     if cmd is None:
+        # In CI a skip here is a silent evaporation of the entire JS DOM
+        # suite — CI stays green while the JS layer goes unverified. Fail
+        # loudly instead; only skip (with a visible reason) outside CI.
+        if os.environ.get("CI"):
+            pytest.fail(
+                "JS test runner (node or docker) unavailable in CI — "
+                "JS layer unverified"
+            )
         pytest.skip("neither node nor docker available — JS tests NOT run")
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, (

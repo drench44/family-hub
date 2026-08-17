@@ -1110,13 +1110,28 @@ function featureEnabled(id) {
   return e ? !!e.enabled : true;
 }
 
+// Always-available features (never configurable off the registry the way the
+// integrations are): an id ABSENT from a non-empty payload must fail OPEN
+// (featureEnabled), same as an id that's simply missing from an older/partial
+// server response — never treated as "off" the way an absent, genuinely-
+// configurable integration (calendar/cameras/weather/climate) legitimately is.
+const ALWAYS_ON_FEATURES = new Set(['chores', 'todos']);
+
 // Reconcile the phone tab bar with the enabled feature set: hide tabs with no
 // enabled backing feature, move off a hidden active tab, and flag the all-off
 // state so the empty panel can show. No-ops (fail-open) on an empty list.
 function updateTabVisibility(list) {
   if (!list || !list.length) return;
   const on = new Set(list.filter((i) => i.enabled).map((i) => i.id));
-  const visible = (tab) => (TAB_FEATURES[tab] || []).some((f) => on.has(f));
+  // Per-feature membership: always-on features fail OPEN via featureEnabled
+  // (absent => shown); configurable integrations keep the on.has membership
+  // test (absent => legitimately unconfigured => reflow away).
+  const featureOn = (id) => ALWAYS_ON_FEATURES.has(id) ? featureEnabled(id) : on.has(id);
+  // A tab with no TAB_FEATURES mapping (e.g. a future tab shipped before its
+  // mapping lands) fails OPEN too, consistent with the fail-open posture —
+  // never silently hide a tab nobody told this function about.
+  const visible = (tab) => !(tab in TAB_FEATURES) ? true
+    : TAB_FEATURES[tab].some(featureOn);
   const btns = [...document.querySelectorAll('.tab-btn')];
   let any = false;
   btns.forEach((b) => {
@@ -1145,11 +1160,21 @@ function applyWallLayout(list) {
   if (!grid || !list || !list.length) return;
   const on = new Set(list.filter((i) => i.enabled).map((i) => i.id));
   const has = (...ids) => ids.some((id) => on.has(id));
-  const chores = has('chores');
+  // Always-on features fail OPEN via featureEnabled (absent => shown, same
+  // fail-open contract as updateTabVisibility above), never the plain on.has
+  // membership test — an id absent from a non-empty payload otherwise reads
+  // as "off" and silently drops an always-available surface on version skew.
+  const chores = featureEnabled('chores');
+  const todos = featureEnabled('todos');
   const calAny = has('google_calendar', 'ics_calendar', 'icloud_caldav');
-  const todos = has('todos');
   const cameras = has('cameras');
-  const dash = has('weather', 'climate');
+  // panels column: weather/climate integrations OR any always-on custom
+  // dashboard panel (a links.panels entry whose id isn't weather/climate —
+  // buildPanels renders those via panelHtml, and they have no toggle of
+  // their own, so the column must survive even with weather+climate both
+  // off or an operator's custom panel would silently lose its column).
+  const dash = has('weather', 'climate')
+    || ((links && links.panels) || []).some((p) => p.id !== 'weather' && p.id !== 'climate');
   const setDisp = (sel, show) => {
     const el = document.querySelector(sel);
     if (el) el.style.display = show ? '' : 'none';
@@ -1269,6 +1294,11 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
 }
 
 function openOverlay(view) {
+  // Feature-off guards run BEFORE any state mutation below: a guarded return
+  // must leave openView/#overlay-content untouched, or a later refresh path
+  // (e.g. openView === 'chores') fires against a host that was never opened.
+  if (view === 'chores' && !featureEnabled('chores')) return;
+  if (view === 'todos' && !featureEnabled('todos')) return;
   const content = document.getElementById('overlay-content');
   content.innerHTML = '';
   openView = view;
@@ -1308,13 +1338,11 @@ function openOverlay(view) {
     renderCalFull();                       // instant paint from cache
     fetchCalWindow().then(renderCalFull);  // then refresh from the API
   } else if (view === 'chores') {
-    if (!featureEnabled('chores')) return;
     content.innerHTML = `<div class="overlay-panel"><div id="chores-full"></div></div>`;
     choreState.day = data_date;
     choreState.editing = false;   // always open in check-off mode
     renderChoresFull(hubData ? hubData.people : null);  // instant paint, today
   } else if (view === 'todos') {
-    if (!featureEnabled('todos')) return;
     content.innerHTML = `<div class="overlay-panel"><div id="todos-full"></div></div>`;
     todoState.source = (hubData && hubData.todo_source) || 'local';
     const cache = todoState.source === 'icloud' ? todoState.reminders : todoState.data;
@@ -2670,9 +2698,10 @@ document.addEventListener('click', (e) => {
     if (open) reflectThemeControls();
     return;
   }
-  // The popover's "All settings" row: close the quick popover (it sits at a
-  // higher z-index than the full-screen overlay and would otherwise float
-  // over it) and open the real thing.
+  // Any [data-open-settings] control: the popover's "All settings" row (close
+  // the quick popover first — it sits at a higher z-index than the full-screen
+  // overlay and would otherwise float over it) AND the all-off empty-state's
+  // "Open Settings" button (no popover open there, closeThemePop is a no-op).
   if (e.target.closest('[data-open-settings]')) {
     closeThemePop();
     openOverlay('settings');

@@ -700,10 +700,31 @@ def test_off_features_hide_their_wall_surface():
 def test_all_off_empty_state_present_and_wired():
     index = (STATIC / "index.html").read_text()
     assert 'id="hub-empty-msg"' in index, "missing all-off empty-state element"
-    assert "body.hub-empty" in CSS, "hub-empty visibility rules missing"
+    # Both load-bearing rules, not just the substring "body.hub-empty": the
+    # grid/tabbar must actually hide AND the empty-state message must actually
+    # show, or the page silently renders blank instead of the intended panel.
+    assert re.search(
+        r"body\.hub-empty\s+\.hub-grid\s*,\s*\n?\s*body\.hub-empty\s+\.tabbar\s*\{"
+        r"[^}]*display:\s*none",
+        CSS,
+    ), "body.hub-empty must hide .hub-grid and .tabbar"
+    assert re.search(
+        r"body\.hub-empty\s+\.hub-empty-state\s*\{[^}]*display:\s*flex",
+        CSS,
+    ), "body.hub-empty must show .hub-empty-state"
     hub = (STATIC / "hub.js").read_text()
     assert "updateTabVisibility" in hub and "TAB_FEATURES" in hub, \
         "data-driven tab visibility missing"
+
+
+def test_hidden_tab_button_is_actually_hidden():
+    # b.hidden (the HTML `hidden` attribute) relies on the UA rule
+    # [hidden]{display:none}, but that's beaten by the author rule
+    # .tab-btn{display:flex} regardless of specificity (author origin beats
+    # UA origin) — a "hidden" tab kept rendering flex on a real phone unless
+    # an author-origin rule at >= .tab-btn's specificity wins it back.
+    assert re.search(r"\.tab-btn\[hidden\][^\{]*\{[^}]*display:\s*none", CSS), \
+        "hidden tab buttons must be display:none (author rule beats UA [hidden])"
 
 
 def test_wall_grid_reflows_on_toggle():

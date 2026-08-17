@@ -457,6 +457,52 @@ test('updateTabVisibility: every feature off -> hub-empty, all tabs hidden', () 
   assert.ok(document.querySelectorAll('.tab-btn').every((b) => b.hidden));
 });
 
+test('updateTabVisibility: chores/todos ABSENT from a non-empty payload fail OPEN (stay visible)', () => {
+  // A non-empty payload that omits the always-on features must not read as
+  // "chores/todos are off" — only a genuinely-configurable integration
+  // (cameras here) legitimately reflows away when absent.
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  document.body.dataset.tab = 'chores';
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', enabled: true, group: 'integration' },
+  ] });
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('chores').hidden, false, 'chores tab stays visible (fail-open)');
+  assert.equal(byTab('todos').hidden, false, 'todos tab stays visible (fail-open)');
+  assert.equal(byTab('cams').hidden, false, 'cameras tab visible (explicitly on)');
+  assert.equal(document.body.classList.contains('hub-empty'), false,
+    'must not stamp hub-empty when the always-on tabs are actually showing');
+});
+
+test('updateTabVisibility + applyWallLayout: off -> on round-trip restores the tab and the wall column', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  seedWallGrid(document);
+  document.body.dataset.tab = 'chores';
+  // Flip todos off: tab hides, wall column drops.
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+  ] });
+  const todosTab = () => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === 'todos');
+  assert.equal(todosTab().hidden, true, 'todos tab hidden while off');
+  assert.equal(document.querySelector('.todo-slot').style.display, 'none',
+    'wall column dropped while off');
+  // Flip todos back on: both surfaces must return.
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+  ] });
+  assert.equal(todosTab().hidden, false, 'todos tab restored on re-enable');
+  assert.equal(document.querySelector('.todo-slot').style.display, '',
+    'wall column restored on re-enable');
+});
+
 // ---- applyWallLayout: reflow the wall grid when a column is off (Task 6) ----
 
 // index.html's `.hub-grid` (and its `.people-col`/`.cal`/`.todo-slot`/`.tiles`/
@@ -520,6 +566,81 @@ test('applyWallLayout: calendar off, todos on -> to-dos fill the calendar column
   assert.ok(grid.style.gridTemplateAreas.includes('todo'), 'todo present');
   assert.ok(!grid.style.gridTemplateAreas.includes('cal'), 'cal dropped');
   assert.equal(document.querySelector('.cal').style.display, 'none');
+});
+
+test('applyWallLayout: todos off, calendar on -> calendar fills BOTH rows (symmetric to the todos case above)', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  // both rows of the middle column are 'cal' (calendar filled up), no 'todo'
+  assert.ok(grid.style.gridTemplateAreas.includes('cal'), 'cal present');
+  assert.ok(!grid.style.gridTemplateAreas.includes('todo'), 'todo dropped');
+  // both template rows literally read 'cal' in the middle slot
+  const rows = grid.style.gridTemplateAreas.split('" "').map((r) => r.replace(/"/g, ''));
+  assert.equal(rows.length, 2);
+  rows.forEach((r) => assert.ok(r.split(' ').includes('cal'),
+    `row "${r}" should include the cal area (both rows filled by calendar)`));
+  assert.equal(document.querySelector('.todo-slot').style.display, 'none');
+});
+
+test('applyWallLayout: chores/todos ABSENT from a non-empty payload fail OPEN (columns stay shown)', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', enabled: true, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.equal(document.querySelector('.people-col').style.display, '',
+    'chores column stays shown (fail-open)');
+  assert.equal(document.querySelector('.todo-slot').style.display, '',
+    'todo-slot stays shown (fail-open)');
+  assert.ok(grid.style.gridTemplateAreas.includes('people'), 'people area present');
+  assert.ok(grid.style.gridTemplateAreas.includes('todo'), 'todo area present');
+});
+
+test('applyWallLayout: weather+climate OFF but a custom dashboard panel exists -> panels column stays', () => {
+  // buildPanels renders any links.panels entry whose id isn't weather/climate
+  // as an always-on custom panel (no toggle of its own) — the .panels column
+  // must survive even with both weather and climate off, or a custom panel
+  // silently loses its column.
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  vm.runInContext("links = { panels: [{ id: 'custom1' }] };", sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.ok(grid.style.gridTemplateAreas.includes('panels'),
+    'panels area kept for the custom panel');
+  assert.equal(document.querySelector('.panels').style.display, '',
+    'panels column stays shown');
+});
+
+test('applyWallLayout: weather+climate OFF and no custom panels -> panels column drops', () => {
+  const { sandbox, document } = newHub();
+  seedWallGrid(document);
+  vm.runInContext('links = { panels: [] };', sandbox);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+    { id: 'google_calendar', enabled: true, group: 'integration' },
+    { id: 'weather', enabled: false, group: 'integration' },
+    { id: 'climate', enabled: false, group: 'integration' },
+  ] });
+  const grid = document.querySelector('.hub-grid');
+  assert.ok(!grid.style.gridTemplateAreas.includes('panels'),
+    'panels area dropped with no custom panel to keep it alive');
+  assert.equal(document.querySelector('.panels').style.display, 'none',
+    'panels column hidden');
 });
 
 test('applyWallLayout: all on -> the default four-column template', () => {
@@ -2754,6 +2875,57 @@ test('openOverlay("cameras-page") renders the 2x2 grid and probes the streams af
   // call would leave every grid tile permanently offline in production.
   const srcs = started.map((u) => u.match(/src=([^&]+)/)[1]).sort();
   assert.deepEqual(srcs, ['a', 'b'], 'probeCamera fired for the grid after open');
+});
+
+// ---- openOverlay feature-off guards (Task: chores/todos toggle) ----
+
+test('openOverlay("chores"): feature OFF -> overlay does not open, no half-init state', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: false, group: 'feature' },
+    { id: 'todos', enabled: true, group: 'feature' },
+  ] });
+
+  sandbox.openOverlay('chores');
+
+  const content = document.getElementById('overlay-content');
+  assert.equal(content.innerHTML, '', '#overlay-content left untouched');
+  assert.ok(!document.getElementById('overlay').classList.contains('open'),
+    'overlay never opened');
+  assert.ok(!document.body.classList.contains('overlay-open'));
+  assert.equal(vm.runInContext('openView', sandbox), null,
+    'openView must stay null on a guarded return, or a later refresh path ' +
+    '(e.g. openView === "chores") fires against a host that was never opened');
+});
+
+test('openOverlay("todos"): feature OFF -> overlay does not open, no half-init state', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'todos', enabled: false, group: 'feature' },
+  ] });
+
+  sandbox.openOverlay('todos');
+
+  const content = document.getElementById('overlay-content');
+  assert.equal(content.innerHTML, '', '#overlay-content left untouched');
+  assert.ok(!document.getElementById('overlay').classList.contains('open'),
+    'overlay never opened');
+  assert.equal(vm.runInContext('openView', sandbox), null);
+});
+
+test('openOverlay("chores"): feature ABSENT from a non-empty payload fails OPEN (does open)', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'cameras', enabled: true, group: 'integration' },
+  ] });
+
+  sandbox.openOverlay('chores');
+
+  const content = document.getElementById('overlay-content');
+  assert.match(content.innerHTML, /id="chores-full"/, 'overlay content painted');
+  assert.ok(document.getElementById('overlay').classList.contains('open'), 'overlay opened');
+  assert.equal(vm.runInContext('openView', sandbox), 'chores');
 });
 
 test('opening an overlay locks page scroll (body.overlay-open); closing unlocks it', () => {

@@ -1494,6 +1494,10 @@ def test_chores_todos_toggle_via_integrations_and_hub_block(tmp_path, monkeypatc
         assert c.patch("/api/integrations/chores", json={"enabled": False}).status_code == 200
         hub2 = c.get("/api/hub").json()
         assert next(i for i in hub2["integrations"] if i["id"] == "chores")["enabled"] is False
+        # round-trip: toggle it back on -> /api/hub reports it enabled again
+        assert c.patch("/api/integrations/chores", json={"enabled": True}).status_code == 200
+        hub3 = c.get("/api/hub").json()
+        assert next(i for i in hub3["integrations"] if i["id"] == "chores")["enabled"] is True
 
 
 def test_disabling_calendar_integration_hides_its_events(tmp_path, monkeypatch):
