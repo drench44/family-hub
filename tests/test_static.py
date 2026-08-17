@@ -356,12 +356,14 @@ def test_each_tab_hides_every_other_surface():
 
 
 def test_camera_page_shows_four_per_screen_and_scrolls():
-    # The full-screen camera page is deliberately two columns with each row half
-    # the visible height, so exactly FOUR cameras fill one screen (2x2) and any
-    # beyond that scroll into view. That means: two columns, a row height derived
-    # from half the container (a `/ 2` calc, NOT `1fr` which would squash all
-    # rows onto one screen), and a scrollable container. Guards the
-    # `.camera-page` block only (not -empty / children).
+    # The full-screen camera page is two columns with a minmax row height:
+    #   grid-auto-rows: minmax(calc((100% - <N>px) / 2), 1fr)
+    # The 1fr ceiling lets four-or-fewer cameras fill the screen (no half-black
+    # void); the sub-half calc floor makes >4 collapse so four tiles dominate and
+    # a sliver of the next row peeks (the scroll affordance on a touch wall).
+    # overflow-y makes the rest reachable. Guards the `.camera-page` block only
+    # (not -empty / children). This is a CSS-property guard, not a rendered-pixel
+    # test — the real 4-up-and-peek look is checked on the wall.
     block = re.search(r"\.camera-page\s*\{([^}]*)\}", CSS)
     assert block, "no .camera-page grid block in styles.css"
     body = block.group(1)
@@ -369,10 +371,12 @@ def test_camera_page_shows_four_per_screen_and_scrolls():
         "camera page must be exactly two columns"
     assert "overflow-y: auto" in body, \
         "camera page must scroll so cameras beyond the first four are reachable"
-    assert "grid-auto-rows:" in body and "/ 2" in body, \
-        "each row must be half the screen (a `/ 2` calc) so four cameras fill one screen"
+    # The row track must be minmax(calc(... / 2), 1fr): the calc floor sizes the
+    # peek, the 1fr ceiling fills the screen when there are four or fewer.
+    assert re.search(r"grid-auto-rows:\s*minmax\(\s*calc\([^)]*\)\s*/\s*2\s*\)\s*,\s*1fr\s*\)", body), \
+        "row height must be minmax(calc(... / 2), 1fr) — peek floor + fill-when-few ceiling"
     assert "grid-auto-rows: 1fr" not in body, \
-        "grid-auto-rows: 1fr squashes every camera onto one screen — use a half-height row"
+        "a bare grid-auto-rows: 1fr squashes every camera onto one screen"
 
 
 def test_tab_bar_covers_all_tabs():
