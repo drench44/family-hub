@@ -300,7 +300,18 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             "label": cal.get("label"),
             "event_color": GOOGLE_EVENT_COLORS.get(e["color_id"] or ""),
         })
-    return {"status": status, "events": events}
+    # The date range the sync actually caches (today - past_days .. today +
+    # window_days). The frontend pages the month view past this, so it marks
+    # out-of-window days as "not synced" rather than rendering them as free
+    # (issue #37).
+    return {
+        "status": status,
+        "events": events,
+        "window": {
+            "from": (today - dt.timedelta(days=cfg.calendar_past_days)).isoformat(),
+            "to": (today + dt.timedelta(days=cfg.calendar_window_days)).isoformat(),
+        },
+    }
 
 
 def _links() -> dict:

@@ -414,6 +414,19 @@ def test_admin_people_crud_and_validation(client, app_mod):
     assert state["people"][0]["name"] == "Remy2"
 
 
+def test_calendar_exposes_synced_window(tmp_path, monkeypatch):
+    """Regression for issue #37: /api/calendar reports the range the sync caches
+    (from config) so the frontend can mark days outside it as not-synced instead
+    of rendering them as free."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendar_window_days": 10, "calendar_past_days": 5})
+    with TestClient(appmod.app) as c:
+        win = c.get("/api/calendar").json()["window"]
+    today = appmod._today()
+    assert win["to"] == (today + dt.timedelta(days=10)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=5)).isoformat()
+
+
 def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod):
     """Regression for issue #35: an explicit JSON null for a field backed by a
     NOT NULL column is a 422, not a 500 from the DB write. fixed_person_id (the
