@@ -52,6 +52,18 @@ CREATE TABLE IF NOT EXISTS todos(
   created_at TEXT NOT NULL,
   done_at TEXT,
   done_date TEXT);
+-- Integrations registry: the runtime on/off state for each togglable data
+-- source / tile ("extension"). The set of AVAILABLE integrations is computed
+-- from config/env (integrations.available_integrations); this table only holds
+-- the operator's enable/disable overlay, seeded enabled so an existing install
+-- is unchanged. config_json is reserved for per-integration settings.
+CREATE TABLE IF NOT EXISTS integrations(
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL);
 """
 
 # Columns a caller may set through update_person / add_chore validation.
@@ -589,3 +601,46 @@ def kv_set(conn, key: str, value: Any) -> None:
     conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
                  (key, json.dumps(value)))
     conn.commit()
+
+
+# --- integrations ---------------------------------------------------------
+
+def seed_integration(conn, iid: str, kind: str, sort: int = 0) -> None:
+    """Insert an integration row if absent (default enabled). Idempotent, so a
+    re-seed on startup never flips an operator's existing toggle."""
+    conn.execute(
+        "INSERT OR IGNORE INTO integrations(id, kind, enabled, config_json, "
+        "sort, created_at) VALUES(?, ?, 1, '{}', ?, ?)",
+        (iid, kind, sort, _now_iso()))
+    conn.commit()
+
+
+def list_integrations(conn) -> list[dict]:
+    rows = conn.execute("SELECT * FROM integrations ORDER BY sort, id")
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["config"] = json.loads(d.pop("config_json") or "{}")
+        except Exception:
+            d["config"] = {}
+        d["enabled"] = bool(d["enabled"])
+        out.append(d)
+    return out
+
+
+def integration_enabled(conn, iid: str, default: bool = True) -> bool:
+    """Enabled state for one integration; `default` when it has no row yet (an
+    unseeded integration reads as enabled, so gating never hides a source the
+    operator has not explicitly turned off)."""
+    row = conn.execute(
+        "SELECT enabled FROM integrations WHERE id = ?", (iid,)).fetchone()
+    return default if row is None else bool(row["enabled"])
+
+
+def set_integration_enabled(conn, iid: str, enabled: bool) -> bool:
+    """Toggle an integration. Returns False if no such row (caller seeds first)."""
+    cur = conn.execute("UPDATE integrations SET enabled = ? WHERE id = ?",
+                       (1 if enabled else 0, iid))
+    conn.commit()
+    return cur.rowcount > 0

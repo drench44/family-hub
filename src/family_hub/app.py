@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from . import chores as chlogic
 from . import db as fdb
 from . import demo as fdemo
+from . import integrations as fintegrations
 from . import tiles
 from . import todos as tdlogic
 from .calendar_sync import GoogleCalendarClient, sync_once
@@ -198,6 +199,11 @@ def _init_db_once(conn) -> None:
         if _db_initialized:
             return
         fdb.ensure_schema(conn)
+        # Seed a row (enabled) for each available integration that has none yet.
+        # Idempotent: never flips an existing toggle. This is the non-breaking
+        # hinge — an existing install seeds every configured source ON.
+        for i, integ in enumerate(fintegrations.available_only(cfg, os.environ)):
+            fdb.seed_integration(conn, integ["id"], integ["kind"], sort=i)
         _ensure_history_backfill(conn)   # kv-guarded, atomic; raises on failure
         if DEMO:
             _ensure_demo_seed(conn)      # people-guarded; raises on failure
@@ -269,6 +275,10 @@ GOOGLE_EVENT_COLORS = {
 def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     status = fdb.kv_get(c, "calendar_status") or {"ok": False, "error": "not configured"}
     cal_map = {cal["id"]: cal for cal in cfg.calendars}
+    # Integration gating: a disabled calendar source's events are hidden (not
+    # deleted) — its cache stays, so re-enabling shows them instantly.
+    cal_google_on = fdb.integration_enabled(c, "google_calendar", default=True)
+    cal_ics_on = fdb.integration_enabled(c, "ics_calendar", default=True)
     # rail color: the user's own Google sidebar color for the calendar wins;
     # config color is the pre-first-sync fallback
     google_colors = fdb.kv_get(c, "calendar_colors") or {}
@@ -294,6 +304,11 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
         if end_day < lo or start_day > horizon:
             continue
         cal = cal_map.get(e["calendar_id"], {})
+        cal_kind = cal.get("kind", "google")
+        if cal_kind == "google" and not cal_google_on:
+            continue
+        if cal_kind == "ics" and not cal_ics_on:
+            continue
         events.append({
             **e,
             "color": google_colors.get(e["calendar_id"]) or cal.get("color"),
@@ -318,7 +333,7 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     }
 
 
-def _links() -> dict:
+def _links(enabled_ids: set | None = None) -> dict:
     # cameras: config-driven list of go2rtc streams. Each tile embeds the
     # stream's WebRTC player; full-screen prefers a "hd" stream when the
     # config names one (e.g. a Protect cam's 4K twin), else the same src.
@@ -326,7 +341,14 @@ def _links() -> dict:
     # (missing "src"/"id"/"url", or a non-integer vw) must not raise out of
     # /api/hub and blank the ENTIRE wall (chores, calendar, every tile) over one
     # typo. A bad entry is skipped and logged; the good ones still render.
-    if DEMO:
+    # The Cameras integration toggle (enabled_ids) blanks the camera lists when
+    # off; None means "no gating" (older callers / tests). DEMO cameras are a
+    # canned showcase with no real `cameras` integration to seed, so they bypass
+    # the toggle and always render.
+    cameras_on = DEMO or enabled_ids is None or "cameras" in enabled_ids
+    if not cameras_on:
+        cameras = camera_page = []
+    elif DEMO:
         # Placeholder camera tiles (no go2rtc, no liveness probe): the frontend
         # paints a static gradient for each (see hub.js tileCamera). Panels
         # still come from config below (empty is fine in demo).
@@ -339,6 +361,22 @@ def _links() -> dict:
         camera_page = _camera_links(cfg.camera_page or cfg.cameras)
     panels = _config_panel_links()
     return {"cameras": cameras, "panels": panels, "camera_page": camera_page}
+
+
+def _integrations_state(c) -> dict:
+    """The available integrations plus their enable/disable state, and the set of
+    enabled ids for render gating. Available comes from config/env (the
+    registry); the enabled flag comes from the integrations table (default True
+    for a not-yet-seeded one, so gating never hides an un-toggled source)."""
+    lst = []
+    enabled_ids = set()
+    for integ in fintegrations.available_only(cfg, os.environ):
+        en = fdb.integration_enabled(c, integ["id"], default=True)
+        if en:
+            enabled_ids.add(integ["id"])
+        lst.append({"id": integ["id"], "kind": integ["kind"],
+                    "name": integ["name"], "enabled": en})
+    return {"list": lst, "enabled_ids": enabled_ids}
 
 
 def _camera_links(entries: list[dict]) -> list[dict]:
@@ -474,13 +512,17 @@ def hub():
         log.error("todos block failed; serving empty buckets", exc_info=True)
         todos_block = {b: [] for b in tdlogic.BUCKETS}
         todos_ok = False
+    istate = _integrations_state(c)
     return {
         "date": today.isoformat(),
         "people": _people_day(c, today),
         "todos": todos_block,
         "todos_ok": todos_ok,
         "calendar": _calendar_block(c, today, 14),
-        "links": _links(),
+        "links": _links(istate["enabled_ids"]),
+        # The wall's settings menu reads this; tiles for disabled integrations
+        # (weather/climate/cameras) are hidden client-side from the enabled flags.
+        "integrations": istate["list"],
         # A deploy-changing token: the wall reloads itself when it changes, so a
         # baked frontend update reaches the kiosk without a manual refresh.
         "build": BUILD,
@@ -637,6 +679,30 @@ def todos_delete(tid: int):
     _todo_row(c, tid)
     fdb.delete_todo(c, tid)
     return {"ok": True}
+
+
+# --- integrations (the settings menu / extension toggles) -----------------
+
+class IntegrationPatch(BaseModel):
+    enabled: bool
+
+
+@app.get("/api/integrations")
+def integrations_list():
+    """Every available integration with its on/off state, for the settings menu."""
+    return {"integrations": _integrations_state(_db())["list"]}
+
+
+@app.patch("/api/integrations/{iid}")
+def integrations_patch(iid: str, body: IntegrationPatch):
+    c = _db()
+    avail = {i["id"]: i for i in fintegrations.available_only(cfg, os.environ)}
+    if iid not in avail:
+        raise HTTPException(404, "unknown integration")
+    # ensure a row exists (a never-toggled integration has none yet), then set it
+    fdb.seed_integration(c, iid, avail[iid]["kind"])
+    fdb.set_integration_enabled(c, iid, body.enabled)
+    return {"id": iid, "enabled": body.enabled}
 
 
 # --- admin ----------------------------------------------------------------

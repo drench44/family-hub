@@ -1448,3 +1448,51 @@ def test_future_day_overlays_live_plan_into_streak_and_week(client, app_mod):
     # future day's occurrence set
     assert sam["week"][-1] == "none"
     assert "streak" in sam
+
+
+def test_integrations_list_toggle_and_hub_block(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "weather_base": "http://w", "go2rtc_base": "http://g",
+        "cameras": [{"src": "cam1", "label": "Front"}],
+        "calendars": [{"id": "fam", "kind": "google", "label": "Fam"}],
+    })
+    with TestClient(appmod.app) as c:
+        ids = {i["id"]: i for i in c.get("/api/integrations").json()["integrations"]}
+        # available ones present, all enabled by default (non-breaking seed)
+        assert ids["weather"]["enabled"] is True
+        assert ids["cameras"]["enabled"] is True
+        assert ids["google_calendar"]["enabled"] is True
+        assert "climate" not in ids            # not configured
+        assert "icloud_caldav" not in ids      # no creds
+        # /api/hub carries the same block
+        hub = c.get("/api/hub").json()
+        assert {i["id"] for i in hub["integrations"]} == set(ids)
+        assert hub["links"]["cameras"][0]["label"] == "Front"
+        # toggle cameras off -> camera links blanked, flag flips
+        assert c.patch("/api/integrations/cameras", json={"enabled": False}).status_code == 200
+        hub2 = c.get("/api/hub").json()
+        assert hub2["links"]["cameras"] == []
+        assert next(i for i in hub2["integrations"] if i["id"] == "cameras")["enabled"] is False
+        # unknown integration -> 404
+        assert c.patch("/api/integrations/nope", json={"enabled": False}).status_code == 404
+
+
+def test_disabling_calendar_integration_hides_its_events(tmp_path, monkeypatch):
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendars": [{"id": "fam", "kind": "google", "label": "Fam"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        today = appmod._today()
+        soon = (today + dt.timedelta(days=3)).isoformat()
+        appmod.fdb.replace_events(c, [{"id": "e1", "calendar_id": "fam",
+            "title": "Dentist", "start_ts": f"{soon}T10:00:00-07:00",
+            "end_ts": f"{soon}T11:00:00-07:00", "all_day": 0}])
+        assert any(e["title"] == "Dentist"
+                   for e in tc.get("/api/calendar").json()["events"])
+        # disable the Google Calendar integration -> its events are hidden (cache kept)
+        tc.patch("/api/integrations/google_calendar", json={"enabled": False})
+        assert tc.get("/api/calendar").json()["events"] == []
+        # re-enable -> visible again immediately, no re-sync
+        tc.patch("/api/integrations/google_calendar", json={"enabled": True})
+        assert any(e["title"] == "Dentist"
+                   for e in tc.get("/api/calendar").json()["events"])
