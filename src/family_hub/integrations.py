@@ -11,8 +11,17 @@ descriptor here — the settings menu, seeding, and gating all read this list.
 from __future__ import annotations
 
 # Kinds group integrations for the UI and for render gating. `calendar` and
-# `caldav` both feed the calendar; `cameras`/`weather`/`climate` are tiles.
+# `caldav` both feed the calendar; `cameras`/`weather`/`climate`/`laundry`
+# are tiles.
 CALENDAR_KINDS = ("calendar", "caldav")
+
+
+def laundry_configured(cfg, env: dict) -> bool:
+    """True iff the laundry block is configured (config.py validated it into
+    cfg.laundry) AND the Home Assistant token is present in the environment.
+    Mirrors caldav_configured: without the credential the whole subsystem is
+    inert and the integration simply isn't available."""
+    return bool(getattr(cfg, "laundry", None) and env.get("HA_TOKEN"))
 
 
 def caldav_configured(env: dict) -> bool:
@@ -60,6 +69,7 @@ def available_integrations(cfg, env: dict | None = None,
         bool(getattr(cfg, "weather_base", "")))
     add("climate", "climate", "Climate",
         bool(getattr(cfg, "climate_base", "")))
+    add("laundry", "laundry", "Laundry", laundry_configured(cfg, env))
     return out
 
 

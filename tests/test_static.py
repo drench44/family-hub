@@ -823,3 +823,21 @@ def test_wall_grid_reflows_on_toggle():
     hub = (STATIC / "hub.js").read_text()
     assert "applyWallLayout" in hub, "wall grid reflow missing"
     assert "gridTemplateAreas" in hub, "reflow must rebuild grid-template-areas"
+
+
+def test_laundry_card_static_guards():
+    """The laundry card's load-bearing wiring: the off-toggle hides its slot,
+    the phone Weather tab counts laundry as a backing feature, and the tumble
+    animation respects prefers-reduced-motion (the wall's only other ambient
+    motion, the sky, holds the same bar)."""
+    assert re.search(r"body\.integ-off-laundry[^\{]*#laundry-slot[^\{]*\{[^}]*display:\s*none",
+                     CSS), "laundry-off must hide the laundry slot"
+    hub = (STATIC / "hub.js").read_text()
+    assert re.search(r"weather:\s*\[[^\]]*'laundry'", hub), \
+        "the weather tab must count laundry as a backing feature (TAB_FEATURES)"
+    assert re.search(
+        r"prefers-reduced-motion[^}]*\{[^}]*\.ln-tumble[^\{]*\{[^}]*animation:\s*none",
+        CSS, re.S), "the tumble must stop under prefers-reduced-motion"
+    # the timer arc + tumble only exist inside .ln-door SVG markup built by
+    # lnPortholeSvg; the renderer must be wired into the poll loop
+    assert "fetchLaundry" in hub and "renderLaundry" in hub and "laundryTick" in hub
