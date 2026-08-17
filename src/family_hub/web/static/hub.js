@@ -1414,14 +1414,50 @@ function wxCondKey(conditions) {
   return 'partly';
 }
 
-/* Sky phase from the local hour: the sky panel's gradient follows the real
-   time of day. Fixed civil-ish boundaries (the feed carries no sunrise/
-   sunset): dawn 5–8, day 8–18, dusk 18–21, night otherwise. */
-function skyPhase(hour) {
+/* "HH:MM" (the feed's local sunrise/sunset shape) -> fractional hours
+   (6.25); anything else -> null, never NaN. */
+function parseHmm(s) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(s == null ? '' : s).trim());
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h + min / 60;
+}
+
+/* Sky phase from the local (fractional) hour. With the feed's real sunrise/
+   sunset (fractional hours via parseHmm) the phase follows the actual sun —
+   dawn and dusk are ±40-minute windows around them — so a December 7am is
+   honestly night-dark and a June 8:30pm still glows. Without them, or with a
+   nonsensical pair (sunset not after sunrise), the fixed civil boundaries
+   stand: dawn 5–8, day 8–18, dusk 18–21, night otherwise. */
+function skyPhase(hour, sunrise, sunset) {
+  const sr = (typeof sunrise === 'number' && isFinite(sunrise)) ? sunrise : null;
+  const ss = (typeof sunset === 'number' && isFinite(sunset)) ? sunset : null;
+  if (sr !== null && ss !== null && sr < ss) {
+    const W = 40 / 60;
+    if (hour >= sr - W && hour < sr + W) return 'dawn';
+    if (hour >= ss - W && hour < ss + W) return 'dusk';
+    if (hour >= sr + W && hour < ss - W) return 'day';
+    return 'night';
+  }
   if (hour >= 5 && hour < 8) return 'dawn';
   if (hour >= 8 && hour < 18) return 'day';
   if (hour >= 18 && hour < 21) return 'dusk';
   return 'night';
+}
+
+/* The moon, shaped by the feed: moon_illum (lit %) sets how far the shadow
+   disc slides off the face, and the moon_phase name picks which limb is lit
+   (waxing lights the right, waning the left — the northern-sky view). The
+   shadow's translateX is --m-shift; its CSS default (100%, fully off) makes
+   a missing/unusable illum render the pre-feed full disc. */
+function moonHtml(wx) {
+  const ill = _reading(wx.moon_illum);
+  if (ill === null) return '<span class="sky-moon"></span>';
+  const frac = Math.max(0, Math.min(1, ill / 100));
+  const waning = /wan|last|third/i.test(String(wx.moon_phase == null ? '' : wx.moon_phase));
+  const shift = Math.round(34 * frac) * (waning ? 1 : -1);   // 34 = moon diameter px
+  return `<span class="sky-moon" style="--m-shift:${shift}px"></span>`;
 }
 
 /* The living sky: a full-bleed drawn scene at the top of the weather card.
@@ -1435,7 +1471,7 @@ function skyPhase(hour) {
    them. `hour` is the local hour at render (injectable for tests). */
 function skySceneHtml(wx, hour) {
   const cond = wxCondKey(wx.conditions);
-  const phase = skyPhase(hour);
+  const phase = skyPhase(hour, parseHmm(wx.sunrise), parseHmm(wx.sunset));
   const night = phase === 'night';
   const tp = wxTempParts(wx.temp, wx.unit);
   const condText = escapeHtml(wx.conditions != null ? String(wx.conditions) : '');
@@ -1454,7 +1490,7 @@ function skySceneHtml(wx, hour) {
       + ` <span class="hl-k">L</span> ${wxVal(wx.low, '°')}</div>`;
   // celestial body only when the sky is clear enough to see it
   const celestial = (cond === 'clear' || cond === 'partly')
-    ? (night ? '<span class="sky-moon"></span>' : '<span class="sky-sun"></span>') : '';
+    ? (night ? moonHtml(wx) : '<span class="sky-sun"></span>') : '';
   const stars = night ? '<span class="sky-stars"></span>' : '';
   const nClouds = { partly: 2, cloudy: 3, storm: 3, rain: 2, snow: 2 }[cond] || 0;
   let clouds = '';
@@ -1532,9 +1568,11 @@ function dewComfort(dp) {
   return { word: 'Oppressive', band: 'crit' };
 }
 
-/* Compact hour label for a chart tick: 0 -> 12a, 12 -> 12p, 14 -> 2p. */
+/* Compact hour label for a chart tick: 0 -> 12a, 12 -> 12p, 14 -> 2p.
+   Floors a fractional hour (the sky phase runs on minutes) so a tick can
+   never read "2.5p". */
 function hourLbl(h) {
-  const hh = ((h % 24) + 24) % 24;
+  const hh = Math.floor(((h % 24) + 24) % 24);
   if (hh === 0) return '12a';
   if (hh === 12) return '12p';
   return hh < 12 ? `${hh}a` : `${hh - 12}p`;
@@ -1616,7 +1654,7 @@ function sparkSvg(spark, nowIndex, hour = new Date().getHours()) {
     + `</svg>`;
 }
 
-function weatherCardHtml(wx, hour = new Date().getHours()) {
+function weatherCardHtml(wx, hour = new Date().getHours() + new Date().getMinutes() / 60) {
   // UV + AQI get a colored ring gauge (wxGauge). Color follows the NUMBER
   // (uvBand/aqiBand); the feed's category text is only the label. Ring fill:
   // UV against a full-scale 11 (EPA extreme), AQI against 200 (its "very
@@ -1640,7 +1678,7 @@ function weatherCardHtml(wx, hour = new Date().getHours()) {
   return `<article class="card wx">`
     + skySceneHtml(wx, hour)
     + `<div class="wx-body">`
-    + sparkSvg(wx.spark, wx.spark_now, hour)
+    + sparkSvg(wx.spark, wx.spark_now, Math.floor(hour))
     + `<div class="stats">${stats}</div>`
     + `</div></article>`;
 }
