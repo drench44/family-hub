@@ -696,3 +696,21 @@ def test_set_integration_config_raises_on_missing_row(conn):
     fdb.seed_integration(conn, "icloud_caldav", "caldav")
     fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
     assert fdb.integration_config(conn, "icloud_caldav")["readonly"] is False
+
+
+def test_caldav_status_pending_survives_sync_failure(conn):
+    _seed_vtodo_collection(conn)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U1", "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "U1", "summary": "x", "raw_ics": remlogic.build_vtodo("U1", "x", _UTC_NOW)}, "t0")
+
+    class AuthFail:
+        def configured(self):
+            return True
+
+        def discover(self):
+            raise RuntimeError("401 Unauthorized")
+
+    st = caldav_sync.sync_once(AuthFail(), conn, _CFG, _NOW)
+    assert st["ok"] is False and st.get("needs_auth") is True
+    assert st["pending"] == 1    # a queued wall edit stays visible during an outage

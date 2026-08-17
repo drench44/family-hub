@@ -1614,6 +1614,25 @@ test('renderTodoSlot: a genuinely empty list (todos_ok omitted) still reads "not
   assert.doesNotMatch(html, /couldn.t load the list/);
 });
 
+test('renderTodoSlot: source=iCloud but iCloud unavailable falls back to the local card', () => {
+  const { document, sandbox } = newHub();
+  const buckets = { overdue: [], today: [], upcoming: [], no_date: [] };
+  // todo_source says iCloud, but no icloud_caldav integration (disconnected
+  // out-of-band): must render the LOCAL card, not a reassuring-empty iCloud one.
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders: buckets,
+    todos: { now: [], soon: [], later: [] }, integrations: [] });
+  let html = document.getElementById('todo-slot').innerHTML;
+  assert.doesNotMatch(html, /shead-chip/);          // no "iCloud" chip -> local card
+  assert.doesNotMatch(html, /data-reminder/);
+
+  // with iCloud available it renders the reminder surface (the iCloud chip)
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders: buckets,
+    reminders_writable: true, todos: { now: [], soon: [], later: [] },
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
+  html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /shead-chip">iCloud/);
+});
+
 test('todosFullHtml: full-screen buckets are boxed like every other section, rows untouched', () => {
   const { sandbox } = newHub();
   vm.runInContext(
@@ -1650,7 +1669,8 @@ const REMINDERS = {
 test('renderTodoSlot: iCloud source renders the reminders card with a source chip, pressing rows, and count chips', () => {
   const { document, sandbox } = newHub();
   vm.runInContext("data_date = '2026-08-17';", sandbox);
-  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: true, reminders: REMINDERS });
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: true, reminders: REMINDERS,
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
   const html = document.getElementById('todo-slot').innerHTML;
 
   // Header still reads "To-Do", now carrying the quiet iCloud source chip.
@@ -1672,7 +1692,8 @@ test('renderTodoSlot: iCloud source renders the reminders card with a source chi
 test('renderTodoSlot: iCloud read-only renders inert rows — same items, no data-reminder to tap', () => {
   const { document, sandbox } = newHub();
   vm.runInContext("data_date = '2026-08-17';", sandbox);
-  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: false, reminders: REMINDERS });
+  sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: false, reminders: REMINDERS,
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
   const html = document.getElementById('todo-slot').innerHTML;
   assert.match(html, /Renew tags/);                 // the information is still shown
   assert.doesNotMatch(html, /data-reminder=/);      // but nothing is tappable
@@ -1681,8 +1702,11 @@ test('renderTodoSlot: iCloud read-only renders inert rows — same items, no dat
 test('renderTodoSlot: iCloud with no reminders reads "nothing on the list", not a broken card', () => {
   const { document, sandbox } = newHub();
   sandbox.renderTodoSlot({ todo_source: 'icloud', reminders_writable: true,
-    reminders: { overdue: [], today: [], upcoming: [], no_date: [] } });
-  assert.match(document.getElementById('todo-slot').innerHTML, /nothing on the list/);
+    reminders: { overdue: [], today: [], upcoming: [], no_date: [] },
+    integrations: [{ id: 'icloud_caldav', enabled: true }] });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /nothing on the list/);
+  assert.match(html, /class="shead-chip">iCloud</);   // the iCloud card, not the local fallback
 });
 
 function mountRemindersFull(reminders, { writable = true, lists = [] } = {}) {

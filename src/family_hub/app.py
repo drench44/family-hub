@@ -901,9 +901,15 @@ def caldav_set_credentials(body: CalDavCreds):
 
 @app.delete("/api/integrations/icloud_caldav/credentials")
 def caldav_clear_credentials():
+    c = _db()
     caldav_service.clear_credentials()
     global _caldav_client_built
     _caldav_client_built = False
+    # iCloud is gone, so the source picker disappears with it: if the To-Do
+    # surface was pointed at iCloud, fall back to local — otherwise it strands on
+    # an empty iCloud card with no visible control to switch back.
+    if fdb.kv_get(c, "todo_source") == "icloud":
+        fdb.kv_set(c, "todo_source", "local")
     return {"ok": True}
 
 

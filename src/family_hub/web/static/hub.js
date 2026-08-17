@@ -547,8 +547,11 @@ function renderPeople(data) {
 function renderTodoSlot(data) {
   const host = document.getElementById('todo-slot');
   // The To-Do surface can be backed by the local whiteboard (default) or by
-  // iCloud Reminders (settings picker). Render whichever the operator chose.
-  if (data.todo_source === 'icloud') {
+  // iCloud Reminders (settings picker). Render whichever the operator chose —
+  // but fall back to local if iCloud is no longer available (e.g. disconnected
+  // out-of-band) so it never strands on a reassuring-but-empty iCloud card.
+  const caldavAvail = (data.integrations || []).some((i) => i.id === 'icloud_caldav');
+  if (data.todo_source === 'icloud' && caldavAvail) {
     host.innerHTML = reminderCardHtml(data.reminders, !!data.reminders_writable);
     return;
   }

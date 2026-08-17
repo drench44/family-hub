@@ -1901,3 +1901,14 @@ def test_disabled_list_hides_pulled_and_pending_reminders(tmp_path, monkeypatch)
         c.close()
         after = _titles(tc.get("/api/reminders").json()["buckets"])
         assert "Buy milk" not in after and "Eggs" not in after   # both hidden
+
+
+def test_disconnect_resets_icloud_todo_source(tmp_path, monkeypatch):
+    """Clearing iCloud creds while the To-Do surface points at iCloud resets it to
+    local — otherwise the surface strands on an empty iCloud card with the source
+    picker (its only escape) hidden."""
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        appmod.fdb.kv_set(appmod._db(), "todo_source", "icloud")
+        assert tc.delete("/api/integrations/icloud_caldav/credentials").status_code == 200
+        assert appmod.fdb.kv_get(appmod._db(), "todo_source") == "local"

@@ -323,7 +323,10 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         log.exception("caldav sync_once failed")
         # An auth failure (revoked/expired app password) from discovery is a
         # first-class state: flag needs_auth, keep serving the cached view.
-        st = {"ok": False, "error": str(e), "last_sync": prior.get("last_sync")}
+        st = {"ok": False, "error": str(e), "last_sync": prior.get("last_sync"),
+              # carry the outbox depth even on a failed sync — a queued wall edit
+              # is most worth surfacing exactly when syncing is broken.
+              "pending": len(fdb.caldav_pending(conn))}
         if _is_auth_error(e):
             st["needs_auth"] = True
         fdb.kv_set(conn, "caldav_status", st)
