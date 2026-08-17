@@ -704,3 +704,9 @@ def test_all_off_empty_state_present_and_wired():
     hub = (STATIC / "hub.js").read_text()
     assert "updateTabVisibility" in hub and "TAB_FEATURES" in hub, \
         "data-driven tab visibility missing"
+
+
+def test_wall_grid_reflows_on_toggle():
+    hub = (STATIC / "hub.js").read_text()
+    assert "applyWallLayout" in hub, "wall grid reflow missing"
+    assert "gridTemplateAreas" in hub, "reflow must rebuild grid-template-areas"

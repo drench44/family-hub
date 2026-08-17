@@ -1132,6 +1132,45 @@ function updateTabVisibility(list) {
   }
 }
 
+// Reflow the wall grid to only the columns whose feature(s) are on, so a
+// disabled feature drops its column and the rest slide up/left instead of
+// leaving a hole. Each section's inline display is toggled too: a section
+// whose grid-area is dropped from the template would otherwise auto-place
+// into an implicit track. Fail-open: an empty/absent list leaves the CSS
+// default four-column grid untouched. (On the phone .hub-grid is display:flex
+// via the width media query, so the inline grid-template is simply ignored
+// there, and inline display:'' defers to the tab-visibility stylesheet rules.)
+function applyWallLayout(list) {
+  const grid = document.querySelector('.hub-grid');
+  if (!grid || !list || !list.length) return;
+  const on = new Set(list.filter((i) => i.enabled).map((i) => i.id));
+  const has = (...ids) => ids.some((id) => on.has(id));
+  const chores = has('chores');
+  const calAny = has('google_calendar', 'ics_calendar', 'icloud_caldav');
+  const todos = has('todos');
+  const cameras = has('cameras');
+  const dash = has('weather', 'climate');
+  const setDisp = (sel, show) => {
+    const el = document.querySelector(sel);
+    if (el) el.style.display = show ? '' : 'none';
+  };
+  setDisp('.people-col', chores);
+  setDisp('.cal', calAny);
+  setDisp('.todo-slot', todos);
+  setDisp('.tiles', cameras);
+  setDisp('.panels', dash);
+  const cols = [];
+  if (chores) cols.push({ w: '360px', a1: 'people', a2: 'people' });
+  if (calAny || todos) cols.push({ w: 'minmax(0, 1fr)',
+    a1: calAny ? 'cal' : 'todo', a2: todos ? 'todo' : 'cal' });
+  if (cameras) cols.push({ w: '540px', a1: 'tiles', a2: 'tiles' });
+  if (dash) cols.push({ w: '340px', a1: 'panels', a2: 'panels' });
+  grid.style.gridTemplateColumns = cols.map((c) => c.w).join(' ');
+  grid.style.gridTemplateAreas = cols.length
+    ? `"${cols.map((c) => c.a1).join(' ')}" "${cols.map((c) => c.a2).join(' ')}"`
+    : '';
+}
+
 function setTab(tab) {
   document.body.dataset.tab = tab;
   document.querySelectorAll('.tab-btn').forEach((b) =>
@@ -2322,6 +2361,7 @@ function renderIntegrations(data) {
   list.forEach((it) =>
     document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
   updateTabVisibility(list);
+  applyWallLayout(list);
   const host = document.getElementById('integrations-ctl');
   if (!host) return;
   const row = (it) => {
