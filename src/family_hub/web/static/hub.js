@@ -10,6 +10,13 @@ const CAM_PROBE_MS = 30000;
 const CAM_HD_POLL_MS = 700;   // HD-twin liveness RETRY cadence (first check fires immediately)
 const CAM_HD_TRIES = 12;      // ~8s budget, then give up and keep the warm stream
 const CAM_HD_FADE_MS = 450;   // drop the base after the cross-fade; keep > the .cam-hd-upgrade CSS transition (0.4s)
+// Per-attempt timeout for the HD reveal probe: well under J_TIMEOUT_MS (common.js,
+// 12s) on purpose. revealHdWhenLive's own ~8s give-up budget (CAM_HD_TRIES x
+// CAM_HD_POLL_MS) assumes each attempt resolves quickly; a wedged HD producer
+// hanging every attempt for the full 12s would balloon that to minutes instead
+// of ~8s, so this is deliberately scoped short relative to the retry loop
+// while staying well above the "returns a frame in about a second" happy path.
+const CAM_HD_PROBE_TIMEOUT_MS = 3000;
 
 let links = {};
 let weatherData = null;   // last /api/tiles/weather payload (native weather card)
@@ -106,8 +113,16 @@ function eventRow(ev, day) {
 
 /* Agenda list over [startStr, startStr+maxDays). `skipEmptyAfter` keeps the
    home feed compact (empty days beyond tomorrow vanish); the full calendar
-   shows every day. */
-function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
+   shows every day. `win` (optional, the calendar payload's sync window) marks
+   an empty day that falls OUTSIDE it as "not synced" rather than "nothing
+   scheduled": the day browser can page past the synced range (issue #37),
+   and a genuinely free day must stay visually distinct from one Google was
+   never asked about. `win` is optional (not every caller has fetched a
+   calendar payload with a `window` field) and a missing/omitted one simply
+   never marks anything (isDayOutsideWindow fails open): the 5-day home feed
+   passes its own calendar.window too, it just never reaches far enough
+   forward to trip it under the default sync window. */
+function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter, win) {
   const byDay = bucketByDay(events);
   let html = '';
   for (let i = 0; i < maxDays; i++) {
@@ -115,10 +130,13 @@ function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter) {
     const evs = byDay[d] || [];
     if (skipEmptyAfter != null && i >= skipEmptyAfter && evs.length === 0) continue;
     const isToday = d === todayStr;
-    html += `<div class="card cal-day${isToday ? ' is-today' : ''}">`
+    const unsynced = evs.length === 0 && isDayOutsideWindow(d, win);
+    html += `<div class="card cal-day${isToday ? ' is-today' : ''}${unsynced ? ' cal-day-unsynced' : ''}">`
       + dayHeadHtml(d, todayStr)
       + (evs.length ? evs.map((ev) => eventRow(ev, d)).join('')
-        : `<div class="cal-empty">nothing scheduled</div>`)
+        : unsynced
+          ? `<div class="cal-empty">not synced yet: Google data doesn’t reach this day</div>`
+          : `<div class="cal-empty">nothing scheduled</div>`)
       + `</div>`;
   }
   return html;
@@ -149,7 +167,7 @@ function renderCalendar(data) {
   document.getElementById('cal').innerHTML =
     sectionHead('Calendar', { overlay: 'calendar', expandLabel: 'Month view' })
     + calStatusNote(data.calendar)
-    + agendaHtml(data.calendar.events, data.date, data.date, 5, 2);
+    + agendaHtml(data.calendar.events, data.date, data.date, 5, 2, data.calendar.window);
 }
 
 /* ---------------------------------------------------- full calendar view */
@@ -174,13 +192,28 @@ async function fetchCalWindow() {
   }
 }
 
-function monthCellHtml(cell, byDay, todayStr) {
+/* `win` (the calendar payload's sync window, optional) marks a cell OUTSIDE it
+   as "not synced" (issue #37): the month view can page arbitrarily far past
+   the range the backend actually caches, and an out-of-window day rendered
+   the same as an in-window free day is a confident-but-wrong "nothing here":
+   the family would trust an empty grid Google actually has events on. Only an
+   in-month, EMPTY, out-of-window cell is marked: same rule as agendaHtml for
+   "empty" (the backend never caches events past its own window, so a stray
+   cached event on an out-of-window day never happens in practice, but this
+   keeps one from rendering under a contradictory "not synced" mark); and
+   `.mg-out` (adjacent-month padding, already opacity-dimmed) is excluded so
+   the mark is never rendered at .mg-out's low opacity, which would make the
+   hatch and caption nearly illegible right where they're least needed (the
+   grid's own filler cells, not the page the family is actually reading). */
+function monthCellHtml(cell, byDay, todayStr, win) {
   const evs = byDay[cell.date] || [];
   const shown = evs.slice(0, 3);
   const more = evs.length - shown.length;
+  const unsynced = cell.inMonth && evs.length === 0 && isDayOutsideWindow(cell.date, win);
   const cls = ['mg-day'];
   if (!cell.inMonth) cls.push('mg-out');
   if (cell.date === todayStr) cls.push('mg-today');
+  if (unsynced) cls.push('mg-unsynced');
   const dayNum = Number(cell.date.slice(8, 10));
   return `<div class="${cls.join(' ')}" data-date="${cell.date}" tabindex="0">`
     + `<span class="mg-num num">${dayNum}</span>`
@@ -189,14 +222,15 @@ function monthCellHtml(cell, byDay, todayStr) {
       + `<span class="mg-dot" style="background:${safeColor(eventColor(ev))}"></span>`
       + `<span class="mg-ev-title">${escapeHtml(ev.title)}</span></span>`).join('')
     + (more > 0 ? `<span class="mg-more">+${more} more</span>` : '')
+    + (unsynced ? `<span class="mg-unsynced-mark">not synced</span>` : '')
     + `</div>`;
 }
 
-function monthHtml(y, m, events, todayStr) {
+function monthHtml(y, m, events, todayStr, win) {
   const byDay = bucketByDay(events);
   const heads = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     .map((d) => `<span class="mg-head">${d}</span>`).join('');
-  const cells = monthGrid(y, m).map((c) => monthCellHtml(c, byDay, todayStr)).join('');
+  const cells = monthGrid(y, m).map((c) => monthCellHtml(c, byDay, todayStr, win)).join('');
   return `<div class="mgrid">${heads}${cells}</div>`;
 }
 
@@ -222,18 +256,19 @@ function renderCalFull() {
   if (!host) return;
   const todayStr = data_date || new Date().toISOString().slice(0, 10);
   const events = (calWin && calWin.events) || [];
+  const win = calWin && calWin.window;   // the backend's actual sync range (issue #37)
   let title = '';
   let body = '';
   if (calState.mode === 'day') {
     title = monthName(calState.y, calState.m);
     body = `<button class="cal-back" type="button" data-calback="1">‹ back to month</button>`
-      + agendaHtml(events, calState.day, todayStr, 1, null);
+      + agendaHtml(events, calState.day, todayStr, 1, null, win);
   } else if (calState.mode === 'agenda') {
     title = monthName(calState.y, calState.m);
-    body = agendaHtml(events, calState.weekStart, todayStr, 7, null);
+    body = agendaHtml(events, calState.weekStart, todayStr, 7, null, win);
   } else {
     title = monthName(calState.y, calState.m);
-    body = monthHtml(calState.y, calState.m, events, todayStr);
+    body = monthHtml(calState.y, calState.m, events, todayStr, win);
   }
   host.innerHTML = calStatusNote(calWin || { status: {} })
     + calNavHtml(title) + `<div class="cal-body">${body}</div>`;
@@ -791,8 +826,10 @@ async function probeOneCamera(cam) {
   });
   let ok = false;
   try {
-    ok = (await fetch(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
-  } catch (e) { /* down */ }
+    // fetchTimeout (common.js): bounds the probe with J_TIMEOUT_MS so a
+    // connected-but-unresponsive server can't leave it in flight forever.
+    ok = (await fetchTimeout(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
+  } catch (e) { /* down (or timed out) */ }
   // Offline -> live transition: reload the frame for a deterministic fresh
   // connect. A player that connected against a DEAD producer may never have
   // established its session, and its self-reconnect is go2rtc internals this
@@ -913,9 +950,13 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
     if (openView !== view || !hd.parentNode) return;   // overlay closed / switched
     let live = false;
     try {
-      live = (await fetch(
-        `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`)).ok;
-    } catch (e) { /* still connecting — treated as not-yet-live */ }
+      // fetchTimeout (common.js), scoped to CAM_HD_PROBE_TIMEOUT_MS (not the
+      // longer default): a wedged HD producer must not hang this retry loop
+      // long enough to blow its own ~8s give-up budget (see the constant above).
+      live = (await fetchTimeout(
+        `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`,
+        CAM_HD_PROBE_TIMEOUT_MS)).ok;
+    } catch (e) { /* still connecting, down, or timed out: treated as not-yet-live */ }
     if (openView !== view || !hd.parentNode) return;   // re-check after the await
     if (live) {
       hd.classList.add('ready');   // HD confirmed live — cross-fade it over the warm base
@@ -999,9 +1040,31 @@ function closeOverlay() {
   scrollPageToTop();   // coming home always lands at the top of the page
 }
 
+/* The fixed-position modals that layer above #overlay (siblings, not
+   children): closeAllOverlays (below) and wallBusy (~1500) both need this
+   exact set (one to close them, the other to detect any of them still shown),
+   so it's named once here rather than hardcoded twice, which is exactly how
+   the idle-timer/#overlay-home pair drifted apart in the first place (issue
+   #34: only closeOverlay() knew to close the overlay, nothing closed these). */
+const MODAL_CLOSERS = {
+  'ev-modal': () => closeEventDetail(),
+  'chore-modal': () => closeChoreEditor(),
+  'confirm-modal': () => closeDeleteConfirm(),
+};
+
+/* Close EVERY full-screen surface in one call: the MODAL_CLOSERS modals are
+   fixed siblings of #overlay, not children of it, so closeOverlay() alone
+   leaves any of them stranded open over the home wall. Shared by the
+   #overlay-home tap and the idle auto-return (armIdle) below so the two
+   "go home" paths can't drift apart again. */
+function closeAllOverlays() {
+  Object.values(MODAL_CLOSERS).forEach((close) => close());
+  closeOverlay();
+}
+
 function armIdle() {
   if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(closeOverlay, idleReturnMs(openView));
+  idleTimer = setTimeout(closeAllOverlays, idleReturnMs(openView));
 }
 
 /* --------------------------------------------------------------- polling */
@@ -1453,7 +1516,7 @@ function wallBusy() {
     return !!(el && !el.classList.contains('hidden'));
   };
   return hasClass('overlay', 'open') || hasClass('theme-pop', 'open')
-    || shown('ev-modal') || shown('chore-modal') || shown('confirm-modal')
+    || Object.keys(MODAL_CLOSERS).some(shown)   // same modal set closeAllOverlays closes
     // a direct tap on the bare wall (e.g. a chore toggle) opens no overlay, so
     // defer the reload for a short quiet window after any recent interaction
     || (Date.now() - lastInteraction < INTERACTION_QUIET_MS);
@@ -1499,6 +1562,20 @@ function scheduledPoll() {
   if (scheduledPollInFlight) return;
   scheduledPollInFlight = true;
   poll().finally(() => { scheduledPollInFlight = false; });
+}
+
+// Same guard, same reason, for the camera probe interval: probeOneCamera's
+// fetches now carry a J_TIMEOUT_MS bound (see fetchTimeout in common.js), but
+// without this an unguarded CAM_PROBE_MS interval would still keep firing a
+// fresh probeCamera() every 30s on top of one still waiting out that timeout,
+// stacking requests toward the browser's connection budget. Direct
+// probeCamera() calls (tab switch, overlay open) are user-paced and
+// intentionally always run, so the guard lives here, not inside probeCamera().
+let scheduledProbeCameraInFlight = false;
+function scheduledProbeCamera() {
+  if (scheduledProbeCameraInFlight) return;
+  scheduledProbeCameraInFlight = true;
+  probeCamera().finally(() => { scheduledProbeCameraInFlight = false; });
 }
 
 let _toastTimer = null;
@@ -1569,6 +1646,13 @@ async function submitChore(url, method, body) {
 }
 
 async function openChoreEditor(seed) {
+  // data-add-chore/data-edit-chore only render inside the chores overlay's
+  // edit mode, so openView is always truthy ('chores') here. Remember it: if
+  // the idle timer or a home tap runs closeAllOverlays() while this fetch is
+  // in flight, openView goes back to null, and this must NOT reopen a modal
+  // over a wall the user (or the idle return) already left: same stale-async
+  // guard as ensurePeopleThenRerender below.
+  const view = openView;
   let state;
   try {
     state = await j('/api/admin/state');   // {people (flat, active flags), chores (full records)}
@@ -1576,6 +1660,7 @@ async function openChoreEditor(seed) {
     showToast('Couldn’t open the editor — check the hub and try again.');
     return;
   }
+  if (openView !== view) return;   // overlay closed/switched while this was in flight
   const host = document.getElementById('chore-editor');
   let model;
   let label;
@@ -1858,7 +1943,7 @@ document.addEventListener('click', (e) => {
   if (head) { openOverlay('chores'); return; }
   const day = e.target.closest('.cal-day');
   if (day && !openView) { openOverlay('calendar'); return; }
-  if (e.target.closest('#overlay-home')) { closeDeleteConfirm(); closeChoreEditor(); closeEventDetail(); closeOverlay(); }
+  if (e.target.closest('#overlay-home')) { closeAllOverlays(); }
 });
 ['pointerdown', 'touchstart', 'keydown'].forEach((evt) =>
   document.addEventListener(evt, () => { noteInteraction(); if (openView) armIdle(); }, { passive: true }));
@@ -1946,4 +2031,4 @@ fetchClimate();
 setInterval(scheduledPoll, POLL_MS);
 setInterval(fetchWeather, POLL_MS);
 setInterval(fetchClimate, POLL_MS);
-setInterval(probeCamera, CAM_PROBE_MS);
+setInterval(scheduledProbeCamera, CAM_PROBE_MS);

@@ -414,6 +414,57 @@ def test_admin_people_crud_and_validation(client, app_mod):
     assert state["people"][0]["name"] == "Remy2"
 
 
+def test_calendar_exposes_synced_window(tmp_path, monkeypatch):
+    """Regression for issue #37: /api/calendar reports the range the sync caches
+    (from config) so the frontend can mark days outside it as not-synced instead
+    of rendering them as free."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendar_window_days": 10, "calendar_past_days": 5})
+    with TestClient(appmod.app) as c:
+        win = c.get("/api/calendar").json()["window"]
+    today = appmod._today()
+    assert win["to"] == (today + dt.timedelta(days=10)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=5)).isoformat()
+
+
+def test_calendar_window_is_intersection_of_fetch_and_sync(tmp_path, monkeypatch):
+    """The window must be the INTERSECTION of the fetch range and the sync
+    coverage. A config window wider than the fixed fetch (frontend uses
+    days=90&past=45) must cap to the fetch, or days the sync caches but this
+    request never fetched would render as falsely-empty instead of not-synced."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendar_window_days": 120, "calendar_past_days": 60})
+    with TestClient(appmod.app) as c:
+        win = c.get("/api/calendar").json()["window"]              # default fetch 90/45
+        win2 = c.get("/api/calendar?days=10&past=5").json()["window"]
+    today = appmod._today()
+    # config 120/60 capped to the fetch 90/45
+    assert win["to"] == (today + dt.timedelta(days=90)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
+    # an explicit narrower fetch caps further
+    assert win2["to"] == (today + dt.timedelta(days=10)).isoformat()
+    assert win2["from"] == (today - dt.timedelta(days=5)).isoformat()
+
+
+def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod):
+    """Regression for issue #35: an explicit JSON null for a field backed by a
+    NOT NULL column is a 422, not a 500 from the DB write. fixed_person_id (the
+    one nullable chore field) still accepts null."""
+    pid = client.post("/api/admin/people",
+                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    assert client.patch(f"/api/admin/people/{pid}", json={"sort": None}).status_code == 422
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": None}).status_code == 422
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    assert client.patch(f"/api/admin/chores/{cid}", json={"icon": None}).status_code == 422
+    assert client.patch(f"/api/admin/chores/{cid}", json={"active": None}).status_code == 422
+    # fixed_person_id: null is legitimate (clearing the fixed assignee) -> 200
+    assert client.patch(f"/api/admin/chores/{cid}",
+                        json={"assign_kind": "rotation", "rotation_order": [pid],
+                              "fixed_person_id": None}).status_code == 200
+
+
 def test_admin_delete_person_hard_removes_and_404s(client, app_mod):
     """The hard-delete endpoint removes the person entirely (distinct from the
     PATCH active=0 deactivate path); an unknown id is a 404."""
@@ -1211,10 +1262,75 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
     # the backfill is one-shot: wiping a day and re-connecting must not
     # resurrect it from live definitions
     fdb.replace_day_log(c, yesterday, [])
-    app_mod._conn = None
+    app_mod._db_initialized = False   # force the one-time backfill path to re-run
     with TestClient(app_mod.app) as tc:
         tc.get("/api/hub")
     assert fdb.day_log(app_mod._db(), yesterday) == []
+
+
+def test_db_connection_is_per_thread(app_mod):
+    """Regression guard for issue #29: request handlers run on a thread pool, so
+    _db() must hand each thread its OWN connection. One shared connection let
+    two threads' transactions interleave (a commit on one committing the other's
+    half-done work). Different threads -> different connection objects."""
+    import threading
+    main_conn = app_mod._db()
+    other = {}
+
+    def grab():
+        other["conn"] = app_mod._db()
+
+    t = threading.Thread(target=grab)
+    t.start()
+    t.join()
+    assert other["conn"] is not main_conn
+    # same thread, same connection (cached, not reconnected every call)
+    assert app_mod._db() is main_conn
+
+
+def test_open_sync_conn_retries_and_flags_failure(app_mod, monkeypatch):
+    """Regression for issue #32: a transient ensure_schema failure at sync
+    startup must not kill the thread; _open_sync_conn retries until it succeeds
+    AND records an unhealthy calendar_status so the wall shows staleness instead
+    of a false-healthy badge."""
+    # Pre-create the schema so the failure path can write calendar_status (the kv
+    # table has to exist for the status write to land, not be swallowed).
+    seed = app_mod.fdb.connect(app_mod.DB_PATH)
+    app_mod.fdb.ensure_schema(seed)
+    seed.close()
+    real_ensure = app_mod.fdb.ensure_schema
+    calls = {"n": 0}
+
+    def flaky(conn):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        return real_ensure(conn)
+
+    monkeypatch.setattr(app_mod.fdb, "ensure_schema", flaky)
+    monkeypatch.setattr(app_mod.time, "sleep", lambda *_: None)   # no real backoff wait
+    conn = app_mod._open_sync_conn()
+    assert conn.execute("SELECT 1").fetchone()[0] == 1
+    assert calls["n"] == 2   # failed once, retried, succeeded
+    # the failure surfaced, not a false-healthy badge
+    status = app_mod.fdb.kv_get(conn, "calendar_status")
+    assert status["ok"] is False and "sync startup" in status["error"]
+
+
+def test_demo_disables_background_sync(tmp_path, monkeypatch):
+    """Regression for issue #38: DEMO mode must not start the sync thread, which
+    would overwrite the seeded calendar_status with 'not configured'."""
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    monkeypatch.setenv("DEMO", "1")
+    monkeypatch.delenv("DISABLE_SYNC", raising=False)
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    assert appmod._sync_enabled() is False        # DEMO -> no sync thread
+    monkeypatch.delenv("DEMO", raising=False)
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    importlib.reload(appmod)
+    assert appmod._sync_enabled() is False         # DISABLE_SYNC -> no sync thread
 
 
 def test_interrupted_backfill_rolls_back_whole_then_retries(app_mod, monkeypatch):

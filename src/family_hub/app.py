@@ -107,8 +107,16 @@ _db_dir = os.path.dirname(DB_PATH)
 if _db_dir:
     os.makedirs(_db_dir, exist_ok=True)
 
-_conn = None
-_conn_lock = threading.Lock()
+# Per-thread SQLite connections. Request handlers are sync `def`, so FastAPI
+# runs them on a thread pool; one shared connection let their transactions
+# interleave (one thread's commit committing another thread's half-done
+# `with conn:` block). See issue #29. Each thread gets its own connection, and
+# SQLite (WAL + busy_timeout) serializes writers across them. The one-time,
+# whole-DB setup (schema migrations, history backfill, DEMO seed) runs once
+# under a lock so concurrent first-requests can't race the table rebuilds.
+_tls = threading.local()
+_init_lock = threading.Lock()
+_db_initialized = False
 
 
 def _now_local() -> dt.datetime:
@@ -160,10 +168,10 @@ def _ensure_history_backfill(conn) -> None:
 
 def _ensure_demo_seed(conn) -> None:
     """DEMO=1 only: seed the fake sample family into an EMPTY db on first open,
-    so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on there
-    being no people yet, so it never re-seeds or touches a real db (and a plain
-    unset-DEMO run never reaches here at all)."""
-    if conn.execute("SELECT 1 FROM people LIMIT 1").fetchone() is not None:
+    so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on EVERY
+    seeded table being empty (not just people), so it never re-seeds or touches a
+    real db (issue #36) — and a plain unset-DEMO run never reaches here at all."""
+    if not fdemo.is_unseeded(conn):
         return
     try:
         fdemo.seed_demo(conn, _today())
@@ -177,62 +185,58 @@ def _ensure_demo_seed(conn) -> None:
     log.info("DEMO mode: seeded the sample family wall")
 
 
+def _init_db_once(conn) -> None:
+    """Run the one-time, whole-DB setup exactly once per process: schema
+    migrations, the legacy history backfill, and (DEMO only) the sample seed.
+    Serialized under _init_lock so concurrent first-requests can't race the
+    table-rebuild migrations. On failure it leaves _db_initialized False and
+    re-raises, so the next request retries the upgrade rather than serving
+    half-set-up data. (The backfill is atomic and the seed self-wipes a partial
+    write, so a retry starts clean.)"""
+    global _db_initialized
+    with _init_lock:
+        if _db_initialized:
+            return
+        fdb.ensure_schema(conn)
+        _ensure_history_backfill(conn)   # kv-guarded, atomic; raises on failure
+        if DEMO:
+            _ensure_demo_seed(conn)      # people-guarded; raises on failure
+        _db_initialized = True
+
+
 def _db():
-    """Module-level SQLite connection with a cheap self-heal ping per use, so a
-    corrupted/closed handle recovers instead of erroring forever."""
-    global _conn
-    with _conn_lock:
-        if _conn is None:
-            _conn = fdb.connect(DB_PATH)
-            fdb.ensure_schema(_conn)
+    """A per-thread SQLite connection with a cheap self-heal ping per use, so a
+    corrupted/closed handle recovers instead of erroring forever. Per-thread
+    (not one shared handle) so the thread pool's request handlers never
+    interleave each other's transactions (issue #29)."""
+    conn = getattr(_tls, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+        except Exception:
+            log.warning("db handle unhealthy; reconnecting", exc_info=True)
             try:
-                _ensure_history_backfill(_conn)
+                conn.close()
             except Exception:
-                # The backfill is atomic (already rolled back). Drop the
-                # half-initialized handle so the NEXT request reconnects and
-                # retries the one-time upgrade, rather than serving zeroed
-                # history forever under a connection whose backfill never ran.
-                log.error("history backfill failed; dropping handle to retry",
-                          exc_info=True)
-                try:
-                    _conn.close()
-                except Exception:
-                    pass
-                _conn = None
-                raise
-            if DEMO:
-                try:
-                    _ensure_demo_seed(_conn)
-                except Exception:
-                    # Partial seed already wiped (clear_demo). Drop the handle so
-                    # the next request reconnects and retries the seed from empty,
-                    # rather than caching a connection whose seed never completed.
-                    log.error("DEMO seed failed; dropping handle to retry",
-                              exc_info=True)
-                    try:
-                        _conn.close()
-                    except Exception:
-                        pass
-                    _conn = None
-                    raise
-        else:
+                pass
+            conn = None
+            _tls.conn = None
+    if conn is None:
+        conn = fdb.connect(DB_PATH)
+        _tls.conn = conn
+    # Ensure the one-time whole-DB setup has run — retried here if a prior
+    # attempt failed, or if a test reset _db_initialized to force a fresh init.
+    if not _db_initialized:
+        try:
+            _init_db_once(conn)
+        except Exception:
             try:
-                _conn.execute("SELECT 1")
+                conn.close()
             except Exception:
-                log.warning("db handle unhealthy; reconnecting", exc_info=True)
-                try:
-                    _conn.close()
-                except Exception:
-                    pass
-                _conn = fdb.connect(DB_PATH)
-                fdb.ensure_schema(_conn)
-                # No drop-handle guard here (unlike the fresh-connect branch):
-                # reaching this reconnect means a handle was already established
-                # once, so the backfill flag is set by now and this call returns
-                # at its kv_get guard without doing — or being able to fail on —
-                # any backfill work.
-                _ensure_history_backfill(_conn)
-        return _conn
+                pass
+            _tls.conn = None
+            raise
+    return conn
 
 
 # One shared async client for the tile proxies instead of building/tearing
@@ -296,7 +300,22 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             "label": cal.get("label"),
             "event_color": GOOGLE_EVENT_COLORS.get(e["color_id"] or ""),
         })
-    return {"status": status, "events": events}
+    # The range for which THIS payload is authoritative (a missing day is really
+    # free): the INTERSECTION of what was fetched (past_days .. days) and what
+    # the sync actually caches (cfg.calendar_past_days .. cfg.calendar_window_days).
+    # Reporting the raw config window would falsely mark a day that the sync
+    # caches but this request never fetched (e.g. calendar_past_days raised above
+    # the frontend's fixed past=45) as free instead of "not synced" (issue #37).
+    synced_back = min(past_days, cfg.calendar_past_days)
+    synced_fwd = min(days, cfg.calendar_window_days)
+    return {
+        "status": status,
+        "events": events,
+        "window": {
+            "from": (today - dt.timedelta(days=synced_back)).isoformat(),
+            "to": (today + dt.timedelta(days=synced_fwd)).isoformat(),
+        },
+    }
 
 
 def _links() -> dict:
@@ -660,6 +679,21 @@ class ChorePatch(BaseModel):
     active: int | None = None
 
 
+# An explicit JSON null for a field backed by a NOT NULL column is a bad request
+# (422), not a 500 from the DB write (issue #35). fixed_person_id is the one
+# chore field that legitimately accepts null (clearing a fixed assignee); `date`
+# is an API-only field whose null means "no change".
+_PERSON_NONNULL_PATCH = {"name", "color", "sort", "active"}
+_CHORE_NONNULL_PATCH = {"title", "icon", "schedule_kind", "days_mask",
+                        "assign_kind", "rotation_order", "sort", "active"}
+
+
+def _reject_null_nonnullable(fields: dict, nonnullable: set) -> None:
+    bad = sorted(k for k in fields if k in nonnullable and fields[k] is None)
+    if bad:
+        raise HTTPException(422, f"{', '.join(bad)} may not be null")
+
+
 def _validate_person(name: str, color: str) -> str:
     name = (name or "").strip()
     if not (1 <= len(name) <= 30):
@@ -746,6 +780,7 @@ def admin_patch_person(pid: int, p: PersonPatch):
     c = _db()
     row = _person_row(c, pid)
     fields = p.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _PERSON_NONNULL_PATCH)
     if "name" in fields or "color" in fields:
         name = fields.get("name", row["name"])
         color = fields.get("color", row["color"])
@@ -789,6 +824,7 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
     c = _db()
     row = _chore_row(c, cid)
     fields = ch.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _CHORE_NONNULL_PATCH)
     merged = {**row, **fields}
     kind = merged["schedule_kind"]
     # Converting a daily/weekly chore to one-time needs a real due date. Its
@@ -911,16 +947,59 @@ def _sync_tick(client, conn, cfg):
         return conn
 
 
+def _open_sync_conn():
+    """Open the sync thread's own DB connection, retrying with backoff. The old
+    code ran connect/ensure_schema outside any try, so a transient startup
+    failure (e.g. ensure_schema racing a request thread's migration ->
+    'database is locked') killed the daemon thread permanently and froze calendar
+    sync forever behind a still-healthy 'last synced' badge (issue #32). Retry
+    instead, and best-effort flag the failure in calendar_status so the wall
+    shows staleness rather than a false-healthy state."""
+    backoff = 5
+    while True:
+        conn = None
+        try:
+            conn = fdb.connect(DB_PATH)
+            fdb.ensure_schema(conn)
+            return conn
+        except Exception as e:
+            log.exception("sync startup failed; retrying in %ss", backoff)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            try:   # surface the failure; skip silently if the DB is unwritable
+                # closing() guarantees the fd is released even when kv_set raises
+                # on the same lock that triggered this retry — else the infinite
+                # backoff loop would leak one connection per iteration.
+                with contextlib.closing(fdb.connect(DB_PATH)) as sc:
+                    prior = fdb.kv_get(sc, "calendar_status") or {}
+                    fdb.kv_set(sc, "calendar_status",
+                               {"ok": False, "error": f"sync startup: {e}",
+                                "last_sync": prior.get("last_sync")})
+            except Exception:
+                pass
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+
+
 def sync_loop():
-    conn = fdb.connect(DB_PATH)
-    fdb.ensure_schema(conn)
+    conn = _open_sync_conn()
     client = GoogleCalendarClient(TOKEN_PATH)
     while True:
         conn = _sync_tick(client, conn, cfg)
         time.sleep(300)
 
 
-if os.environ.get("DISABLE_SYNC") != "1":
+def _sync_enabled() -> bool:
+    """The background sync thread runs unless disabled for tests (DISABLE_SYNC)
+    or in DEMO mode. DEMO's canned data must not be overwritten by a real sync
+    that would flag the seeded calendar as 'not configured' (issue #38)."""
+    return os.environ.get("DISABLE_SYNC") != "1" and not DEMO
+
+
+if _sync_enabled():
     threading.Thread(target=sync_loop, daemon=True).start()
 
 # HTML must always revalidate (no-cache still allows ETag 304s): the ?v=N
