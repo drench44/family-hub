@@ -857,15 +857,46 @@ def test_laundry_card_static_guards():
     # the timer arc + tumble only exist inside .ln-door SVG markup built by
     # lnPortholeSvg; the renderer must be wired into the poll loop
     assert "fetchLaundry" in hub and "renderLaundry" in hub and "laundryTick" in hub
+    # the finish-endgame fast lane: near a projected finish the frontend
+    # chains short re-polls (and the server cache tightens in step) so the
+    # brief lg_thinq "end" status can't slip between 60s polls — without it
+    # the wall misses finishes entirely (live board, 2026-08-17)
+    assert "lnEndgame" in hub and "LN_FAST_POLL_MS" in hub
+    # ... and the JS window must stay PAIRED with the server's cache window:
+    # if they drift, the fast polls just re-read a still-warm cache and the
+    # whole lane silently does nothing
+    from family_hub import tiles as ftiles
+    ahead = re.search(r"const LN_ENDGAME_AHEAD_MIN = (\d+)", hub)
+    behind = re.search(r"const LN_ENDGAME_BEHIND_MIN = (\d+)", hub)
+    assert ahead and behind, "hub.js lnEndgame window constants missing"
+    assert (int(ahead.group(1)) == int(ftiles.LAUNDRY_ENDGAME_AHEAD_MIN)
+            and int(behind.group(1)) == int(ftiles.LAUNDRY_ENDGAME_BEHIND_MIN)), \
+        "hub.js lnEndgame window must match tiles.LAUNDRY_ENDGAME_*_MIN"
     # every animated laundry class must be neutralized under reduced motion
     # (a class dropped from the block would leave the full 12.8s tumble
     # running for reduced-motion users with no test failing)
     rm_block = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*?)\n\}", CSS, re.S)
     assert rm_block, "prefers-reduced-motion block missing"
+    # exact-token match, not substring: ".ln-sud" would otherwise ride on
+    # ".ln-sud-drift" (and ".ln-heat" on ".ln-heatglow"), leaving the
+    # shorter class removable with no test failing
     for cls in ("ln-tumble", "ln-flyp", "ln-lift", "ln-heap",
-                "ln-water", "ln-waterline", "ln-halo"):
-        assert f".{cls}" in rm_block.group(1), \
+                "ln-water", "ln-waterline", "ln-sud", "ln-sud-drift",
+                "ln-heatglow", "ln-halo"):
+        assert re.search(rf"\.{re.escape(cls)}(?![\w-])", rm_block.group(1)), \
             f"reduced-motion must neutralize .{cls}"
+    # a paused machine must LOOK paused: the freeze rule (the one whose
+    # declaration block STARTS with animation-play-state, unlike the done/
+    # reduced-motion rules) must cover every animated class. ln-sud-drift
+    # needs no entry — drift bubbles carry ln-sud in the markup, and the
+    # two-class paused selector out-specifies the drift animation rule.
+    paused = re.search(r"([^{}]+)\{\s*animation-play-state:\s*paused", CSS)
+    assert paused, "paused-phase freeze rule missing"
+    for cls in ("ln-tumble", "ln-flyp", "ln-lift", "ln-water",
+                "ln-waterline", "ln-sud", "ln-heatglow", "ln-heap"):
+        assert re.search(rf"\.ln-ph-paused \.{re.escape(cls)}(?![\w-])",
+                         paused.group(1)), \
+            f"paused phase must freeze .{cls}"
     # the phone Laundry tab shows ONLY the laundry slot from the shared
     # .panels section, and the Weather tab no longer duplicates it
     assert re.search(r'body\[data-tab="laundry"\] \.panels > :not\(\.laundry-slot\)'

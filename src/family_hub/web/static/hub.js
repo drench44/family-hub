@@ -2301,17 +2301,30 @@ function lnPortholeSvg(m, now = Date.now()) {
       + `<g transform="translate(50 66)">`
       + `<path class="ln-flyp ln-w${i + 1}" style="animation-delay:${(base + i * 0.55).toFixed(2)}s" d="${d}"/>`
       + `</g></g>`).join('');
-    inner = `<g class="ln-tumble">${drum}</g>`
+    // the dryer's tell is HEAT: a warm radial glow low in the drum,
+    // breathing slowly. Drawn UNDER the drum art and load so it reads as
+    // hot air behind the clothes. (Rising steam squiggles were tried and
+    // rejected: over a tan heap at porthole size they read as the wrong
+    // emoji — operator, 2026-08-17.)
+    inner = (m.kind === 'dryer'
+        ? `<circle class="ln-heatglow" cx="50" cy="50" r="37" fill="url(#lnht-${gid})"/>`
+        : '')
+      + `<g class="ln-tumble">${drum}</g>`
       + trio(0)
       + `<g transform="matrix(-1 0 0 1 100 0)">${trio(6.4)}</g>`
       + heap
       + (m.kind !== 'dryer'
-        ? `<path class="ln-water" d="M11 66 Q 30 61 50 66 T 89 66 L 89 90 L 11 90 Z"/>`
-          + `<path class="ln-waterline" d="M11 66 Q 30 61 50 66 T 89 66"/>`
-          + `<circle class="ln-sud" cx="41" cy="64" r="2.7"/>`
-          + `<circle class="ln-sud" cx="47" cy="62.4" r="1.9"/>`
-          + `<circle class="ln-sud" cx="60" cy="64.5" r="2.2"/>`
-          + `<circle class="ln-sud ln-sud-drift" cx="55" cy="56" r="1.2"/>`
+        ? `<path class="ln-water" d="M11 70 Q 30 65 50 70 T 89 70 L 89 90 L 11 90 Z"/>`
+          + `<path class="ln-waterline" d="M11 70 Q 30 65 50 70 T 89 70"/>`
+          + `<circle class="ln-sud" cx="33.5" cy="69.6" r="1.6"/>`
+          + `<circle class="ln-sud" cx="41" cy="68" r="2.7"/>`
+          + `<circle class="ln-sud" cx="47" cy="66.4" r="1.9"/>`
+          + `<circle class="ln-sud" cx="52.5" cy="67.7" r="1.5"/>`
+          + `<circle class="ln-sud" cx="60" cy="68.5" r="2.2"/>`
+          + `<circle class="ln-sud" cx="66" cy="69.7" r="1.8"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="55" cy="63" r="1.2"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="44" cy="64.5" r=".9" style="animation-delay:1.3s"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="63.5" cy="63.8" r="1.05" style="animation-delay:2.4s"/>`
         : '');
   } else if (m.phase === 'done') {
     // the cycle-complete light: the drum glows softly over the finished
@@ -2332,6 +2345,9 @@ function lnPortholeSvg(m, now = Date.now()) {
     + `<radialGradient id="lngl-${gid}" cx=".38" cy=".3" r=".9">`
     + `<stop class="ln-st-glhi" offset="0"/><stop class="ln-st-glmid" offset=".55"/>`
     + `<stop class="ln-st-gllo" offset="1"/></radialGradient>`
+    + `<radialGradient id="lnht-${gid}" cx=".5" cy=".72" r=".8">`
+    + `<stop class="ln-st-hthi" offset="0"/><stop class="ln-st-htlo" offset="1"/>`
+    + `</radialGradient>`
     + `<clipPath id="lncl-${gid}"><circle cx="50" cy="50" r="37"/></clipPath>`
     + `</defs>`
     + `<circle class="ln-bezel" cx="50" cy="50" r="43" stroke="url(#lnbz-${gid})"/>`
@@ -2422,6 +2438,32 @@ function laundryTick(now = Date.now()) {
   });
 }
 
+/* The finish ENDGAME: lg_thinq holds "end" only briefly before the machine
+   powers itself off, so inside the final couple of minutes (or just past the
+   projected finish) the whole done window can slip between 60s polls — the
+   wall then misses the finish entirely (live board, 2026-08-17). While any
+   machine is in that window, chain short re-polls; the server's laundry
+   cache tightens its TTL in step (tiles.LAUNDRY_ENDGAME_TTL) so these
+   fetches see fresh HA state. The window is bounded a few minutes past the
+   projection so a stale latched remaining-time sensor can't pin fast
+   polling for hours; past it, the server's missed-finish memory takes over.
+   The window bounds are PAIRED with tiles.LAUNDRY_ENDGAME_AHEAD_MIN /
+   _BEHIND_MIN (a static guard holds them equal): drift apart and the fast
+   polls just re-read a still-warm cache. */
+const LN_FAST_POLL_MS = 10000;
+const LN_ENDGAME_AHEAD_MIN = 2;
+const LN_ENDGAME_BEHIND_MIN = 5;
+let lnFastTimer = null;
+function lnEndgame(machines) {
+  return (machines || []).some((m) => {
+    if (m.phase !== 'running') return false;
+    const t = Date.parse(m.finishes_at);
+    if (isNaN(t)) return false;
+    const min = (t - Date.now()) / 60000;
+    return min <= LN_ENDGAME_AHEAD_MIN && min >= -LN_ENDGAME_BEHIND_MIN;
+  });
+}
+
 /* Poll the fail-soft laundry endpoint on the hub cadence; same last-good-card
    discipline as weather/climate. Re-render ONLY when the payload actually
    changed — an innerHTML rebuild restarts the tumble animation mid-spin, and
@@ -2435,6 +2477,15 @@ async function fetchLaundry() {
   } catch (e) {
     laundryFails += 1;
     if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) laundryData = { available: false };
+  }
+  // (re)arm the endgame fast lane off the fresh payload BEFORE rendering:
+  // a render throw must not dissolve the chain in exactly the window it
+  // exists for. Clearing first keeps the 60s master poll and the chain
+  // from ever stacking timers.
+  clearTimeout(lnFastTimer);
+  lnFastTimer = null;
+  if (lnEndgame(laundryData && laundryData.machines)) {
+    lnFastTimer = setTimeout(fetchLaundry, LN_FAST_POLL_MS);
   }
   if (JSON.stringify(laundryData) !== before) renderLaundry();
   else laundryTick();   // still advance the countdown on the poll beat

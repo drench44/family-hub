@@ -1360,13 +1360,15 @@ async def tile_laundry():
     # survives the machine being opened / powered off — and later restarts of
     # this server — then attach the remembered stamp to every machine.
     #
-    # Stamp ONLY on an observed TRANSITION into done (previous phase, kept in
-    # kv, was neither done nor offline). status_since is HA's last_changed,
-    # which resets on an HA restart or a done→unavailable→done cloud blip —
-    # naive re-stamping would overwrite the real 9:02pm finish with the 3am
-    # restart time. A genuine new cycle always passes through running/idle
-    # first; a blip or restart never does (it reads done→offline→done, or
-    # done→done with a moved last_changed — both refused here).
+    # Stamp ONLY on an observed TRANSITION (previous phase kept in kv): into
+    # done from neither done nor offline, or — the missed-finish path — from
+    # running/paused straight to idle (see the elif below). status_since is
+    # HA's last_changed, which resets on an HA restart or a
+    # done→unavailable→done cloud blip — naive re-stamping would overwrite
+    # the real 9:02pm finish with the 3am restart time. A genuine new cycle
+    # always passes through running/idle first; a blip or restart never does
+    # (it reads done→offline→done, or done→done with a moved last_changed —
+    # both refused here).
     #
     # The tile itself is cached in-process (tiles._laundry_cache), so copy
     # before annotating: the cached dict must stay un-mutated. And the kv
@@ -1378,14 +1380,73 @@ async def tile_laundry():
         for m in machines:
             done_key = f"laundry_done_{m['id']}"
             phase_key = f"laundry_phase_{m['id']}"
+            missed_key = f"laundry_missed_{m['id']}"
+            nonoff_key = f"laundry_nonoff_{m['id']}"
             phase = m.get("phase")
             prev = fdb.kv_get(c, phase_key)
+            # Provenance across an HA blip: prev collapses to "offline"
+            # while HA is blind, losing what the machine was DOING before —
+            # so the last non-offline phase is tracked in its own key. A
+            # finish straddled by a blip (running -> offline -> idle) is
+            # still a finish and gets the full missed-done treatment below;
+            # a blip on an idle or freshly-emptied machine is still nothing.
+            came_from = (prev if prev != "offline"
+                         else fdb.kv_get(c, nonoff_key))
             if (phase == "done" and m.get("status_since")
                     and prev not in ("done", "offline")
                     and fdb.kv_get(c, done_key) != m["status_since"]):
                 fdb.kv_set(c, done_key, m["status_since"])
+            elif phase == "idle" and came_from in ("running", "paused"):
+                # The missed finish: LG machines auto-power-off a minute or
+                # two after "end", so a 60s poll can watch running -> power_off
+                # and never see done at all — leaving the wall on a bare
+                # "Idle" with no completion memory (live board, 2026-08-17).
+                # A machine that WAS in a cycle (directly, or across an HA
+                # blip — came_from) and now reports idle has ended it. From
+                # RUNNING with the projection recently passed (within the
+                # Done-hold window — any staler and it's likely a LATCHED
+                # previous-cycle value from a flaky remaining-time sensor,
+                # not this load's finish) = a genuine finished load: stamp
+                # that exact moment AND remember it as a missed done
+                # (presented below as the real Done it was). Anything else —
+                # a canceled cycle (projection still future), a stale
+                # projection (warned, refused), or an exit from PAUSED
+                # (pause freezes the drum while the projection keeps aging,
+                # so a "past" projection there is fiction) — stamps only the
+                # moment the machine left the cycle, and never fakes a Done.
+                mt = tiles._laundry_minutes_to(m.get("finishes_at"))
+                if (came_from == "running" and mt is not None
+                        and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0):
+                    fdb.kv_set(c, done_key, m["finishes_at"])
+                    fdb.kv_set(c, missed_key, m["finishes_at"])
+                else:
+                    if came_from == "running" and mt is not None and mt < 0:
+                        log.warning(
+                            "laundry %s: left its cycle with a stale finish "
+                            "projection (%s); stamping the exit moment "
+                            "instead", m["id"], m["finishes_at"])
+                    if m.get("status_since"):
+                        fdb.kv_set(c, done_key, m["status_since"])
+            if phase in ("running", "paused", "reserved", "done", "error"):
+                # any sign of machine activity retires the synthetic Done (a
+                # real observed done replaces it; a new cycle supersedes it).
+                # Deliberately NOT cleared on offline: an HA blip mid-hold
+                # must not erase a finish the family hasn't seen yet.
+                if fdb.kv_get(c, missed_key):
+                    fdb.kv_set(c, missed_key, None)
             if phase and phase != prev:
                 fdb.kv_set(c, phase_key, phase)
+            if phase and phase != "offline":
+                fdb.kv_set(c, nonoff_key, phase)
+            if phase == "idle":
+                # Present a remembered missed finish as the Done it really
+                # was — green ring, "at 9:02pm" — for the hold window, then
+                # decay to idle + the quiet "last load" line.
+                ms = fdb.kv_get(c, missed_key)
+                mt = tiles._laundry_minutes_to(ms) if ms else None
+                if mt is not None and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0:
+                    m["phase"] = "done"
+                    m["status_since"] = ms
             m["last_done"] = fdb.kv_get(c, done_key)
     except Exception:
         log.warning("laundry: completion-memory kv unavailable; serving the "
