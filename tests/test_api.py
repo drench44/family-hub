@@ -1553,6 +1553,31 @@ def test_away_patch_rejects_end_before_start(client, app_mod, monkeypatch):
                               "end_date": "2026-08-10"}).status_code == 200
 
 
+def test_away_patch_rejects_start_after_stored_end(client, app_mod, monkeypatch):
+    """Mirror of the end<start guard: PATCHing start_date LATER than the row's
+    already-stored end_date, without re-supplying end_date, must 422 -- not
+    silently void the whole period via away_map's a>b skip."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    pid = client.post("/api/admin/away",
+                      json={"person_id": p1, "start_date": "2026-08-10"}).json()["id"]
+    # close the period so it has a stored end_date
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"end_date": "2026-08-12"}).status_code == 200
+
+    # moving start past the stored end, without touching end_date, must 422
+    r = client.patch(f"/api/admin/away/{pid}", json={"start_date": "2026-08-20"})
+    assert r.status_code == 422
+
+    # a start move that stays within the stored end still works
+    ok = client.patch(f"/api/admin/away/{pid}", json={"start_date": "2026-08-11"})
+    assert ok.status_code == 200
+    row = next(p for p in client.get("/api/admin/away").json()["away_periods"]
+               if p["id"] == pid)
+    assert row["start_date"] == "2026-08-11"
+    assert row["end_date"] == "2026-08-12"
+
+
 def test_away_patch_and_back_unknown_id_404(client, app_mod, monkeypatch):
     """S3: PATCH/back on an unknown id is a 404, mirroring DELETE."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
