@@ -5005,9 +5005,16 @@ test('laundryTick: countdown + arc update in place without rebuilding the drum',
   assert.equal(after, before, 'machine element identity preserved (no re-render)');
   assert.equal(after.querySelector('.num').textContent, '18');
   assert.equal(after.querySelector('.ln-sub').textContent, 'Rinsing · done 2:23pm');
-  const dash = after.querySelector('.ln-arc').getAttribute('stroke-dasharray');
+  const arcEl = after.querySelector('.ln-arc');
+  const dash = arcEl.getAttribute('stroke-dasharray');
   const [len, circ] = dash.split(' ').map(Number);
   assert.ok(Math.abs(len / circ - 18 / 60) < 0.01, 'arc drained to 18 min');
+  // the tick's circumference must match the RENDERED ring's radius — the
+  // two writers (render + tick) once diverged silently (44 vs 47.5) and a
+  // ratio-only assertion was blind to it
+  const ringR = Number(arcEl.getAttribute('r'));
+  assert.ok(Math.abs(circ - 2 * Math.PI * ringR) < 0.1,
+    `tick circumference ${circ} must equal 2πr of the rendered ring (r=${ringR})`);
   // count -> word shape change (finish slips past) rebuilds just the big line
   sandbox.laundryTick(LN_NOW + 40 * 60000);
   assert.match(washer().querySelector('.ln-big').innerHTML, /Any minute/);
