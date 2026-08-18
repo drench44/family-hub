@@ -127,3 +127,14 @@ def test_build_chore_vtodo_all_day_and_timed():
     assert "TRIGGER;VALUE=DATE-TIME:20260820T140000Z" in t   # typed absolute UTC
     assert "20260821T010000Z" in t                           # 18:00 PDT -> next-day Z
     assert t.count("BEGIN:VALARM") == 2
+
+
+def test_build_chore_vtodo_dtstamp_is_utc_from_local_now():
+    """Regression: a LOCAL-zone tz-aware now (what the sync tick passes) must
+    still stamp DTSTAMP/CREATED in UTC 'Z' — not a bare local TZID iCloud rejects."""
+    from zoneinfo import ZoneInfo
+    now = dt.datetime(2026, 8, 17, 12, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    ics = rem.build_chore_vtodo("u", "Dishes", dt.date(2026, 8, 20), [], now)
+    assert "DTSTAMP:20260817T190000Z" in ics       # 12:00 PDT -> 19:00Z
+    assert "CREATED:20260817T190000Z" in ics
+    assert "TZID" not in ics

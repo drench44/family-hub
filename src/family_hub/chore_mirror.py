@@ -23,10 +23,6 @@ from . import reminders as remlogic
 log = logging.getLogger("family_hub.caldav")
 
 DEFAULT_HORIZON_DAYS = 7
-# Keep one past day in the window so a chore completed late (yesterday) is not
-# pruned before the completion sync records it (P4). Completed reminders are kept
-# regardless; this only affects un-completed ones.
-_PAST_DAYS = 1
 
 
 def _title(chore: dict) -> str:
@@ -84,28 +80,41 @@ def reconcile_completions(conn, now: dt.datetime) -> int:
     yet. Un-completing stays a wall action (which pushes back via push_completion).
     Returns the number of completions newly recorded. Never raises."""
     try:
-        added = 0
-        for m in fdb.list_chore_mirror(conn):
+        rows = fdb.list_chore_mirror(conn)
+    except Exception:
+        log.exception("chore completion reconcile: list failed (non-fatal)")
+        return 0
+    added = 0
+    for m in rows:
+        try:      # isolate per row so one poison object can't stall all streaks
             obj = fdb.get_cal_object(conn, m["cal_object_id"])
             if not obj or "STATUS:COMPLETED" not in (obj.get("raw_ics") or ""):
                 continue
             if not fdb.completion_exists(conn, m["chore_id"], m["date"]):
                 fdb.set_completion(conn, m["chore_id"], m["date"], m["person_id"])
                 added += 1
-        return added
-    except Exception:
-        log.exception("chore mirror completion reconcile failed (non-fatal)")
-        return 0
+        except Exception:
+            log.warning("chore completion reconcile skipped: %s",
+                        m.get("uid"), exc_info=True)
+    return added
 
 
-def reconcile(conn, cfg, now: dt.datetime) -> dict:
+def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
     """Bring each mapped person's iCloud list in line with the wall's chore plan
-    over [today-1, today+H]. Returns {created, moved, deleted}. Never raises."""
+    over [today, today+H]. No past day: the wall FREEZES history in occurrence_log,
+    so recomputing yesterday's live plan could rewrite a reminder against a plan
+    the wall no longer shows — the completions-before-prune ordering already
+    catches a late completion. `synced_collections` (when given) is the set of
+    VTODO list ids that pulled OK this tick; the prune only trusts a list's state
+    when it actually synced, so a per-list outage can't delete a reminder and lose
+    an iOS completion. Returns {created, moved, updated, deleted}. Never raises;
+    per-occurrence failures are isolated so one poison row can't stall the rest."""
+    zero = {"created": 0, "moved": 0, "updated": 0, "deleted": 0}
     try:
         mapped = {p["id"]: p["reminder_list_id"]
                   for p in fdb.list_people(conn) if p.get("reminder_list_id")}
         if not mapped:
-            return {"created": 0, "moved": 0, "deleted": 0}
+            return dict(zero)
         tz = now.tzinfo             # wall zone (None in tests -> all-day fallback)
         now_iso = now.isoformat()
         today = now.date()
@@ -115,7 +124,7 @@ def reconcile(conn, cfg, now: dt.datetime) -> dict:
         chores_list = list(chores.values())
 
         desired: dict = {}
-        for i in range(-_PAST_DAYS, H + 1):
+        for i in range(0, H + 1):
             d = today + dt.timedelta(days=i)
             for row in chlogic.plan_rows(chores_list, all_people, d):
                 lid = mapped.get(row["person_id"])
@@ -127,24 +136,31 @@ def reconcile(conn, cfg, now: dt.datetime) -> dict:
         created = moved = updated = deleted = 0
 
         for (cid, diso), (pid, lid) in desired.items():
-            chore = chores.get(cid)
-            if chore is None:
-                continue
-            cur = existing.get((cid, diso))
-            if cur is None:
-                _queue_create(conn, chore, diso, pid, lid, tz, now, now_iso)
-                created += 1
-            elif cur["person_id"] != pid:     # rotation handed off to another person
-                fdb.queue_cal_object_delete(conn, cur["cal_object_id"], now_iso)
-                fdb.delete_chore_mirror(conn, cid, diso)
-                _queue_create(conn, chore, diso, pid, lid, tz, now, now_iso)
-                moved += 1
-            elif cur.get("sig") != _sig(chore):
-                # the chore's title/icon/times were edited -> refresh the reminder
-                # in place, unless it's already completed (leave history alone; the
-                # stale sig lets a later reopen re-sync).
-                obj = fdb.get_cal_object(conn, cur["cal_object_id"])
-                if obj and "STATUS:COMPLETED" not in (obj.get("raw_ics") or ""):
+            try:
+                chore = chores.get(cid)
+                if chore is None:
+                    continue
+                cur = existing.get((cid, diso))
+                obj = fdb.get_cal_object(conn, cur["cal_object_id"]) if cur else None
+                completed = bool(obj and "STATUS:COMPLETED" in (obj.get("raw_ics") or ""))
+                if cur is None or obj is None:
+                    # not mirrored, or its object vanished (deleted in iOS / a
+                    # conflict dropped the row) -> (re)create; the wall is source
+                    # of truth. Clear an orphaned ledger row first.
+                    if cur is not None:
+                        fdb.delete_chore_mirror(conn, cid, diso)
+                    _queue_create(conn, chore, diso, pid, lid, tz, now, now_iso)
+                    created += 1
+                elif cur["person_id"] != pid:     # rotation handed off to another person
+                    if not completed:             # never delete a DONE reminder (history)
+                        fdb.queue_cal_object_delete(conn, cur["cal_object_id"], now_iso)
+                    fdb.delete_chore_mirror(conn, cid, diso)
+                    _queue_create(conn, chore, diso, pid, lid, tz, now, now_iso)
+                    moved += 1
+                elif cur.get("sig") != _sig(chore) and not completed:
+                    # the chore's title/icon/times were edited -> refresh in place.
+                    # A completed occurrence is left alone (its stale sig lets a
+                    # later reopen re-sync).
                     d = dt.date.fromisoformat(diso)
                     ics = remlogic.build_chore_vtodo(
                         cur["uid"], _title(chore), d,
@@ -154,21 +170,32 @@ def reconcile(conn, cfg, now: dt.datetime) -> dict:
                     fdb.upsert_chore_mirror(conn, cid, diso, pid, cur["cal_object_id"],
                                             cur["uid"], _sig(chore))
                     updated += 1
+            except Exception:
+                log.warning("chore mirror occurrence skipped: %s %s",
+                            cid, diso, exc_info=True)
 
-        # prune occurrences that fell out of the window (past, or the chore was
-        # deleted/deactivated). Never delete a COMPLETED reminder — that's history
-        # in iOS; just forget the ledger row so it isn't reconciled again.
+        # prune occurrences that fell out of the window (past, chore deleted /
+        # deactivated). Never delete a COMPLETED reminder — that's history; just
+        # forget the ledger row. Skip lists that didn't sync this tick, so a stale
+        # local copy can't drive a delete that loses an iOS completion.
         for (cid, diso), m in existing.items():
             if (cid, diso) in desired:
                 continue
-            obj = fdb.get_cal_object(conn, m["cal_object_id"])
-            if not (obj and "STATUS:COMPLETED" in (obj.get("raw_ics") or "")):
-                fdb.queue_cal_object_delete(conn, m["cal_object_id"], now_iso)
-            fdb.delete_chore_mirror(conn, cid, diso)
-            deleted += 1
+            try:
+                coll = m["cal_object_id"].split("/", 1)[0]
+                if synced_collections is not None and coll not in synced_collections:
+                    continue
+                obj = fdb.get_cal_object(conn, m["cal_object_id"])
+                if not (obj and "STATUS:COMPLETED" in (obj.get("raw_ics") or "")):
+                    fdb.queue_cal_object_delete(conn, m["cal_object_id"], now_iso)
+                fdb.delete_chore_mirror(conn, cid, diso)
+                deleted += 1
+            except Exception:
+                log.warning("chore mirror prune skipped: %s %s",
+                            cid, diso, exc_info=True)
 
         return {"created": created, "moved": moved, "updated": updated,
                 "deleted": deleted}
     except Exception:
         log.exception("chore mirror reconcile failed (non-fatal)")
-        return {"created": 0, "moved": 0, "updated": 0, "deleted": 0, "error": True}
+        return {**zero, "error": True}
