@@ -5713,3 +5713,28 @@ test('renderSettingsFull emits the version line and paints the fetched version i
   assert.equal(document.getElementById('settings-version').textContent, 'family-hub v4.5.6',
     'renderSettingsFull calls paintVersion(), so the line shows the fetched version');
 });
+
+test('skySceneHtml nests the drift clouds INSIDE .sky, so the drift keyframe 100cqw resolves against the sky width', () => {
+  // The CSS fix ties the cloud drift's off-screen exit to `100cqw`, resolved
+  // against the nearest query container — meant to be `.sky`
+  // (container-type:inline-size). That resolution needs the cloud spans to be
+  // DESCENDANTS of .sky, which a static CSS guard can't see. This pins it: move
+  // the clouds OUT of .sky and 100cqw resolves against the wrong ancestor, the
+  // off-screen reset silently re-breaks, and the static guard stays green — this
+  // test goes red. (It guards descendancy only; it does NOT catch a nearer
+  // container wrapped *inside* .sky — the fake DOM has no parent links or
+  // computed style to express "no nearer container".)
+  const { sandbox } = newHub();
+  const html = sandbox.skySceneHtml(
+    { conditions: 'cloudy', temp: 60, unit: 'F', sunrise: '06:00', sunset: '20:00', high: 70, low: 50 },
+    12);
+  const roots = parseFragment(html);
+  const sky = queryFirst(roots, '.sky');
+  assert.ok(sky, 'skySceneHtml must render a .sky container');
+  const insideSky = queryAll(sky.children, '.sky-cloud');
+  assert.ok(insideSky.length >= 1, 'a cloudy sky must render drift clouds');
+  const anywhere = queryAll(roots, '.sky-cloud');
+  assert.equal(anywhere.length, insideSky.length,
+    'every .sky-cloud must live inside .sky (the container-type query container) — '
+    + 'a cloud outside .sky would make its drift 100cqw resolve against the wrong ancestor');
+});
