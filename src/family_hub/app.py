@@ -685,6 +685,21 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
 
     logs = fdb.logs_between(c, window_from, d_str)
     history = fdb.completions_between(c, window_from, d_str)
+    # Who OWNED each (day, chore) — straight from the frozen log, which is the
+    # record of what the wall actually asked of whom. The streak input below is
+    # keyed off this, NOT off completions.person_id: a completion means "that
+    # chore got done that day", and today's owner can legitimately change after
+    # it was tapped (the away overlay re-freezes today whenever someone leaves
+    # or comes back mid-day). Keying the streak off the tapper instead broke the
+    # returning person's day — the card drew the tick while the streak counted
+    # the day unfinished — and the mirror-image case broke the backup's. The
+    # completion rows themselves are never rewritten, so the ledger still says
+    # who physically did it, and already-written histories read correctly.
+    owner = {(r["date"], r["chore_id"]): r["person_id"] for r in logs}
+    if d > today:
+        # future days aren't logged; their live plan is the owner of record
+        for r in rows:
+            owner[(d_str, r["chore_id"])] = r["person_id"]
     for entry in plan:
         pid = entry["person"]["id"]
         occ: dict[str, set] = {}
@@ -699,7 +714,9 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
                 occ[d_str] = live
         cbd: dict[str, set] = {}
         for r in history:
-            if r["person_id"] == pid:
+            # a day with no log row at all (server was down, pre-install) falls
+            # back to the completion's own person_id rather than vanishing
+            if owner.get((r["date"], r["chore_id"]), r["person_id"]) == pid:
                 cbd.setdefault(r["date"], set()).add(r["chore_id"])
         away_dates = amap.get(pid, {}).get("dates", set())
         entry["away"] = pid in away_today
