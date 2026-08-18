@@ -2200,6 +2200,198 @@ def _laundry_tile_with(phase, status, since, finishes=None):
     return tile
 
 
+def test_tiles_laundry_observed_finish_holds_done_through_auto_power_off(
+        client, monkeypatch):
+    # LG machines turn THEMSELVES off 30-90s after "end" with the load still
+    # inside (measured live: 29s and 79s). An observed done -> idle(power_off)
+    # exit is the machine's own act, not a person collecting the load — the
+    # wall must keep presenting Done for the same hold window a MISSED finish
+    # gets. Without this, perfect observation makes Done vanish in a minute
+    # while a missed finish holds 30 (operator report, 2026-08-18: "washer
+    # shows idle instead of done"). An exit to "initial" (a human powering
+    # the machine on) still decays immediately — that's the real seen-it
+    # signal this status enum offers.
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    # cycle runs, then the observed end
+    t_end = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-30), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    assert machine()["phase"] == "done"
+    # ...the machine powers ITSELF off: Done must stand, at the observed end
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["phase"] == "done", "auto power-off must not eat an observed Done"
+    assert m["status_since"] == t_end
+    assert m["last_done"] == t_end
+    # steady state keeps holding (idle -> idle is not a transition)
+    assert machine()["phase"] == "done"
+    # the hold is diagnosable in the cycle log (raw transition + note)
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["phase"] == "idle" and rows[0]["note"] == "auto_off_hold"
+    # a new cycle retires the hold like any other machine activity
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "detecting", iso(0)))
+    assert machine()["phase"] == "running"
+    # cancelled cycle: no Done faked — the earlier hold was already retired
+    # by the new cycle above, so nothing is left to present
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=iso(5)))
+    assert machine()["phase"] == "idle"
+
+
+def test_tiles_laundry_power_on_mid_hold_clears_done(client, monkeypatch):
+    # Once the hold has engaged the machine sits in phase "idle", so a
+    # person powering it on arrives as a STATUS change (power_off ->
+    # initial), never a phase transition — the clear must key on current
+    # status or the green Done keeps glowing for the rest of its window
+    # while someone stands at the machine emptying it (caught in review).
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    t_end = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-30), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    assert machine()["phase"] == "done"          # hold engaged
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "initial", iso(0)))
+    m = machine()                                # a person powered it on
+    assert m["phase"] == "idle", "power-on must clear the hold immediately"
+    assert m["last_done"] == t_end               # the quiet line still serves
+    # the collection moment is LOGGED (the one status-keyed row in the
+    # phase-keyed log) — a hold killed at minute 3 and one that ran its
+    # window must be tellable apart when tuning the hold from log data
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["note"] == "hold_cleared_by_power_on"
+    assert rows[0]["prev_phase"] == "idle" and rows[0]["phase"] == "idle"
+    # ...and the clear is durable: powering back off must not resurrect it
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    assert machine()["phase"] == "idle"
+    # same contact signal clears a MISSED-finish hold (shared mechanism)
+    t_fin = iso(-2)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "rinsing", iso(-40), finishes=t_fin))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=t_fin))
+    assert machine()["phase"] == "done"          # missed finish presents
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "initial", iso(0), finishes=t_fin))
+    assert machine()["phase"] == "idle"
+
+
+def test_tiles_laundry_auto_off_hold_bridges_an_ha_blip(client, monkeypatch):
+    # done -> offline -> idle(power_off): the auto power-off landing during
+    # an HA blip must still engage the hold via the non-offline provenance
+    # (came_from), with the bridge recorded — the missed-finish twin has
+    # this guard, the observed-finish path needs it too (a simplification
+    # of came_from back to prev would silently lose exactly this case).
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    t_end = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-30), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["phase"] == "done" and m["status_since"] == t_end
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["note"] == "auto_off_hold+offline_bridge"
+
+
+def test_tiles_laundry_frozen_prevent_exit_keeps_the_hold(client, monkeypatch):
+    # frozen_prevent_initial is the machine's own freeze-prevention standby
+    # (winter firmware), not a person at the machine — a cold-day finish
+    # must hold Done the same as a plain auto power-off
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    t_end = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-30), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "frozen_prevent_initial", iso(0)))
+    assert machine()["phase"] == "done"
+
+
+def test_tiles_laundry_stale_observed_finish_does_not_hold(client, monkeypatch):
+    # The hold refuses a stale end stamp (server down between "end" and the
+    # auto power-off for longer than the hold window): presenting a
+    # 40-minute-old finish as a fresh green Done would be wrong-but-
+    # reassuring — decay straight to idle + the "last load" line.
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    t_end = iso(-40)   # past LAUNDRY_MISSED_DONE_HOLD_MIN
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-70), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    assert machine()["phase"] == "done"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["phase"] == "idle"
+    assert m["last_done"] == t_end   # the accurate stamp still serves the line
+    # the refusal is LOUD in the cycle log — a bare NULL row would be
+    # indistinguishable from an ordinary transition, invisible to the
+    # tune-from-log analysis this log exists for
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["phase"] == "idle" and rows[0]["note"] == "auto_off_refused"
+    # ...and a refusal resolved ACROSS an HA blip carries the bridge suffix
+    # like every other outcome (the suffix line serves both arms)
+    t_end2 = iso(-40)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-70), finishes=t_end2))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end2))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    assert machine()["phase"] == "idle"
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["note"] == "auto_off_refused+offline_bridge"
+
+
 def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeypatch):
     # LG machines auto-power-off a minute or two after "end", so a 60s poll
     # can watch running -> power_off and never observe the done phase at all —

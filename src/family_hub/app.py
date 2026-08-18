@@ -1747,6 +1747,43 @@ def _laundry_annotate(t: dict) -> dict:
                         fdb.kv_set(c, done_key, m["status_since"])
                 if prev == "offline":
                     note += "+offline_bridge"
+            elif (phase == "idle" and came_from == "done"
+                    and m.get("status") in ("power_off",
+                                            "frozen_prevent_initial")):
+                # The OBSERVED-finish twin of the missed-done hold: these LG
+                # machines turn THEMSELVES off 30-90s after "end" (measured
+                # live 2026-08-18: 29s and 79s) with the load still inside,
+                # and done -> idle(power_off) is that self-act — nobody has
+                # been to the machine (frozen_prevent_initial is likewise
+                # the machine's own freeze-prevention standby, not a person
+                # — grouped here so a cold-day finish doesn't lose its
+                # hold). Without a hold here, perfectly catching the finish
+                # shows Done for barely a minute while MISSING it holds 30
+                # (operator report, 2026-08-18: "washer shows idle instead
+                # of done"). Re-present the already-stamped observed end
+                # for the same hold window. An exit to "initial" (a person
+                # powering the machine on — the one human-contact signal
+                # this enum offers) decays instead, both here and mid-hold
+                # (see the presentation block below); and a stamp already
+                # older than the hold (server blind between end and
+                # power-off), unparseable, or missing is REFUSED — never a
+                # fresh green Done on a 40-minute-old finish — loudly, like
+                # its stale-projection twin: the refusal is exactly what
+                # log-based tuning needs to see.
+                held = fdb.kv_get(c, done_key)
+                mt = tiles._laundry_minutes_to(held) if held else None
+                if (mt is not None
+                        and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0):
+                    fdb.kv_set(c, missed_key, held)
+                    note = "auto_off_hold"
+                else:
+                    log.warning(
+                        "laundry %s: powered itself off after an observed "
+                        "end but the end stamp (%r) is unusable for a Done "
+                        "hold; decaying to idle", m["id"], held)
+                    note = "auto_off_refused"
+                if prev == "offline":
+                    note += "+offline_bridge"
             if phase in ("running", "paused", "reserved", "done", "error"):
                 # any sign of machine activity retires the synthetic Done (a
                 # real observed done replaces it; a new cycle supersedes it).
@@ -1787,9 +1824,40 @@ def _laundry_annotate(t: dict) -> dict:
             if phase and phase != "offline":
                 fdb.kv_set(c, nonoff_key, phase)
             if phase == "idle":
-                # Present a remembered missed finish as the Done it really
-                # was — green ring, "at 9:02pm" — for the hold window, then
-                # decay to idle + the quiet "last load" line.
+                # A person powering the machine on is the one human-contact
+                # signal this status enum offers — and it arrives as a
+                # STATUS change inside phase "idle" (power_off -> initial),
+                # never as a phase transition, so it must be honored here by
+                # current status or a standing hold keeps glowing green for
+                # the rest of its window while someone is at the machine
+                # emptying it (caught in review, 2026-08-18: the branch
+                # comment claimed this and the code didn't do it).
+                if m.get("status") == "initial" and fdb.kv_get(c, missed_key):
+                    # ...and the clear is LOGGED — the one status-keyed row
+                    # in a phase-keyed log (the note says so in db.py): a
+                    # hold a person killed at minute 3 and one that ran its
+                    # full window must be tellable apart, because the
+                    # collection moment is the number that sizes the hold.
+                    # Same failure asymmetry as the transition log above,
+                    # and the row lands BEFORE the kv clear so a locked-DB
+                    # retry re-runs both.
+                    try:
+                        fdb.laundry_log_add(c, m["id"], "idle", "idle",
+                                            m.get("status"),
+                                            m.get("finishes_at"),
+                                            m.get("status_since"),
+                                            "hold_cleared_by_power_on")
+                    except sqlite3.OperationalError:
+                        raise
+                    except Exception:
+                        log.warning("laundry %s: hold-clear log write "
+                                    "failed; clearing the hold anyway",
+                                    m["id"], exc_info=True)
+                    fdb.kv_set(c, missed_key, None)
+                # Present a remembered finish (missed, or observed-then-
+                # auto-powered-off) as the Done it really was — green ring,
+                # "at 9:02pm" — for the hold window, then decay to idle +
+                # the quiet "last load" line.
                 ms = fdb.kv_get(c, missed_key)
                 mt = tiles._laundry_minutes_to(ms) if ms else None
                 if mt is not None and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0:
