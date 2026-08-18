@@ -2304,6 +2304,356 @@ def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeyp
     assert m["last_done"] == t_end and m["phase"] == "idle"
 
 
+def _laundry_stub_tile(machines, calls=None):
+    """A tiles.laundry_tile stand-in; `calls` (a list) counts invocations so
+    tests can prove the route served the watcher's snapshot WITHOUT re-fetching."""
+    async def tile(hclient, cfg, token):
+        if calls is not None:
+            calls.append(1)
+        return {"available": True, "machines": [dict(m) for m in machines]}
+    return tile
+
+
+_LN_IDLE = {"id": "washer", "label": "Washer", "kind": "washer",
+            "phase": "idle", "status": "initial", "finishes_at": None,
+            "status_since": None}
+_LN_RUN = {"id": "washer", "label": "Washer", "kind": "washer",
+           "phase": "running", "status": "spinning", "finishes_at": None,
+           "status_since": None}
+
+
+def test_laundry_watcher_snapshot_serves_without_refetch(client, monkeypatch):
+    # The background watcher's tick fetches + annotates once and stores a
+    # snapshot; the route then serves that snapshot while it's fresh instead
+    # of re-fetching per request — and falls back to its own inline fetch
+    # once the snapshot goes stale (watcher wedged/disabled).
+    import asyncio
+    import time as _time
+    import family_hub.app as appmod
+    calls = []
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_IDLE], calls))
+    asyncio.run(appmod._laundry_watch_tick())
+    assert len(calls) == 1
+    t = client.get("/api/tiles/laundry").json()
+    assert t["available"] is True
+    assert t["machines"][0]["id"] == "washer"
+    assert "last_done" in t["machines"][0]     # snapshot is the ANNOTATED tile
+    assert len(calls) == 1                     # served from the snapshot
+    # stale snapshot -> the route's inline fallback fetches for itself
+    appmod._laundry_snapshot_ts = (
+        _time.monotonic() - appmod.LAUNDRY_SNAPSHOT_FRESH_S - 1)
+    client.get("/api/tiles/laundry").json()
+    assert len(calls) == 2
+
+
+def test_laundry_watcher_wakes_stream_waiters_only_on_change(client, monkeypatch):
+    # Each tick that CHANGES the payload swaps in a fresh waiter event and
+    # sets the old one (SSE pushes); an unchanged tick wakes nobody (idle
+    # machines must not spray heartbeat traffic as data events).
+    import asyncio
+    import family_hub.app as appmod
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_IDLE]))
+    asyncio.run(appmod._laundry_watch_tick())   # None -> idle: a change
+    ev = appmod._laundry_change
+    asyncio.run(appmod._laundry_watch_tick())   # steady state
+    assert appmod._laundry_change is ev and not ev.is_set()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_RUN]))
+    asyncio.run(appmod._laundry_watch_tick())   # idle -> running: a change
+    assert ev.is_set() and appmod._laundry_change is not ev
+
+
+def test_laundry_watcher_tick_failure_is_soft_and_recovers(client, monkeypatch):
+    # A tick that blows up (HA down mid-request, DB hiccup) must neither
+    # raise out of the loop nor clobber the standing snapshot; the next
+    # good tick recovers.
+    import asyncio
+    import family_hub.app as appmod
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_IDLE]))
+    asyncio.run(appmod._laundry_watch_tick())
+    good = appmod._laundry_snapshot
+
+    async def boom(hclient, cfg, token):
+        raise RuntimeError("HA fell over")
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", boom)
+    asyncio.run(appmod._laundry_watch_tick())   # must not raise
+    assert appmod._laundry_snapshot == good
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_RUN]))
+    asyncio.run(appmod._laundry_watch_tick())
+    assert appmod._laundry_snapshot["machines"][0]["phase"] == "running"
+
+
+def test_laundry_watcher_holds_last_good_through_a_brief_blip(client, monkeypatch):
+    # At a 5s cadence a transient HA blip is ~15x more likely to be observed
+    # than under the old 60s poll — so a brief available:false tick keeps
+    # the last good card standing (still served fresh) rather than
+    # flickering "Laundry unavailable" across the kitchen. A PERSISTENT
+    # outage still goes honestly unavailable once the hold expires.
+    import asyncio
+    import time as _time
+    import family_hub.app as appmod
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_RUN]))
+    asyncio.run(appmod._laundry_watch_tick())
+
+    async def down(hclient, cfg, token):
+        return {"available": False}
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", down)
+    asyncio.run(appmod._laundry_watch_tick())   # blip: last good stands
+    t = client.get("/api/tiles/laundry").json()
+    assert t["available"] is True and t["machines"][0]["phase"] == "running"
+    # outage persists past the hold -> honest unavailable
+    appmod._laundry_unavail_since = (
+        _time.monotonic() - appmod.LAUNDRY_UNAVAIL_HOLD_S - 1)
+    asyncio.run(appmod._laundry_watch_tick())
+    assert client.get("/api/tiles/laundry").json() == {"available": False}
+    # recovery mid-outage clears the hold clock: a LATER blip gets a fresh
+    # 30s hold, not the dregs of this one
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_RUN]))
+    asyncio.run(appmod._laundry_watch_tick())
+    assert appmod._laundry_unavail_since is None
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", down)
+    asyncio.run(appmod._laundry_watch_tick())
+    t = client.get("/api/tiles/laundry").json()
+    assert t["available"] is True, "a fresh blip must get a fresh hold"
+
+
+def test_laundry_watcher_startup_with_ha_down_is_honestly_unavailable(
+        client, monkeypatch):
+    # No prior good snapshot means there is nothing honest to hold — a hub
+    # that BOOTS against a down HA must show unavailable immediately, not
+    # nothing-at-all for the length of the hold window.
+    import asyncio
+    import family_hub.app as appmod
+
+    async def down(hclient, cfg, token):
+        return {"available": False}
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", down)
+    asyncio.run(appmod._laundry_watch_tick())
+    assert appmod._laundry_snapshot == {"available": False}
+    assert client.get("/api/tiles/laundry").json() == {"available": False}
+
+
+def test_laundry_watch_gate_opens_in_production_shape(app_mod, monkeypatch):
+    # THE headline gate: with a real-shaped deployment (sync enabled +
+    # laundry configured) the watcher must arm — a gate regressed to
+    # always-False loses the entire real-time feature INVISIBLY (the tile
+    # route's inline fallback keeps the card looking fine at 60s latency,
+    # and the cycle log quietly stops observing). Each leg is then flipped
+    # individually to prove every OFF condition still gates.
+    from family_hub.config import _clean_laundry
+    appmod = app_mod
+    assert appmod.LAUNDRY_WATCH_S <= 10.0
+    laundry = _clean_laundry({
+        "ha_base": "http://ha:8123", "machines": [
+            {"id": "washer", "status_entity": "s.a", "remaining_entity": "s.b"}]})
+    monkeypatch.setattr(appmod.cfg, "laundry", laundry)
+    monkeypatch.delenv("DISABLE_SYNC", raising=False)
+    assert appmod._laundry_watch_enabled() is True    # the production shape
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    assert appmod._laundry_watch_enabled() is False   # tests / opt-out
+    monkeypatch.delenv("DISABLE_SYNC", raising=False)
+    monkeypatch.setattr(appmod, "DEMO", True)
+    assert appmod._laundry_watch_enabled() is False   # demo: canned data
+    monkeypatch.setattr(appmod, "DEMO", False)
+    monkeypatch.setattr(appmod.cfg, "laundry", None)
+    assert appmod._laundry_watch_enabled() is False   # unconfigured hub
+    # PAIRED: the tile cache must expire under the watcher cadence, or every
+    # tick re-reads a still-warm cache and the "watcher" silently observes
+    # nothing new (the same drift trap the old endgame fast lane had)
+    assert ftiles.LAUNDRY_TTL < appmod.LAUNDRY_WATCH_S
+
+
+def test_laundry_lifespan_arms_and_disarms_the_watcher(app_mod, monkeypatch):
+    # The lifespan actually STARTS the loop when the gate is open and
+    # cancels it on shutdown — the gate test above means nothing if the
+    # task creation itself is dropped from _lifespan.
+    import asyncio
+    appmod = app_mod
+    ran = asyncio.Event()
+
+    async def loop_stub():
+        ran.set()
+        await asyncio.sleep(3600)   # parks until cancelled by the lifespan
+
+    monkeypatch.setattr(appmod, "_laundry_watch_enabled", lambda: True)
+    monkeypatch.setattr(appmod, "laundry_watch_loop", loop_stub)
+    with TestClient(appmod.app):
+        pass   # enter starts the lifespan; exit must cancel cleanly
+    assert ran.is_set(), "lifespan never started the watch loop"
+
+
+def test_laundry_watch_loop_survives_a_tick_that_raises(app_mod, monkeypatch):
+    # The loop's own armor: _laundry_watch_tick guards fetch+annotate, but
+    # an exception escaping the tick (a future edit past the try, an
+    # unexpected error path) must not kill the task permanently — the death
+    # would be SILENT (the route's fallback keeps the card healthy-looking
+    # while the log stops observing).
+    import asyncio
+    appmod = app_mod
+    calls = []
+
+    async def tick():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("escaped the tick")
+        raise asyncio.CancelledError()   # ends the loop for the test
+
+    async def run():
+        monkeypatch.setattr(appmod, "_laundry_watch_tick", tick)
+        monkeypatch.setattr(appmod, "LAUNDRY_WATCH_S", 0.001)
+        with pytest.raises(asyncio.CancelledError):
+            await appmod.laundry_watch_loop()
+    asyncio.run(run())
+    assert len(calls) == 2, "the loop must outlive a crashing tick"
+
+
+# The SSE stream is tested by driving its generator directly: this
+# starlette's TestClient BUFFERS the whole response before returning
+# (verified by stack dump — client.stream() never comes back from an
+# unbounded body), so the HTTP layer physically can't exercise an infinite
+# stream. Route registration is asserted separately; live behavior is part
+# of the post-deploy verification.
+
+def _sse_data(chunk):
+    """Parse one `data: {...}` SSE chunk to JSON; None for a keepalive."""
+    s = chunk.decode() if isinstance(chunk, bytes) else chunk
+    if not s.startswith("data: "):
+        return None
+    return json.loads(s[len("data: "):s.index("\n")])
+
+
+def test_laundry_stream_greets_pings_and_pushes(client, monkeypatch):
+    # The stream leads with the CURRENT annotated tile (the wall paints
+    # without waiting for a change), keeps the pipe warm with `: ping`
+    # while nothing happens, and pushes a fresh event the moment a watcher
+    # tick observes a change — same payload shape as /api/tiles/laundry.
+    import asyncio
+    import family_hub.app as appmod
+    monkeypatch.setattr(appmod, "LAUNDRY_STREAM_PING_S", 0.05)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_RUN]))
+    assert any(getattr(r, "path", None) == "/api/laundry/stream"
+               for r in appmod.app.routes)
+
+    async def scenario():
+        await appmod._laundry_watch_tick()
+        resp = await appmod.laundry_stream()
+        assert resp.media_type == "text/event-stream"
+        gen = resp.body_iterator
+        chunks = [await gen.__anext__(),    # greeting: the current tile
+                  await gen.__anext__()]    # steady state: keepalive
+        monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                            _laundry_stub_tile([_LN_IDLE]))
+        await appmod._laundry_watch_tick()  # a change lands...
+        chunks.append(await gen.__anext__())   # ...and is pushed
+        await gen.aclose()
+        return chunks
+
+    greet, ping, push = asyncio.run(scenario())
+    ev = _sse_data(greet)
+    assert ev and ev["available"] is True
+    assert ev["machines"][0]["phase"] == "running"
+    assert "last_done" in ev["machines"][0]
+    assert _sse_data(ping) is None          # comment frame, not a data event
+    ev2 = _sse_data(push)
+    assert ev2 and ev2["machines"][0]["phase"] == "idle"
+
+
+def test_laundry_stream_pushes_without_waiting_out_the_ping(client, monkeypatch):
+    # The lost-wakeup contract, pinned: the generator arms its waiter
+    # BEFORE reading the payload, so a change is pushed IMMEDIATELY. With
+    # the ping timer left at its real 20s, a reordered arm-after-read (or a
+    # dropped waiter) can only deliver on the next ping cycle — this
+    # wait_for would time out.
+    import asyncio
+    import family_hub.app as appmod
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_RUN]))
+
+    async def scenario():
+        await appmod._laundry_watch_tick()
+        gen = (await appmod.laundry_stream()).body_iterator
+        await gen.__anext__()                      # greeting
+        push = asyncio.ensure_future(gen.__anext__())
+        await asyncio.sleep(0.05)                  # parked on the waiter
+        monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                            _laundry_stub_tile([_LN_IDLE]))
+        await appmod._laundry_watch_tick()
+        try:
+            return await asyncio.wait_for(push, timeout=1.0)
+        finally:
+            await gen.aclose()
+    chunk = asyncio.run(scenario())
+    ev = _sse_data(chunk)
+    assert ev and ev["machines"][0]["phase"] == "idle"
+
+
+def test_laundry_stream_survives_a_failing_payload_read(client, monkeypatch):
+    # A payload read that raises mid-stream (HA down AND the snapshot gone
+    # stale) must heartbeat, not escape the generator — an escaping
+    # exception would put every open wall's EventSource into a reconnect
+    # storm against a server that's already struggling.
+    import asyncio
+    import family_hub.app as appmod
+    monkeypatch.setattr(appmod, "LAUNDRY_STREAM_PING_S", 0.05)
+
+    state = {"fail": True}
+
+    async def payload():
+        if state["fail"]:
+            raise RuntimeError("payload read failed")
+        return {"available": True, "machines": []}
+
+    async def scenario():
+        monkeypatch.setattr(appmod, "_laundry_payload", payload)
+        gen = (await appmod.laundry_stream()).body_iterator
+        first = await gen.__anext__()          # held open: keepalive
+        state["fail"] = False                  # payload heals...
+        second = await gen.__anext__()         # ...and the stream recovers
+        await gen.aclose()
+        return first, second
+    first, second = asyncio.run(scenario())
+    assert _sse_data(first) is None, "a failing read must yield a keepalive"
+    ev = _sse_data(second)
+    assert ev and ev["available"] is True
+
+
+def test_laundry_stream_demo_serves_canned_machines(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    monkeypatch.setenv("DEMO", "1")
+    import asyncio
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    try:
+        monkeypatch.setattr(appmod, "LAUNDRY_STREAM_PING_S", 0.01)
+
+        async def first_two():
+            resp = await appmod.laundry_stream()
+            gen = resp.body_iterator
+            chunks = [await gen.__anext__(), await gen.__anext__()]
+            await gen.aclose()
+            return chunks
+        greet, then = asyncio.run(first_two())
+        ev = _sse_data(greet)
+        assert ev and ev["available"] is True and len(ev["machines"]) == 2
+        # demo machines never transition, but demo_laundry() re-times every
+        # payload per call — the stream must NOT push those as "changes"
+        # (each push is an innerHTML rebuild restarting the tumble mid-spin
+        # on the demo wall). Greet once, then keepalives only.
+        assert _sse_data(then) is None, \
+            "DEMO stream must not churn data events"
+    finally:
+        monkeypatch.delenv("DEMO")
+        importlib.reload(appmod)
+
+
 def test_laundry_cycle_log_records_transitions_only(client, app_mod, monkeypatch):
     # every observed RAW phase transition lands in the cycle log with its
     # diagnostic note; steady-state polls add nothing; the endpoint serves

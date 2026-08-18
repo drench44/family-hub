@@ -755,12 +755,12 @@ def kv_set(conn, key: str, value: Any) -> None:
 #
 # Append-only history of observed washer/dryer phase TRANSITIONS (never
 # per-poll rows — an idle machine writes nothing). The evidence base for
-# tuning the finish-detection heuristics (endgame window, missed-done hold,
-# projection trust) from real cycles instead of guesses, and for diagnosing
-# any finish the wall got wrong. Lives in hub.db, so the standard tiered
-# backups cover it.
+# tuning the finish-detection heuristics (watcher cadence, missed-done
+# hold, projection trust) from real cycles instead of guesses, and for
+# diagnosing any finish the wall got wrong. Lives in hub.db, so the
+# standard tiered backups cover it.
 #
-# `note` vocabulary (written by app.tile_laundry): missed_finish /
+# `note` vocabulary (written by app._laundry_annotate): missed_finish /
 # stale_projection / cycle_exit, each optionally carrying a
 # "+offline_bridge" suffix when the transition was resolved across an HA
 # blip — consumers must match by PREFIX, not equality. NULL = an ordinary
