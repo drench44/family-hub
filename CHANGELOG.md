@@ -11,12 +11,14 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Fixed
+- Weather sky clouds now drift smoothly at any width. The drift animation exited
+  at a fixed offset tuned to the narrow desktop column, so on the wider
+  mobile/full-screen weather view a cloud was still mid-sky when it snapped back
+  to the left — a visible "reset". The exit is now relative to the sky's own
+  width, so the wrap-around always happens off-screen.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.
-
-
-### Fixed
 - Native chores: deleting (or unmapping) the last person whose chores mirror to
   iCloud no longer orphans their reminders — the mirror reconcile now still prunes
   existing rows when nothing is mapped, instead of early-returning. (Caught in the
