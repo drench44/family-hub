@@ -1287,6 +1287,11 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
 
 
 # --- away overlay -----------------------------------------------------------
+#
+# CONVENTION for every test in this block (T0): freeze _today BEFORE the first
+# client call. admin_add_chore anchors rotation_epoch to _today(), and occurs()
+# is False before the epoch -- seeding against the real clock makes the test
+# date-dependent and it rots at the first midnight after it was written.
 
 def test_away_person_freezes_no_rows_and_streak_continues(client, app_mod, monkeypatch):
     """A person marked away: their fixed daily chore (no backup) pauses --
@@ -1531,6 +1536,107 @@ def test_backup_covering_completion_credits_backup_not_away_person(
     a2 = next(p for p in hub2["people"] if p["person"]["id"] == A)
     assert b2["streak"] >= 1, "the backup's covering day counts toward THEIR streak"
     assert a2["away"] is True and a2["streak"] == 0, "away owner is uncredited"
+
+
+def test_return_mid_day_keeps_the_owners_streak(client, app_mod, monkeypatch):
+    """C1 (THE streak-destroyer): the ordinary "I'm back" flow.
+
+    The backup covers and COMPLETES the owner's fixed chore in the morning
+    (completion row keyed to the backup). The owner then taps "I'm back", which
+    ends the period yesterday -- so today is theirs again and the next serve
+    RE-FREEZES today's occurrence_log row onto the owner. The card keeps showing
+    the tick (done flags are per chore, not per person), but the owner's streak
+    input used to be keyed by completions.person_id, so today read "not all
+    done" and the streak broke the moment the day aged.
+
+    Ownership of a day belongs to the FROZEN LOG, not to whoever happened to tap
+    the row: a completion means "that chore got done that day". Completions are
+    never rewritten (the ledger still records who physically did it)."""
+    today = dt.date(2026, 8, 17)
+    seed_day = today - dt.timedelta(days=5)
+    monkeypatch.setattr(app_mod, "_today", lambda: seed_day)   # T0: freeze first
+    c = app_mod._db()
+    A = _make_person(client, "Owner", "#5BC9F0")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+
+    # A is away from two days ago (so the default "I'm back" -> end=yesterday is
+    # a valid end >= start), B covers.
+    period_id = fdb.add_away_period(
+        c, A, (today - dt.timedelta(days=2)).isoformat(), None, B)
+
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    hub = client.get("/api/hub").json()                 # freezes today onto B
+    bcard = next(p for p in hub["people"] if p["person"]["id"] == B)
+    assert any(ch["id"] == cid and ch["covering_for"] == A for ch in bcard["chores"])
+    assert client.post(f"/api/chores/{cid}/complete").json() == {"ok": True}
+
+    # ... and mid-morning A walks in the door and taps "I'm back".
+    assert client.post(f"/api/admin/away/{period_id}/back").status_code == 200
+    hub = client.get("/api/hub").json()                 # re-freeze: today is A's
+    acard = next(p for p in hub["people"] if p["person"]["id"] == A)
+    assert acard["away"] is False
+    assert [ch["done"] for ch in acard["chores"] if ch["id"] == cid] == [True], \
+        "the card draws the tick -- the streak must agree with it"
+    assert acard["streak"] == 1, \
+        "today is the owner's and it is fully done: the streak counts it"
+    assert acard["week"][-1] == "done"
+
+    # R1: the completion row itself is NOT rewritten -- B really did the chore.
+    row = next(r for r in fdb.completions_between(c, today.isoformat(),
+                                                  today.isoformat())
+               if r["chore_id"] == cid)
+    assert row["person_id"] == B
+
+    # age the day: the frozen record still reads "the owner's day, fully done".
+    monkeypatch.setattr(app_mod, "_today", lambda: today + dt.timedelta(days=1))
+    hub2 = client.get("/api/hub").json()
+    a2 = next(p for p in hub2["people"] if p["person"]["id"] == A)
+    b2 = next(p for p in hub2["people"] if p["person"]["id"] == B)
+    assert a2["streak"] == 1, "aging must not break the returning person's streak"
+    assert a2["week"][-2] == "done"
+    assert b2["week"][-2] == "rest", \
+        "the backup no longer owns that day, so it is rest for them, not a miss"
+
+
+def test_open_period_mid_day_keeps_the_backups_day_whole(
+        client, app_mod, monkeypatch):
+    """C1, mirror image: the owner completes their chore in the morning, THEN
+    goes away with a backup. The re-freeze moves today's row onto the backup, so
+    the backup's day must read fully done from that same completion -- otherwise
+    opening a period mid-day silently breaks the COVERING person's streak."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)      # T0: freeze first
+    c = app_mod._db()
+    A = _make_person(client, "Owner", "#5BC9F0")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+
+    client.get("/api/hub")                                  # freeze today onto A
+    assert client.post(f"/api/chores/{cid}/complete").json() == {"ok": True}
+    comp = next(r for r in fdb.completions_between(c, today.isoformat(),
+                                                   today.isoformat())
+                if r["chore_id"] == cid)
+    assert comp["person_id"] == A
+
+    # A leaves at lunchtime; B picks the chore up.
+    assert client.post("/api/admin/away",
+                       json={"person_id": A,
+                             "backup_person_id": B}).status_code == 200
+    hub = client.get("/api/hub").json()                     # re-freeze onto B
+    bcard = next(p for p in hub["people"] if p["person"]["id"] == B)
+    acard = next(p for p in hub["people"] if p["person"]["id"] == A)
+    assert any(ch["id"] == cid and ch["covering_for"] == A and ch["done"]
+               for ch in bcard["chores"])
+    assert bcard["streak"] == 1, "the backup owns today now, and it is done"
+    assert bcard["week"][-1] == "done"
+    assert acard["away"] is True and acard["week"][-1] == "away"
+
+    # and it survives aging
+    monkeypatch.setattr(app_mod, "_today", lambda: today + dt.timedelta(days=1))
+    b2 = next(p for p in client.get("/api/hub").json()["people"]
+              if p["person"]["id"] == B)
+    assert b2["week"][-2] == "done" and b2["streak"] == 1
 
 
 def test_away_back_rejects_end_before_start(client, app_mod, monkeypatch):

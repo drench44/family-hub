@@ -22,6 +22,10 @@ rolls that section to a dated version via `python scripts/release.py`.
   and deleting an away period restores exactly what was there before.
 
 ### Fixed
+- Coming home no longer costs you your streak. If someone covered your chore
+  while you were away and you tap "I'm back" the same day, the day now counts
+  as finished for you, exactly as the tick on your card already showed. The
+  same fix keeps the covering person's day whole when someone leaves mid-day.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.
