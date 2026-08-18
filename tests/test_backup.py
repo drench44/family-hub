@@ -270,3 +270,18 @@ def test_stale_partial_is_swept_on_next_run(tmp_path):
     _run(db, out)
     assert not list((out / "hourly").glob(".partial*")), \
         "a prior hard-kill's orphaned partial is swept on the next run"
+
+
+def test_offbox_rsync_does_not_preserve_owner_group_perms():
+    # A NAS export squashes client uids to one account, so `rsync -a` (owner/
+    # group/perms) fails with EPERM (exit 23) even though the data copies —
+    # which would false-trip the exit-2 REMOTE FAIL every run. Pin that the
+    # off-box mirror copies content + mtimes only and lets the target own perms.
+    import re
+    s = SCRIPT.read_text()
+    m = re.search(r'rsync\b[^\n]*"\$OUT/"\s+"\$REMOTE/"', s)
+    assert m, "off-box rsync line not found"
+    line = m.group(0)
+    assert " -a" not in line, "off-box rsync must not use -a on a squashed NAS target"
+    assert "--no-owner" in line and "--no-group" in line, \
+        "off-box rsync must skip owner/group (NAS squash forbids chown/chgrp)"
