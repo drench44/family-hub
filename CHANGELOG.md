@@ -37,6 +37,16 @@ rolls that section to a dated version via `python scripts/release.py`.
   a reminder you already completed never reopens itself.
 - A chore mirror that fails now says so in settings instead of failing quietly
   behind a green badge.
+- The fill-in picker only offers people who can actually cover — nobody who
+  has left the household or is away themselves — so a covered chore can't
+  quietly disappear.
+- "Pause everyone" no longer locks the chore editor: you can still add and
+  edit chores for someone while they're away.
+- Browsing back to a past day still shows who the fill-in was covering for,
+  long after the trip has ended.
+- The day browser now carries the same "away status unavailable" note the
+  main screen shows, and tapping a chore off while that's broken asks you to
+  try again instead of crediting the wrong person.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.

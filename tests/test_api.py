@@ -1783,22 +1783,145 @@ def test_backup_deleted_pauses_covering_chore_end_to_end(
                for p in hub["people"])
 
 
-def test_inactive_backup_pauses_covering_chore(client, app_mod, monkeypatch):
-    """F7: an INACTIVE (not deleted) backup is allowed at open time, but the
-    covering chore then pauses at resolve since the backup isn't present."""
+def test_frozen_past_day_keeps_the_covering_for_explanation(client, app_mod,
+                                                            monkeypatch):
+    """I9 end-to-end: the wall freezes a covered day, the away period then ENDS
+    (and is even deleted), and the day browser must still explain why the
+    backup had that chore — 'covering for <the away person>'. Before this the
+    tag was derived at render time and vanished with the period."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)      # T0: freeze first
+    c = app_mod._db()
+    A = _make_person(client, "Away")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+    period = client.post("/api/admin/away",
+                         json={"person_id": A,
+                               "backup_person_id": B}).json()["id"]
+    client.get("/api/hub")                        # freeze today with B covering
+    assert fdb.day_log(c, today.isoformat())[0]["covering_for"] == A
+
+    # the trip ends and the record of it is deleted outright
+    client.delete(f"/api/admin/away/{period}")
+    monkeypatch.setattr(app_mod, "_today", lambda: today + dt.timedelta(days=1))
+    day = client.get(f"/api/chores/day?date={today.isoformat()}").json()
+    bcard = next(p for p in day["people"] if p["person"]["id"] == B)
+    row = next(ch for ch in bcard["chores"] if ch["id"] == cid)
+    assert row["covering_for"] == A, \
+        "the frozen day still says who the backup was standing in for"
+
+
+def test_backup_that_goes_inactive_later_pauses_the_covering_chore(
+        client, app_mod, monkeypatch):
+    """F7 + I6: an unavailable backup is now rejected UP FRONT (see
+    test_backup_picker_rejects_inactive_and_away_people), but a backup who goes
+    inactive AFTER the period opened is still handled at resolve time — the
+    covering chore pauses instead of landing on someone who isn't there."""
     today = dt.date(2026, 8, 17)
     monkeypatch.setattr(app_mod, "_today", lambda: today)
     A = _make_person(client, "Away")
     B = _make_person(client, "Backup", "#F05B5B")
     cid = _fixed_chore(client, A, "Dishes")
-    client.patch(f"/api/admin/people/{B}", json={"active": 0})   # inactive
-    # open must still ALLOW an inactive backup (uses include_inactive)
     assert client.post("/api/admin/away",
                        json={"person_id": A,
                              "backup_person_id": B}).status_code == 200
+    client.patch(f"/api/admin/people/{B}", json={"active": 0})   # inactive LATER
     hub = client.get("/api/hub").json()
     assert all(not any(ch["id"] == cid for ch in p["chores"])
                for p in hub["people"]), "inactive backup -> chore pauses"
+
+
+def test_backup_picker_rejects_inactive_and_away_people(client, app_mod,
+                                                        monkeypatch):
+    """I6: choosing a backup who is inactive, or away themselves, made every
+    covered chore vanish at resolve time with no explanation. Both are 422 at
+    the source, on open AND on patch."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    A = _make_person(client, "Away")
+    inactive = _make_person(client, "Gone", "#F05B5B")
+    traveller = _make_person(client, "Also away", "#5BFF5B")
+    ok_backup = _make_person(client, "Home", "#C39BEA")
+    client.patch(f"/api/admin/people/{inactive}", json={"active": 0})
+    client.post("/api/admin/away", json={"person_id": traveller})
+
+    assert client.post("/api/admin/away",
+                       json={"person_id": A,
+                             "backup_person_id": inactive}).status_code == 422
+    assert client.post("/api/admin/away",
+                       json={"person_id": A,
+                             "backup_person_id": traveller}).status_code == 422
+    r = client.post("/api/admin/away",
+                    json={"person_id": A, "backup_person_id": ok_backup})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": inactive}).status_code == 422
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": traveller}).status_code == 422
+    # clearing the backup, and re-picking an available one, still work
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": None}).status_code == 200
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": ok_backup}).status_code == 200
+
+
+def test_away_patch_rejects_null_start_date(client, app_mod, monkeypatch):
+    """I7: an explicit JSON null for start_date (a NOT NULL column) was a 500
+    from the DB write. It's a bad request — 422, like every sibling patch."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    A = _make_person(client, "Away")
+    pid = client.post("/api/admin/away", json={"person_id": A}).json()["id"]
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"start_date": None}).status_code == 422
+    # the period is untouched, and the nullable fields still accept null
+    row = next(p for p in client.get("/api/admin/away").json()["away_periods"]
+               if p["id"] == pid)
+    assert row["start_date"] == "2026-08-17"
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"end_date": None}).status_code == 200
+
+
+def test_complete_refuses_to_guess_when_the_away_overlay_is_broken(
+        client, app_mod, monkeypatch):
+    """I2: reading the wall may degrade when the away overlay build fails (it
+    shows a note); WRITING a completion may not — crediting the away owner
+    would break the covering person's streak. No person_id + a broken overlay
+    is a 503 the tap can retry; an explicit person_id is still honored."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    A = _make_person(client, "Away")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+    client.post("/api/admin/away", json={"person_id": A, "backup_person_id": B})
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated away_map failure")
+    monkeypatch.setattr(app_mod.fdb, "away_map", boom)
+
+    r = client.post(f"/api/chores/{cid}/complete")
+    assert r.status_code == 503
+    assert "away status unavailable" in r.json()["detail"]
+    assert fdb.completions_between(app_mod._db(), today.isoformat(),
+                                   today.isoformat()) == []
+    ok = client.post(f"/api/chores/{cid}/complete", json={"person_id": B})
+    assert ok.status_code == 200
+
+
+def test_chores_day_carries_away_ok(client, app_mod, monkeypatch):
+    """M4/I10: the day browser reads the same degraded-state flag the wall
+    does, so a failed overlay build shows a note instead of presenting an away
+    person as present with a full chore list."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    _seed_person_chore(client, title="Dishes")
+    day = f"/api/chores/day?date={today.isoformat()}"
+    assert client.get(day).json()["away_ok"] is True
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated away_map failure")
+    monkeypatch.setattr(app_mod.fdb, "away_map", boom)
+    body = client.get(day).json()
+    assert body["away_ok"] is False and body["people"]
 
 
 def test_db_connection_is_per_thread(app_mod):
