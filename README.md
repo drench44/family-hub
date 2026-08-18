@@ -54,8 +54,11 @@ at one URL.
   after the machine is opened or powered off). Machines that power
   themselves off right after the end-of-cycle chime don't slip through:
   polling tightens near the projected finish, and a finish that still lands
-  between polls is reconstructed and shown as Done. Built for LG ThinQ's
-  sensors, but any HA integration exposing a status enum + a remaining-time
+  between polls is reconstructed and shown as Done. Every observed phase
+  transition is also logged in the database (`GET /api/laundry/log`, a year
+  of cycle history, covered by the standard backups) so the finish
+  heuristics can be tuned from real cycles. Built for LG ThinQ's sensors,
+  but any HA integration exposing a status enum + a remaining-time
   timestamp works. Fails soft like weather/climate.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —

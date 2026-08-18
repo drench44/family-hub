@@ -608,3 +608,41 @@ def test_integrations_seed_toggle_and_default(conn):
     rows = {r["id"]: r for r in fdb.list_integrations(conn)}
     assert rows["weather"]["enabled"] is False and rows["weather"]["kind"] == "weather"
     assert rows["weather"]["config"] == {}
+
+
+def test_laundry_log_add_recent_filter_and_prune(conn):
+    fdb.laundry_log_add(conn, "washer", None, "idle", "power_off",
+                        None, "2026-08-17T21:00:00+00:00")
+    fdb.laundry_log_add(conn, "washer", "idle", "running", "rinsing",
+                        "2026-08-17T22:00:00+00:00", "2026-08-17T21:10:00+00:00")
+    fdb.laundry_log_add(conn, "dryer", "idle", "running", "drying",
+                        None, None, None)
+    fdb.laundry_log_add(conn, "washer", "running", "idle", "power_off",
+                        "2026-08-17T22:00:00+00:00", "2026-08-17T22:02:00+00:00",
+                        "missed_finish")
+    rows = fdb.laundry_log_recent(conn)
+    assert len(rows) == 4
+    # newest first, full row shape
+    assert rows[0]["machine"] == "washer" and rows[0]["note"] == "missed_finish"
+    assert rows[0]["prev_phase"] == "running" and rows[0]["phase"] == "idle"
+    assert rows[-1]["prev_phase"] is None   # first-sight row keeps its NULL
+    # per-machine filter
+    assert {r["machine"] for r in fdb.laundry_log_recent(conn, "dryer")} == {"dryer"}
+    assert len(fdb.laundry_log_recent(conn, "washer")) == 3
+    # limit clamps into [1, 1000] rather than erroring
+    assert len(fdb.laundry_log_recent(conn, limit=1)) == 1
+    assert len(fdb.laundry_log_recent(conn, limit=-5)) == 1
+    assert len(fdb.laundry_log_recent(conn, limit=10 ** 9)) == 4
+    # rows older than the keep window are pruned by the next write
+    import datetime as dt
+    old = (dt.datetime.now(dt.timezone.utc)
+           - dt.timedelta(days=fdb.LAUNDRY_LOG_KEEP_DAYS + 1)).isoformat()
+    conn.execute(
+        "INSERT INTO laundry_log(ts, machine, phase) VALUES(?, 'washer', 'idle')",
+        (old,))
+    conn.commit()
+    assert len(fdb.laundry_log_recent(conn)) == 5
+    fdb.laundry_log_add(conn, "dryer", "running", "done", "end", None, None)
+    rows = fdb.laundry_log_recent(conn)
+    assert len(rows) == 5   # the ancient row is gone, the new one is in
+    assert all(r["ts"] > old for r in rows)
