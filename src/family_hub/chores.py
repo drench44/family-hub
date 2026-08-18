@@ -78,21 +78,45 @@ def assignee_id(chore: dict, d: dt.date,
     return order[occurrences_before(chore, d) % len(order)]
 
 
-def plan_rows(chores: list[dict], people: list[dict], d: dt.date) -> list[dict]:
+def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
+             away: dict | None = None) -> list[dict]:
     """Live-resolve the day's assignments to flat rows — the exact shape the
     occurrence_log stores, so a frozen past day and a live day render the same
-    way. Chores with no resolvable assignee among ``people`` are omitted."""
+    way. Chores with no resolvable assignee among ``people`` are omitted.
+
+    ``away`` (optional) is ``{"ids": set[int], "backup": {pid: backup_pid |
+    None}}``. Away people fall out of rotations (their turns go to whoever's
+    home). A fixed chore assigned to an away person reassigns to their backup
+    if the backup is present (active and not away), tagging the row
+    ``covering_for=<away pid>``; with no available backup the chore pauses
+    for the day (row omitted) rather than crashing."""
+    away = away or {"ids": set(), "backup": {}}
+    away_ids = away.get("ids", set())
+    backup = away.get("backup", {})
     active_ids = {p["id"] for p in people}
+    present_ids = active_ids - away_ids          # people home & not away
     rows = []
     for chore in chores:
         if not occurs(chore, d):
             continue
-        aid = assignee_id(chore, d, active_ids)
-        if aid is None or aid not in active_ids:
+        # rotations skip away people (fall to whoever's home); fixed returns
+        # its fixed_person_id regardless.
+        aid = assignee_id(chore, d, present_ids)
+        if aid is None:
+            continue
+        covering_for = None
+        if aid in away_ids:                      # only fixed chores reach here
+            b = backup.get(aid)
+            if b is None or b not in present_ids:
+                continue                         # no available backup -> pause
+            covering_for = aid
+            aid = b
+        if aid not in present_ids:               # inactive/away, no cover
             continue
         rows.append({"chore_id": chore["id"], "person_id": aid,
                      "title": chore["title"], "icon": chore["icon"],
-                     "rot": 1 if chore["assign_kind"] == "rotation" else 0})
+                     "rot": 1 if chore["assign_kind"] == "rotation" else 0,
+                     "covering_for": covering_for})
     return rows
 
 
@@ -106,7 +130,8 @@ def day_plan(rows: list[dict], people: list[dict], completions) -> list[dict]:
     for person in people:
         pid = person["id"]
         prows = [{"id": r["chore_id"], "title": r["title"], "icon": r["icon"],
-                  "rot": bool(r["rot"]), "done": r["chore_id"] in completed}
+                  "rot": bool(r["rot"]), "done": r["chore_id"] in completed,
+                  "covering_for": r.get("covering_for")}
                  for r in rows if r["person_id"] == pid]
         plan.append({
             "person": {"id": pid, "name": person["name"], "color": person["color"]},
