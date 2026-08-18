@@ -1126,6 +1126,26 @@ class PersonPatch(BaseModel):
     active: int | None = None
 
 
+class AwayIn(BaseModel):
+    person_id: int
+    start_date: str | None = None
+    backup_person_id: int | None = None
+
+
+class AwayPatch(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+    backup_person_id: int | None = None
+
+
+class AwayEveryoneIn(BaseModel):
+    start_date: str | None = None
+
+
+class AwayBackIn(BaseModel):
+    end_date: str | None = None
+
+
 class ChoreIn(BaseModel):
     title: str
     icon: str = ""
@@ -1341,6 +1361,84 @@ def admin_delete_chore(cid: int):
     c = _db()
     _chore_row(c, cid)  # raises 404 if it doesn't exist (existing helper behavior)
     fdb.delete_chore(c, cid)
+    return {"ok": True}
+
+
+def _valid_date(s: str) -> str:
+    try:
+        return dt.date.fromisoformat(s).isoformat()
+    except ValueError:
+        raise HTTPException(422, "bad date")
+
+
+def _away_rows(c):
+    people = {p["id"]: p["name"]
+              for p in fdb.list_people(c, include_inactive=True)}
+    out = []
+    for r in fdb.list_away_periods(c):
+        row = dict(r)
+        row["person_name"] = people.get(r["person_id"])
+        row["backup_name"] = people.get(r["backup_person_id"])
+        out.append(row)
+    return out
+
+
+@app.get("/api/admin/away")
+def admin_away_list():
+    return {"away_periods": _away_rows(_db())}
+
+
+@app.post("/api/admin/away")
+def admin_away_open(a: AwayIn):
+    c = _db()
+    _person_row(c, a.person_id)                     # 404 if unknown
+    if a.backup_person_id is not None:
+        if a.backup_person_id == a.person_id:
+            raise HTTPException(422, "backup cannot be the same person")
+        _person_row(c, a.backup_person_id)
+    start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
+    pid = fdb.add_away_period(c, a.person_id, start, None, a.backup_person_id)
+    return next(r for r in _away_rows(c) if r["id"] == pid)
+
+
+@app.post("/api/admin/away/everyone")
+def admin_away_everyone(a: AwayEveryoneIn):
+    c = _db()
+    start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
+    open_pids = {r["person_id"] for r in fdb.list_away_periods(c,
+                 include_closed=False)}
+    created = []
+    for p in fdb.list_people(c):                    # active only
+        if p["id"] in open_pids:
+            continue
+        created.append(fdb.add_away_period(c, p["id"], start, None, None))
+    return {"created": created}
+
+
+@app.patch("/api/admin/away/{pid}")
+def admin_away_patch(pid: int, a: AwayPatch):
+    c = _db()
+    fields = a.model_dump(exclude_unset=True)
+    for k in ("start_date", "end_date"):
+        if fields.get(k) is not None:
+            fields[k] = _valid_date(fields[k])
+    fdb.update_away_period(c, pid, **fields)
+    return {"ok": True}
+
+
+@app.post("/api/admin/away/{pid}/back")
+def admin_away_back(pid: int, a: AwayBackIn | None = None):
+    c = _db()
+    end = (_valid_date(a.end_date) if a and a.end_date
+           else (_today() - dt.timedelta(days=1)).isoformat())
+    fdb.close_away_period(c, pid, end)
+    return {"ok": True}
+
+
+@app.delete("/api/admin/away/{pid}")
+def admin_away_delete(pid: int):
+    if not fdb.delete_away_period(_db(), pid):
+        raise HTTPException(404, "unknown away period")
     return {"ok": True}
 
 
