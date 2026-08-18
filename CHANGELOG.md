@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-08-18
+
 ### Fixed
 - Weather sky clouds now drift smoothly at any width. The drift animation exited
   at a fixed offset tuned to the narrow desktop column, so on the wider
