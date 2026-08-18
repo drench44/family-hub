@@ -608,3 +608,45 @@ def test_integrations_seed_toggle_and_default(conn):
     rows = {r["id"]: r for r in fdb.list_integrations(conn)}
     assert rows["weather"]["enabled"] is False and rows["weather"]["kind"] == "weather"
     assert rows["weather"]["config"] == {}
+
+
+def test_away_period_crud_and_map(conn):
+    a = fdb.add_person(conn, "Ava", "#f00")
+    b = fdb.add_person(conn, "Bo", "#0f0")
+    pid = fdb.add_away_period(conn, a, "2026-08-14", None, backup_person_id=b)
+    rows = fdb.list_away_periods(conn)
+    assert len(rows) == 1 and rows[0]["end_date"] is None
+    # open-ended period covers from start through to_date
+    m = fdb.away_map(conn, "2026-08-10", "2026-08-16")
+    assert m[a]["dates"] == {"2026-08-14", "2026-08-15", "2026-08-16"}
+    assert m[a]["backup_on"]["2026-08-15"] == b
+    # closing clips the tail
+    fdb.close_away_period(conn, pid, "2026-08-15")
+    m2 = fdb.away_map(conn, "2026-08-10", "2026-08-20")
+    assert m2[a]["dates"] == {"2026-08-14", "2026-08-15"}
+    # window clipping: nothing before from_date
+    assert fdb.away_map(conn, "2026-08-16", "2026-08-20") == {}
+    # delete removes it
+    assert fdb.delete_away_period(conn, pid) is True
+    assert fdb.list_away_periods(conn) == []
+
+
+def test_away_schema_idempotent_on_existing_db(tmp_path):
+    p = str(tmp_path / "t.db")
+    fdb.connect(p).close()
+    # second connect re-runs SCHEMA; must not raise or wipe data
+    c = fdb.connect(p)
+    fdb.ensure_schema(c)
+    assert fdb.list_away_periods(c) == []
+    c.close()
+
+
+def test_delete_person_clears_away_rows(conn):
+    a = fdb.add_person(conn, "Ava", "#f00")
+    b = fdb.add_person(conn, "Bo", "#0f0")
+    fdb.add_away_period(conn, a, "2026-08-14", None, backup_person_id=b)
+    fdb.add_away_period(conn, b, "2026-08-14", None, backup_person_id=a)
+    fdb.delete_person(conn, a)
+    rows = fdb.list_away_periods(conn)
+    assert all(r["person_id"] != a for r in rows)         # a's own period gone
+    assert all(r["backup_person_id"] != a for r in rows)  # a's backup ref cleared

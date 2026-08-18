@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 SCHEMA = """
@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS caldav_collections(
   ctag TEXT,
   sync_token TEXT,
   last_seen_at TEXT);
+-- Away/pause mode: a pure additive overlay on top of the frozen occurrence_log.
+-- One row per away span for a person (open-ended while end_date is NULL, closed
+-- once they're back). Never rewrites/deletes occurrence_log rows -- the plan
+-- builder consults this table at render time via away_map() instead.
+CREATE TABLE IF NOT EXISTS away_periods(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_id INTEGER NOT NULL REFERENCES people(id),
+  start_date TEXT NOT NULL,
+  end_date TEXT,
+  backup_person_id INTEGER,
+  created_at TEXT NOT NULL);
 """
 
 # Columns a caller may set through update_person / add_chore validation.
@@ -406,8 +417,88 @@ def delete_person(conn, pid: int) -> bool:
         conn.execute("UPDATE chores SET fixed_person_id = NULL "
                      "WHERE fixed_person_id = ?", (pid,))
         conn.execute("DELETE FROM completions WHERE person_id = ?", (pid,))
+        conn.execute("DELETE FROM away_periods WHERE person_id = ?", (pid,))
+        conn.execute("UPDATE away_periods SET backup_person_id = NULL "
+                     "WHERE backup_person_id = ?", (pid,))
         conn.execute("DELETE FROM people WHERE id = ?", (pid,))
         return True
+
+
+# --- away periods -----------------------------------------------------------
+# Additive overlay: rows here mark a person away for a date span, with an
+# optional backup assignee. Never touches occurrence_log (frozen history) --
+# consumers fold this in at render/plan time via away_map().
+
+_AWAY_FIELDS = {"start_date", "end_date", "backup_person_id"}
+
+
+def add_away_period(conn, person_id: int, start_date: str,
+                    end_date: str | None = None,
+                    backup_person_id: int | None = None) -> int:
+    cur = conn.execute(
+        "INSERT INTO away_periods(person_id, start_date, end_date, "
+        "backup_person_id, created_at) VALUES(?, ?, ?, ?, ?)",
+        (person_id, start_date, end_date, backup_person_id, _now_iso()))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def close_away_period(conn, period_id: int, end_date: str) -> None:
+    conn.execute("UPDATE away_periods SET end_date = ? WHERE id = ?",
+                 (end_date, period_id))
+    conn.commit()
+
+
+def update_away_period(conn, period_id: int, **fields) -> None:
+    cols = {k: v for k, v in fields.items() if k in _AWAY_FIELDS}
+    if not cols:
+        return
+    assignments = ", ".join(f"{k} = ?" for k in cols)
+    conn.execute(f"UPDATE away_periods SET {assignments} WHERE id = ?",
+                 (*cols.values(), period_id))
+    conn.commit()
+
+
+def delete_away_period(conn, period_id: int) -> bool:
+    with conn:
+        if conn.execute("SELECT 1 FROM away_periods WHERE id = ?",
+                        (period_id,)).fetchone() is None:
+            return False
+        conn.execute("DELETE FROM away_periods WHERE id = ?", (period_id,))
+        return True
+
+
+def list_away_periods(conn, include_closed: bool = True) -> list[dict]:
+    sql = "SELECT * FROM away_periods"
+    if not include_closed:
+        sql += " WHERE end_date IS NULL"
+    sql += " ORDER BY start_date, id"
+    return [dict(r) for r in conn.execute(sql)]
+
+
+def away_map(conn, from_date: str, to_date: str) -> dict[int, dict]:
+    """Per person within [from_date, to_date]: the set of away date strings and
+    the effective backup person id for each of those dates. Interval expansion
+    is clipped to the window; an open-ended period (end_date NULL) is treated
+    as running through to_date."""
+    lo = date.fromisoformat(from_date)
+    hi = date.fromisoformat(to_date)
+    out: dict[int, dict] = {}
+    for r in conn.execute("SELECT * FROM away_periods"):
+        start = date.fromisoformat(r["start_date"])
+        end = date.fromisoformat(r["end_date"]) if r["end_date"] else hi
+        a = max(start, lo)
+        b = min(end, hi)
+        if a > b:
+            continue
+        info = out.setdefault(r["person_id"], {"dates": set(), "backup_on": {}})
+        d = a
+        while d <= b:
+            ds = d.isoformat()
+            info["dates"].add(ds)
+            info["backup_on"][ds] = r["backup_person_id"]
+            d += timedelta(days=1)
+    return out
 
 
 # --- chores ---------------------------------------------------------------
