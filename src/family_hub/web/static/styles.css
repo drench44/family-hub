@@ -602,52 +602,216 @@ body {
 .hdot.st-crit { background: var(--crit); }
 
 /* ------- native laundry card (washer/dryer portholes) ------- */
-/* The signature is the porthole: each machine drawn as its front-loader door.
-   The bezel doubles as a kitchen-timer dial (the .ln-arc is minutes-left on a
-   60-minute face), the drum interior carries the state (tumbling garments
-   while running, a check when done, empty when idle), and the drum contents
-   run water-cool in the washer / warm in the dryer — a physical truth, so it
-   reads without a legend. Everything resolves through theme tokens; the only
-   motion is the tumble, and only while a cycle is actually running. */
+/* The signature is the porthole: each machine drawn as its front-loader door,
+   built as material — a brushed-steel bezel (gradient ring, light from the
+   upper left), genuinely dark curved glass (real machines are dark inside no
+   matter the room, so the interior is fixed-dark on every theme), and the
+   stainless drum you actually see through the door: hub, perforation rings,
+   and three lifter baffles that ride the tumble rotation like the real drum.
+   The thin illuminated halo OUTSIDE the steel is the data ring — minutes left
+   on a 60-minute dial while running, and a full breathing green ring while a
+   finished load waits in the drum (the attention moment; it calms down the
+   instant the door opens and the machine reads idle). Clothes tint by machine
+   — washer water-cool, dryer warm — a physical truth, so it reads without a
+   legend. Motion: the tumble while running, the halo breath while done; both
+   stop under prefers-reduced-motion (the static glow keeps the attention). */
 .laundry-slot { display: flex; flex-direction: column; gap: 12px; }
 .ln { padding: 16px 12px 14px; }
 .ln-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ln-m { display: flex; flex-direction: column; align-items: center; text-align: center;
-  min-width: 0; }
+  min-width: 0; border-radius: 12px; padding: 8px 4px 9px; }
+/* the just-finished machine gets the same wash grammar the climate card uses
+   for warn states — visible across the kitchen, gone once the door opens */
+.ln-m.ln-ph-done { background: color-mix(in srgb, var(--good) 9%, transparent); }
 .ln-door { width: 104px; height: 104px; }
-.ln-bezel { fill: var(--surface-2); stroke: var(--edge); stroke-width: 5; }
-/* timer dial: minutes left, drawn from 12 o'clock (the -90° spin) */
-.ln-arc { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round;
+/* brushed-steel bezel: light falls from the upper left */
+.ln-bezel { fill: none; stroke-width: 6; }
+.ln-st-bzhi  { stop-color: color-mix(in srgb, var(--ink) 52%, var(--surface-2)); }
+.ln-st-bzmid { stop-color: color-mix(in srgb, var(--ink) 20%, var(--surface-2)); }
+.ln-st-bzlo  { stop-color: color-mix(in srgb, var(--ink) 7%, var(--surface-2)); }
+/* the glass: fixed-dark interior with an off-center depth falloff */
+.ln-st-glhi  { stop-color: #323A46; }
+.ln-st-glmid { stop-color: #171B21; }
+.ln-st-gllo  { stop-color: #0A0C10; }
+/* the glass fill is the radial gradient set as a presentation attribute in
+   lnPortholeSvg (a CSS fill here would override and flatten it) */
+.ln-glass { stroke: none; }
+/* recess between glass and steel */
+.ln-lip { fill: none; stroke: rgba(0, 0, 0, .55); stroke-width: 2.4; }
+/* glass reflection: a curved specular band, always light like a real glint */
+.ln-glint { fill: #FFFFFF; opacity: .13; }
+.ln-glint2 { opacity: .06; }
+/* the drum, in fixed stainless grays (the interior ignores the theme) */
+.ln-hub { fill: none; stroke: #8B95A3; opacity: .15; stroke-width: 5; }
+.ln-perf { fill: none; stroke: #8B95A3; opacity: .24; stroke-width: 1;
+  stroke-dasharray: .9 4.4; stroke-linecap: round; }
+.ln-baffle { fill: #939CAB; opacity: .3; }
+/* data ring: a thin illuminated halo flush outside the steel, minutes on a
+   60-minute dial drawn from 12 o'clock (the -90° spin) */
+.ln-arc { fill: none; stroke: var(--accent); stroke-width: 3.6; stroke-linecap: round;
   transform: rotate(-90deg); transform-origin: 50px 50px; }
 .ln-ph-paused .ln-arc { stroke: var(--warn); }
 .ln-ph-done .ln-arc { stroke: var(--good); }
-.ln-glass { fill: color-mix(in srgb, var(--ground) 55%, var(--surface-2)); }
-.ln-glint { stroke: var(--ink); opacity: .14; stroke-width: 3; stroke-linecap: round; }
-/* drum contents: garments tint by machine (washer cool / dryer warm) */
-.ln-g { fill: var(--p2); }
-.ln-g1 { opacity: .62; } .ln-g2 { opacity: .46; } .ln-g3 { opacity: .36; }
-.ln-dryer .ln-g { fill: var(--p3); }
-.ln-sud { fill: var(--ink); opacity: .25; }
-.ln-dryer .ln-sud { display: none; }   /* suds are a washer thing */
-.ln-tumble { transform-origin: 50px 50px; animation: ln-spin 3.4s linear infinite; }
-.ln-ph-paused .ln-tumble { animation-play-state: paused; }
-@keyframes ln-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .ln-tumble { animation: none; } }
+/* the finished-load beacon: a fat translucent ring under the data ring that
+   breathes, plus the drum's cycle-complete light */
+.ln-halo { fill: none; stroke: var(--good); stroke-width: 7; opacity: .18;
+  animation: ln-breathe 2.6s ease-in-out infinite; }
+.ln-donewash { fill: var(--good); opacity: .1; }
+@keyframes ln-breathe { 50% { opacity: .42; } }
+/* the load, drawn as cloth in two shades (cool in the washer, warm in the
+   dryer): a folded heap with fold shadows and a top-edge sheen, plus two
+   loose pieces that tumble for real — see the ln-carry keyframes below */
+.ln-cl1 { fill: color-mix(in srgb, var(--p2) 78%, #10141A); opacity: .95; }
+.ln-cl2 { fill: color-mix(in srgb, var(--p2) 62%, #E8EEF4); opacity: .9; }
+.ln-fold { fill: none; stroke: rgba(0, 0, 0, .32); stroke-width: 1.7;
+  stroke-linecap: round; }
+.ln-sheen { fill: none; stroke: #FFFFFF; opacity: .22; stroke-width: 1.6;
+  stroke-linecap: round; }
+.ln-dryer .ln-cl1 { fill: color-mix(in srgb, var(--p3) 78%, #141008); }
+.ln-dryer .ln-cl2 { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
+/* tumble physics. The heap sloshes gently at the drum floor. Each loose
+   piece runs a three-layer cycle: its .ln-lift carrier rotates about the
+   drum center at (near) drum speed, so the carry is EXACTLY circular and
+   pressed against the wall — no chord-cutting; the piece itself (.ln-fly)
+   first scoops outward to wall radius, holds through the carry, then falls
+   in the carrier's held frame on an accelerating gravity curve (world-space
+   endpoints hand-computed so the landing spot equals the cycle's start —
+   the 100%->0% wrap is invisible) and rocks the last few degrees to rest.
+   Two fliers on offset phases so the motion never reads as a loop. All
+   transform-only — compositor-friendly for the wall's modest hardware. */
+.ln-lift { transform-origin: 50px 50px; animation: ln-liftcycle 12.8s linear infinite; }
+.ln-flyp { animation: ln-flycycle 12.8s infinite; }
+/* three cloth shades so the cascade reads as different garments */
+.ln-flyp { fill: color-mix(in srgb, var(--p2) 62%, #E8EEF4); opacity: .9; }
+.ln-w2 { fill: color-mix(in srgb, var(--p2) 45%, #F2F7FC); }
+.ln-w3 { fill: color-mix(in srgb, var(--p2) 80%, #C9DEF2); opacity: .82; }
+.ln-dryer .ln-flyp { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
+.ln-dryer .ln-w2 { fill: color-mix(in srgb, var(--p3) 45%, #FBF4E8); }
+.ln-dryer .ln-w3 { fill: color-mix(in srgb, var(--p3) 80%, #E8D9BF); }
+.ln-heap { transform-origin: 50px 66px; animation: ln-slosh 12.8s infinite; }
+/* a done machine's load lies still (the cycle is over). Both longhands on
+   purpose: .ln-washer .ln-heap re-sets animation-NAME at equal specificity,
+   so `animation: none` alone survives only by declaration order — pausing
+   too makes stillness robust against reordering. */
+.ln-ph-done .ln-heap { animation: none; animation-play-state: paused; }
+/* the washer's load sits lower — properly IN the water, not floating on it
+   (operator, 2026-08-17). The offset is baked into its own slosh keyframes
+   because the animation's transform would override a static translate. */
+.ln-washer .ln-heap { animation-name: ln-slosh-w; }
+/* carrier: ride the wall from 6 o'clock to the ~11 o'clock detach point
+   (-150 deg — the real release, per the tumble patent), hold while the
+   piece flies, then snap back for the second lift. Both snaps land on
+   world-positions equal to the next segment's start, so they're invisible.
+   Two flights fit the active half of the 12.8s master; the piece rests in
+   the heap through the reverse half (the mirrored trio flies then). */
+@keyframes ln-liftcycle {
+  0%     { transform: rotate(0deg); }
+  5%     { transform: rotate(-150deg); }
+  18.75% { transform: rotate(-150deg); }
+  18.76% { transform: rotate(0deg); }
+  23.75% { transform: rotate(-150deg); }
+  100%   { transform: rotate(-150deg); }
+}
+/* the piece: scoop to wall radius, pressed to the wall through the carry,
+   then a BALLISTIC release — it keeps rising on its tangent, decelerating
+   to a peak, and only then does gravity bend it over into an accelerating
+   fall, landing with a squash and rocking upright. No wall-stop: the
+   release velocity continues the carry velocity. */
+@keyframes ln-flycycle {
+  0%     { transform: translate(0, 0) rotate(0deg) scale(1, 1); animation-timing-function: ease-out; }
+  1.3%   { transform: translate(0, 11px) rotate(0deg) scale(1, 1); animation-timing-function: linear; }
+  5%     { transform: translate(0, 11px) rotate(0deg) scale(1, 1); animation-timing-function: ease-out; }
+  6.6%   { transform: translate(8.6px, 11.9px) rotate(-70deg) scale(1, 1.05); animation-timing-function: cubic-bezier(.4, 0, .85, .5); }
+  8.2%   { transform: translate(1.4px, -7.6px) rotate(-180deg) scale(1, 1.08); animation-timing-function: cubic-bezier(.35, .1, .7, .5); }
+  9.7%   { transform: translate(-8px, -29.9px) rotate(-320deg) scale(1.12, .88); animation-timing-function: ease-out; }
+  11%    { transform: translate(-8px, -29.9px) rotate(-360deg) scale(1, 1); }
+  18.75% { transform: translate(-8px, -29.9px) rotate(-360deg) scale(1, 1); }
+  18.76% { transform: translate(0, 0) rotate(0deg) scale(1, 1); animation-timing-function: ease-out; }
+  20.05% { transform: translate(0, 11px) rotate(0deg) scale(1, 1); animation-timing-function: linear; }
+  23.75% { transform: translate(0, 11px) rotate(0deg) scale(1, 1); animation-timing-function: ease-out; }
+  25.35% { transform: translate(8.6px, 11.9px) rotate(-70deg) scale(1, 1.05); animation-timing-function: cubic-bezier(.4, 0, .85, .5); }
+  26.95% { transform: translate(1.4px, -7.6px) rotate(-180deg) scale(1, 1.08); animation-timing-function: cubic-bezier(.35, .1, .7, .5); }
+  28.45% { transform: translate(-8px, -29.9px) rotate(-320deg) scale(1.12, .88); animation-timing-function: ease-out; }
+  29.75% { transform: translate(-8px, -29.9px) rotate(-360deg) scale(1, 1); }
+  100%   { transform: translate(-8px, -29.9px) rotate(-360deg) scale(1, 1); }
+}
+@keyframes ln-slosh {
+  0%   { transform: rotate(0deg); animation-timing-function: ease-out; }
+  6%   { transform: rotate(5deg); animation-timing-function: ease-in-out; }
+  20%  { transform: rotate(3.4deg); animation-timing-function: ease-in-out; }
+  33%  { transform: rotate(5deg); animation-timing-function: ease-in-out; }
+  44%  { transform: rotate(0deg); animation-timing-function: ease-in-out; }
+  56%  { transform: rotate(-5deg); animation-timing-function: ease-in-out; }
+  70%  { transform: rotate(-3.4deg); animation-timing-function: ease-in-out; }
+  83%  { transform: rotate(-5deg); animation-timing-function: ease-in-out; }
+  94%  { transform: rotate(0deg); }
+  100% { transform: rotate(0deg); }
+}
+@keyframes ln-slosh-w {
+  0%   { transform: translate(0, 4.5px) rotate(0deg); animation-timing-function: ease-out; }
+  6%   { transform: translate(0, 3.8px) rotate(5deg); animation-timing-function: ease-in-out; }
+  20%  { transform: translate(0, 4.5px) rotate(3.4deg); animation-timing-function: ease-in-out; }
+  33%  { transform: translate(0, 3.8px) rotate(5deg); animation-timing-function: ease-in-out; }
+  44%  { transform: translate(0, 4.5px) rotate(0deg); animation-timing-function: ease-in-out; }
+  56%  { transform: translate(0, 3.8px) rotate(-5deg); animation-timing-function: ease-in-out; }
+  70%  { transform: translate(0, 4.5px) rotate(-3.4deg); animation-timing-function: ease-in-out; }
+  83%  { transform: translate(0, 3.8px) rotate(-5deg); animation-timing-function: ease-in-out; }
+  94%  { transform: translate(0, 4.5px) rotate(0deg); }
+  100% { transform: translate(0, 4.5px) rotate(0deg); }
+}
+/* wash water: translucent depth with a bright meniscus line, lapping gently
+   side to side while the drum spins (the water is the one thing in the drum
+   that does NOT rotate); foam rides the line, one fainter bubble above it */
+.ln-water { fill: color-mix(in srgb, var(--p2) 70%, #DDEEFF); opacity: .16;
+  animation: ln-lap 2.8s ease-in-out infinite alternate; }
+.ln-waterline { fill: none; stroke: color-mix(in srgb, var(--p2) 40%, #EAF6FF);
+  opacity: .65; stroke-width: 1.4; stroke-linecap: round;
+  animation: ln-lap 2.8s ease-in-out infinite alternate; }
+@keyframes ln-lap { from { transform: translate(-2px, 0); } to { transform: translate(2px, .6px); } }
+.ln-sud { fill: #E8EEF4; opacity: .6; }
+.ln-sud-drift { opacity: .4; }
+.ln-tumble { transform-origin: 50px 50px; animation: ln-drum 12.8s infinite; }
+.ln-ph-paused .ln-tumble, .ln-ph-paused .ln-flyp, .ln-ph-paused .ln-lift,
+.ln-ph-paused .ln-water, .ln-ph-paused .ln-waterline,
+.ln-ph-paused .ln-heap { animation-play-state: paused; }
+/* the drum reverses like the real machine: three turns one way, an eased
+   stop, three turns back, another stop — a 12.8s master cycle every
+   direction-dependent animation below shares */
+@keyframes ln-drum {
+  0%    { transform: rotate(0deg); animation-timing-function: ease-in; }
+  5%    { transform: rotate(-140deg); animation-timing-function: linear; }
+  33%   { transform: rotate(-940deg); animation-timing-function: ease-out; }
+  37.5% { transform: rotate(-1080deg); }
+  50%   { transform: rotate(-1080deg); animation-timing-function: ease-in; }
+  55%   { transform: rotate(-940deg); animation-timing-function: linear; }
+  83%   { transform: rotate(-140deg); animation-timing-function: ease-out; }
+  87.5% { transform: rotate(0deg); }
+  100%  { transform: rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ln-tumble, .ln-flyp, .ln-lift, .ln-heap,
+  .ln-water, .ln-waterline { animation: none; }
+  /* motionless fliers rest at their 0% spot, inside the heap */
+  .ln-halo { animation: none; }   /* the static glow still marks the finish */
+}
 .ln-check { fill: none; stroke: var(--good); stroke-width: 7;
   stroke-linecap: round; stroke-linejoin: round; }
 .ln-bang { fill: var(--crit); font: 700 34px var(--sans); }
-/* quiet phases quiet the whole machine block */
-.ln-ph-idle .ln-door, .ln-ph-offline .ln-door { opacity: .55; }
-.ln-label { margin-top: 8px; font-size: 10px; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--faint); }
-.ln-big { margin-top: 2px; font-size: 25px; font-weight: 650; color: var(--ink);
+/* quiet phases quiet the door — gently: below ~.7 it disappears entirely on
+   the wall panel (operator feedback 2026-08-17) */
+.ln-ph-idle .ln-door, .ln-ph-offline .ln-door { opacity: .78; }
+/* text sized for across-the-kitchen reading (operator: "hard to see") */
+.ln-label { margin-top: 7px; font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--dim); font-weight: 600; }
+.ln-big { margin-top: 2px; font-size: 27px; font-weight: 650; color: var(--ink);
   line-height: 1.15; }
-.ln-big .num { font-size: 30px; }
-.ln-unit { margin-left: 4px; font-size: 13px; font-weight: 500; color: var(--dim); }
+.ln-big .num { font-size: 32px; }
+.ln-unit { margin-left: 4px; font-size: 14px; font-weight: 500; color: var(--dim); }
 .ln-ph-done .ln-big { color: var(--good); }
 .ln-ph-error .ln-big { color: var(--crit); }
 .ln-ph-idle .ln-big, .ln-ph-offline .ln-big { color: var(--dim); font-weight: 550; }
-.ln-sub { margin-top: 1px; font-size: 12px; color: var(--dim); min-height: 15px; }
+.ln-sub { margin-top: 1px; font-size: 13.5px; min-height: 17px;
+  color: color-mix(in srgb, var(--ink) 30%, var(--dim)); }
 
 
 /* ========================== calendar ========================= */
@@ -1851,6 +2015,15 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) body[data-tab="weather"] .cal,
   :root:not([data-layout="desktop"]) body[data-tab="weather"] .tiles,
   :root:not([data-layout="desktop"]) body[data-tab="weather"] .todos-page { display: none; }
+  /* the Laundry tab reuses the .panels section (where the laundry slot
+     lives) but filters it to just that slot; the Weather tab in turn no
+     longer shows the slot — laundry has its own tab on the phone. */
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .people-col,
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .cal,
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .tiles,
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .todos-page { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .panels > :not(.laundry-slot) { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="weather"] .laundry-slot { display: none; }
   :root:not([data-layout="desktop"]) body[data-tab="todos"] .people-col,
   :root:not([data-layout="desktop"]) body[data-tab="todos"] .cal,
   :root:not([data-layout="desktop"]) body[data-tab="todos"] .tiles,
@@ -1872,10 +2045,13 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) .tab-btn { min-width: 0; }
 }
 
-/* Five tabs need to fit down to 380px with no horizontal scroll. Sibling media
-   query (not nested — older engines), same not-desktop guard so a forced-desktop
-   TV never picks up the smaller phone type. */
-@media (max-width: 380px) {
+/* SIX tabs (laundry joined 2026-08-17) need to fit with no horizontal
+   scroll: at 390px (iPhone 12–16 logical width) CALENDAR's mono label
+   overruns a sixth of the bar at the base type size, so the smaller type
+   applies up to 440px. Sibling media query (not nested — older engines),
+   same not-desktop guard so a forced-desktop TV never picks up the smaller
+   phone type. */
+@media (max-width: 440px) {
   :root:not([data-layout="desktop"]) .tab-btn { font-size: 9px; letter-spacing: 0.08em; padding: 6px 2px; }
 }
 /* <<< phone shell (max-width:1000px unless forced desktop) <<< */
