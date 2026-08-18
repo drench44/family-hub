@@ -630,7 +630,7 @@ body {
 .ln-st-bzmid { stop-color: color-mix(in srgb, var(--ink) 20%, var(--surface-2)); }
 .ln-st-bzlo  { stop-color: color-mix(in srgb, var(--ink) 7%, var(--surface-2)); }
 /* the glass: fixed-dark interior with an off-center depth falloff */
-.ln-st-glhi  { stop-color: #2A3038; }
+.ln-st-glhi  { stop-color: #323A46; }
 .ln-st-glmid { stop-color: #171B21; }
 .ln-st-gllo  { stop-color: #0A0C10; }
 /* the glass fill is the radial gradient set as a presentation attribute in
@@ -640,6 +640,7 @@ body {
 .ln-lip { fill: none; stroke: rgba(0, 0, 0, .55); stroke-width: 2.4; }
 /* glass reflection: a curved specular band, always light like a real glint */
 .ln-glint { fill: #FFFFFF; opacity: .13; }
+.ln-glint2 { opacity: .06; }
 /* the drum, in fixed stainless grays (the interior ignores the theme) */
 .ln-hub { fill: none; stroke: #8B95A3; opacity: .15; stroke-width: 5; }
 .ln-perf { fill: none; stroke: #8B95A3; opacity: .24; stroke-width: 1;
@@ -668,52 +669,91 @@ body {
   stroke-linecap: round; }
 .ln-dryer .ln-cl1 { fill: color-mix(in srgb, var(--p3) 78%, #141008); }
 .ln-dryer .ln-cl2 { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
-/* tumble physics. The heap sloshes in place at the drum floor; each flier is
-   a cloth wad (geometry centered on its own origin, positioned purely by the
-   keyframed transform) that is CARRIED up the drum wall at near-drum speed
-   (the linear segments), RELEASES near the top, FALLS on an accelerating arc
-   (the cubic-bezier gravity segment), then lands and settles back into the
-   heap. Rotation ends at a full -360° so the loop closes without a snap; the
-   two fliers run different periods and phases so the motion never reads as a
-   repeating loop. Transform-only animation — compositor-friendly for the
-   wall's modest hardware. */
+/* tumble physics. The heap sloshes gently at the drum floor. Each loose
+   piece runs a three-layer cycle: its .ln-lift carrier rotates about the
+   drum center at (near) drum speed, so the carry is EXACTLY circular and
+   pressed against the wall — no chord-cutting; the piece itself (.ln-fly)
+   first scoops outward to wall radius, holds through the carry, then falls
+   in the carrier's held frame on an accelerating gravity curve (world-space
+   endpoints hand-computed so the landing spot equals the cycle's start —
+   the 100%->0% wrap is invisible) and rocks the last few degrees to rest.
+   Two fliers on offset phases so the motion never reads as a loop. All
+   transform-only — compositor-friendly for the wall's modest hardware. */
 .ln-fly { fill: color-mix(in srgb, var(--p2) 62%, #E8EEF4); opacity: .9; }
 .ln-dryer .ln-fly { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
-.ln-fly1 { animation: ln-carry1 2.9s infinite; }
-.ln-fly2 { animation: ln-carry2 3.7s -1.9s infinite; }
-.ln-heap { transform-origin: 50px 66px; animation: ln-slosh 2.6s ease-in-out infinite; }
-@keyframes ln-carry1 {
-  0%   { transform: translate(52px, 66px) rotate(0deg); animation-timing-function: linear; }
-  14%  { transform: translate(61px, 60px) rotate(-30deg); animation-timing-function: linear; }
-  28%  { transform: translate(66px, 50px) rotate(-70deg); animation-timing-function: linear; }
-  40%  { transform: translate(62px, 38px) rotate(-110deg); animation-timing-function: linear; }
-  46%  { transform: translate(57px, 33px) rotate(-140deg); animation-timing-function: cubic-bezier(.45, 0, .85, .45); }
-  68%  { transform: translate(42px, 60px) rotate(-265deg); animation-timing-function: ease-out; }
-  80%  { transform: translate(48px, 66.5px) rotate(-320deg); animation-timing-function: ease-in-out; }
-  100% { transform: translate(52px, 66px) rotate(-360deg); }
+.ln-lift { transform-origin: 50px 50px; }
+.ln-lift1 { animation: ln-liftcycle 16s linear infinite; }
+.ln-lift2 { animation: ln-liftcycle 16s linear -8s infinite; }
+.ln-fly1 { animation: ln-flycycle 16s infinite; }
+.ln-fly2 { animation: ln-flycycle 16s -8s infinite; }
+.ln-heap { transform-origin: 50px 66px; animation: ln-slosh 3.1s ease-in-out infinite; }
+/* carrier: ride the wall up and over the top, hold while the piece falls;
+   two cycles fit the active (spinning) half of the 16s master, then the
+   piece rests in the heap while the drum runs the other way. The 22.5%
+   snap-back is invisible: the landing's world position equals the start. */
+@keyframes ln-liftcycle {
+  0%     { transform: rotate(0deg); }
+  13.05% { transform: rotate(-210deg); }
+  22.5%  { transform: rotate(-210deg); }
+  22.51% { transform: rotate(0deg); }
+  35.55% { transform: rotate(-210deg); }
+  100%   { transform: rotate(-210deg); }
 }
-@keyframes ln-carry2 {
-  0%   { transform: translate(46px, 67px) rotate(0deg); animation-timing-function: linear; }
-  16%  { transform: translate(58px, 62px) rotate(-35deg); animation-timing-function: linear; }
-  32%  { transform: translate(65px, 52px) rotate(-75deg); animation-timing-function: linear; }
-  44%  { transform: translate(61px, 41px) rotate(-115deg); animation-timing-function: cubic-bezier(.45, 0, .85, .45); }
-  66%  { transform: translate(40px, 62px) rotate(-250deg); animation-timing-function: ease-out; }
-  80%  { transform: translate(43px, 67px) rotate(-305deg); animation-timing-function: ease-in-out; }
-  100% { transform: translate(46px, 67px) rotate(-360deg); }
+/* the piece: scoop to wall radius, hold through the carry, gravity fall,
+   rock to rest — twice — then rest through the reverse half */
+@keyframes ln-flycycle {
+  0%     { transform: translate(0, 0) rotate(0deg); animation-timing-function: ease-out; }
+  2.7%   { transform: translate(0, 11px) rotate(0deg); animation-timing-function: linear; }
+  13.05% { transform: translate(0, 11px) rotate(0deg); animation-timing-function: cubic-bezier(.5, 0, .85, .4); }
+  18.9%  { transform: translate(5.5px, -6.6px) rotate(-200deg); animation-timing-function: cubic-bezier(.3, .15, .65, .55); }
+  21.15% { transform: translate(8px, -29.9px) rotate(-348deg); animation-timing-function: ease-out; }
+  22.5%  { transform: translate(8px, -29.9px) rotate(-360deg); }
+  22.51% { transform: translate(0, 0) rotate(0deg); animation-timing-function: ease-out; }
+  25.2%  { transform: translate(0, 11px) rotate(0deg); animation-timing-function: linear; }
+  35.55% { transform: translate(0, 11px) rotate(0deg); animation-timing-function: cubic-bezier(.5, 0, .85, .4); }
+  41.4%  { transform: translate(5.5px, -6.6px) rotate(-200deg); animation-timing-function: cubic-bezier(.3, .15, .65, .55); }
+  43.65% { transform: translate(8px, -29.9px) rotate(-348deg); animation-timing-function: ease-out; }
+  45%    { transform: translate(8px, -29.9px) rotate(-360deg); }
+  100%   { transform: translate(8px, -29.9px) rotate(-360deg); }
 }
 @keyframes ln-slosh {
-  0%, 100% { transform: rotate(-4deg); }
-  50% { transform: translate(0, -1.5px) rotate(5deg); }
+  0%, 100% { transform: rotate(-2.5deg); }
+  50% { transform: translate(0, -1px) rotate(3deg); }
 }
-/* wash water: stays level while the drum spins; foam floats on it */
-.ln-water { fill: var(--p2); opacity: .22; }
-.ln-sud { fill: #E8EEF4; opacity: .55; }
-.ln-tumble { transform-origin: 50px 50px; animation: ln-spin 3.4s linear infinite; }
+}
+/* wash water: translucent depth with a bright meniscus line, lapping gently
+   side to side while the drum spins (the water is the one thing in the drum
+   that does NOT rotate); foam rides the line, one bubble drifting free */
+.ln-water { fill: color-mix(in srgb, var(--p2) 55%, #0C1826); opacity: .5;
+  animation: ln-lap 2.8s ease-in-out infinite alternate; }
+.ln-waterline { fill: none; stroke: color-mix(in srgb, var(--p2) 40%, #EAF6FF);
+  opacity: .65; stroke-width: 1.4; stroke-linecap: round;
+  animation: ln-lap 2.8s ease-in-out infinite alternate; }
+@keyframes ln-lap { from { transform: translate(-2px, 0); } to { transform: translate(2px, .6px); } }
+.ln-sud { fill: #E8EEF4; opacity: .6; }
+.ln-sud-drift { opacity: .4; }
+.ln-tumble { transform-origin: 50px 50px; animation: ln-drum 16s infinite; }
 .ln-ph-paused .ln-tumble, .ln-ph-paused .ln-fly1, .ln-ph-paused .ln-fly2,
+.ln-ph-paused .ln-lift1, .ln-ph-paused .ln-lift2, .ln-ph-paused .ln-water,
+.ln-ph-paused .ln-waterline,
 .ln-ph-paused .ln-heap { animation-play-state: paused; }
-@keyframes ln-spin { to { transform: rotate(-360deg); } }
+/* the drum reverses like the real machine: two turns one way, an eased
+   stop, two turns back, another stop — a 16s master cycle every direction-
+   dependent animation below shares */
+@keyframes ln-drum {
+  0%   { transform: rotate(0deg); animation-timing-function: ease-in; }
+  6%   { transform: rotate(-80deg); animation-timing-function: linear; }
+  41%  { transform: rotate(-660deg); animation-timing-function: ease-out; }
+  45%  { transform: rotate(-720deg); }
+  50%  { transform: rotate(-720deg); animation-timing-function: ease-in; }
+  56%  { transform: rotate(-640deg); animation-timing-function: linear; }
+  91%  { transform: rotate(-60deg); animation-timing-function: ease-out; }
+  95%  { transform: rotate(0deg); }
+  100% { transform: rotate(0deg); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ln-tumble, .ln-fly1, .ln-fly2, .ln-heap { animation: none; }
+  .ln-tumble, .ln-fly1, .ln-fly2, .ln-lift1, .ln-lift2, .ln-heap,
+  .ln-water, .ln-waterline { animation: none; }
   /* motionless fliers rest at their 0% spot, inside the heap */
   .ln-halo { animation: none; }   /* the static glow still marks the finish */
 }
@@ -1914,6 +1954,15 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) body[data-tab="weather"] .cal,
   :root:not([data-layout="desktop"]) body[data-tab="weather"] .tiles,
   :root:not([data-layout="desktop"]) body[data-tab="weather"] .todos-page { display: none; }
+  /* the Laundry tab reuses the .panels section (where the laundry slot
+     lives) but filters it to just that slot; the Weather tab in turn no
+     longer shows the slot — laundry has its own tab on the phone. */
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .people-col,
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .cal,
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .tiles,
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .todos-page { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="laundry"] .panels > :not(.laundry-slot) { display: none; }
+  :root:not([data-layout="desktop"]) body[data-tab="weather"] .laundry-slot { display: none; }
   :root:not([data-layout="desktop"]) body[data-tab="todos"] .people-col,
   :root:not([data-layout="desktop"]) body[data-tab="todos"] .cal,
   :root:not([data-layout="desktop"]) body[data-tab="todos"] .tiles,

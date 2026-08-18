@@ -434,7 +434,8 @@ function seedTabbar(document) {
     '<button class="tab-btn" data-tab="todos">To-Dos</button>' +
     '<button class="tab-btn" data-tab="cal">Calendar</button>' +
     '<button class="tab-btn" data-tab="cams">Cameras</button>' +
-    '<button class="tab-btn" data-tab="weather">Weather</button>';
+    '<button class="tab-btn" data-tab="weather">Weather</button>' +
+    '<button class="tab-btn" data-tab="laundry">Laundry</button>';
   return bar;
 }
 
@@ -4797,7 +4798,7 @@ test('laundryTick: countdown + arc update in place without rebuilding the drum',
   assert.match(washer().querySelector('.ln-big').innerHTML, /Any minute/);
 });
 
-test('updateTabVisibility + applyWallLayout: laundry alone keeps the weather tab and panels column', () => {
+test('updateTabVisibility + applyWallLayout: laundry has its own tab; alone it keeps the panels column', () => {
   const { sandbox, document } = newHub();
   seedTabbar(document);
   seedWallGrid(document);
@@ -4807,24 +4808,37 @@ test('updateTabVisibility + applyWallLayout: laundry alone keeps the weather tab
     { id: 'climate', enabled: false, group: 'integration' },
     { id: 'laundry', enabled: true, group: 'integration' },
   ] });
-  const weatherTab = document.querySelectorAll('.tab-btn')
-    .find((b) => b.dataset.tab === 'weather');
-  assert.equal(weatherTab.hidden, false,
-    'weather tab survives on laundry alone (it hosts the laundry card)');
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('laundry').hidden, false, 'laundry gets its own tab');
+  assert.equal(byTab('weather').hidden, true,
+    'weather tab no longer survives on laundry alone (laundry moved out)');
   const grid = document.querySelector('.hub-grid');
   assert.match(grid.style.gridTemplateAreas || '', /panels/,
-    'panels column survives on laundry alone');
-  // ...and off drops both (no custom panels in this sandbox)
+    'the WALL panels column still hosts the laundry slot, so it survives');
+  // ...and laundry off drops its tab + the column (no custom panels here)
   sandbox.renderIntegrations({ integrations: [
     { id: 'chores', enabled: true, group: 'feature' },
     { id: 'weather', enabled: false, group: 'integration' },
     { id: 'climate', enabled: false, group: 'integration' },
     { id: 'laundry', enabled: false, group: 'integration' },
   ] });
-  assert.equal(weatherTab.hidden, true);
+  assert.equal(byTab('laundry').hidden, true);
   assert.doesNotMatch(grid.style.gridTemplateAreas || '', /panels/);
   assert.equal(document.body.classList.contains('integ-off-laundry'), true,
     'the CSS hook that hides #laundry-slot is stamped');
+  // active-tab fallback: parked on the laundry tab when it goes away
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'laundry', enabled: true, group: 'integration' },
+  ] });
+  sandbox.setTab('laundry');
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'laundry', enabled: false, group: 'integration' },
+  ] });
+  assert.equal(document.body.dataset.tab, 'chores',
+    'hiding the active laundry tab falls back to the first visible tab');
 });
 
 
