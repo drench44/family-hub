@@ -320,6 +320,14 @@ script + systemd units (fail-loud, atomic, keeps 14): edit the paths in the
 `systemctl enable --now family-hub-backup.timer`.
 **Restore:** stop the container, copy a snapshot over `data/hub.db`, start.
 
+## Adding a feature
+
+Work through [`docs/adding-a-feature.md`](docs/adding-a-feature.md) as a
+checklist — registry toggle, fail-soft backend, demo payload, mobile surface,
+tests and guards, visual gates, docs + screenshot, review, and post-deploy
+verification. Every item cites the real bug that created it; the wall ships
+nothing that skipped a gate.
+
 ## Tests
 
 Four layers, no external services needed (Python 3.12):
