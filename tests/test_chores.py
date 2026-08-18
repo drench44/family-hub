@@ -15,6 +15,18 @@ def P(pid, name="p", color="#5BC9F0"):
     return {"id": pid, "name": name, "color": color, "sort": 0, "active": 1}
 
 
+def _fixed(cid, pid, title="x"):
+    return {"id": cid, "title": title, "icon": "", "schedule_kind": "daily",
+            "days_mask": 0, "assign_kind": "fixed", "fixed_person_id": pid,
+            "rotation_order": [], "rotation_epoch": "2026-01-01", "active": 1}
+
+
+def _rot(cid, order):
+    return {"id": cid, "title": "trash", "icon": "", "schedule_kind": "daily",
+            "days_mask": 0, "assign_kind": "rotation", "fixed_person_id": None,
+            "rotation_order": order, "rotation_epoch": "2026-01-01", "active": 1}
+
+
 def test_occurs_daily_and_days_mask():
     mon, sun = dt.date(2026, 8, 10), dt.date(2026, 8, 16)
     assert ch.occurs(C(), mon)
@@ -103,9 +115,9 @@ def test_plan_rows_flat_shape_and_omissions():
                         dt.date(2026, 8, 12))
     assert rows == [
         {"chore_id": 10, "person_id": 1, "title": "Dishes", "icon": "🍽️",
-         "rot": 0},
+         "rot": 0, "covering_for": None},
         {"chore_id": 12, "person_id": 1, "title": "Feed cat", "icon": "",
-         "rot": 1},
+         "rot": 1, "covering_for": None},
     ]
 
 
@@ -117,6 +129,56 @@ def test_plan_rows_rotation_skips_inactive_person():
     for d in (dt.date(2026, 8, 12), dt.date(2026, 8, 13)):
         rows = ch.plan_rows([rot], people, d)
         assert [r["person_id"] for r in rows] == [1]
+
+
+def test_plan_rows_rotation_falls_to_whoever_is_home():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    ch_rot = _rot(9, [1, 2])
+    base = ch.plan_rows([ch_rot], people, d)               # normal assignee
+    normal_pid = base[0]["person_id"]
+    away_pid = normal_pid
+    other = 2 if normal_pid == 1 else 1
+    rows = ch.plan_rows([ch_rot], people, d, {"ids": {away_pid}, "backup": {}})
+    assert rows and rows[0]["person_id"] == other          # fell to who's home
+
+
+def test_plan_rows_fixed_reassigns_to_available_backup():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    rows = ch.plan_rows([_fixed(5, 1, "dog")], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert len(rows) == 1
+    assert rows[0]["person_id"] == 2 and rows[0]["covering_for"] == 1
+
+
+def test_plan_rows_fixed_pauses_when_no_available_backup():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    # no backup -> paused
+    assert ch.plan_rows([_fixed(5, 1)], people, d, {"ids": {1}, "backup": {}}) == []
+    # backup who is also away -> paused (not crash)
+    assert ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1, 2}, "backup": {1: 2}}) == []
+
+
+def test_plan_rows_away_person_own_chore_absent():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"}]
+    assert ch.plan_rows([_fixed(5, 1)], people, d, {"ids": {1}, "backup": {}}) == []
+
+
+def test_covering_for_not_persisted_in_log_shape():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    r = ch.plan_rows([_fixed(5, 1, "dog")], people, d,
+                     {"ids": {1}, "backup": {1: 2}})[0]
+    assert set(r) >= {"chore_id", "person_id", "title", "icon", "rot",
+                      "covering_for"}
 
 
 def test_day_plan_shape_done_flags_and_rotation():
