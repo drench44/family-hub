@@ -27,23 +27,17 @@ _weather_cache: dict[str, tuple[float, dict]] = {}
 CLIMATE_TTL = 60.0
 _climate_cache: dict[str, tuple[float, dict]] = {}
 
-# Laundry cache, keyed by ha_base. Shorter than the 60s poll so a cycle-done
-# flip reaches the wall within about one poll even with several devices
-# sharing the cache.
-LAUNDRY_TTL = 25.0
-# The cycle ENDGAME: lg_thinq holds "end" only briefly before the machine
-# powers itself off, so with the projected finish ~2 min out (or just past)
-# the whole done window can fit between normal polls — the live board then
-# never shows Done and never stamps a last load (operator, 2026-08-17).
-# Inside the endgame the cache tightens to this TTL and the frontend chains
-# short re-polls (hub.js lnEndgame), so a poll lands inside the window.
-# The endgame is bounded a few minutes past the projection too: a stale
-# latched remaining-time sensor must not pin fast polling for hours.
-LAUNDRY_ENDGAME_TTL = 5.0
-LAUNDRY_ENDGAME_AHEAD_MIN = 2.0
-LAUNDRY_ENDGAME_BEHIND_MIN = 5.0
+# Laundry cache, keyed by ha_base. Sized just UNDER the background watcher's
+# cadence (app.LAUNDRY_WATCH_S, 5s): every watcher tick gets a genuinely
+# fresh HA read, while any request landing between ticks (the route's
+# fallback fetch when the watcher is disabled or hasn't produced a snapshot
+# yet) reuses the still-warm result instead of doubling the HA traffic. The
+# old two-speed endgame TTL is gone — the watcher polls at finish-catching
+# speed all cycle long, so the brief lg_thinq "end" status can't slip
+# between reads anywhere, not just near the projected finish.
+LAUNDRY_TTL = 4.0
 # How long a MISSED finish (running -> idle with the projection passed, see
-# app.tile_laundry) keeps presenting as Done before decaying to idle + the
+# app._laundry_annotate) keeps presenting as Done before decaying to idle + the
 # "last load" line. A real observed "end" holds Done until the door opens;
 # a machine that powered itself off gives no such signal, so the wall holds
 # the green Done long enough to be seen across the kitchen, not forever.
@@ -57,6 +51,7 @@ def reset_caches() -> None:
     _weather_cache.clear()
     _climate_cache.clear()
     _laundry_cache.clear()
+    _ha_warned.clear()
 
 
 async def climate_tile(client, cfg) -> dict:
@@ -305,19 +300,6 @@ def _laundry_past(iso: str | None) -> bool:
     return mt is not None and mt <= 0
 
 
-def _laundry_endgame(machines: list[dict]) -> bool:
-    """True iff any machine is running with its projected finish inside the
-    endgame window (a little ahead of the projection to a little behind it)
-    — the stretch where the brief "end" status could slip between polls."""
-    for m in machines:
-        if m.get("phase") != "running":
-            continue
-        mt = _laundry_minutes_to(m.get("finishes_at"))
-        if mt is not None and -LAUNDRY_ENDGAME_BEHIND_MIN <= mt <= LAUNDRY_ENDGAME_AHEAD_MIN:
-            return True
-    return False
-
-
 def _laundry_ts(raw: object) -> str | None:
     """An HA timestamp state, validated: the ISO string as-is when it parses,
     else None. HA reports 'unknown'/'unavailable' as states too — those are
@@ -332,6 +314,14 @@ def _laundry_ts(raw: object) -> str | None:
     return raw
 
 
+# Entities currently in a warned-about outage — failure logging is EDGE-
+# triggered (one warning going down, one info coming back) because the 5s
+# background watcher would otherwise turn a prolonged HA outage into ~48
+# warning lines a minute, drowning the log used to diagnose that very
+# outage (and burying any one-time crash line under the flood).
+_ha_warned: set[str] = set()
+
+
 async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
     """One HA entity state, or None on any failure (auth, LAN, non-dict body).
     Failures are per-entity so one flaky sensor can't sink the whole card."""
@@ -340,10 +330,20 @@ async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
                              headers={"Authorization": f"Bearer {token}"})
         r.raise_for_status()
         body = r.json()
-        return body if isinstance(body, dict) else None
+        if not isinstance(body, dict):
+            raise ValueError(f"non-dict body {type(body).__name__}")
     except Exception as e:
-        log.warning("laundry: HA state %s unavailable: %s", entity, e)
+        if entity not in _ha_warned:
+            _ha_warned.add(entity)
+            log.warning("laundry: HA state %s unavailable: %s "
+                        "(quiet until it recovers)", entity, e)
+        else:
+            log.debug("laundry: HA state %s still unavailable: %s", entity, e)
         return None
+    if entity in _ha_warned:
+        _ha_warned.discard(entity)
+        log.info("laundry: HA state %s recovered", entity)
+    return body
 
 
 async def laundry_tile(client, cfg, token: str) -> dict:
@@ -397,8 +397,7 @@ async def laundry_tile(client, cfg, token: str) -> dict:
         # offline. Not cached, so recovery shows on the next poll.
         return {"available": False}
     result = {"available": True, "machines": out}
-    ttl = LAUNDRY_ENDGAME_TTL if _laundry_endgame(out) else LAUNDRY_TTL
-    _laundry_cache[base] = (time.monotonic() + ttl, result)
+    _laundry_cache[base] = (time.monotonic() + LAUNDRY_TTL, result)
     return result
 
 
