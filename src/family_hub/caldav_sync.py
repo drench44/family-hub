@@ -397,7 +397,20 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             # only trust prune decisions for VTODO lists that pulled OK this tick
             synced_vtodo = {"caldav:" + c["id"] for c in collections
                             if c.get("comp") == "VTODO"} - set(vtodo_failed)
-            chore_mirror.reconcile(conn, cfg, now, synced_collections=synced_vtodo)
+            # reconcile() never raises — it returns {"error": True} when the
+            # whole tick blew up. Discarding that made a mirror that died every
+            # tick invisible (the calendar badge stayed 'ok' forever), so the
+            # result is recorded for /api/admin/state and the settings row.
+            mres = chore_mirror.reconcile(conn, cfg, now,
+                                          synced_collections=synced_vtodo)
+            mirror_status = {"ok": not mres.get("error"), "at": now.isoformat(),
+                             "created": mres.get("created", 0),
+                             "moved": mres.get("moved", 0),
+                             "updated": mres.get("updated", 0),
+                             "deleted": mres.get("deleted", 0)}
+            if mres.get("error"):
+                log.error("chore mirror reconcile reported a failed tick")
+            fdb.kv_set(conn, "chore_mirror_status", mirror_status)
             flushed = flush_pending(client, conn, collections, now.isoformat())
             errors.extend(flushed["errors"])
             needs_auth = needs_auth or flushed["needs_auth"]

@@ -510,10 +510,15 @@ def _reminder_lists(c) -> list:
             if col["comp_type"] == "VTODO" and col["enabled"]]
 
 
-def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
+def _integ_status(iid: str, caldav_status: dict, cal_status: dict,
+                  mirror_status: dict | None = None):
     """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
     or None for one with no sync (cameras/weather/climate/laundry). Drives the settings
-    menu's 'Reconnect iCloud' / warning affordance on auth-failure or error."""
+    menu's 'Reconnect iCloud' / warning affordance on auth-failure or error.
+
+    The chore mirror rides on the iCloud integration, so a failing mirror tick
+    shows as an error on that row — it used to fail forever with the row still
+    reading 'ok'."""
     # calendar_status is shared by Google + ICS and can't tell them apart, and
     # needs_auth is a Google-only concept — so only surface it on google_calendar
     # (ICS gets no status rather than mis-inheriting Google's auth state).
@@ -526,6 +531,8 @@ def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
     err = src.get("error")
     if src.get("ok") is False and err not in (None, "", "not configured", "disabled"):
         return "error"
+    if iid == "icloud_caldav" and (mirror_status or {}).get("ok") is False:
+        return "error"
     return "ok"
 
 
@@ -536,6 +543,7 @@ def _integrations_state(c) -> dict:
     True for a not-yet-seeded one, so gating never hides an un-toggled source)."""
     caldav_status = fdb.kv_get(c, "caldav_status") or {}
     cal_status = fdb.kv_get(c, "calendar_status") or {}
+    mirror_status = fdb.kv_get(c, "chore_mirror_status") or {}
     lst = []
     enabled_ids = set()
     for integ in _available_only():
@@ -545,7 +553,8 @@ def _integrations_state(c) -> dict:
         entry = {"id": integ["id"], "kind": integ["kind"],
                  "name": integ["name"], "enabled": en,
                  "group": integ.get("group", "integration"),
-                 "status": _integ_status(integ["id"], caldav_status, cal_status)}
+                 "status": _integ_status(integ["id"], caldav_status, cal_status,
+                                         mirror_status)}
         if integ["id"] == "icloud_caldav":
             # the connected Apple ID (not a secret) so settings can show it; the
             # password is never included. readonly = 1-way (read-only) vs 2-way.
@@ -895,18 +904,45 @@ def complete(chore_id: int, body: CompleteBody | None = None):
     # enforce this via a FK; this gives a clean error on any DB.)
     _person_row(c, person_id)
     fdb.set_completion(c, chore_id, date_str, person_id)
-    # Reflect onto the mirrored iCloud reminder (no-op if not mirrored).
-    chore_mirror.push_completion(c, chore_id, date_str, True)
+    # Reflect onto the mirrored iCloud reminder (no-op if not mirrored, or if
+    # the ledger row is stale — see push_completion's expected_person_id).
+    chore_mirror.push_completion(c, chore_id, date_str, True,
+                                 expected_person_id=person_id)
     return {"ok": True}
+
+
+def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
+    """Who the wall currently shows this occurrence for — the frozen log for a
+    past day, else the live plan under the away overlay. None when it can't be
+    resolved (no such occurrence, a broken overlay); callers treat that as "no
+    expectation" rather than failing. Never raises."""
+    try:
+        d = dt.date.fromisoformat(date_str)
+        if d < _today():
+            row = fdb.log_row(c, chore_id, date_str)
+            return row["person_id"] if row else None
+        _, away_view, _ = _away_view(c, d)
+        rows = chlogic.plan_rows(fdb.list_chores(c), fdb.list_people(c), d,
+                                 away_view)
+        row = next((r for r in rows if r["chore_id"] == chore_id), None)
+        return row["person_id"] if row else None
+    except Exception:
+        log.warning("could not resolve the owner of chore %s on %s",
+                    chore_id, date_str, exc_info=True)
+        return None
 
 
 @app.delete("/api/chores/{chore_id}/complete")
 def uncomplete(chore_id: int, date: str | None = None):
     c = _db()
     date_str = date or _today().isoformat()
+    # Resolve the current owner BEFORE clearing, so the reopen can't be pushed
+    # onto a mirror ledger row that still names the other person (M3).
+    owner = _resolved_owner(c, chore_id, date_str)
     fdb.clear_completion(c, chore_id, date_str)
     # Reopen the mirrored iCloud reminder too (no-op if not mirrored).
-    chore_mirror.push_completion(c, chore_id, date_str, False)
+    chore_mirror.push_completion(c, chore_id, date_str, False,
+                                 expected_person_id=owner)
     return {"ok": True}
 
 
@@ -1404,7 +1440,11 @@ def admin_state():
             # empty until iCloud is connected and its reminder lists are synced.
             "reminder_lists": [{"id": col["id"], "name": col["display_name"]}
                                for col in fdb.list_caldav_collections(c)
-                               if col["comp_type"] == "VTODO"]}
+                               if col["comp_type"] == "VTODO"],
+            # Last chore-mirror tick: {ok, at, created, moved, updated, deleted}
+            # ({} before the first two-way sync). A mirror that dies every tick
+            # used to be completely invisible.
+            "chore_mirror_status": fdb.kv_get(c, "chore_mirror_status") or {}}
 
 
 @app.post("/api/admin/people")

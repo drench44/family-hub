@@ -309,6 +309,121 @@ def test_reconcile_covering_chore_lands_on_backups_list_and_credits_backup(conn)
     assert comp["person_id"] == ava
 
 
+def _away_pair(conn):
+    """Milo (mapped) with a daily chore, Ava (mapped) as his backup, one
+    reconcile already run BEFORE the away period opens -- the stale-ledger race
+    the sync tick can hit, since reconcile_completions runs before reconcile."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    cid = _daily(conn, "Fish", milo)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    today = _NOW.date().isoformat()
+    m = fdb.get_chore_mirror(conn, cid, today)
+    assert m["person_id"] == milo                    # ledger keyed to the owner
+    fdb.add_away_period(conn, milo, today, backup_person_id=ava)
+    return milo, ava, cid, today, m
+
+
+def _completion_person(conn, cid, date):
+    row = conn.execute(
+        "SELECT person_id FROM completions WHERE chore_id=? AND date=?",
+        (cid, date)).fetchone()
+    return row["person_id"] if row else None
+
+
+def test_reconcile_completions_credits_the_current_owner_not_the_ledger(conn):
+    """M2: the sync tick runs reconcile_completions BEFORE reconcile, so the
+    ledger row can predate an away/back change. An iOS check-off must be
+    recorded against whoever owns the day NOW (live-resolved through the away
+    overlay), not the person the stale ledger row still names."""
+    milo, ava, cid, today, m = _away_pair(conn)
+    _complete_in_ios(conn, m, title="Fish")
+    assert chore_mirror.reconcile_completions(conn, _NOW) == 1
+    assert _completion_person(conn, cid, today) == ava, \
+        "the covering person owns the day now -- credit them, not the away owner"
+
+
+def test_reconcile_completions_prefers_the_frozen_log_owner(conn):
+    """M2: when the wall has already FROZEN the day, that record is the truth
+    about who owned it -- it beats both the ledger and a live re-resolve."""
+    milo, ava, cid, today, m = _away_pair(conn)
+    fdb.replace_day_log(conn, today, [
+        {"chore_id": cid, "person_id": milo, "title": "Fish", "icon": "",
+         "rot": 0, "covering_for": None}])
+    _complete_in_ios(conn, m, title="Fish")
+    assert chore_mirror.reconcile_completions(conn, _NOW) == 1
+    assert _completion_person(conn, cid, today) == milo
+
+
+def test_push_completion_noops_on_a_stale_ledger_row(conn, caplog):
+    """M3: a wall completion resolved to the BACKUP must not be pushed onto a
+    ledger row still keyed to the away owner -- that marks the reminder done on
+    the away person's phone (and leaves the backup nagged). No-op + warn; the
+    next reconcile's moved branch relocates the reminder properly."""
+    import logging
+    milo, ava, cid, today, m = _away_pair(conn)
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        assert chore_mirror.push_completion(
+            conn, cid, today, True, expected_person_id=ava) is False
+    obj = fdb.get_cal_object(conn, m["cal_object_id"])
+    assert "STATUS:COMPLETED" not in obj["raw_ics"], "the away person's reminder is untouched"
+    assert any("stale" in r.getMessage() for r in caplog.records)
+    # no expectation supplied (or a matching one) still pushes
+    assert chore_mirror.push_completion(conn, cid, today, True,
+                                        expected_person_id=milo) is True
+
+
+def test_recreating_a_pruned_occurrence_keeps_it_completed_and_its_identity(conn):
+    """I4: an occurrence that was completed, pruned (ledger row dropped, the
+    COMPLETED object kept as history) and then re-desired must come back
+    COMPLETED and keep the server identity it already earned -- otherwise the
+    re-create reopens a finished reminder on the phone and, with href/etag
+    nulled, pushes it as a brand-new object (duplicate in iCloud)."""
+    pid = _person(conn, "Emma", "caldav:emma")
+    cid = _daily(conn, "Dishes", pid)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    today = _NOW.date().isoformat()
+    m = fdb.get_chore_mirror(conn, cid, today)
+    _complete_in_ios(conn, m)                       # done in iOS, pulled back SYNCED
+    fdb.set_completion(conn, cid, today, pid)       # and recorded on the wall
+    fdb.update_chore(conn, cid, active=0)           # falls out of desired -> prune
+    chore_mirror.reconcile(conn, _CFG, _NOW, synced_collections={"caldav:emma"})
+    assert fdb.get_chore_mirror(conn, cid, today) is None
+    kept = fdb.get_cal_object(conn, m["cal_object_id"])
+    assert kept is not None and kept["href"]
+
+    fdb.update_chore(conn, cid, active=1)           # re-desired (an away edit, an undelete)
+    chore_mirror.reconcile(conn, _CFG, _NOW, synced_collections={"caldav:emma"})
+    back = fdb.get_cal_object(conn, m["cal_object_id"])
+    assert "STATUS:COMPLETED" in back["raw_ics"], "a finished reminder must not reopen"
+    assert back["href"] == kept["href"] and back["etag"] == kept["etag"], \
+        "the server identity survives the re-create (no duplicate object)"
+    assert back["sync_state"] == "PENDING_UPDATE", \
+        "an object that already exists server-side is updated in place, not created"
+    assert fdb.completion_exists(conn, cid, today), "the wall record is untouched"
+    assert fdb.get_chore_mirror(conn, cid, today) is not None
+
+
+def test_once_chore_with_no_backup_stays_mirrored_while_away(conn):
+    """I3 through the mirror: a one-time chore inside an away span with nobody
+    to cover stays assigned to its owner, so its reminder must NOT be pruned --
+    the reverse of the recurring case (which pauses and is pruned)."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    due = (_NOW.date() + dt.timedelta(days=2)).isoformat()
+    cid = fdb.add_chore(conn, title="Vet appt", icon="", schedule_kind="once",
+                        days_mask=0, assign_kind="fixed", fixed_person_id=milo,
+                        rotation_order=[], rotation_epoch=due)
+    assert chore_mirror.reconcile(conn, _CFG, _NOW)["created"] == 1
+    fdb.add_away_period(conn, milo, _NOW.date().isoformat(),
+                        (_NOW.date() + dt.timedelta(days=3)).isoformat())
+    res = chore_mirror.reconcile(conn, _CFG, _NOW,
+                                 synced_collections={"caldav:milo"})
+    assert res["deleted"] == 0
+    rows = fdb.list_chore_mirror(conn)
+    assert [(m["chore_id"], m["date"], m["person_id"]) for m in rows] == \
+        [(cid, due, milo)], "the dated commitment stays on the owner's list"
+
+
 def test_reconcile_return_moves_reminder_back_to_owner(conn):
     """Closing the away period hands the future occurrences back: the next
     reconcile's 'moved' branch relocates uncompleted covering reminders from the

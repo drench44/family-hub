@@ -1047,14 +1047,31 @@ def queue_cal_object_update(conn, oid: str, raw_ics: str, summary: str,
 
 def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
     """Insert a wall-created object as PENDING_CREATE (no href/etag yet — the push
-    assigns them)."""
+    assigns them).
+
+    If a row for this id ALREADY exists with a server href, the object exists in
+    iCloud and only its body is being re-desired (the chore mirror re-creating an
+    occurrence whose ledger row was pruned). Keep the identity it earned —
+    href/etag/base_etag/sequence — and queue it as PENDING_UPDATE, which the flush
+    pushes as a conditional PUT to that same resource. Nulling them instead made
+    the push a blind create: a duplicate object in the family's Reminders list,
+    and a later delete that skipped the server because the row had no href."""
+    prior = conn.execute(
+        "SELECT href, etag, base_etag, sequence FROM cal_objects WHERE id = ?",
+        (obj["id"],)).fetchone()
+    href = prior["href"] if prior else None
+    etag = prior["etag"] if prior else None
+    base_etag = prior["base_etag"] if prior else None
+    sequence = int(prior["sequence"] or 0) if prior else 0
+    state = "PENDING_UPDATE" if href else "PENDING_CREATE"
     conn.execute(
         "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "
         "href, etag, base_etag, summary, raw_ics, sequence, sync_state, "
-        "local_modified_at) VALUES(?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 0, "
-        "'PENDING_CREATE', ?)",
+        "local_modified_at, sync_attempts, last_sync_error) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)",
         (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
-         obj.get("summary", ""), obj.get("raw_ics"), now_iso))
+         href, etag, base_etag, obj.get("summary", ""), obj.get("raw_ics"),
+         sequence, state, now_iso))
     conn.commit()
 
 
