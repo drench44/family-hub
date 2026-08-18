@@ -11,6 +11,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Added
+- Backup-health badge: the wall header shows an amber "Backup stale" pill once
+  the last successful `hub.db` backup is older than `BACKUP_STALE_HOURS`
+  (default 36h) — hidden while healthy. A successful backup records a heartbeat
+  in `hub.db`, `/api/hub` carries the status (fails-soft), and a stale heartbeat
+  also catches a backup that stopped running entirely.
 - Versioning system: a single `VERSION` source of truth, this changelog, git
   tags, and a `scripts/release.py` bump-roll-tag ceremony.
 - Enforced changelog: a CI `changelog-guard` job and a local pre-commit hook
@@ -25,6 +30,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 ### Changed
 - Static asset cache-busting is unified to the app version (`?v=<version>`), so
   the css/js cache-busts can no longer drift apart or lag a branch.
+
+### Fixed
+- The release-tooling dry-run test no longer pins itself to the live repo's
+  `[Unreleased]` state, so the first real `scripts/release.py` cut (which empties
+  `[Unreleased]`) doesn't break the test suite.
 
 ## [1.0.0] — 2026-08-17
 

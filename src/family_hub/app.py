@@ -67,6 +67,11 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "web", "static")
 # below is gated on this flag, so an unset DEMO changes zero behavior.
 DEMO = os.environ.get("DEMO", "") == "1"
 
+# Dashboard backup-health: the header shows a "Backup stale" badge once the last
+# successful backup is older than this. 36h clears the nightly snapshot, so only
+# a genuinely missed/failed backup trips it.
+BACKUP_STALE_S = int(os.environ.get("BACKUP_STALE_HOURS", "36")) * 3600
+
 
 def _compute_build() -> str:
     """Short token that changes whenever any baked frontend asset changes, so the
@@ -673,6 +678,36 @@ def _people_day(c, d: dt.date) -> list[dict]:
     return plan
 
 
+def _backup_status(last_success, now, stale_s):
+    """Pure: (last-success datetime or None, now, threshold secs) -> the /api/hub
+    `backup` block. 'known' is False before any heartbeat exists, so a fresh
+    deploy shows a muted 'unknown', never a false alarm."""
+    if last_success is None:
+        return {"known": False, "last_success": None, "age_s": None,
+                "stale": False, "threshold_s": stale_s}
+    age = int((now - last_success).total_seconds())
+    return {"known": True, "last_success": last_success.isoformat(), "age_s": age,
+            "stale": age > stale_s, "threshold_s": stale_s}
+
+
+def _build_backup(conn, now=None, stale_s=BACKUP_STALE_S):
+    """Read the 'backup_status' heartbeat the backup script writes into hub.db on
+    every successful snapshot ({"at": ISO, ...}) and derive staleness. family-hub
+    `kv` has no updated_at column, so the timestamp lives in the value. A stale
+    heartbeat also catches 'backups stopped running at all'."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    rec = fdb.kv_get(conn, "backup_status")
+    last = None
+    if isinstance(rec, dict) and rec.get("at"):
+        try:
+            last = dt.datetime.fromisoformat(rec["at"])
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=dt.timezone.utc)
+        except (ValueError, TypeError):
+            last = None
+    return _backup_status(last, now, stale_s)
+
+
 @app.get("/api/hub")
 def hub():
     c = _db()
@@ -700,6 +735,13 @@ def hub():
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
     reminders_block = (remlogic.group(_visible_reminders(c), today)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
+    # Backup health for the header badge — fails-soft like the todos block above:
+    # a read error must not 500 the whole wall over a status indicator.
+    try:
+        backup_block = _build_backup(c)
+    except Exception:
+        log.error("backup status read failed; serving unknown", exc_info=True)
+        backup_block = _backup_status(None, dt.datetime.now(dt.timezone.utc), BACKUP_STALE_S)
     return {
         "date": today.isoformat(),
         "people": _people_day(c, today),
@@ -723,6 +765,9 @@ def hub():
         # A deploy-changing token: the wall reloads itself when it changes, so a
         # baked frontend update reaches the kiosk without a manual refresh.
         "build": BUILD,
+        # Backup-health for the header badge: {known, last_success, age_s, stale,
+        # threshold_s}. From the heartbeat the backup script writes on success.
+        "backup": backup_block,
         # House-default display theme (or None). The wall/admin stamp it live
         # on a fresh device with no localStorage override; None => the shipped
         # grey/green/none stays. Never persisted client-side.

@@ -22,6 +22,7 @@ const {
   fmtTimeRange, monthName, eventColor, wallZoom,
   isDayOutsideWindow,
   caldavTestMessage, caldavPanelHtml, caldavCollectionsHtml,
+  backupBadge,
 } = sandbox;
 const panelFit = (...a) => ({ ...sandbox.panelFit(...a) });
 const monthGrid = (...a) => JSON.parse(JSON.stringify(sandbox.monthGrid(...a)));
@@ -874,4 +875,21 @@ test('clampFrac: bounded 0..1 fill fraction for the meters', () => {
   assert.equal(f(null, 11), 0);         // no reading -> empty bar
   assert.equal(f('', 200), 0);
   assert.equal(f(50, 0), 0);            // guard divide-by-zero
+});
+
+// ----------------------------------------------------------- backupBadge
+
+test('backupBadge: hidden when payload missing, unknown, or fresh', () => {
+  assert.equal(backupBadge(null).show, false);
+  assert.equal(backupBadge(undefined).show, false);
+  assert.equal(backupBadge({ known: false, stale: false, age_s: null }).show, false);
+  assert.equal(backupBadge({ known: true, stale: false, age_s: 3600 }).show, false);
+});
+
+test('backupBadge: amber with age when a known backup is stale', () => {
+  const b = backupBadge({ known: true, stale: true, age_s: 144000, threshold_s: 129600 });
+  assert.equal(b.show, true);
+  assert.equal(b.level, 'warn');
+  assert.match(b.text, /Backup stale/);
+  assert.match(b.text, /40h/);   // 144000s
 });
