@@ -431,7 +431,7 @@ def test_admin_html_is_retired():
         "no frontend file may still link to the retired /admin.html"
 
 
-MOBILE_TABS = ("chores", "cal", "cams", "weather")
+MOBILE_TABS = ("chores", "cal", "cams", "weather", "laundry")
 
 # the wall sections that each live in the hub grid; a tab shows one and hides
 # the rest. (.camgrid is not here — it is default-hidden and only the cams tab
@@ -442,7 +442,10 @@ WALL_SURFACES = {"people-col", "cal", "tiles", "panels"}
 # the .camgrid (a single stacked column on the phone) and suppresses the wall's
 # .tiles column entirely, so its surface is none of the shared wall sections.
 TAB_SURFACE = {"chores": ".people-col", "cal": ".cal",
-               "cams": ".camgrid", "weather": ".panels"}
+               "cams": ".camgrid", "weather": ".panels",
+               # laundry reuses .panels, filtered to the laundry slot by its
+               # own child rule (asserted in test_laundry_card_static_guards)
+               "laundry": ".panels"}
 
 
 def test_mobile_reflow_block_present():
@@ -833,11 +836,18 @@ def test_laundry_card_static_guards():
     assert re.search(r"body\.integ-off-laundry[^\{]*#laundry-slot[^\{]*\{[^}]*display:\s*none",
                      CSS), "laundry-off must hide the laundry slot"
     hub = (STATIC / "hub.js").read_text()
-    assert re.search(r"weather:\s*\[[^\]]*'laundry'", hub), \
-        "the weather tab must count laundry as a backing feature (TAB_FEATURES)"
+    assert re.search(r"laundry:\s*\['laundry'\]", hub), \
+        "laundry must back its own phone tab (TAB_FEATURES)"
     assert re.search(
         r"prefers-reduced-motion[^}]*\{[^}]*\.ln-tumble[^\{]*\{[^}]*animation:\s*none",
         CSS, re.S), "the tumble must stop under prefers-reduced-motion"
     # the timer arc + tumble only exist inside .ln-door SVG markup built by
     # lnPortholeSvg; the renderer must be wired into the poll loop
     assert "fetchLaundry" in hub and "renderLaundry" in hub and "laundryTick" in hub
+    # the phone Laundry tab shows ONLY the laundry slot from the shared
+    # .panels section, and the Weather tab no longer duplicates it
+    assert re.search(r'body\[data-tab="laundry"\] \.panels > :not\(\.laundry-slot\)'
+                     r'[^{]*\{[^}]*display:\s*none', CSS), \
+        "laundry tab must filter .panels to the laundry slot"
+    assert re.search(r'body\[data-tab="weather"\] \.laundry-slot[^{]*\{[^}]*display:\s*none',
+                     CSS), "weather tab must not duplicate the laundry slot"

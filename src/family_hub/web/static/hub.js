@@ -1100,7 +1100,8 @@ const TAB_FEATURES = {
   todos: ['todos'],
   cal: ['google_calendar', 'ics_calendar', 'icloud_caldav'],
   cams: ['cameras'],
-  weather: ['weather', 'climate', 'laundry'],
+  weather: ['weather', 'climate'],
+  laundry: ['laundry'],
 };
 
 // A custom dashboard panel (links.panels entry that isn't the weather/climate
@@ -2200,9 +2201,27 @@ function lnPortholeSvg(m, now = Date.now()) {
     // Fliers draw UNDER the heap so they emerge from behind it when picked
     // up and disappear into it when they land. The washer's water line stays
     // LEVEL outside all of it, with foam floating on top.
+    // Each flier is three layers: the .ln-lift carrier rotates about the
+    // drum center (so the carry is EXACTLY circular, pressed to the wall at
+    // drum speed), a static positioner puts the piece at its heap start, and
+    // the .ln-fly path itself runs the scoop-up / hold / gravity-fall /
+    // settle keyframes in the carrier's frame. Endpoints are computed so the
+    // landing spot equals the cycle start — the 100%->0% wrap is invisible.
+    // The 16s master cycle reverses direction like the real machine: two
+    // carry-and-fall cycles one way, an eased stop, two mirrored cycles the
+    // other way (the second flier lives in a horizontally-mirrored group and
+    // runs the SAME trajectory half a master-cycle later, so it climbs the
+    // opposite wall), another stop, repeat. Clothes rest in the heap during
+    // the opposite direction's window — which is what a real reversal pause
+    // looks like.
     inner = `<g class="ln-tumble">${drum}</g>`
+      + `<g class="ln-lift ln-lift1"><g transform="translate(50 66)">`
       + `<path class="ln-fly ln-fly1" d="M-6 -1 C-6 -5 -1 -7 3 -5 C6.5 -3.5 6.5 1 3.5 3 C0 5 -4.5 3.5 -6 -1 Z"/>`
+      + `</g></g>`
+      + `<g transform="matrix(-1 0 0 1 100 0)">`
+      + `<g class="ln-lift ln-lift2"><g transform="translate(50 66)">`
       + `<path class="ln-fly ln-fly2" d="M-4 0 C-4.5 -3.5 -1 -5 2 -4 C4.5 -3 4.5 0.5 2.5 2 C0 3.5 -3 3 -4 0 Z"/>`
+      + `</g></g></g>`
       + `<g class="ln-heap">`
       + `<path class="ln-cl1" d="M30 66 C28 58 34 53 40 55 C43 49 51 48 55 53`
       +   ` C60 49 68 52 68 59 C72 62 70 69 64 71 C58 75 42 75 36 72 C31 70 29 69 30 66 Z"/>`
@@ -2212,10 +2231,12 @@ function lnPortholeSvg(m, now = Date.now()) {
       + `<path class="ln-sheen" d="M42 53.5 C46 51 51 51 55 53.5"/>`
       + `</g>`
       + (m.kind !== 'dryer'
-        ? `<path class="ln-water" d="M13 66 Q 31 60 50 66 T 87 66 L 87 90 L 13 90 Z"/>`
+        ? `<path class="ln-water" d="M11 66 Q 30 61 50 66 T 89 66 L 89 90 L 11 90 Z"/>`
+          + `<path class="ln-waterline" d="M11 66 Q 30 61 50 66 T 89 66"/>`
           + `<circle class="ln-sud" cx="41" cy="64" r="2.7"/>`
           + `<circle class="ln-sud" cx="47" cy="62.4" r="1.9"/>`
           + `<circle class="ln-sud" cx="60" cy="64.5" r="2.2"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="55" cy="56" r="1.2"/>`
         : '');
   } else if (m.phase === 'done') {
     // the cycle-complete light: the drum glows softly until the door opens
@@ -2244,6 +2265,7 @@ function lnPortholeSvg(m, now = Date.now()) {
     + `<g clip-path="url(#lncl-${gid})">${inner}</g>`
     + `<circle class="ln-lip" cx="50" cy="50" r="38.2"/>`
     + `<path class="ln-glint" d="M25 37 A 31 31 0 0 1 41 22 A 35 35 0 0 0 28 46 Z"/>`
+    + `<path class="ln-glint ln-glint2" d="M63 76 A 30 30 0 0 0 74 66 A 33 33 0 0 1 60 79 Z"/>`
     + `</svg>`;
 }
 
