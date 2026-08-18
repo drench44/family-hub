@@ -1433,6 +1433,170 @@ test('buildChoreForm: a once model with no date renders the date input seeded to
     'empty once date falls back to a valid todayISO string');
 });
 
+// --- routine-type + reminder-times editor (P1). A delegated control reads
+// e.target.closest(sel); shim closest() on the tapped node the way a real tap
+// resolves it (same pattern as the "Once" test above).
+function tapDelegated(host, delegateSel, btnSel) {
+  const btn = host.querySelector(btnSel);
+  btn.closest = (s) => (selectorMatches(btn, s) ? btn : null);
+  host.querySelector(delegateSel).onclick({ target: btn });
+  return btn;
+}
+
+const P2 = [
+  { id: 1, name: 'Sam', color: '#5BC9F0', active: 1 },
+  { id: 2, name: 'Alex', color: '#8AE0AD', active: 1 },
+];
+
+test('buildChoreForm: choosing "Every N days" reveals the stepper, seeds a default, hides days/date', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  let captured = null;
+  sandbox.buildChoreForm(host, sandbox.freshChoreModel(), 'Add chore', (b) => { captured = b; }, P2);
+
+  tapDelegated(host, '.f-repeat', '[data-repeat="interval"]');
+  assert.ok(!host.querySelector('.f-interval').classList.contains('hidden'), 'interval stepper shown');
+  assert.ok(host.querySelector('.f-days').classList.contains('hidden'), 'weekly day chips hidden');
+  assert.ok(host.querySelector('.f-date').classList.contains('hidden'), 'once date hidden');
+  assert.equal(host.querySelector('.f-intervaldays').value, '2', 'a default cadence is seeded');
+
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(captured.schedule_kind, 'interval');
+  assert.equal(captured.interval_days, 2);
+});
+
+test('buildChoreForm: an interval chore edit populates the stepper and round-trips its value', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const model = sandbox.choreToModel({
+    title: 'Water plants', icon: '🪴', schedule_kind: 'interval', days_mask: 0,
+    interval_days: 4, week_interval: 1, due_times: [],
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [],
+  });
+  let captured = null;
+  sandbox.buildChoreForm(host, model, 'Save', (b) => { captured = b; }, P2);
+  assert.ok(host.querySelector('[data-repeat="interval"]').classList.contains('active'),
+    'the Every-N-days segment is active on an interval chore');
+  assert.equal(host.querySelector('.f-intervaldays').value, '4', 'stepper seeded from interval_days');
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(captured.interval_days, 4);
+});
+
+test('buildChoreForm: interval with a blank field blocks submit with an inline error', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const model = { ...sandbox.freshChoreModel(), repeat: 'interval', intervalDays: '' };
+  let called = false;
+  sandbox.buildChoreForm(host, model, 'Save', () => { called = true; }, P2);
+  host.querySelector('.f-intervaldays').value = '';   // user cleared it
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(called, false, 'submit is blocked when the interval is empty');
+  const err = host.querySelector('.f-error');
+  assert.ok(!err.classList.contains('hidden'), 'the inline error is shown');
+  assert.match(err.textContent, /1.*365/, 'the error names the 1–365 range');
+});
+
+test('buildChoreForm: the week-cadence toggle round-trips biweekly (week_interval 2)', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const model = { ...sandbox.freshChoreModel(), repeat: 'weekly', days: new Set([2]) };
+  let captured = null;
+  sandbox.buildChoreForm(host, model, 'Add chore', (b) => { captured = b; }, P2);
+  assert.ok(!host.querySelector('.f-weekfreq').classList.contains('hidden'),
+    'the cadence toggle shows for a weekly chore');
+
+  tapDelegated(host, '.f-weekfreq', '[data-weekfreq="2"]');
+  assert.ok(host.querySelector('[data-weekfreq="2"]').classList.contains('active'),
+    'Every 2 weeks is marked active');
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(captured.schedule_kind, 'days');
+  assert.equal(captured.week_interval, 2);
+
+  // toggling back to weekly restores week_interval 1
+  tapDelegated(host, '.f-weekfreq', '[data-weekfreq="1"]');
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(captured.week_interval, 1);
+});
+
+test('buildChoreForm: a biweekly chore edit pre-selects the Every-2-weeks toggle', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const model = sandbox.choreToModel({
+    title: 'Bins', icon: '', schedule_kind: 'days', days_mask: 4,
+    week_interval: 2, interval_days: null, due_times: [],
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [],
+  });
+  sandbox.buildChoreForm(host, model, 'Save', () => {}, P2);
+  assert.ok(host.querySelector('[data-weekfreq="2"]').classList.contains('active'),
+    'the biweekly cadence is pre-selected on edit');
+  assert.ok(!host.querySelector('[data-weekfreq="1"]').classList.contains('active'),
+    'the weekly cadence is not also active');
+});
+
+test('buildChoreForm: adding a reminder time renders a chip and round-trips due_times', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  let captured = null;
+  sandbox.buildChoreForm(host, sandbox.freshChoreModel(), 'Add chore', (b) => { captured = b; }, P2);
+  // empty starts as the "none yet" hint, not a chip
+  assert.match(host.querySelector('.f-times').innerHTML, /No reminder times/);
+
+  host.querySelector('.f-timeinput').value = '08:00';
+  host.querySelector('.f-timeadd').onclick();
+  assert.match(host.querySelector('.f-times').innerHTML, /data-remtime="0"/, 'a chip is rendered');
+  assert.match(host.querySelector('.f-times').innerHTML, /8am/, 'the chip shows the fmtTime label');
+  assert.equal(host.querySelector('.f-timeinput').value, '', 'the add input is cleared after adding');
+
+  host.querySelector('[data-submit]').onclick();
+  assert.deepEqual([...captured.due_times], ['08:00']);
+});
+
+test('buildChoreForm: reminder times de-dupe and sort; removing a chip drops it', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  let captured = null;
+  sandbox.buildChoreForm(host, sandbox.freshChoreModel(), 'Add chore', (b) => { captured = b; }, P2);
+
+  const add = (v) => { host.querySelector('.f-timeinput').value = v; host.querySelector('.f-timeadd').onclick(); };
+  add('20:00'); add('07:30'); add('20:00');   // last is a duplicate -> ignored
+  host.querySelector('[data-submit]').onclick();
+  assert.deepEqual([...captured.due_times], ['07:30', '20:00'], 'sorted, de-duped');
+
+  // remove the first chip (07:30) via the delegated list handler
+  tapDelegated(host, '.f-times', '[data-remtime="0"]');
+  host.querySelector('[data-submit]').onclick();
+  assert.deepEqual([...captured.due_times], ['20:00']);
+});
+
+test('buildChoreForm: a timed chore edit populates its reminder chips', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const model = sandbox.choreToModel({
+    title: 'Meds', icon: '💊', schedule_kind: 'daily', days_mask: 0,
+    week_interval: 1, interval_days: null, due_times: ['09:00', '21:00'],
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [],
+  });
+  sandbox.buildChoreForm(host, model, 'Save', () => {}, P2);
+  const html = host.querySelector('.f-times').innerHTML;
+  assert.match(html, /9am/);
+  assert.match(html, /9pm/);
+  assert.match(html, /data-remtime="1"/, 'both chips rendered');
+});
+
+test('buildChoreForm: the add-time row hides once six times are set', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const model = { ...sandbox.freshChoreModel(),
+    times: ['06:00', '07:00', '08:00', '09:00', '10:00', '11:00'] };   // already 6
+  sandbox.buildChoreForm(host, model, 'Add chore', () => {}, P2);
+  assert.ok(host.querySelector('.time-add').classList.contains('hidden'),
+    'the add row is hidden at the 6-time cap');
+  // removing one brings the add row back
+  tapDelegated(host, '.f-times', '[data-remtime="0"]');
+  assert.ok(!host.querySelector('.time-add').classList.contains('hidden'),
+    'the add row returns below the cap');
+});
+
 // Build a #chores-full host, seed hub.js's state as if the chores overlay were
 // open on today, render it, and return helpers to inspect + tap the result.
 //

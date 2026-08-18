@@ -2098,7 +2098,10 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 .swatch.selected { border-color: var(--ink); }
 .swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.segmented { display: inline-flex; gap: 3px; background: var(--surface-2); border-radius: 10px; padding: 3px; }
+/* flex-wrap lets the 4-option Repeat control (Daily/Weekly/Every N days/Once)
+   reflow to a second line on a ≤400px phone instead of overflowing the card;
+   the 2-button controls that also use .segmented never reach the wrap width. */
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 3px; background: var(--surface-2); border-radius: 10px; padding: 3px; }
 .seg-btn {
   font-family: var(--mono); font-size: 12px; font-weight: 600;
   letter-spacing: 0.06em; text-transform: uppercase;
@@ -2117,6 +2120,34 @@ body.integ-off-todos .todo-slot { display: none; }
    reuses .txt-input's box; this rule just keeps it self-sized rather than
    stretching the full field width like the text inputs. */
 .f-date { align-self: flex-start; }
+/* "Every [ N ] days" stepper (shown only when Repeat = Every N days). The
+   number field rides .txt-input's 44px/16px box (no iOS zoom-on-focus); this
+   just sizes it to the number and sets the flanking words. */
+.interval-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.interval-word { font-size: 15px; color: var(--dim); }
+.interval-num { width: 88px; text-align: center; padding: 0 8px; }
+/* Reminder times: a time input + Add button on one wrapping row, then the
+   chosen times as removable chips below (each chip is a tap-to-remove button,
+   like the rotation list). All colours are tokens, so every theme resolves. */
+.time-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.time-input { width: auto; flex: 0 0 auto; }
+.time-add-btn {
+  height: 44px; padding: 0 16px;
+  font-size: 15px; font-weight: 600; white-space: nowrap;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 10px; cursor: pointer;
+}
+.time-add-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.time-list { display: flex; gap: 6px; flex-wrap: wrap; }
+.time-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+  font-family: var(--mono); font-size: 13px; color: var(--ink);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 8px; padding: 8px 12px; cursor: pointer;
+}
+.time-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .day-chip {
   font-family: var(--mono); font-size: 12px;
   color: var(--dim); background: var(--surface-2);
