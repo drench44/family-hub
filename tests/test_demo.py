@@ -240,3 +240,22 @@ def test_demo_laundry_tile_is_canned_and_live_shaped(demo_client):
     ids = {i["id"]: i for i in
            demo_client.get("/api/hub").json()["integrations"]}
     assert "laundry" in ids and ids["laundry"]["enabled"] is True
+
+
+def test_demo_laundry_log_is_canned_and_live_shaped(demo_client):
+    """DEMO serves a canned cycle log matching the live endpoint's row shape
+    (both signature rows: an observed finish and a missed_finish), no DB.
+    The expected keys come from a REAL row, not a hardcoded copy — so a
+    live-schema change that forgets the demo fails here in either
+    direction."""
+    from family_hub import db as fdb
+    c = fdb.connect(":memory:")
+    fdb.ensure_schema(c)
+    fdb.laundry_log_add(c, "washer", "running", "done", "end", None, None)
+    real_keys = set(fdb.laundry_log_recent(c)[0])
+    c.close()
+    entries = demo_client.get("/api/laundry/log").json()["entries"]
+    assert entries, "demo cycle log must not be empty"
+    assert all(set(e) == real_keys for e in entries)
+    notes = {e["note"] for e in entries}
+    assert None in notes and "missed_finish" in notes
