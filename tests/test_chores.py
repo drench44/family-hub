@@ -372,6 +372,106 @@ def test_deactivated_owner_with_an_open_away_period_drops_the_chore():
                         {"ids": {1}, "backup": {}}) == []
 
 
+# --- away x the newer routine types (biweekly / every-N-days) ---------------
+#
+# The away overlay was only ever proven against DAILY chores. These walk the
+# cycles by hand so a rotation can't silently drift a turn when someone is away
+# (drift is invisible on a daily chore and permanent on a biweekly one).
+
+def _biweekly_rot(cid, order, epoch="2026-08-03"):
+    """Mon+Wed, every OTHER week, rotating through `order`."""
+    return {"id": cid, "title": "Recycling", "icon": "", "schedule_kind": "days",
+            "days_mask": 0b101, "week_interval": 2, "assign_kind": "rotation",
+            "fixed_person_id": None, "rotation_order": order,
+            "rotation_epoch": epoch, "active": 1}
+
+
+def _interval_chore(cid, n, *, order=None, owner=None, epoch="2026-08-03"):
+    return {"id": cid, "title": "Filter", "icon": "", "schedule_kind": "interval",
+            "interval_days": n, "days_mask": 0,
+            "assign_kind": "rotation" if order else "fixed",
+            "fixed_person_id": owner, "rotation_order": order or [],
+            "rotation_epoch": epoch, "active": 1}
+
+
+def test_away_view_on_reshapes_one_day_of_an_away_map():
+    """away_view_on is the ONE place a db.away_map window becomes the overlay
+    plan_rows consumes -- the wall, the iCloud mirror and the demo seed all go
+    through it so they can never resolve a day differently."""
+    amap = {
+        7: {"dates": {"2026-08-16", "2026-08-17"},
+            "backup_on": {"2026-08-16": 8, "2026-08-17": None}},
+        9: {"dates": {"2026-08-18"}, "backup_on": {"2026-08-18": 8}},
+    }
+    assert ch.away_view_on(amap, "2026-08-16") == {"ids": {7}, "backup": {7: 8}}
+    assert ch.away_view_on(amap, "2026-08-17") == {"ids": {7}, "backup": {7: None}}
+    assert ch.away_view_on(amap, "2026-08-18") == {"ids": {9}, "backup": {9: 8}}
+    # a day nobody is away is an empty overlay, not a crash
+    assert ch.away_view_on(amap, "2026-08-20") == {"ids": set(), "backup": {}}
+    assert ch.away_view_on({}, "2026-08-16") == {"ids": set(), "backup": {}}
+
+
+def test_biweekly_rotation_with_a_member_away_keeps_the_cycle():
+    """T1: a biweekly ('days' + week_interval=2) ROTATION, epoch Mon 2026-08-03,
+    Mon+Wed, order [1, 2]. Hand-walked occurrences and their normal assignees:
+      8/03 Mon -> 1   8/05 Wed -> 2      (week 0, on cycle)
+      8/10, 8/12                          (week 1, OFF cycle -> no rows)
+      8/17 Mon -> 1   8/19 Wed -> 2      (week 2, on cycle)
+      8/31 Mon -> 1                       (week 4, on cycle)
+    Person 1 is away on 8/17 only: that turn falls to whoever's home, off-cycle
+    days stay empty, and 8/31 comes back to 1 with no drift."""
+    people = [P(1, "A"), P(2, "B")]
+    chore = _biweekly_rot(9, [1, 2])
+    away = {"ids": {1}, "backup": {}}
+
+    def who(d, overlay=None):
+        rows = ch.plan_rows([chore], people, d, overlay)
+        return rows[0]["person_id"] if rows else None
+
+    assert who(dt.date(2026, 8, 17)) == 1                      # normal turn
+    assert who(dt.date(2026, 8, 17), away) == 2, "the turn falls to whoever's home"
+    # an OFF-cycle day stays empty whether or not anyone is away
+    assert who(dt.date(2026, 8, 10)) is None
+    assert who(dt.date(2026, 8, 10), away) is None
+    # back home: the sequence resumes exactly where it was, no drift
+    assert who(dt.date(2026, 8, 19)) == 2
+    assert who(dt.date(2026, 8, 31)) == 1
+
+
+def test_interval_rotation_with_a_member_away_keeps_the_cycle():
+    """T2: every-3-days rotation from Mon 2026-08-03, order [1, 2]:
+      8/03 -> 1, 8/06 -> 2, 8/09 -> 1, 8/12 -> 2, 8/15 -> 1.
+    Person 1 away on 8/09 hands that one turn to 2; the off-cycle days in
+    between never occur; 8/15 returns to 1 without drift."""
+    people = [P(1, "A"), P(2, "B")]
+    chore = _interval_chore(9, 3, order=[1, 2])
+    away = {"ids": {1}, "backup": {}}
+
+    def who(d, overlay=None):
+        rows = ch.plan_rows([chore], people, d, overlay)
+        return rows[0]["person_id"] if rows else None
+
+    assert who(dt.date(2026, 8, 9)) == 1
+    assert who(dt.date(2026, 8, 9), away) == 2
+    assert who(dt.date(2026, 8, 10), away) is None      # not an occurrence at all
+    assert who(dt.date(2026, 8, 12)) == 2
+    assert who(dt.date(2026, 8, 15)) == 1
+
+
+def test_fixed_interval_chore_is_covered_on_cycle_days_only():
+    """T3: a FIXED every-3-days chore owned by an away person with a backup is
+    covered (covering_for set) on its on-cycle days and simply doesn't occur in
+    between -- cover must never invent an occurrence."""
+    people = [P(1, "A"), P(2, "B")]
+    chore = _interval_chore(9, 3, owner=1)
+    away = {"ids": {1}, "backup": {1: 2}}
+    on_cycle = ch.plan_rows([chore], people, dt.date(2026, 8, 9), away)
+    assert len(on_cycle) == 1
+    assert on_cycle[0]["person_id"] == 2 and on_cycle[0]["covering_for"] == 1
+    assert ch.plan_rows([chore], people, dt.date(2026, 8, 10), away) == []
+    assert ch.plan_rows([chore], people, dt.date(2026, 8, 11), away) == []
+
+
 def test_away_boundary_last_day_away_next_day_normal():
     """F6: the last inclusive away day reads 'away'; the day immediately after
     end_date reads its normal state -- proven through week_strip."""

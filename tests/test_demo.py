@@ -268,9 +268,10 @@ def test_demo_away_state_is_coherent_for_today(tmp_path):
 
     today_str = today.isoformat()
     amap = db.away_map(c, today_str, today_str)
-    away_today = {pid for pid, info in amap.items() if today_str in info["dates"]}
-    backup_today = {pid: amap[pid]["backup_on"].get(today_str) for pid in away_today}
-    away_view = {"ids": away_today, "backup": backup_today}
+    # via the shared helper, exactly as app._away_view and the mirror do -- an
+    # inline reshape here could pass while the real render diverged
+    away_view = chlogic.away_view_on(amap, today_str)
+    assert away_view["ids"] == {milo_id}
     rows = chlogic.plan_rows(db.list_chores(c), people, today, away_view)
 
     milo_rows = [r for r in rows if r["person_id"] == milo_id]
