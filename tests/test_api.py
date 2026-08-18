@@ -1353,10 +1353,19 @@ def test_away_overlay_build_fails_soft(client, app_mod, monkeypatch, caplog):
     with caplog.at_level(logging.ERROR, logger="family_hub"):
         r = client.get("/api/hub")
     assert r.status_code == 200
-    entry = r.json()["people"][0]
+    body = r.json()
+    entry = body["people"][0]
     assert entry["away"] is False
+    # S1b: the wall gets a degraded-state flag (mirrors todos_ok) so it can show
+    # a "away status unavailable" note instead of silently rendering present.
+    assert body["away_ok"] is False
     assert any("away overlay" in rec.getMessage()
                for rec in caplog.records if rec.levelno >= logging.ERROR)
+
+
+def test_hub_away_ok_by_default(client, app_mod):
+    _seed_person_chore(client, title="Dishes")
+    assert client.get("/api/hub").json()["away_ok"] is True
 
 
 def test_admin_state_includes_away_periods(client, app_mod):
@@ -1376,7 +1385,12 @@ def test_admin_away_create_close_delete(client, app_mod, monkeypatch):
     p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
     p2 = client.post("/api/admin/people", json={"name": "Sam", "color": "#F05B5B"}).json()["id"]
 
-    r = client.post("/api/admin/away", json={"person_id": p1, "backup_person_id": p2})
+    # started a few days back, so the default "I'm back" (end=yesterday) is a
+    # valid end >= start (a same-day open + default back is now a 422, see
+    # test_away_back_rejects_end_before_start).
+    r = client.post("/api/admin/away",
+                    json={"person_id": p1, "backup_person_id": p2,
+                          "start_date": "2026-08-12"})
     assert r.status_code == 200
     body = r.json()
     pid = body["id"]
@@ -1384,7 +1398,7 @@ def test_admin_away_create_close_delete(client, app_mod, monkeypatch):
     assert body["backup_person_id"] == p2
     assert body["person_name"] == "Remy"
     assert body["backup_name"] == "Sam"
-    assert body["start_date"] == "2026-08-17"
+    assert body["start_date"] == "2026-08-12"
     assert body["end_date"] is None
 
     listed = client.get("/api/admin/away").json()["away_periods"]
@@ -1421,7 +1435,8 @@ def test_admin_away_patch_and_back_with_explicit_date(client, app_mod, monkeypat
                if p["id"] == pid)
     assert row["end_date"] == "2026-08-20"
 
-    assert client.patch("/api/admin/away/9999", json={"start_date": "2026-08-10"}).status_code == 200
+    # An unknown id is a 404 no-op, not a reassuring 200 (S3: mirrors DELETE).
+    assert client.patch("/api/admin/away/9999", json={"start_date": "2026-08-10"}).status_code == 404
     assert client.patch(f"/api/admin/away/{pid}", json={"start_date": "bad-date"}).status_code == 422
 
 
@@ -1458,6 +1473,173 @@ def test_admin_away_everyone_opens_for_all_active(client, app_mod, monkeypatch):
     assert len(p2_periods) == 1
     assert p2_periods[0]["start_date"] == "2026-08-17"
     assert not any(p["person_id"] == p3 for p in listed)
+
+
+def _make_person(client, name, color="#5BC9F0"):
+    return client.post("/api/admin/people",
+                       json={"name": name, "color": color}).json()["id"]
+
+
+def _fixed_chore(client, owner, title="Dishes"):
+    return client.post("/api/admin/chores", json={
+        "title": title, "icon": "", "schedule_kind": "daily", "days_mask": 0,
+        "assign_kind": "fixed", "fixed_person_id": owner,
+        "rotation_order": []}).json()["id"]
+
+
+def test_backup_covering_completion_credits_backup_not_away_person(
+        client, app_mod, monkeypatch):
+    """C1 (THE regression guard): a backup tapping a covering FIXED chore on the
+    wall (client sends NO person_id) must be recorded under the BACKUP, not the
+    away owner. Recording it under the away owner shows done today but never
+    reaches the backup's per-person completion map, so the backup's streak
+    silently breaks once the day ages."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    c = app_mod._db()
+    A = _make_person(client, "Away", "#5BC9F0")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+    # A goes away today with B as backup
+    client.post("/api/admin/away", json={"person_id": A, "backup_person_id": B})
+
+    # the wall resolves the covering chore onto B
+    hub = client.get("/api/hub").json()
+    bcard = next(p for p in hub["people"] if p["person"]["id"] == B)
+    assert any(ch["id"] == cid and ch["covering_for"] == A for ch in bcard["chores"])
+
+    # B taps it -- no person_id in the request, exactly like the wall sends
+    assert client.post(f"/api/chores/{cid}/complete").json() == {"ok": True}
+
+    comps = fdb.completions_between(c, today.isoformat(), today.isoformat())
+    row = next(r for r in comps if r["chore_id"] == cid)
+    assert row["person_id"] == B, \
+        "covering completion must credit the backup, not the away owner"
+    assert not any(r["person_id"] == A for r in comps), \
+        "nothing may be credited to the away owner"
+
+    # age the day: B's streak counts the covering day; A stays away, uncredited
+    monkeypatch.setattr(app_mod, "_today", lambda: today + dt.timedelta(days=1))
+    hub2 = client.get("/api/hub").json()
+    b2 = next(p for p in hub2["people"] if p["person"]["id"] == B)
+    a2 = next(p for p in hub2["people"] if p["person"]["id"] == A)
+    assert b2["streak"] >= 1, "the backup's covering day counts toward THEIR streak"
+    assert a2["away"] is True and a2["streak"] == 0, "away owner is uncredited"
+
+
+def test_away_back_rejects_end_before_start(client, app_mod, monkeypatch):
+    """S2: the fast 'Going away' (start=today) then immediate 'I'm back' (end
+    defaults to yesterday) double-tap must 422, not silently void the period."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
+    assert client.post(f"/api/admin/away/{pid}/back").status_code == 422
+    # an explicit end on/after start still works
+    assert client.post(f"/api/admin/away/{pid}/back",
+                       json={"end_date": "2026-08-17"}).status_code == 200
+
+
+def test_away_patch_rejects_end_before_start(client, app_mod, monkeypatch):
+    """S2: PATCH end_date earlier than the row's start_date is 422."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    pid = client.post("/api/admin/away",
+                      json={"person_id": p1, "start_date": "2026-08-15"}).json()["id"]
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"end_date": "2026-08-10"}).status_code == 422
+    # moving start in the SAME patch is respected for the comparison
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"start_date": "2026-08-05",
+                              "end_date": "2026-08-10"}).status_code == 200
+
+
+def test_away_patch_and_back_unknown_id_404(client, app_mod, monkeypatch):
+    """S3: PATCH/back on an unknown id is a 404, mirroring DELETE."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    assert client.patch("/api/admin/away/9999",
+                        json={"start_date": "2026-08-10"}).status_code == 404
+    assert client.post("/api/admin/away/9999/back").status_code == 404
+
+
+def test_away_patch_backup_validation(client, app_mod, monkeypatch):
+    """S4: PATCH backup_person_id is validated like open -- 422 on self,
+    404 on unknown, 200 on a real other person."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    p2 = _make_person(client, "Sam", "#F05B5B")
+    pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": p1}).status_code == 422
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": 9999}).status_code == 404
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": p2}).status_code == 200
+
+
+def test_away_open_twice_conflicts(client, app_mod, monkeypatch):
+    """F1b: a second open period for a person 409s, so overlapping rows never
+    reach the wall."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 200
+    assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 409
+    # after they're back, opening a fresh period is allowed again
+    pid = client.get("/api/admin/away").json()["away_periods"][0]["id"]
+    client.post(f"/api/admin/away/{pid}/back", json={"end_date": "2026-08-17"})
+    assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 200
+
+
+def test_future_dated_away_period_not_active_today(client, app_mod, monkeypatch):
+    """F2: a period that starts AFTER today leaves the person present today with
+    their normal chores rendering."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    A = _make_person(client, "Away")
+    cid = _fixed_chore(client, A, "Dishes")
+    client.post("/api/admin/away",
+                json={"person_id": A, "start_date": "2026-08-25"})
+    card = next(p for p in client.get("/api/hub").json()["people"]
+                if p["person"]["id"] == A)
+    assert card["away"] is False
+    assert any(ch["id"] == cid for ch in card["chores"]), \
+        "normal chore renders while the away period is still in the future"
+
+
+def test_backup_deleted_pauses_covering_chore_end_to_end(
+        client, app_mod, monkeypatch):
+    """F3: deleting the backup while referenced pauses the away owner's fixed
+    chore (no stale covering row to a deleted id), no crash."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    A = _make_person(client, "Away")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+    client.post("/api/admin/away", json={"person_id": A, "backup_person_id": B})
+    client.delete(f"/api/admin/people/{B}")
+    hub = client.get("/api/hub").json()
+    a_card = next(p for p in hub["people"] if p["person"]["id"] == A)
+    assert a_card["away"] is True
+    # chore paused: it appears on nobody's card
+    assert all(not any(ch["id"] == cid for ch in p["chores"])
+               for p in hub["people"])
+
+
+def test_inactive_backup_pauses_covering_chore(client, app_mod, monkeypatch):
+    """F7: an INACTIVE (not deleted) backup is allowed at open time, but the
+    covering chore then pauses at resolve since the backup isn't present."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    A = _make_person(client, "Away")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+    client.patch(f"/api/admin/people/{B}", json={"active": 0})   # inactive
+    # open must still ALLOW an inactive backup (uses include_inactive)
+    assert client.post("/api/admin/away",
+                       json={"person_id": A,
+                             "backup_person_id": B}).status_code == 200
+    hub = client.get("/api/hub").json()
+    assert all(not any(ch["id"] == cid for ch in p["chores"])
+               for p in hub["people"]), "inactive backup -> chore pauses"
 
 
 def test_db_connection_is_per_thread(app_mod):

@@ -650,3 +650,54 @@ def test_delete_person_clears_away_rows(conn):
     rows = fdb.list_away_periods(conn)
     assert all(r["person_id"] != a for r in rows)         # a's own period gone
     assert all(r["backup_person_id"] != a for r in rows)  # a's backup ref cleared
+
+
+def test_away_map_overlap_is_deterministic(conn):
+    """S1a: two overlapping open periods for one person with different backups
+    resolve deterministically -- rows fold in (start_date, id) order, so the
+    later row wins the backup_on for any shared date."""
+    a = fdb.add_person(conn, "Ava", "#f00")
+    b1 = fdb.add_person(conn, "Bo", "#0f0")
+    b2 = fdb.add_person(conn, "Cy", "#00f")
+    # Insert the LATER-start row first (smaller id) so rowid order != (start_date,
+    # id) order -- without the ORDER BY, SQLite's default rowid order would fold
+    # them the other way and flip the shared-date winner, so this genuinely
+    # exercises the deterministic ordering rather than passing by insertion luck.
+    fdb.add_away_period(conn, a, "2026-08-16", "2026-08-20", backup_person_id=b2)
+    fdb.add_away_period(conn, a, "2026-08-14", "2026-08-20", backup_person_id=b1)
+    m = fdb.away_map(conn, "2026-08-10", "2026-08-25")
+    assert m[a]["backup_on"]["2026-08-15"] == b1   # only the 8/14 row covers 8/15
+    assert m[a]["backup_on"]["2026-08-18"] == b2   # both cover 8/18 -> later start wins
+
+
+def test_away_map_skips_corrupt_row(conn, caplog):
+    """S1a: one row with an unparseable start_date must not disable away for the
+    whole household -- away_map skips only that row and still returns the valid
+    person's dates."""
+    import logging
+    a = fdb.add_person(conn, "Ava", "#f00")
+    x = fdb.add_person(conn, "Xan", "#0f0")
+    fdb.add_away_period(conn, a, "2026-08-14", "2026-08-16")
+    # inject a corrupt row directly, bypassing add_away_period's validation
+    conn.execute("INSERT INTO away_periods(person_id, start_date, end_date, "
+                 "backup_person_id, created_at) VALUES(?, ?, ?, ?, ?)",
+                 (x, "not-a-date", None, None, "2026-08-17T00:00:00Z"))
+    conn.commit()
+    with caplog.at_level(logging.WARNING, logger="family_hub.db"):
+        m = fdb.away_map(conn, "2026-08-10", "2026-08-20")
+    assert m[a]["dates"] == {"2026-08-14", "2026-08-15", "2026-08-16"}
+    assert x not in m                        # bad row skipped, not fatal
+    assert any("skipping period" in r.getMessage() for r in caplog.records)
+
+
+def test_close_and_update_away_report_rowcount(conn):
+    """S3: the mutators report whether a row was actually hit, so the API can
+    404 an unknown id instead of returning a reassuring ok."""
+    a = fdb.add_person(conn, "Ava", "#f00")
+    pid = fdb.add_away_period(conn, a, "2026-08-14")
+    assert fdb.close_away_period(conn, pid, "2026-08-16") is True
+    assert fdb.close_away_period(conn, 9999, "2026-08-16") is False
+    assert fdb.update_away_period(conn, pid, start_date="2026-08-13") is True
+    assert fdb.update_away_period(conn, 9999, start_date="2026-08-13") is False
+    assert fdb.get_away_period(conn, pid)["start_date"] == "2026-08-13"
+    assert fdb.get_away_period(conn, 9999) is None
