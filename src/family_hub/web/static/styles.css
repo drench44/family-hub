@@ -689,6 +689,8 @@ body {
 .ln-dryer .ln-w2 { fill: color-mix(in srgb, var(--p3) 45%, #FBF4E8); }
 .ln-dryer .ln-w3 { fill: color-mix(in srgb, var(--p3) 80%, #E8D9BF); }
 .ln-heap { transform-origin: 50px 66px; animation: ln-slosh 12.8s infinite; }
+/* a done machine's load lies still (the cycle is over) */
+.ln-ph-done .ln-heap { animation: none; }
 /* the washer's load sits lower — properly IN the water, not floating on it
    (operator, 2026-08-17). The offset is baked into its own slosh keyframes
    because the animation's transform would override a static translate. */
@@ -754,8 +756,6 @@ body {
   94%  { transform: translate(0, 4.5px) rotate(0deg); }
   100% { transform: translate(0, 4.5px) rotate(0deg); }
 }
-}
-}
 /* wash water: translucent depth with a bright meniscus line, lapping gently
    side to side while the drum spins (the water is the one thing in the drum
    that does NOT rotate); foam rides the line, one bubble drifting free */
@@ -784,7 +784,6 @@ body {
   83%   { transform: rotate(-140deg); animation-timing-function: ease-out; }
   87.5% { transform: rotate(0deg); }
   100%  { transform: rotate(0deg); }
-}
 }
 @media (prefers-reduced-motion: reduce) {
   .ln-tumble, .ln-flyp, .ln-lift, .ln-heap,

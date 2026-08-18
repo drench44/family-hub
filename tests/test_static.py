@@ -857,6 +857,15 @@ def test_laundry_card_static_guards():
     # the timer arc + tumble only exist inside .ln-door SVG markup built by
     # lnPortholeSvg; the renderer must be wired into the poll loop
     assert "fetchLaundry" in hub and "renderLaundry" in hub and "laundryTick" in hub
+    # every animated laundry class must be neutralized under reduced motion
+    # (a class dropped from the block would leave the full 12.8s tumble
+    # running for reduced-motion users with no test failing)
+    rm_block = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*?)\n\}", CSS, re.S)
+    assert rm_block, "prefers-reduced-motion block missing"
+    for cls in ("ln-tumble", "ln-flyp", "ln-lift", "ln-heap",
+                "ln-water", "ln-waterline", "ln-halo"):
+        assert f".{cls}" in rm_block.group(1), \
+            f"reduced-motion must neutralize .{cls}"
     # the phone Laundry tab shows ONLY the laundry slot from the shared
     # .panels section, and the Weather tab no longer duplicates it
     assert re.search(r'body\[data-tab="laundry"\] \.panels > :not\(\.laundry-slot\)'
@@ -864,3 +873,20 @@ def test_laundry_card_static_guards():
         "laundry tab must filter .panels to the laundry slot"
     assert re.search(r'body\[data-tab="weather"\] \.laundry-slot[^{]*\{[^}]*display:\s*none',
                      CSS), "weather tab must not duplicate the laundry slot"
+
+
+def test_css_braces_balanced():
+    """styles.css must have balanced braces with depth never going negative.
+    Browser error recovery hides a stray top-level `}`, but the same scar
+    INSIDE the mobile @media block would silently terminate it and disable
+    every tab-visibility rule after it — while all the regex guards (which
+    match raw text, not parsed CSS) keep passing. Caught for real on the
+    2026-08-17 laundry branch: three stray braces from edit splices."""
+    depth = 0
+    for i, ch in enumerate(CSS):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            assert depth >= 0, f"stray closing brace at offset {i}"
+    assert depth == 0, f"unbalanced braces: depth {depth} at EOF"
