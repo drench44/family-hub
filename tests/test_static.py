@@ -32,7 +32,11 @@ _CLASS_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*$")
 # selected in JS, never to be styled (the visible styling rides sibling classes
 # like .segmented / .day-chips / .txt-input). Listed here on purpose.
 UNSTYLED_OK = {"f-title", "f-icon", "f-repeat", "f-days", "f-assign",
-               "f-person", "f-rotadd", "f-rotation", "f-rothint", "f-error"}
+               "f-person", "f-rotadd", "f-rotation", "f-rothint", "f-error",
+               # routine-type + reminder-times hooks (styling rides sibling
+               # classes: .segmented / .interval-row / .txt-input / .time-list)
+               "f-weekfreq", "f-interval", "f-intervaldays", "f-timeinput",
+               "f-timeadd", "f-times"}
 
 
 def _css_rule(selector):
@@ -113,6 +117,46 @@ def test_chore_row_is_a_big_tap_target():
     rule = _css_rule(".chore-row")
     m = re.search(r"min-height:\s*(\d+)px", rule)
     assert m and int(m.group(1)) >= 48, ".chore-row must be >= 48px (tap target)"
+
+
+def test_chore_form_schedule_and_reminder_controls_are_styled():
+    # The routine-type + reminder-times controls added to the shared chore form.
+    # Pin each visible class is actually styled so the editor can't render the
+    # interval stepper / week-cadence toggle / time chips unstyled.
+    for cls in (".interval-row", ".interval-word", ".interval-num",
+                ".time-add", ".time-input", ".time-add-btn",
+                ".time-list", ".time-chip"):
+        assert _css_rule(cls).strip(), f"{cls} (chore form control) is unstyled"
+
+
+def test_chore_form_time_and_number_inputs_avoid_ios_zoom_and_are_tap_targets():
+    # The <input type=time> (reminder add) and <input type=number> (every-N-days)
+    # both ride the shared .txt-input box, which MUST stay >= 16px font (or iOS
+    # Safari zooms the page on focus) and >= 44px tall (tap target, CLAUDE.md).
+    box = _css_rule(".txt-input")
+    fs = re.search(r"font-size:\s*(\d+)px", box)
+    assert fs and int(fs.group(1)) >= 16, ".txt-input font must be >= 16px (no iOS zoom-on-focus)"
+    ht = re.search(r"height:\s*(\d+)px", box)
+    assert ht and int(ht.group(1)) >= 44, ".txt-input must be a >= 44px tap target"
+    # Both new inputs must carry txt-input so they inherit that box (a width-only
+    # override that dropped it would reintroduce the zoom/tap bug).
+    for cls in ("interval-num", "time-input"):
+        assert re.search(rf'class="txt-input[^"]*\b{cls}\b', ALL_JS), \
+            f".{cls} must be applied alongside .txt-input"
+    # The Add-time button and the time chips are their own tap targets.
+    for cls in (".time-add-btn", ".time-chip"):
+        rule = _css_rule(cls)
+        m = re.search(r"(?:min-)?height:\s*(\d+)px", rule)
+        assert m and int(m.group(1)) >= 44, f"{cls} must be a >= 44px tap target"
+
+
+def test_person_editor_icloud_list_picker_and_badge():
+    # The person→iCloud-list picker is a .txt-input <select> (so it inherits the
+    # guarded >=16px/>=44px box — no iOS zoom-on-focus, real tap target), and the
+    # "mirrored" badge shown next to a mapped person is styled.
+    assert '<select class="txt-input" data-plist>' in ALL_JS, \
+        "the iCloud-list picker must be a .txt-input <select> (>=16px font / >=44px tall)"
+    assert _css_rule(".padmin-badge").strip(), ".padmin-badge (iCloud mirror tag) is unstyled"
 
 
 def test_reminder_list_picker_avoids_ios_zoom_and_is_a_tap_target():

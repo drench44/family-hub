@@ -258,6 +258,7 @@ test('buildChorePayload: daily fixed chore trims and shapes correctly', () => {
   })));
   assert.deepEqual(p, {
     title: 'Dishes', icon: '🍽️', schedule_kind: 'daily', days_mask: 0,
+    week_interval: 1, interval_days: null, due_times: [],
     assign_kind: 'fixed', fixed_person_id: 3, rotation_order: [], date: null,
   });
 });
@@ -271,6 +272,7 @@ test('buildChorePayload: one-time chore carries its date and forces fixed', () =
   assert.deepEqual(p, {
     title: 'Return library books', icon: '📚', schedule_kind: 'once',
     days_mask: 0,                       // a one-time chore never carries a weekly mask
+    week_interval: 1, interval_days: null, due_times: [],
     assign_kind: 'fixed',              // rotation is coerced away
     fixed_person_id: 4, rotation_order: [], date: '2026-08-20',
   });
@@ -314,6 +316,119 @@ test('buildChorePayload: empty person selection serializes to null, not 0', () =
     assign: 'fixed', person: '', rot: [],
   });
   assert.equal(p.fixed_person_id, null);
+});
+
+// --- routine types added in P1: biweekly (weekly + week_interval 2),
+// every-N-days (schedule_kind interval + interval_days), and reminder times
+// (due_times). Each must round-trip to the right shape and keep the other
+// kinds' fields clean.
+
+test('buildChorePayload: biweekly is schedule_kind days with week_interval 2', () => {
+  const p = sandbox.buildChorePayload({
+    title: 'Bins', icon: '', repeat: 'weekly', days: new Set([2]),   // Wed
+    weekInterval: 2, assign: 'fixed', person: '1', rot: [],
+  });
+  assert.equal(p.schedule_kind, 'days');
+  assert.equal(p.days_mask, 4);              // bit 2
+  assert.equal(p.week_interval, 2);          // biweekly
+  assert.equal(p.interval_days, null);       // not an interval chore
+});
+
+test('buildChorePayload: plain weekly carries week_interval 1', () => {
+  const p = sandbox.buildChorePayload({
+    title: 'Bins', icon: '', repeat: 'weekly', days: new Set([2]),
+    weekInterval: 1, assign: 'fixed', person: '1', rot: [],
+  });
+  assert.equal(p.week_interval, 1);
+});
+
+test('buildChorePayload: every-N-days is schedule_kind interval + interval_days', () => {
+  const p = sandbox.buildChorePayload({
+    title: 'Water plants', icon: '🪴', repeat: 'interval', intervalDays: '3',
+    days: new Set([1, 2]),                    // ignored off a weekly kind
+    weekInterval: 2,                          // ignored off a weekly kind
+    assign: 'fixed', person: '5', rot: [],
+  });
+  assert.equal(p.schedule_kind, 'interval');
+  assert.equal(p.interval_days, 3);
+  assert.equal(p.days_mask, 0);              // no weekly mask on an interval chore
+  assert.equal(p.week_interval, 1);          // neutral off the weekly kind
+});
+
+test('buildChorePayload: interval clamps out-of-range and rejects empty', () => {
+  const over = sandbox.buildChorePayload({
+    title: 'x', icon: '', repeat: 'interval', intervalDays: '400',
+    days: new Set(), assign: 'fixed', person: '1', rot: [],
+  });
+  assert.equal(over.interval_days, 365);     // clamped to the max
+  const empty = sandbox.buildChorePayload({
+    title: 'x', icon: '', repeat: 'interval', intervalDays: '',
+    days: new Set(), assign: 'fixed', person: '1', rot: [],
+  });
+  assert.equal(empty.interval_days, null);   // empty -> null (server rejects; UI guards first)
+});
+
+test('buildChorePayload: due_times de-dupe, sort, drop junk, cap at 6 — any kind', () => {
+  const p = sandbox.buildChorePayload({
+    title: 'x', icon: '', repeat: 'daily', days: new Set(),
+    assign: 'fixed', person: '1', rot: [],
+    times: ['20:00', '07:30', '20:00', '7:30', '24:00', 'nope', '  08:15  '],
+  });
+  // '7:30' (unpadded), '24:00' (out of range) and 'nope' are dropped; the
+  // zero-padded '07:30' survives; '20:00' de-duped; '  08:15  ' trimmed;
+  // result sorted ascending. (spread: sandbox-realm array -> test realm)
+  assert.deepEqual([...p.due_times], ['07:30', '08:15', '20:00']);
+});
+
+test('buildChorePayload: due_times caps at 6 in ascending order', () => {
+  const p = sandbox.buildChorePayload({
+    title: 'x', icon: '', repeat: 'daily', days: new Set(),
+    assign: 'fixed', person: '1', rot: [],
+    times: ['09:00', '08:00', '07:00', '06:00', '05:00', '04:00', '03:00'],
+  });
+  assert.deepEqual([...p.due_times], ['03:00', '04:00', '05:00', '06:00', '07:00', '08:00']);
+});
+
+test('choreToModel: an interval chore maps back to repeat interval + intervalDays', () => {
+  const m = sandbox.choreToModel({
+    title: 'Water plants', icon: '🪴', schedule_kind: 'interval', days_mask: 0,
+    interval_days: 3, week_interval: 1, due_times: ['08:00'],
+    assign_kind: 'fixed', fixed_person_id: 5, rotation_order: [],
+  });
+  assert.equal(m.repeat, 'interval');
+  assert.equal(m.intervalDays, 3);
+  assert.equal(m.weekInterval, 1);
+  assert.deepEqual([...m.times], ['08:00']);
+});
+
+test('choreToModel: a biweekly chore maps back to weekly + weekInterval 2', () => {
+  const m = sandbox.choreToModel({
+    title: 'Bins', icon: '', schedule_kind: 'days', days_mask: 4,
+    week_interval: 2, interval_days: null, due_times: [],
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [],
+  });
+  assert.equal(m.repeat, 'weekly');
+  assert.equal(m.weekInterval, 2);
+  assert.ok(m.days.has(2));
+});
+
+test('choreToModel: missing due_times/interval fields degrade to []/empty, weekly=1', () => {
+  const m = sandbox.choreToModel({
+    title: 'Bed', icon: '', schedule_kind: 'daily', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [],
+  });
+  assert.deepEqual([...m.times], []);
+  assert.equal(m.intervalDays, '');
+  assert.equal(m.weekInterval, 1);
+});
+
+// --- person -> iCloud list mapping body (the "— none —" option clears to null).
+
+test('reminderListBody: a list id maps through; "" and null clear to null', () => {
+  assert.deepEqual({ ...sandbox.reminderListBody('caldav:emma') }, { reminder_list_id: 'caldav:emma' });
+  assert.deepEqual({ ...sandbox.reminderListBody('') }, { reminder_list_id: null });
+  assert.deepEqual({ ...sandbox.reminderListBody(null) }, { reminder_list_id: null });
+  assert.deepEqual({ ...sandbox.reminderListBody(undefined) }, { reminder_list_id: null });
 });
 
 // --- chore toggle failure detection (drives the "couldn't save" toast).

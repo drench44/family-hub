@@ -864,3 +864,25 @@ def test_caldav_status_pending_survives_sync_failure(conn):
     st = caldav_sync.sync_once(AuthFail(), conn, _CFG, _NOW)
     assert st["ok"] is False and st.get("needs_auth") is True
     assert st["pending"] == 1    # a queued wall edit stays visible during an outage
+
+
+def test_sync_once_mirrors_chores_to_icloud(conn):
+    """End-to-end: a mapped person + chore, driven through sync_once with a real
+    LOCAL-zone now, pushes the chore occurrences to iCloud with UTC DTSTAMP."""
+    from zoneinfo import ZoneInfo
+    pid = fdb.add_person(conn, "Emma", "#5BC9F0")
+    fdb.upsert_caldav_collection(conn, "caldav:rem", "VTODO", "Emma", None, "t")
+    fdb.update_person(conn, pid, reminder_list_id="caldav:rem")
+    fdb.add_chore(conn, title="Dishes", icon="", schedule_kind="daily", days_mask=0,
+                  assign_kind="fixed", fixed_person_id=pid, rotation_order=[],
+                  rotation_epoch="2026-08-01")
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    tznow = dt.datetime(2026, 8, 17, 12, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    client = WriteFake([{"id": "rem", "name": "Emma", "comp": "VTODO", "todos": []}])
+    caldav_sync.sync_once(client, conn, _CFG, tznow)
+    dishes = [p for p in client.puts if "Dishes" in p[2]]
+    assert dishes and all(p[0] == "rem" for p in dishes)               # pushed to Emma's list
+    assert any("DTSTAMP:20260817T190000Z" in p[2] for p in dishes)     # 12 PDT -> 19Z (UTC fix)
+    assert fdb.list_chore_mirror(conn)
+    assert all(o["sync_state"] == "SYNCED" for o in fdb.list_cal_objects(conn, "VTODO"))
