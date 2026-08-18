@@ -1831,6 +1831,29 @@ def test_backup_that_goes_inactive_later_pauses_the_covering_chore(
                for p in hub["people"]), "inactive backup -> chore pauses"
 
 
+def test_deactivating_an_away_person_stops_parking_chores_on_the_backup(
+        client, app_mod, monkeypatch):
+    """I5 end-to-end: a person is marked away with a backup, then deactivated
+    (they moved out, the account was retired) while the period is still open.
+    Their chores must stop, not sit on the backup's card forever."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)      # T0: freeze first
+    A = _make_person(client, "Away")
+    B = _make_person(client, "Backup", "#F05B5B")
+    cid = _fixed_chore(client, A, "Dishes")
+    client.post("/api/admin/away", json={"person_id": A, "backup_person_id": B})
+    bcard = next(p for p in client.get("/api/hub").json()["people"]
+                 if p["person"]["id"] == B)
+    assert any(ch["id"] == cid for ch in bcard["chores"])      # covered today
+
+    client.patch(f"/api/admin/people/{A}", json={"active": 0})
+    hub = client.get("/api/hub").json()
+    assert all(not any(ch["id"] == cid for ch in p["chores"])
+               for p in hub["people"]), \
+        "an inactive owner's chore drops; it is not parked on the backup"
+    assert fdb.day_log(app_mod._db(), today.isoformat()) == []
+
+
 def test_backup_picker_rejects_inactive_and_away_people(client, app_mod,
                                                         monkeypatch):
     """I6: choosing a backup who is inactive, or away themselves, made every
