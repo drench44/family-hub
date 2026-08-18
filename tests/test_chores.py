@@ -315,6 +315,55 @@ def test_backup_deleted_pauses_fixed_chore():
     assert rows == []
 
 
+def _once(cid, pid, due, title="Vet appt"):
+    return {"id": cid, "title": title, "icon": "", "schedule_kind": "once",
+            "days_mask": 0, "assign_kind": "fixed", "fixed_person_id": pid,
+            "rotation_order": [], "rotation_epoch": due, "active": 1}
+
+
+def test_once_chore_inside_an_away_span_stays_with_its_owner():
+    """I3/R2: a one-time chore is a DATED COMMITMENT -- it occurs on exactly one
+    day and never again. Pausing it for that day destroys it forever (the wall,
+    the log and the iCloud mirror all lose it). With no available backup it
+    therefore stays on the away owner's card rather than vanishing."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_once(7, 1, d.isoformat())], people, d,
+                        {"ids": {1}, "backup": {}})
+    assert len(rows) == 1
+    assert rows[0]["person_id"] == 1 and rows[0]["covering_for"] is None
+    # ... and a RECURRING chore in the same spot still pauses (it comes back
+    # tomorrow, so nothing is lost)
+    assert ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1}, "backup": {}}) == []
+
+
+def test_once_chore_with_an_available_backup_is_covered_as_usual():
+    """I3/R2 has no effect when someone CAN cover: the one-time chore moves to
+    the backup with the covering_for tag, exactly like a recurring one."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_once(7, 1, d.isoformat())], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert len(rows) == 1
+    assert rows[0]["person_id"] == 2 and rows[0]["covering_for"] == 1
+
+
+def test_deactivated_owner_with_an_open_away_period_drops_the_chore():
+    """I5: a person who is deactivated while an away period is still open used
+    to park their chores on the backup forever -- the away branch ran first and
+    covered a chore whose owner had left the household. Inactive wins: the
+    chore drops, exactly as it does for a deactivated owner who isn't away."""
+    d = dt.date(2026, 8, 17)
+    people = [P(2, "B")]                       # owner 1 deactivated -> not listed
+    rows = ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert rows == [], "an inactive owner's chore is dropped, not covered"
+    # a once-chore gets no exemption from this either: its owner is gone.
+    assert ch.plan_rows([_once(7, 1, d.isoformat())], people, d,
+                        {"ids": {1}, "backup": {}}) == []
+
+
 def test_away_boundary_last_day_away_next_day_normal():
     """F6: the last inclusive away day reads 'away'; the day immediately after
     end_date reads its normal state -- proven through week_strip."""
