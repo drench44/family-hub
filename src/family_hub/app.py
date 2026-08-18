@@ -36,6 +36,7 @@ from . import todos as tdlogic
 from . import version as fversion
 from . import caldav_service
 from . import caldav_sync
+from . import chore_mirror
 from .calendar_sync import GoogleCalendarClient, sync_once
 from .config import load_config
 
@@ -831,13 +832,18 @@ def complete(chore_id: int, body: CompleteBody | None = None):
     # enforce this via a FK; this gives a clean error on any DB.)
     _person_row(c, person_id)
     fdb.set_completion(c, chore_id, date_str, person_id)
+    # Reflect onto the mirrored iCloud reminder (no-op if not mirrored).
+    chore_mirror.push_completion(c, chore_id, date_str, True)
     return {"ok": True}
 
 
 @app.delete("/api/chores/{chore_id}/complete")
 def uncomplete(chore_id: int, date: str | None = None):
     c = _db()
-    fdb.clear_completion(c, chore_id, date or _today().isoformat())
+    date_str = date or _today().isoformat()
+    fdb.clear_completion(c, chore_id, date_str)
+    # Reopen the mirrored iCloud reminder too (no-op if not mirrored).
+    chore_mirror.push_completion(c, chore_id, date_str, False)
     return {"ok": True}
 
 
@@ -1161,6 +1167,9 @@ class PersonPatch(BaseModel):
     color: str | None = None
     sort: int | None = None
     active: int | None = None
+    # The iCloud reminder list (caldav:<slug>) this person's chores mirror into;
+    # null clears the mapping. Nullable, so absent from _PERSON_NONNULL_PATCH.
+    reminder_list_id: str | None = None
 
 
 class ChoreIn(BaseModel):
@@ -1168,6 +1177,9 @@ class ChoreIn(BaseModel):
     icon: str = ""
     schedule_kind: str
     days_mask: int = 0
+    week_interval: int = 1              # 'days': 1=weekly, 2=biweekly
+    interval_days: int | None = None   # 'interval': every N days from epoch
+    due_times: list[str] = []          # ["HH:MM",...] -> iOS notifications
     assign_kind: str
     fixed_person_id: int | None = None
     rotation_order: list[int] = []
@@ -1181,6 +1193,9 @@ class ChorePatch(BaseModel):
     icon: str | None = None
     schedule_kind: str | None = None
     days_mask: int | None = None
+    week_interval: int | None = None
+    interval_days: int | None = None
+    due_times: list[str] | None = None
     assign_kind: str | None = None
     fixed_person_id: int | None = None
     rotation_order: list[int] | None = None
@@ -1195,7 +1210,10 @@ class ChorePatch(BaseModel):
 # is an API-only field whose null means "no change".
 _PERSON_NONNULL_PATCH = {"name", "color", "sort", "active"}
 _CHORE_NONNULL_PATCH = {"title", "icon", "schedule_kind", "days_mask",
-                        "assign_kind", "rotation_order", "sort", "active"}
+                        "week_interval", "due_times", "assign_kind",
+                        "rotation_order", "sort", "active"}
+# interval_days is nullable (only set for the 'interval' kind), so it is NOT in
+# the non-null set — an explicit null clears it, which is correct.
 
 
 def _reject_null_nonnullable(fields: dict, nonnullable: set) -> None:
@@ -1213,6 +1231,21 @@ def _validate_person(name: str, color: str) -> str:
     return name
 
 
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _validate_due_times(times) -> None:
+    """Reminder times are 'HH:MM' 24h, at most a handful (each becomes an iOS
+    notification). A bad time is a 422, never a silent drop."""
+    if not isinstance(times, list):
+        raise HTTPException(422, "due_times must be a list of HH:MM strings")
+    if len(times) > 6:
+        raise HTTPException(422, "at most 6 reminder times")
+    for t in times:
+        if not (isinstance(t, str) and _HHMM.match(t)):
+            raise HTTPException(422, f"invalid time {t!r} — use HH:MM (00:00–23:59)")
+
+
 def _validate_chore(merged: dict) -> None:
     title = (merged.get("title") or "").strip()
     if not (1 <= len(title) <= 60):
@@ -1220,13 +1253,21 @@ def _validate_chore(merged: dict) -> None:
     if len(merged.get("icon") or "") > 4:
         raise HTTPException(422, "icon must be at most 4 characters")
     kind = merged["schedule_kind"]
-    if kind not in ("daily", "days", "once"):
-        raise HTTPException(422, "schedule_kind must be daily, days or once")
+    if kind not in ("daily", "days", "once", "interval"):
+        raise HTTPException(422, "schedule_kind must be daily, days, once or interval")
     mask = merged.get("days_mask") or 0
     if not (0 <= mask <= 127):
         raise HTTPException(422, "days_mask must be 0–127")
-    if kind == "days" and mask == 0:
-        raise HTTPException(422, "pick at least one day for a weekly chore")
+    if kind == "days":
+        if mask == 0:
+            raise HTTPException(422, "pick at least one day for a weekly chore")
+        if (merged.get("week_interval") or 1) not in (1, 2):
+            raise HTTPException(422, "week_interval must be 1 (weekly) or 2 (biweekly)")
+    if kind == "interval":
+        n = merged.get("interval_days")
+        if not isinstance(n, int) or not (1 <= n <= 365):
+            raise HTTPException(422, "interval_days must be 1–365")
+    _validate_due_times(merged.get("due_times") or [])
     if kind == "once":
         # A one-time chore is one person on one date — no rotation.
         if merged["assign_kind"] != "fixed":
@@ -1274,7 +1315,12 @@ def _chore_row(c, cid: int) -> dict:
 def admin_state():
     c = _db()
     return {"people": fdb.list_people(c, include_inactive=True),
-            "chores": fdb.list_chores(c, include_inactive=True)}
+            "chores": fdb.list_chores(c, include_inactive=True),
+            # iCloud VTODO lists a person's chores can mirror into (P2 picker);
+            # empty until iCloud is connected and its reminder lists are synced.
+            "reminder_lists": [{"id": col["id"], "name": col["display_name"]}
+                               for col in fdb.list_caldav_collections(c)
+                               if col["comp_type"] == "VTODO"]}
 
 
 @app.post("/api/admin/people")
@@ -1295,6 +1341,11 @@ def admin_patch_person(pid: int, p: PersonPatch):
         name = fields.get("name", row["name"])
         color = fields.get("color", row["color"])
         fields["name"] = _validate_person(name, color)
+    if fields.get("reminder_list_id"):   # non-empty must be a real VTODO list
+        vtodo = {col["id"] for col in fdb.list_caldav_collections(c)
+                 if col["comp_type"] == "VTODO"}
+        if fields["reminder_list_id"] not in vtodo:
+            raise HTTPException(422, "unknown reminder list")
     fdb.update_person(c, pid, **fields)
     return _person_row(c, pid)
 
@@ -1322,6 +1373,9 @@ def admin_add_chore(ch: ChoreIn):
         c, title=merged["title"].strip(), icon=merged["icon"],
         schedule_kind=kind,
         days_mask=merged["days_mask"] if kind == "days" else 0,
+        week_interval=merged["week_interval"] if kind == "days" else 1,
+        interval_days=merged["interval_days"] if kind == "interval" else None,
+        due_times=merged["due_times"],
         assign_kind=merged["assign_kind"],
         fixed_person_id=merged["fixed_person_id"] if merged["assign_kind"] == "fixed" else None,
         rotation_order=merged["rotation_order"] if merged["assign_kind"] == "rotation" else [],
@@ -1349,6 +1403,9 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
     # keep dependent columns coherent with the resolved kind
     if kind != "days":
         fields["days_mask"] = 0
+        fields["week_interval"] = 1     # biweekly only applies to a 'days' chore
+    if kind != "interval":
+        fields["interval_days"] = None  # every-N-days only for the 'interval' kind
     if merged["assign_kind"] == "fixed":
         fields["rotation_order"] = []
     else:

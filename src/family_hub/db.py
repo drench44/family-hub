@@ -15,11 +15,15 @@ from typing import Any
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL,
-  sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+  sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+  reminder_list_id TEXT);   -- caldav:<slug> of this person's iCloud chore list (P2)
 CREATE TABLE IF NOT EXISTS chores(
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
-  schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+  schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once','interval')),
   days_mask INTEGER NOT NULL DEFAULT 0,
+  week_interval INTEGER NOT NULL DEFAULT 1,   -- 'days': 1=weekly, 2=biweekly
+  interval_days INTEGER,                       -- 'interval': every N days from epoch
+  due_times TEXT NOT NULL DEFAULT '[]',        -- JSON ["HH:MM",...] -> iOS notifications
   assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
   fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
   rotation_epoch TEXT NOT NULL,
@@ -114,12 +118,25 @@ CREATE TABLE IF NOT EXISTS caldav_collections(
   ctag TEXT,
   sync_token TEXT,
   last_seen_at TEXT);
+-- Chore mirror ledger (P3): one row per (chore occurrence) mirrored into a
+-- person's iCloud list, mapping it to the cal_objects row + stable UID so the
+-- reconcile can create/move/prune and two-way completion can map an iCloud
+-- check-off back to (chore, date, person).
+CREATE TABLE IF NOT EXISTS chore_mirror(
+  chore_id INTEGER NOT NULL,
+  date TEXT NOT NULL,                 -- occurrence date 'YYYY-MM-DD'
+  person_id INTEGER NOT NULL,
+  cal_object_id TEXT NOT NULL,        -- the cal_objects row we created
+  uid TEXT NOT NULL,                  -- 'familyhub-chore-<id>-<date>'
+  sig TEXT,                           -- content signature; reconcile re-pushes on drift
+  PRIMARY KEY(chore_id, date));
 """
 
 # Columns a caller may set through update_person / add_chore validation.
-_PERSON_FIELDS = {"name", "color", "sort", "active"}
+_PERSON_FIELDS = {"name", "color", "sort", "active", "reminder_list_id"}
 _CHORE_COLUMNS = {
-    "title", "icon", "schedule_kind", "days_mask", "assign_kind",
+    "title", "icon", "schedule_kind", "days_mask", "week_interval",
+    "interval_days", "due_times", "assign_kind",
     "fixed_person_id", "rotation_order", "rotation_epoch", "sort", "active",
 }
 _TODO_FIELDS = {"title", "bucket"}
@@ -206,6 +223,22 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             (tbl,)).fetchone()
         if row and "AUTOINCREMENT" not in row["sql"].upper():
             _rebuild_with_autoincrement(conn, tbl, ddl, cols)
+    # 2026-08-18: richer routines — every-N-days ('interval' kind), biweekly
+    # (week_interval), and due-time notifications (due_times). Adds three columns
+    # and widens schedule_kind to allow 'interval'. A DB that already carries
+    # AUTOINCREMENT + the 'once' CHECK went through neither rebuild above, so
+    # migrate it here. Idempotent: skips once 'interval' is in the CHECK.
+    chores_sql2 = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chores'"
+    ).fetchone()
+    if chores_sql2 and "'interval'" not in chores_sql2["sql"]:
+        _migrate_chores_routines(conn)
+    # 2026-08-18: people gained reminder_list_id (their iCloud chore list, P2).
+    # Nullable, so a plain additive ALTER is enough — no rebuild.
+    ppl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(people)")}
+    if "reminder_list_id" not in ppl_cols:
+        conn.execute("ALTER TABLE people ADD COLUMN reminder_list_id TEXT")
+        conn.commit()
 
 
 def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
@@ -272,6 +305,49 @@ def _widen_chore_schedule_check(conn: sqlite3.Connection) -> None:
           schedule_kind TEXT NOT NULL
             CHECK(schedule_kind IN ('daily','days','once')),
           days_mask INTEGER NOT NULL DEFAULT 0,
+          assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+          fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+          rotation_epoch TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)""")
+        conn.execute("""INSERT INTO chores_new(
+          id, title, icon, schedule_kind, days_mask, assign_kind,
+          fixed_person_id, rotation_order, rotation_epoch, sort, active)
+          SELECT id, title, icon, schedule_kind, days_mask, assign_kind,
+          fixed_person_id, rotation_order, rotation_epoch, sort, active
+          FROM chores""")
+        conn.execute("DROP TABLE chores")
+        conn.execute("ALTER TABLE chores_new RENAME TO chores")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
+
+
+def _migrate_chores_routines(conn: sqlite3.Connection) -> None:
+    """Rebuild `chores` with the richer-routine columns (week_interval,
+    interval_days, due_times) and the widened schedule_kind CHECK ('interval'),
+    preserving every row (new columns take their defaults), as ONE atomic
+    transaction — same crash-safety contract as _widen_chore_schedule_check. Keeps
+    AUTOINCREMENT so a DB that already earned it never regresses to id reuse."""
+    prior_iso = conn.isolation_level
+    try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute("DROP TABLE IF EXISTS chores_new")
+        conn.execute("""CREATE TABLE chores_new(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+          icon TEXT NOT NULL DEFAULT '',
+          schedule_kind TEXT NOT NULL
+            CHECK(schedule_kind IN ('daily','days','once','interval')),
+          days_mask INTEGER NOT NULL DEFAULT 0,
+          week_interval INTEGER NOT NULL DEFAULT 1,
+          interval_days INTEGER,
+          due_times TEXT NOT NULL DEFAULT '[]',
           assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
           fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
           rotation_epoch TEXT NOT NULL,
@@ -425,12 +501,15 @@ def delete_person(conn, pid: int) -> bool:
 # --- chores ---------------------------------------------------------------
 
 def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,
-              fixed_person_id, rotation_order, rotation_epoch) -> int:
+              fixed_person_id, rotation_order, rotation_epoch,
+              week_interval=1, interval_days=None, due_times=None) -> int:
     cur = conn.execute(
-        """INSERT INTO chores(title, icon, schedule_kind, days_mask, assign_kind,
+        """INSERT INTO chores(title, icon, schedule_kind, days_mask, week_interval,
+                              interval_days, due_times, assign_kind,
                               fixed_person_id, rotation_order, rotation_epoch)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
-        (title, icon, schedule_kind, days_mask, assign_kind, fixed_person_id,
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (title, icon, schedule_kind, days_mask, week_interval, interval_days,
+         json.dumps(due_times or []), assign_kind, fixed_person_id,
          json.dumps(rotation_order), rotation_epoch))
     conn.commit()
     return int(cur.lastrowid)
@@ -439,6 +518,7 @@ def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,
 def _chore_row(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["rotation_order"] = json.loads(d["rotation_order"])
+    d["due_times"] = json.loads(d.get("due_times") or "[]")
     return d
 
 
@@ -456,6 +536,8 @@ def update_chore(conn, cid: int, **fields) -> None:
         return
     if "rotation_order" in cols:
         cols["rotation_order"] = json.dumps(cols["rotation_order"])
+    if "due_times" in cols:
+        cols["due_times"] = json.dumps(cols["due_times"] or [])
     assignments = ", ".join(f"{k} = ?" for k in cols)
     conn.execute(f"UPDATE chores SET {assignments} WHERE id = ?",
                  (*cols.values(), cid))
@@ -547,6 +629,12 @@ def clear_completion(conn, chore_id: int, date: str) -> None:
     conn.execute("DELETE FROM completions WHERE chore_id = ? AND date = ?",
                  (chore_id, date))
     conn.commit()
+
+
+def completion_exists(conn, chore_id: int, date: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM completions WHERE chore_id = ? AND date = ?",
+        (chore_id, date)).fetchone() is not None
 
 
 def completions_between(conn, date_from: str, date_to: str) -> list[dict]:
@@ -957,6 +1045,42 @@ def list_caldav_collections(conn, comp_type: str | None = None) -> list[dict]:
         d["enabled"] = bool(d["enabled"])
         out.append(d)
     return out
+
+
+# --- chore mirror ledger (P3) ---------------------------------------------
+
+def upsert_chore_mirror(conn, chore_id: int, date: str, person_id: int,
+                        cal_object_id: str, uid: str, sig: str | None = None) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO chore_mirror(chore_id, date, person_id, "
+        "cal_object_id, uid, sig) VALUES(?, ?, ?, ?, ?, ?)",
+        (chore_id, date, person_id, cal_object_id, uid, sig))
+    conn.commit()
+
+
+def list_chore_mirror(conn) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM chore_mirror")]
+
+
+def delete_chore_mirror(conn, chore_id: int, date: str) -> None:
+    conn.execute("DELETE FROM chore_mirror WHERE chore_id = ? AND date = ?",
+                 (chore_id, date))
+    conn.commit()
+
+
+def get_chore_mirror(conn, chore_id: int, date: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM chore_mirror WHERE chore_id = ? AND date = ?",
+        (chore_id, date)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_chore_mirror_by_uid(conn, uid: str) -> dict | None:
+    """Map an iCloud object's UID back to its (chore, date, person) — the P4
+    two-way completion path uses this to record a check-off done in iOS."""
+    row = conn.execute("SELECT * FROM chore_mirror WHERE uid = ?",
+                       (uid,)).fetchone()
+    return dict(row) if row is not None else None
 
 
 def caldav_collection_enabled(conn, cid: str, default: bool = True) -> bool:
