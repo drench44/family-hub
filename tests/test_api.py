@@ -1286,6 +1286,89 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
     assert fdb.day_log(app_mod._db(), yesterday) == []
 
 
+# --- away overlay -----------------------------------------------------------
+
+def test_away_person_freezes_no_rows_and_streak_continues(client, app_mod, monkeypatch):
+    """A person marked away: their fixed daily chore (no backup) pauses --
+    no occurrence_log row is written for them on away days -- and their
+    streak treats the away span as rest, so it survives the gap and resumes
+    counting on return.
+
+    Day layout, relative to RETURN_DAY (D0):
+      D0-7..D0-4  pretrip: 4 consecutive completed days (seeded directly into
+                  the frozen log + completions, like the other freeze tests)
+      D0-3..D0-1  away (3 days), closed at D0-1 ("the day before return")
+      D0-2        the day we check mid-trip (away=True, streak still 4)
+      D0          return day: chore completed, streak == 4 + 1 == 5
+    """
+    c = app_mod._db()
+    return_day = dt.date(2026, 8, 17)
+    pid, cid = _seed_person_chore(client, title="Dishes")
+
+    pretrip_days = [return_day - dt.timedelta(days=i) for i in (7, 6, 5, 4)]
+    for d in pretrip_days:
+        ds = d.isoformat()
+        _log(c, ds, cid, pid, title="Dishes")
+        fdb.set_completion(c, cid, ds, pid)
+
+    away_start = return_day - dt.timedelta(days=3)
+    away_last = return_day - dt.timedelta(days=1)   # day before return
+    period_id = fdb.add_away_period(c, pid, away_start.isoformat())
+
+    # --- mid-trip: away day, streak unchanged (rest-day skip) --------------
+    mid_trip = return_day - dt.timedelta(days=2)
+    monkeypatch.setattr(app_mod, "_today", lambda: mid_trip)
+    hub = client.get("/api/hub").json()
+    assert len(hub["people"]) == 1
+    entry = hub["people"][0]
+    assert entry["person"]["id"] == pid
+    assert entry["away"] is True
+    assert entry["streak"] == 4, "away days are skipped as rest; pretrip streak survives"
+
+    # frozen log for the away day has NO row for this person's chore -- the
+    # fixed chore paused (no backup), so nothing was covered either
+    mid_rows = fdb.day_log(c, mid_trip.isoformat())
+    assert not any(r["person_id"] == pid and r["chore_id"] == cid for r in mid_rows)
+
+    # --- close the period the day before return, complete on return -------
+    fdb.close_away_period(c, period_id, away_last.isoformat())
+    monkeypatch.setattr(app_mod, "_today", lambda: return_day)
+    assert client.post(f"/api/chores/{cid}/complete").json() == {"ok": True}
+    hub = client.get("/api/hub").json()
+    entry = hub["people"][0]
+    assert entry["away"] is False
+    assert entry["streak"] == 5, "pretrip streak (4) + the completed return day (1)"
+
+
+def test_away_overlay_build_fails_soft(client, app_mod, monkeypatch, caplog):
+    """A broken away_map() (bad row, read failure) must not 500 the whole
+    wall -- same fails-soft philosophy as the todos block in hub(). The wall
+    renders with no away overlay (nobody marked away) instead of crashing."""
+    import logging
+    _seed_person_chore(client, title="Dishes")
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated away_map failure")
+    monkeypatch.setattr(app_mod.fdb, "away_map", boom)
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        r = client.get("/api/hub")
+    assert r.status_code == 200
+    entry = r.json()["people"][0]
+    assert entry["away"] is False
+    assert any("away overlay" in rec.getMessage()
+               for rec in caplog.records if rec.levelno >= logging.ERROR)
+
+
+def test_admin_state_includes_away_periods(client, app_mod):
+    c = app_mod._db()
+    pid, _ = _seed_person_chore(client, title="Dishes")
+    period_id = fdb.add_away_period(c, pid, app_mod._today().isoformat())
+    state = client.get("/api/admin/state").json()
+    assert "away_periods" in state
+    assert [p["id"] for p in state["away_periods"]] == [period_id]
+    assert state["away_periods"][0]["person_id"] == pid
+
+
 def test_db_connection_is_per_thread(app_mod):
     """Regression guard for issue #29: request handlers run on a thread pool, so
     _db() must hand each thread its OWN connection. One shared connection let
@@ -1373,11 +1456,11 @@ def test_interrupted_backfill_rolls_back_whole_then_retries(app_mod, monkeypatch
     boom_day = today - dt.timedelta(days=5)
     state = {"raised": False}
 
-    def flaky(chores, people, d):
+    def flaky(chores, people, d, away=None):
         if d == boom_day and not state["raised"]:
             state["raised"] = True
             raise RuntimeError("simulated crash mid-backfill")
-        return real_plan_rows(chores, people, d)
+        return real_plan_rows(chores, people, d, away)
     monkeypatch.setattr(app_mod.chlogic, "plan_rows", flaky)
 
     with TestClient(app_mod.app, raise_server_exceptions=False) as tc:
