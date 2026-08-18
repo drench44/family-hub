@@ -2238,11 +2238,15 @@ test('renderTodoSlot: header sits OUTSIDE the .card, the list sits INSIDE it (Ta
   assert.match(html,
     /<button class="todo-row" type="button" data-todo="1" aria-label="mark done: Call dentist">/);
 
-  // Counts render as three chips (now/soon/later), 'now' carrying the accent
-  // chip class — same open-item semantics as before (done items excluded).
-  assert.match(html, /<div class="foot"><span class="chip now">1 now<\/span>/);
-  assert.match(html, /<span class="chip">1 soon<\/span>/);
-  assert.match(html, /<span class="chip">2 later<\/span><\/div>/);
+  // The card is now a 3-tier digest: one labelled group per non-empty tier,
+  // each head carrying that tier's OPEN count (done items excluded). The old
+  // now-only + count-chip footer is gone.
+  assert.match(html, />Now<span class="todo-grp-count">1</);
+  assert.match(html, />Soon<span class="todo-grp-count">1</);
+  assert.match(html, />Later<span class="todo-grp-count">2</);
+  assert.match(html, /Return the bottles/, 'the soon tier now shows on the card');
+  assert.match(html, /Order dog food/, 'the later tier now shows on the card');
+  assert.doesNotMatch(html, /class="foot"/, 'the count-chip footer is gone');
 });
 
 test('renderTodoSlot: todos_ok===false shows a "couldn’t load" note, NOT an empty card', () => {
@@ -5101,4 +5105,163 @@ test('fetchLaundry: an unchanged payload does not repaint (tumble never restarts
   sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => done });
   await sandbox.fetchLaundry();
   assert.notEqual(slot.querySelectorAll('.ln-m')[0], el1, 'changed payload repainted');
+});
+
+// ---------------------------------------------------------------------------
+// To-Do wall card: the 3-tier digest (Now / Soon / Later). The compact card
+// used to show ONLY the `now` bucket plus three count chips; it now surfaces
+// all three tiers, bounded by a fixed row budget, with a "+N more" control per
+// tier that opens the full list. todoDigest() is the pure allocator; the markup
+// tests pin todoCardHtml()'s rendering of it.
+// ---------------------------------------------------------------------------
+function tItem(id, bucket, { done = false } = {}) {
+  return {
+    id, title: `t${id}`, bucket,
+    created_at: `2026-08-17T0${id % 9}:00:00Z`,
+    done_at: done ? '2026-08-17T09:00:00Z' : null,
+    done_date: done ? '2026-08-17' : null,
+  };
+}
+const tOpen = (n, bucket) => Array.from({ length: n }, (_, i) => tItem(i + 1, bucket));
+const tDone = (n, bucket) => Array.from({ length: n }, (_, i) => tItem(100 + i, bucket, { done: true }));
+const DIGEST_BUDGET = 9;
+
+test('todoDigest: fills all three tiers when they fit the budget', () => {
+  const { sandbox } = newHub();
+  // [...g] rehomes the sandbox-realm array so deepEqual doesn't trip on the
+  // vm's separate Array.prototype (same reason other tests JSON-normalize).
+  const g = [...sandbox.todoDigest({ now: tOpen(2, 'now'), soon: tOpen(3, 'soon'), later: tOpen(2, 'later') }, DIGEST_BUDGET)];
+  assert.equal(g.length, 3);
+  assert.deepEqual(g.map((x) => x.bucket), ['now', 'soon', 'later']);
+  assert.deepEqual(g.map((x) => x.rows.length), [2, 3, 2]);
+  assert.deepEqual(g.map((x) => x.openCount), [2, 3, 2]);
+  assert.deepEqual(g.map((x) => x.moreOpen), [0, 0, 0]);
+});
+
+test('todoDigest: omits tiers that have no items', () => {
+  const { sandbox } = newHub();
+  const g = sandbox.todoDigest({ now: tOpen(1, 'now'), soon: [], later: [] }, DIGEST_BUDGET);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].bucket, 'now');
+});
+
+test('todoDigest: bounds a long tier to the budget and reports hidden open as moreOpen', () => {
+  const { sandbox } = newHub();
+  const g = sandbox.todoDigest({ now: tOpen(12, 'now'), soon: [], later: [] }, DIGEST_BUDGET);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].rows.length, DIGEST_BUDGET);
+  assert.equal(g[0].moreOpen, 3);
+});
+
+test('todoDigest: guarantees soon and later each show >=1 row behind a long now list', () => {
+  const { sandbox } = newHub();
+  const g = sandbox.todoDigest({ now: tOpen(20, 'now'), soon: tOpen(5, 'soon'), later: tOpen(5, 'later') }, DIGEST_BUDGET);
+  const by = Object.fromEntries(g.map((x) => [x.bucket, x]));
+  assert.ok(by.soon.rows.length >= 1, 'soon keeps at least one visible row');
+  assert.ok(by.later.rows.length >= 1, 'later keeps at least one visible row');
+  const total = g.reduce((n, x) => n + x.rows.length, 0);
+  assert.equal(total, DIGEST_BUDGET, 'never exceeds the budget');
+  assert.equal(by.soon.moreOpen, 4);
+  assert.equal(by.later.moreOpen, 4);
+});
+
+test('todoDigest: done-today lingerers fill only leftover budget and are never counted as more', () => {
+  const { sandbox } = newHub();
+  const g = sandbox.todoDigest({ now: [...tOpen(2, 'now'), ...tDone(3, 'now')], soon: [], later: [] }, DIGEST_BUDGET);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].rows.length, 5, 'shows the 2 open + 3 done-today rows');
+  assert.equal(g[0].openCount, 2, 'the header count is open items only');
+  assert.equal(g[0].moreOpen, 0, 'a hidden done item is not advertised as more');
+  assert.equal(g[0].rows.filter((t) => t.done_at).length, 3, 'the done rows linger');
+});
+
+test('todoDigest: open items win the budget over another tier\'s done-today lingerers', () => {
+  const { sandbox } = newHub();
+  const g = sandbox.todoDigest(
+    { now: [...tOpen(2, 'now'), ...tDone(7, 'now')], soon: tOpen(5, 'soon'), later: [] },
+    DIGEST_BUDGET,
+  );
+  const by = Object.fromEntries(g.map((x) => [x.bucket, x]));
+  assert.equal(by.soon.rows.length, 5, 'all 5 actionable soon items stay visible');
+  assert.equal(by.soon.moreOpen, 0);
+  assert.equal(by.now.moreOpen, 0, 'no open now item is hidden');
+  const total = g.reduce((n, x) => n + x.rows.length, 0);
+  assert.equal(total, DIGEST_BUDGET);
+});
+
+test('todoCardHtml: renders labeled tier groups with open counts and drops the old chip footer', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.todoCardHtml({ now: tOpen(2, 'now'), soon: tOpen(3, 'soon'), later: tOpen(2, 'later') });
+  assert.equal((html.match(/todo-grp-head/g) || []).length, 3, 'a head per non-empty tier');
+  assert.match(html, />Now<span class="todo-grp-count">2</);
+  assert.match(html, />Soon<span class="todo-grp-count">3</);
+  assert.match(html, />Later<span class="todo-grp-count">2</);
+  assert.match(html, /data-todo="1"/, 'rows are tap-to-complete');
+  assert.ok(!/class="foot"/.test(html), 'the count-chip footer is gone');
+});
+
+test('todoCardHtml: an over-budget tier shows a "+N more" control that opens the full list', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.todoCardHtml({ now: tOpen(12, 'now'), soon: [], later: [] });
+  assert.match(html, /class="todo-more"[^>]*data-overlay="todos"/);
+  assert.match(html, /\+3 more/);
+});
+
+test('todoCardHtml: an empty list shows the empty note and no tier groups', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.todoCardHtml({ now: [], soon: [], later: [] });
+  assert.match(html, /nothing on the list/);
+  assert.ok(!/todo-grp/.test(html));
+});
+
+test('todoCardHtml: a read error (ok=false) shows the load-failed note and no groups', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.todoCardHtml({}, false);
+  assert.match(html, /couldn.t load the list/);
+  assert.ok(!/todo-grp/.test(html));
+});
+
+test('todoCardHtml: tapping a tier\'s "+N more" opens the todos full list', () => {
+  // The tap-through is the whole point of folding items behind "+N more"; pin
+  // that the delegated click actually reaches openOverlay('todos'), not just
+  // that the button's markup exists. openOverlay is a hub.js global, so a
+  // sandbox stub captures the call; `fire('click', ...)` drives the real
+  // document click listener hub.js registered at load.
+  const { document, sandbox, fire } = newHub();
+  const opened = [];
+  sandbox.openOverlay = (v) => opened.push(v);
+  sandbox.renderTodoSlot({ todos: { now: tOpen(12, 'now'), soon: [], later: [] } });
+  const more = document.getElementById('todo-slot').querySelector('.todo-more');
+  assert.ok(more, 'the "+N more" control rendered');
+  more.closest = (s) => (s === '.todo-more' ? more : null);
+  fire('click', { target: more });
+  assert.deepEqual(opened, ['todos']);
+});
+
+test('todoDigest: a missing/empty payload yields no groups (never throws)', () => {
+  const { sandbox } = newHub();
+  assert.deepEqual([...sandbox.todoDigest(undefined, DIGEST_BUDGET)], []);
+  assert.deepEqual([...sandbox.todoDigest({}, DIGEST_BUDGET)], []);
+});
+
+test('todoDigest: "+N more" counts only hidden OPEN items even when a tier also has done-today rows', () => {
+  const { sandbox } = newHub();
+  // now alone, over budget, with open AND done items in the same tier. Open
+  // items sort first, so the budget shows 9 open and folds the rest; the done
+  // lingerers get no room and are NOT part of the overflow count.
+  const g = sandbox.todoDigest({ now: [...tOpen(12, 'now'), ...tDone(4, 'now')], soon: [], later: [] }, DIGEST_BUDGET);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].rows.length, DIGEST_BUDGET, 'the budget is spent on open items');
+  assert.equal(g[0].rows.filter((t) => t.done_at).length, 0, 'no done row is shown when open items fill the budget');
+  assert.equal(g[0].moreOpen, 3, 'overflow = 12 open - 9 shown, done items excluded');
+});
+
+test('todoCardHtml: a tier that is only done-today lingerers shows its label without a "0" count', () => {
+  const { sandbox } = newHub();
+  // now has no open work left today, just one completed item lingering; soon/
+  // later empty so the budget has room to show the lingerer (phase 2).
+  const html = sandbox.todoCardHtml({ now: tDone(1, 'now'), soon: [], later: [] });
+  assert.match(html, /todo-grp-head">Now<\/div>/, 'the label shows, with no count badge');
+  assert.ok(!/todo-grp-count/.test(html), 'no "0" count badge on a done-only tier');
+  assert.match(html, /todo-row done/, 'the completed row still lingers, struck through');
 });

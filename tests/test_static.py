@@ -140,6 +140,18 @@ def test_todo_and_reminder_rows_and_actions_are_big_tap_targets():
     assert am and int(am.group(1)) >= 44, ".todo-act (delete/move) must be a >= 44px tap target"
 
 
+def test_todo_digest_card_tier_classes_are_styled():
+    # The wall To-Do card is a 3-tier digest (todoDigest/todoCardHtml in hub.js):
+    # a labelled head per tier, its open count, and a "+N more" tap-through. Pin
+    # that each class is styled so the digest can't render unstyled, and that the
+    # "+N more" control clears the ~44px tap floor (CLAUDE.md) like the rows.
+    for cls in (".todo-grp-head", ".todo-grp-count", ".todo-more"):
+        assert _css_rule(cls).strip(), f"{cls} (To-Do digest card) is unstyled"
+    more = _css_rule(".todo-more")
+    mm = re.search(r"min-height:\s*(\d+)px", more)
+    assert mm and int(mm.group(1)) >= 44, ".todo-more must be a >= 44px tap target"
+
+
 def test_reminder_bucket_list_reuses_the_shared_row_and_box_classes():
     # The iCloud reminders view is built from the same .todo-row(-full)/.card
     # chrome as the local list — not a parallel styling system that could drift.
