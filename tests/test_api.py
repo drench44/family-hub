@@ -2422,6 +2422,79 @@ def test_laundry_watch_loop_starts_only_when_enabled_and_configured():
     assert appmod._laundry_watch_enabled() is False   # DISABLE_SYNC=1 in tests
 
 
+# The SSE stream is tested by driving its generator directly: this
+# starlette's TestClient BUFFERS the whole response before returning
+# (verified by stack dump — client.stream() never comes back from an
+# unbounded body), so the HTTP layer physically can't exercise an infinite
+# stream. Route registration is asserted separately; live behavior is part
+# of the post-deploy verification.
+
+def _sse_data(chunk):
+    """Parse one `data: {...}` SSE chunk to JSON; None for a keepalive."""
+    s = chunk.decode() if isinstance(chunk, bytes) else chunk
+    if not s.startswith("data: "):
+        return None
+    return json.loads(s[len("data: "):s.index("\n")])
+
+
+def test_laundry_stream_greets_pings_and_pushes(client, monkeypatch):
+    # The stream leads with the CURRENT annotated tile (the wall paints
+    # without waiting for a change), keeps the pipe warm with `: ping`
+    # while nothing happens, and pushes a fresh event the moment a watcher
+    # tick observes a change — same payload shape as /api/tiles/laundry.
+    import asyncio
+    import family_hub.app as appmod
+    monkeypatch.setattr(appmod, "LAUNDRY_STREAM_PING_S", 0.05)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_stub_tile([_LN_RUN]))
+    assert any(getattr(r, "path", None) == "/api/laundry/stream"
+               for r in appmod.app.routes)
+
+    async def scenario():
+        await appmod._laundry_watch_tick()
+        resp = await appmod.laundry_stream()
+        assert resp.media_type == "text/event-stream"
+        gen = resp.body_iterator
+        chunks = [await gen.__anext__(),    # greeting: the current tile
+                  await gen.__anext__()]    # steady state: keepalive
+        monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                            _laundry_stub_tile([_LN_IDLE]))
+        await appmod._laundry_watch_tick()  # a change lands...
+        chunks.append(await gen.__anext__())   # ...and is pushed
+        await gen.aclose()
+        return chunks
+
+    greet, ping, push = asyncio.run(scenario())
+    ev = _sse_data(greet)
+    assert ev and ev["available"] is True
+    assert ev["machines"][0]["phase"] == "running"
+    assert "last_done" in ev["machines"][0]
+    assert _sse_data(ping) is None          # comment frame, not a data event
+    ev2 = _sse_data(push)
+    assert ev2 and ev2["machines"][0]["phase"] == "idle"
+
+
+def test_laundry_stream_demo_serves_canned_machines(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    monkeypatch.setenv("DEMO", "1")
+    import asyncio
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    try:
+        async def first():
+            resp = await appmod.laundry_stream()
+            gen = resp.body_iterator
+            chunk = await gen.__anext__()
+            await gen.aclose()
+            return chunk
+        ev = _sse_data(asyncio.run(first()))
+        assert ev and ev["available"] is True and len(ev["machines"]) == 2
+    finally:
+        monkeypatch.delenv("DEMO")
+        importlib.reload(appmod)
+
+
 def test_laundry_cycle_log_records_transitions_only(client, app_mod, monkeypatch):
     # every observed RAW phase transition lands in the cycle log with its
     # diagnostic note; steady-state polls add nothing; the endpoint serves

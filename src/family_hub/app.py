@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import json
 import datetime as dt
 import logging
 import os
@@ -23,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1576,6 +1577,48 @@ async def _laundry_payload() -> dict:
 @app.get("/api/tiles/laundry")
 async def tile_laundry():
     return await _laundry_payload()
+
+
+# How long a stream waiter sleeps before emitting a keepalive comment. Under
+# the 60s idle timeouts of the proxies/browsers that might sit between a
+# phone and the hub; also the cadence at which a waiter re-checks the
+# payload itself, so a stream opened while the watcher is disabled (or a
+# change that raced the waiter's re-arm) still converges on the truth.
+LAUNDRY_STREAM_PING_S = 20.0
+
+
+@app.get("/api/laundry/stream")
+async def laundry_stream():
+    """Server-sent events: the annotated laundry tile, pushed. Emits the
+    current payload immediately on connect (the wall paints without waiting
+    for a change), then a new event whenever the watcher observes one, with
+    `: ping` keepalives between. The payload is exactly /api/tiles/laundry's
+    — the frontend feeds both through the same applyLaundry. EventSource
+    handles reconnection natively, and the 60s poll remains as the fallback
+    for anything that can't hold a stream open."""
+    async def gen():
+        last = None
+        while True:
+            waiter = _laundry_change   # arm BEFORE reading: no lost wakeup
+            try:
+                payload = await _laundry_payload()
+                data = json.dumps(payload)
+            except Exception:
+                # fail-soft like every tile read: hold the stream open and
+                # heartbeat; the next good read pushes the recovery
+                log.warning("laundry stream: payload read failed",
+                            exc_info=True)
+                data = None
+            if data is not None and data != last:
+                last = data
+                yield f"data: {data}\n\n"
+            else:
+                yield ": ping\n\n"
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(waiter.wait(),
+                                       timeout=LAUNDRY_STREAM_PING_S)
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
 
 
 def _laundry_annotate(t: dict) -> dict:
