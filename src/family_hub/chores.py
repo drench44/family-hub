@@ -124,6 +124,18 @@ def assignee_id(chore: dict, d: dt.date,
     return order[occurrences_before(chore, d) % len(order)]
 
 
+def away_view_on(amap: dict, d_iso: str) -> dict:
+    """Reshape one date out of a db.away_map() window into the ``{"ids",
+    "backup"}`` view ``plan_rows`` consumes. Pure — shared by the wall render
+    (app._away_view) and the iCloud chore mirror so both resolve the SAME
+    assignees for a day; a divergence there would mirror a reminder to a
+    different person than the wall shows (and credit the wrong streak on an
+    iOS check-off)."""
+    ids = {pid for pid, info in amap.items() if d_iso in info["dates"]}
+    return {"ids": ids,
+            "backup": {pid: amap[pid]["backup_on"].get(d_iso) for pid in ids}}
+
+
 def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
              away: dict | None = None) -> list[dict]:
     """Live-resolve the day's assignments to flat rows — the exact shape the

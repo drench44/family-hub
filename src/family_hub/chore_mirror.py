@@ -128,10 +128,22 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
         chores = {c["id"]: c for c in fdb.list_chores(conn)}
         chores_list = list(chores.values())
 
+        # Away/pause overlay over the whole horizon: the mirror mirrors what
+        # the WALL shows. An away person's paused chore must not ring their
+        # phone; a covered chore belongs on the BACKUP's list (and its ledger
+        # row under the backup, so an iOS check-off credits the backup's
+        # streak — the same rule the /complete endpoint enforces). If this
+        # read throws, the outer except skips the tick entirely: no work is
+        # safer than an away-blind pass that would bounce reminders back to
+        # the away person.
+        amap = fdb.away_map(conn, today.isoformat(),
+                            (today + dt.timedelta(days=H)).isoformat())
+
         desired: dict = {}
         for i in range(0, H + 1):
             d = today + dt.timedelta(days=i)
-            for row in chlogic.plan_rows(chores_list, all_people, d):
+            view = chlogic.away_view_on(amap, d.isoformat())
+            for row in chlogic.plan_rows(chores_list, all_people, d, view):
                 lid = mapped.get(row["person_id"])
                 if lid:
                     desired[(row["chore_id"], d.isoformat())] = (row["person_id"], lid)
