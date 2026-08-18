@@ -618,6 +618,12 @@ def clear_completion(conn, chore_id: int, date: str) -> None:
     conn.commit()
 
 
+def completion_exists(conn, chore_id: int, date: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM completions WHERE chore_id = ? AND date = ?",
+        (chore_id, date)).fetchone() is not None
+
+
 def completions_between(conn, date_from: str, date_to: str) -> list[dict]:
     rows = conn.execute(
         "SELECT chore_id, date, person_id FROM completions "
@@ -996,6 +1002,13 @@ def delete_chore_mirror(conn, chore_id: int, date: str) -> None:
     conn.execute("DELETE FROM chore_mirror WHERE chore_id = ? AND date = ?",
                  (chore_id, date))
     conn.commit()
+
+
+def get_chore_mirror(conn, chore_id: int, date: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM chore_mirror WHERE chore_id = ? AND date = ?",
+        (chore_id, date)).fetchone()
+    return dict(row) if row is not None else None
 
 
 def get_chore_mirror_by_uid(conn, uid: str) -> dict | None:

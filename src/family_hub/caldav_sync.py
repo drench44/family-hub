@@ -391,6 +391,9 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             # (queues creates/deletes into the outbox), so this same flush pushes
             # them. Runs after the pull so its prune sees fresh completion state.
             from . import chore_mirror
+            # iOS check-offs -> local completions (streaks) first, then project
+            # the plan (which keeps completed reminders and prunes stale ones).
+            chore_mirror.reconcile_completions(conn, now)
             chore_mirror.reconcile(conn, cfg, now)
             flushed = flush_pending(client, conn, collections, now.isoformat())
             errors.extend(flushed["errors"])

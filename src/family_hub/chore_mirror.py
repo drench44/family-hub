@@ -45,6 +45,50 @@ def _queue_create(conn, chore, diso, person_id, list_id, tz, now, now_iso) -> No
     fdb.upsert_chore_mirror(conn, chore["id"], diso, person_id, oid, uid)
 
 
+def push_completion(conn, chore_id: int, date: str, completed: bool) -> bool:
+    """Reflect a WALL completion/uncompletion onto the mirrored iCloud reminder
+    (P4, direction wall -> iOS), via the outbox. No-op (False) when the occurrence
+    isn't mirrored or its object is gone. Safe to call unconditionally from the
+    chore complete/uncomplete endpoints."""
+    m = fdb.get_chore_mirror(conn, chore_id, date)
+    if not m:
+        return False
+    obj = fdb.get_cal_object(conn, m["cal_object_id"])
+    if not obj or not obj.get("raw_ics"):
+        return False
+    now = dt.datetime.now(dt.timezone.utc)
+    try:
+        ics = remlogic.set_completed(obj["raw_ics"], completed, now)
+    except Exception:
+        log.warning("chore mirror push_completion skipped for %s",
+                    m["cal_object_id"], exc_info=True)
+        return False
+    return fdb.queue_cal_object_update(
+        conn, m["cal_object_id"], ics, obj.get("summary", ""), now.isoformat())
+
+
+def reconcile_completions(conn, now: dt.datetime) -> int:
+    """iOS check-offs -> local completions (P4, direction iOS -> wall). ADD-ONLY:
+    a reminder marked done in iOS records the local completion (so streaks stay
+    right); reopening in iOS does NOT un-complete on the wall. Add-only is
+    deliberate — removing here could undo a wall completion that hasn't pushed
+    yet. Un-completing stays a wall action (which pushes back via push_completion).
+    Returns the number of completions newly recorded. Never raises."""
+    try:
+        added = 0
+        for m in fdb.list_chore_mirror(conn):
+            obj = fdb.get_cal_object(conn, m["cal_object_id"])
+            if not obj or "STATUS:COMPLETED" not in (obj.get("raw_ics") or ""):
+                continue
+            if not fdb.completion_exists(conn, m["chore_id"], m["date"]):
+                fdb.set_completion(conn, m["chore_id"], m["date"], m["person_id"])
+                added += 1
+        return added
+    except Exception:
+        log.exception("chore mirror completion reconcile failed (non-fatal)")
+        return 0
+
+
 def reconcile(conn, cfg, now: dt.datetime) -> dict:
     """Bring each mapped person's iCloud list in line with the wall's chore plan
     over [today-1, today+H]. Returns {created, moved, deleted}. Never raises."""

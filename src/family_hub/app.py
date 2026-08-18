@@ -34,6 +34,7 @@ from . import tiles
 from . import todos as tdlogic
 from . import caldav_service
 from . import caldav_sync
+from . import chore_mirror
 from .calendar_sync import GoogleCalendarClient, sync_once
 from .config import load_config
 
@@ -773,13 +774,18 @@ def complete(chore_id: int, body: CompleteBody | None = None):
     # enforce this via a FK; this gives a clean error on any DB.)
     _person_row(c, person_id)
     fdb.set_completion(c, chore_id, date_str, person_id)
+    # Reflect onto the mirrored iCloud reminder (no-op if not mirrored).
+    chore_mirror.push_completion(c, chore_id, date_str, True)
     return {"ok": True}
 
 
 @app.delete("/api/chores/{chore_id}/complete")
 def uncomplete(chore_id: int, date: str | None = None):
     c = _db()
-    fdb.clear_completion(c, chore_id, date or _today().isoformat())
+    date_str = date or _today().isoformat()
+    fdb.clear_completion(c, chore_id, date_str)
+    # Reopen the mirrored iCloud reminder too (no-op if not mirrored).
+    chore_mirror.push_completion(c, chore_id, date_str, False)
     return {"ok": True}
 
 
