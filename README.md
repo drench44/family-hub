@@ -54,16 +54,22 @@ at one URL.
 - **Laundry:** washer + dryer as porthole cards fed by Home Assistant — a
   timer-dial ring counts the minutes down, the drum tumbles while a cycle
   runs (wash water and suds in the washer, a heat glow in the dryer), and a
-  finished load shows a check with *when* it finished (remembered even
-  after the machine is opened or powered off). Machines that power
-  themselves off right after the end-of-cycle chime don't slip through:
-  polling tightens near the projected finish, and a finish that still lands
-  between polls is reconstructed and shown as Done. Every observed phase
+  finished load shows a check with *when* it finished — held for half an
+  hour even after the machine shuts itself down, then kept as a quiet
+  "last load" line (powering the machine back on clears the check early:
+  someone's collecting it). The card is real-time: a
+  server-side watcher re-reads Home Assistant every 5 seconds for the whole
+  cycle and pushes each change to open walls over a live stream
+  (`GET /api/laundry/stream`, server-sent events), so a status change shows
+  in seconds — machines that power themselves off right after the
+  end-of-cycle chime can't slip through, and a finish that still lands
+  between reads is reconstructed and shown as Done. Every observed phase
   transition is also logged in the database (`GET /api/laundry/log`, a year
   of cycle history, covered by the standard backups) so the finish
-  heuristics can be tuned from real cycles. Built for LG ThinQ's sensors,
-  but any HA integration exposing a status enum + a remaining-time
-  timestamp works. Fails soft like weather/climate.
+  heuristics can be tuned from real cycles — and because the server does
+  the observing, the log fills even with no wall open. Built for LG
+  ThinQ's sensors, but any HA integration exposing a status enum + a
+  remaining-time timestamp works. Fails soft like weather/climate.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —
   no phone needed. Mark someone **away** here too, with an optional backup to

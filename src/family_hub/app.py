@@ -2,15 +2,19 @@
 
 The wall page polls /api/hub and drives the /api/admin/* routes from its Chores
 edit mode (reachable from a phone too — same page); tiles proxy the box's other
-services. A background thread syncs Google Calendar every 5 min
-(disabled by DISABLE_SYNC=1 in tests). LAN-only, no auth — the established
-trust model for every service on this box.
+services. A background thread syncs Google Calendar every 5 min, and a
+background asyncio task watches Home Assistant's laundry sensors every 5s,
+pushing changes to open walls over SSE (both disabled by DISABLE_SYNC=1 in
+tests). LAN-only, no auth — the established trust model for every service
+on this box.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import datetime as dt
+import json
 import logging
 import os
 import re
@@ -22,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -274,8 +278,32 @@ _http = httpx.AsyncClient()
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app):
-    yield
-    await _http.aclose()
+    # The laundry watcher (see "laundry: annotation, background watcher"
+    # below) lives on the app's own loop so it shares _http and the SSE
+    # waiters' Event. Armed only where the calendar sync would run and only
+    # with laundry configured; cancelled cleanly on shutdown. The done-
+    # callback is the loud backstop for the "impossible" exit: the loop
+    # armors every tick, so anything that still kills the task (a
+    # BaseException like MemoryError) must at least leave a log line.
+    watch = None
+    if _laundry_watch_enabled():
+        watch = asyncio.create_task(laundry_watch_loop())
+        watch.add_done_callback(
+            lambda t: t.cancelled()
+            or log.error("laundry watch: task exited (real-time lane dead; "
+                         "tile route falls back to inline fetch)",
+                         exc_info=t.exception()))
+    try:
+        yield
+    finally:
+        # aclose() must run even if shutdown itself raises — and awaiting a
+        # crashed (already-done) task re-raises its stored exception, which
+        # is NOT a CancelledError, so keep that from eating the cleanup too.
+        if watch is not None:
+            watch.cancel()
+            with contextlib.suppress(BaseException):
+                await watch
+        await _http.aclose()
 
 
 app = FastAPI(title="family-hub", lifespan=_lifespan)
@@ -1740,13 +1768,181 @@ async def tile_weather():
     return await tiles.weather_tile(_http, cfg)
 
 
-@app.get("/api/tiles/laundry")
-async def tile_laundry():
+# --- laundry: annotation, background watcher, live stream ------------------
+#
+# The laundry pipeline is PUSH-shaped end to end: LG ThinQ pushes into Home
+# Assistant within seconds (verified live 2026-08-18 — the remaining-time
+# sensor retimes mid-cycle), a background watcher here re-reads HA every
+# LAUNDRY_WATCH_S and keeps an annotated snapshot, and /api/laundry/stream
+# pushes each change to open walls over SSE. Before the watcher, the server
+# only looked at HA when a browser polled (60s cadence, 25s cache): every
+# status change took up to ~85s to reach the wall, and with no wall open the
+# cycle log + completion memory observed nothing at all.
+
+LAUNDRY_WATCH_S = 5.0
+# A snapshot older than this is treated as absent (watcher disabled or
+# wedged) and the tile route falls back to fetching HA inline, exactly the
+# pre-watcher behavior — the card must never go dark because a background
+# task died. Three missed ticks means genuinely stuck, not just busy.
+LAUNDRY_SNAPSHOT_FRESH_S = 15.0
+# At a 5s cadence a transient HA blip is far more likely to land on a tick
+# than under the old 60s poll, and an instant available:false push would
+# flicker "Laundry unavailable" across the kitchen for a hiccup that heals
+# itself. Hold the last good card this long before going honestly
+# unavailable (the frontend's own last-good discipline, TILE_FAIL_LIMIT,
+# covers fetch failures the same way).
+LAUNDRY_UNAVAIL_HOLD_S = 30.0
+
+_laundry_snapshot: dict | None = None
+_laundry_snapshot_ts: float = 0.0
+_laundry_unavail_since: float | None = None
+# The change signal for SSE waiters: each CHANGED tick swaps in a fresh
+# Event and sets the old one, so every waiter wakes exactly once per change
+# and re-arms on the new event. (Bound to the running loop at wait time;
+# in production the watcher and the stream handlers share the app's loop.)
+_laundry_change: asyncio.Event = asyncio.Event()
+
+
+def _laundry_watch_enabled() -> bool:
+    """The watcher runs only where the calendar sync would (not in DEMO, not
+    under DISABLE_SYNC) and only with laundry actually configured — an
+    unconfigured hub must not poll a nonexistent HA every 5s forever."""
+    return _sync_enabled() and bool(getattr(cfg, "laundry", None))
+
+
+async def _laundry_watch_tick() -> None:
+    """One watcher iteration: fetch from HA, run the transition synthesis
+    (kv completion memory + cycle log — see _laundry_annotate), publish the
+    snapshot, and wake stream waiters iff the payload changed. Every failure
+    is soft: log and leave the previous snapshot standing for the next tick."""
+    global _laundry_snapshot, _laundry_snapshot_ts, _laundry_unavail_since, \
+        _laundry_change
+    try:
+        t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
+        snap = _laundry_annotate(t) if t.get("available") else t
+    except Exception:
+        log.warning("laundry watch: tick failed; retrying on cadence",
+                    exc_info=True)
+        return
+    now = time.monotonic()
+    if snap.get("available"):
+        _laundry_unavail_since = None
+    else:
+        if _laundry_unavail_since is None:
+            _laundry_unavail_since = now
+        if (now - _laundry_unavail_since < LAUNDRY_UNAVAIL_HOLD_S
+                and _laundry_snapshot is not None
+                and _laundry_snapshot.get("available")):
+            # brief blip: keep the last good card standing (re-stamped fresh
+            # so the route keeps serving it); honest once the hold expires
+            _laundry_snapshot_ts = now
+            return
+    changed = snap != _laundry_snapshot
+    _laundry_snapshot = snap
+    _laundry_snapshot_ts = now
+    if changed:
+        waiters, _laundry_change = _laundry_change, asyncio.Event()
+        waiters.set()
+
+
+async def laundry_watch_loop() -> None:
+    # The tick guards its own fetch/annotate, but the loop still armors the
+    # whole body: an exception escaping the tick would otherwise kill this
+    # task PERMANENTLY and silently — the lifespan holds the task reference,
+    # so asyncio's "exception was never retrieved" warning never fires, and
+    # the route's inline fallback keeps the card looking healthy while the
+    # cycle log + completion memory quietly stop observing (the exact
+    # pre-watcher regression this loop exists to fix). CancelledError must
+    # pass through: it's the lifespan's shutdown signal, not a failure.
+    while True:
+        try:
+            await _laundry_watch_tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("laundry watch: tick crashed; continuing")
+        await asyncio.sleep(LAUNDRY_WATCH_S)
+
+
+async def _laundry_payload() -> dict:
+    """The current laundry tile: demo when canned, the watcher's snapshot
+    while fresh, else an inline fetch+annotate — the pre-watcher path, kept
+    both as the no-watcher mode (tests, DISABLE_SYNC) and as the fallback
+    that keeps the card alive if the watcher ever wedges."""
     if DEMO:
         return fdemo.demo_laundry()   # canned machines; no HA hit
+    if (_laundry_snapshot is not None
+            and time.monotonic() - _laundry_snapshot_ts < LAUNDRY_SNAPSHOT_FRESH_S):
+        return _laundry_snapshot
     t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
     if not t.get("available"):
         return t
+    return _laundry_annotate(t)
+
+
+@app.get("/api/tiles/laundry")
+async def tile_laundry():
+    return await _laundry_payload()
+
+
+# How long a stream waiter sleeps before emitting a keepalive comment. Under
+# the 60s idle timeouts of the proxies/browsers that might sit between a
+# phone and the hub; also the cadence at which a waiter re-checks the
+# payload itself, so a stream opened while the watcher is disabled (or a
+# change that raced the waiter's re-arm) still converges on the truth.
+LAUNDRY_STREAM_PING_S = 20.0
+
+
+@app.get("/api/laundry/stream")
+async def laundry_stream():
+    """Server-sent events: the annotated laundry tile, pushed. Emits the
+    current payload immediately on connect (the wall paints without waiting
+    for a change), then a new event whenever the watcher observes one, with
+    `: ping` keepalives between. The payload is exactly /api/tiles/laundry's
+    — the frontend feeds both through the same applyLaundry. EventSource
+    handles reconnection natively, and the 60s poll remains as the fallback
+    for anything that can't hold a stream open."""
+    async def gen():
+        if DEMO:
+            # canned machines never transition — greet once, then only
+            # keepalives. Re-reading demo_laundry() would re-time every
+            # payload and push a "change" each cycle, and each push is an
+            # innerHTML rebuild that restarts the tumble mid-spin on the
+            # demo wall (the churn applyLaundry exists to prevent).
+            yield f"data: {json.dumps(fdemo.demo_laundry())}\n\n"
+            while True:
+                await asyncio.sleep(LAUNDRY_STREAM_PING_S)
+                yield ": ping\n\n"
+        last = None
+        while True:
+            waiter = _laundry_change   # arm BEFORE reading: no lost wakeup
+            try:
+                payload = await _laundry_payload()
+                data = json.dumps(payload)
+            except Exception:
+                # fail-soft like every tile read: hold the stream open and
+                # heartbeat; the next good read pushes the recovery
+                log.warning("laundry stream: payload read failed",
+                            exc_info=True)
+                data = None
+            if data is not None and data != last:
+                last = data
+                yield f"data: {data}\n\n"
+            else:
+                yield ": ping\n\n"
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(waiter.wait(),
+                                       timeout=LAUNDRY_STREAM_PING_S)
+    # X-Accel-Buffering: today the hub serves browsers directly, but the
+    # moment any reverse proxy lands in front, response buffering would
+    # queue these events indefinitely and the stream would "work" while
+    # delivering nothing — cheap to preempt now.
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+def _laundry_annotate(t: dict) -> dict:
     # Completion memory: a machine sitting in "end" carries WHEN it finished
     # (status_since). Stamp that into the kv store so "finished at 2:14"
     # survives the machine being opened / powered off — and later restarts of
@@ -1828,6 +2024,43 @@ async def tile_laundry():
                         fdb.kv_set(c, done_key, m["status_since"])
                 if prev == "offline":
                     note += "+offline_bridge"
+            elif (phase == "idle" and came_from == "done"
+                    and m.get("status") in ("power_off",
+                                            "frozen_prevent_initial")):
+                # The OBSERVED-finish twin of the missed-done hold: these LG
+                # machines turn THEMSELVES off 30-90s after "end" (measured
+                # live 2026-08-18: 29s and 79s) with the load still inside,
+                # and done -> idle(power_off) is that self-act — nobody has
+                # been to the machine (frozen_prevent_initial is likewise
+                # the machine's own freeze-prevention standby, not a person
+                # — grouped here so a cold-day finish doesn't lose its
+                # hold). Without a hold here, perfectly catching the finish
+                # shows Done for barely a minute while MISSING it holds 30
+                # (operator report, 2026-08-18: "washer shows idle instead
+                # of done"). Re-present the already-stamped observed end
+                # for the same hold window. An exit to "initial" (a person
+                # powering the machine on — the one human-contact signal
+                # this enum offers) decays instead, both here and mid-hold
+                # (see the presentation block below); and a stamp already
+                # older than the hold (server blind between end and
+                # power-off), unparseable, or missing is REFUSED — never a
+                # fresh green Done on a 40-minute-old finish — loudly, like
+                # its stale-projection twin: the refusal is exactly what
+                # log-based tuning needs to see.
+                held = fdb.kv_get(c, done_key)
+                mt = tiles._laundry_minutes_to(held) if held else None
+                if (mt is not None
+                        and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0):
+                    fdb.kv_set(c, missed_key, held)
+                    note = "auto_off_hold"
+                else:
+                    log.warning(
+                        "laundry %s: powered itself off after an observed "
+                        "end but the end stamp (%r) is unusable for a Done "
+                        "hold; decaying to idle", m["id"], held)
+                    note = "auto_off_refused"
+                if prev == "offline":
+                    note += "+offline_bridge"
             if phase in ("running", "paused", "reserved", "done", "error"):
                 # any sign of machine activity retires the synthetic Done (a
                 # real observed done replaces it; a new cycle supersedes it).
@@ -1868,9 +2101,40 @@ async def tile_laundry():
             if phase and phase != "offline":
                 fdb.kv_set(c, nonoff_key, phase)
             if phase == "idle":
-                # Present a remembered missed finish as the Done it really
-                # was — green ring, "at 9:02pm" — for the hold window, then
-                # decay to idle + the quiet "last load" line.
+                # A person powering the machine on is the one human-contact
+                # signal this status enum offers — and it arrives as a
+                # STATUS change inside phase "idle" (power_off -> initial),
+                # never as a phase transition, so it must be honored here by
+                # current status or a standing hold keeps glowing green for
+                # the rest of its window while someone is at the machine
+                # emptying it (caught in review, 2026-08-18: the branch
+                # comment claimed this and the code didn't do it).
+                if m.get("status") == "initial" and fdb.kv_get(c, missed_key):
+                    # ...and the clear is LOGGED — the one status-keyed row
+                    # in a phase-keyed log (the note says so in db.py): a
+                    # hold a person killed at minute 3 and one that ran its
+                    # full window must be tellable apart, because the
+                    # collection moment is the number that sizes the hold.
+                    # Same failure asymmetry as the transition log above,
+                    # and the row lands BEFORE the kv clear so a locked-DB
+                    # retry re-runs both.
+                    try:
+                        fdb.laundry_log_add(c, m["id"], "idle", "idle",
+                                            m.get("status"),
+                                            m.get("finishes_at"),
+                                            m.get("status_since"),
+                                            "hold_cleared_by_power_on")
+                    except sqlite3.OperationalError:
+                        raise
+                    except Exception:
+                        log.warning("laundry %s: hold-clear log write "
+                                    "failed; clearing the hold anyway",
+                                    m["id"], exc_info=True)
+                    fdb.kv_set(c, missed_key, None)
+                # Present a remembered finish (missed, or observed-then-
+                # auto-powered-off) as the Done it really was — green ring,
+                # "at 9:02pm" — for the hold window, then decay to idle +
+                # the quiet "last load" line.
                 ms = fdb.kv_get(c, missed_key)
                 mt = tiles._laundry_minutes_to(ms) if ms else None
                 if mt is not None and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0:
@@ -1889,8 +2153,8 @@ async def tile_laundry():
 @app.get("/api/laundry/log")
 async def laundry_log_route(machine: str | None = None, limit: int = 200):
     """The laundry cycle log: observed phase transitions newest-first — the
-    evidence base for tuning finish detection (projection accuracy, endgame
-    window, missed-done hold) and diagnosing any finish the wall got wrong.
+    evidence base for tuning finish detection (projection accuracy, watcher
+    cadence, missed-done hold) and diagnosing any finish the wall got wrong.
     Fail-soft like every tile read: a DB hiccup serves an empty list loudly
     logged, never a 500."""
     if not (1 <= limit <= 1000):
