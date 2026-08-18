@@ -2254,21 +2254,19 @@ function lnPortholeSvg(m, now = Date.now()) {
       `<rect class="ln-baffle" x="47.6" y="15.5" width="4.8" height="10.5" rx="2.4"`
       + ` transform="rotate(${a} 50 50)"/>`).join('');
   let inner;
+  // The resting load: a folded heap in two cloth shades with fold shadows
+  // and a top-edge sheen. Spinning machines slosh it (ln-slosh, with drag
+  // inertia toward the rising wall); a done machine shows it lying still
+  // under the cycle-complete light — the clothes really are in there.
+  const heap = `<g class="ln-heap">`
+    + `<path class="ln-cl1" d="M30 66 C28 58 34 53 40 55 C43 49 51 48 55 53`
+    +   ` C60 49 68 52 68 59 C72 62 70 69 64 71 C58 75 42 75 36 72 C31 70 29 69 30 66 Z"/>`
+    + `<path class="ln-cl2" d="M52 53 C53 47 61 45 65 49 C69 52 67 58 61 58 C56 59 52 57 52 53 Z"/>`
+    + `<path class="ln-fold" d="M36 66 C41 63 46 64 50 68"/>`
+    + `<path class="ln-fold" d="M52 60 C56 58 60 60 63 64"/>`
+    + `<path class="ln-sheen" d="M42 53.5 C46 51 51 51 55 53.5"/>`
+    + `</g>`;
   if (spinning) {
-    // Tumble physics: only the DRUM (furniture) rides the rigid rotation.
-    // The load itself obeys gravity — the heap sloshes at the bottom while
-    // two loose pieces get carried up the drum wall, release near the top,
-    // and fall on an accelerating arc back into the pile (the ln-carry
-    // keyframes; two different periods so the motion never reads as a loop).
-    // Fliers draw UNDER the heap so they emerge from behind it when picked
-    // up and disappear into it when they land. The washer's water line stays
-    // LEVEL outside all of it, with foam floating on top.
-    // Each flier is three layers: the .ln-lift carrier rotates about the
-    // drum center (so the carry is EXACTLY circular, pressed to the wall at
-    // drum speed), a static positioner puts the piece at its heap start, and
-    // the .ln-fly path itself runs the scoop-up / hold / gravity-fall /
-    // settle keyframes in the carrier's frame. Endpoints are computed so the
-    // landing spot equals the cycle start — the 100%->0% wrap is invisible.
     // Tumble choreography grounded in the real physics (Whirlpool patent
     // US9822476: tumble ~48 RPM, articles ride the drum from 6 o'clock and
     // DETACH at ~11 o'clock — before top-of-travel, where <1G centripetal
@@ -2277,7 +2275,13 @@ function lnPortholeSvg(m, now = Date.now()) {
     // staggered pieces lifting and falling, an eased stop, three mirrored
     // revolutions (the second trio lives in a horizontally-mirrored group,
     // so it climbs the opposite wall), another stop. One carrier + one fall
-    // keyframe set serves all six pieces via animation-delay phase shifts.
+    // keyframe set serves all six pieces via animation-delay phase shifts;
+    // each flier's .ln-lift carrier rotates about the drum center so the
+    // carry is EXACTLY circular, and the fall is ballistic — the release
+    // velocity continues the carry velocity (endpoints computed so landing
+    // equals the next cycle's start; the wrap snap is invisible). Fliers
+    // draw UNDER the heap so they emerge from and vanish into it. The
+    // washer's water stays LEVEL outside all of it, foam riding the line.
     const wads = [
       'M-6 -1 C-6 -5 -1 -7 3 -5 C6.5 -3.5 6.5 1 3.5 3 C0 5 -4.5 3.5 -6 -1 Z',
       'M-4 0 C-4.5 -3.5 -1 -5 2 -4 C4.5 -3 4.5 .5 2.5 2 C0 3.5 -3 3 -4 0 Z',
@@ -2291,15 +2295,7 @@ function lnPortholeSvg(m, now = Date.now()) {
     inner = `<g class="ln-tumble">${drum}</g>`
       + trio(0)
       + `<g transform="matrix(-1 0 0 1 100 0)">${trio(6.4)}</g>`
-      + `<g class="ln-heap">`
-      + `<g class="ln-heap">`
-      + `<path class="ln-cl1" d="M30 66 C28 58 34 53 40 55 C43 49 51 48 55 53`
-      +   ` C60 49 68 52 68 59 C72 62 70 69 64 71 C58 75 42 75 36 72 C31 70 29 69 30 66 Z"/>`
-      + `<path class="ln-cl2" d="M52 53 C53 47 61 45 65 49 C69 52 67 58 61 58 C56 59 52 57 52 53 Z"/>`
-      + `<path class="ln-fold" d="M36 66 C41 63 46 64 50 68"/>`
-      + `<path class="ln-fold" d="M52 60 C56 58 60 60 63 64"/>`
-      + `<path class="ln-sheen" d="M42 53.5 C46 51 51 51 55 53.5"/>`
-      + `</g>`
+      + heap
       + (m.kind !== 'dryer'
         ? `<path class="ln-water" d="M11 66 Q 30 61 50 66 T 89 66 L 89 90 L 11 90 Z"/>`
           + `<path class="ln-waterline" d="M11 66 Q 30 61 50 66 T 89 66"/>`
@@ -2309,8 +2305,10 @@ function lnPortholeSvg(m, now = Date.now()) {
           + `<circle class="ln-sud ln-sud-drift" cx="55" cy="56" r="1.2"/>`
         : '');
   } else if (m.phase === 'done') {
-    // the cycle-complete light: the drum glows softly until the door opens
+    // the cycle-complete light: the drum glows softly over the finished
+    // load, which lies still until the door opens
     inner = `<circle class="ln-donewash" cx="50" cy="50" r="37"/>` + drum
+      + heap
       + `<path class="ln-check" d="M36 51 L46 61 L65 40"/>`;
   } else if (m.phase === 'error') {
     inner = drum + `<text class="ln-bang" x="50" y="60" text-anchor="middle">!</text>`;

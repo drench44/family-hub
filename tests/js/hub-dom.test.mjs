@@ -4949,6 +4949,20 @@ test('laundry card: portholes render running + done machines with the timer arc'
   assert.doesNotMatch(dryerHtml, /ln-tumble/);
   const full = /class="ln-arc"[^>]*stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(dryerHtml);
   assert.ok(Math.abs(full[1] / full[2] - 1) < 0.01, 'done ring is full');
+  // string-built SVG that no browser validates: the group tree must balance
+  // (a truncated/duplicated <g> ships silently otherwise — caught for real
+  // on this branch: a doubled ln-heap put the water on the slosh) and each
+  // machine renders exactly ONE heap
+  assert.equal((html.match(/<g[\s>]/g) || []).length,
+    (html.match(/<\/g>/g) || []).length, 'unbalanced <g> groups');
+  assert.equal((html.match(/class="ln-heap"/g) || []).length, 2,
+    'exactly one heap per machine');
+  // per-machine SVG ids: gradients/clips must not collide across machines
+  // (duplicate SVG ids silently resolve to the first)
+  assert.match(html, /id="lnbz-washer"/);
+  assert.match(html, /id="lnbz-dryer"/);
+  assert.match(html, /url\(#lngl-washer\)/);
+  assert.match(html, /url\(#lngl-dryer\)/);
   // the glanceable lines
   assert.match(html, /<span class="num">23<\/span><span class="ln-unit">min<\/span>/);
   assert.match(html, /Rinsing · done 2:23pm/);
