@@ -1833,6 +1833,26 @@ def _laundry_annotate(t: dict) -> dict:
                 # emptying it (caught in review, 2026-08-18: the branch
                 # comment claimed this and the code didn't do it).
                 if m.get("status") == "initial" and fdb.kv_get(c, missed_key):
+                    # ...and the clear is LOGGED — the one status-keyed row
+                    # in a phase-keyed log (the note says so in db.py): a
+                    # hold a person killed at minute 3 and one that ran its
+                    # full window must be tellable apart, because the
+                    # collection moment is the number that sizes the hold.
+                    # Same failure asymmetry as the transition log above,
+                    # and the row lands BEFORE the kv clear so a locked-DB
+                    # retry re-runs both.
+                    try:
+                        fdb.laundry_log_add(c, m["id"], "idle", "idle",
+                                            m.get("status"),
+                                            m.get("finishes_at"),
+                                            m.get("status_since"),
+                                            "hold_cleared_by_power_on")
+                    except sqlite3.OperationalError:
+                        raise
+                    except Exception:
+                        log.warning("laundry %s: hold-clear log write "
+                                    "failed; clearing the hold anyway",
+                                    m["id"], exc_info=True)
                     fdb.kv_set(c, missed_key, None)
                 # Present a remembered finish (missed, or observed-then-
                 # auto-powered-off) as the Done it really was — green ring,
