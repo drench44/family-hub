@@ -2229,8 +2229,15 @@ function lnLines(m, now = Date.now()) {
    pieces while running (see the tumble-physics CSS), the lit resting
    load + a check when done, empty when idle. Washer loads run water-
    cool, dryers warm — via the ln-washer / ln-dryer machine class. */
+// The data ring's geometry, shared by BOTH writers — lnPortholeSvg (full
+// renders) and laundryTick (in-place updates). One constant, or the tick
+// silently redraws the dial at the wrong circumference (caught in review:
+// a 45-min wash read 69% instead of 75% after the first tick).
+const LN_RING_R = 47.5;
+const LN_RING_C = 2 * Math.PI * LN_RING_R;
+
 function lnPortholeSvg(m, now = Date.now()) {
-  const R = 47.5, C = 2 * Math.PI * R;   // data ring: a thin halo outside the steel
+  const R = LN_RING_R, C = LN_RING_C;   // data ring: a thin halo outside the steel
   const mins = lnMinutesLeft(m.finishes_at, now);
   let frac = 0;
   if (m.phase === 'done') frac = 1;
@@ -2409,9 +2416,8 @@ function laundryTick(now = Date.now()) {
     const arc = el.querySelector('.ln-arc');
     const mins = lnMinutesLeft(m.finishes_at, now);
     if (arc && (m.phase === 'running' || m.phase === 'paused') && mins !== null) {
-      const C = 2 * Math.PI * 44;
       arc.setAttribute('stroke-dasharray',
-        `${(Math.min(1, mins / 60) * C).toFixed(1)} ${C.toFixed(1)}`);
+        `${(Math.min(1, mins / 60) * LN_RING_C).toFixed(1)} ${LN_RING_C.toFixed(1)}`);
     }
   });
 }
