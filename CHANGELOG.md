@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-08-17
+
 ### Added
 - Native chores: chore routines now mirror into each person's iCloud Reminders
   list, two-way. New routine types — every-N-days, biweekly, and due-time
