@@ -252,3 +252,15 @@ def test_push_completion_on_synced_object_bumps_to_pending_update(conn):
     obj = fdb.get_cal_object(conn, m["cal_object_id"])
     assert obj["sync_state"] == "PENDING_UPDATE" and "STATUS:COMPLETED" in obj["raw_ics"]
     assert obj["base_etag"] == "e1"                          # preserved for If-Match
+
+
+def test_reconcile_prunes_orphans_after_mapped_person_deleted(conn):
+    """Deleting the last mapped person must still prune their mirrored reminders
+    (reconcile used to early-return on 'no mapped people' and orphan them)."""
+    pid = _person(conn, "Emma", "caldav:emma")
+    _daily(conn, "Dishes", pid)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert len(fdb.list_chore_mirror(conn)) == 8
+    fdb.delete_person(conn, pid)                    # nothing mapped now; rows orphaned
+    res = chore_mirror.reconcile(conn, _CFG, _NOW, synced_collections={"caldav:emma"})
+    assert res["deleted"] == 8 and fdb.list_chore_mirror(conn) == []
