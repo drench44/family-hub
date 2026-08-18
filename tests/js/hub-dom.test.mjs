@@ -4176,6 +4176,69 @@ test('the streak chip shows the fire count with an honest tooltip (no misleading
   assert.ok(!none.includes('chip-streak'), 'no streak chip below the threshold');
 });
 
+test('an away person: the Away badge replaces the chore list, the streak stays visible, no "0/0" empty state', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.personCardHtml(
+    { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 4, away: true, chores: [], week: [] });
+  assert.match(html, /class="away-badge">Away ✈️<\/div>/, 'away badge renders');
+  assert.match(html, /class="chip-streak"[^>]*>🔥 4<\/span>/, 'streak chip stays visible while away');
+  assert.ok(!html.includes('chore-row'), 'no chore rows (not even the empty state) while away');
+  assert.ok(!html.includes('cal-empty'), 'no "nothing this day" text — that would read as a rest day, not away');
+  assert.ok(!/\b0\s*\/\s*0\b/.test(html), 'no literal 0/0 anywhere in the markup');
+  // edit mode: no stray "+ Add chore" row alongside the away badge either
+  const editing = sandbox.personCardHtml(
+    { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 0, away: true, chores: [], week: [] },
+    { editing: true });
+  assert.ok(!editing.includes('chore-add'), 'no add-chore affordance while the card shows Away');
+  assert.match(editing, /class="away-badge">Away ✈️<\/div>/);
+  // an active (not away) person is unaffected: normal empty state, no badge
+  const present = sandbox.personCardHtml(
+    { person: { id: 'p4', name: 'Rae', color: '#2AAE7A' }, streak: 0, away: false, chores: [], week: [] });
+  assert.ok(!present.includes('away-badge'), 'away:false never shows the badge');
+  assert.match(present, /cal-empty">nothing this day/, 'away:false keeps the normal empty state');
+});
+
+test('weekStripHtml maps the "away" week state to its own dim class, distinct from ws-none/ws-rest', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.weekStripHtml(['done', 'none', 'rest', 'away', 'away', 'partial', 'done']);
+  assert.match(html, /<span class="ws-cell ws-away">/, 'away maps to ws-away, no other class mixed in');
+  assert.match(html, /ws-cell ws-none"/);
+  assert.match(html, /ws-cell ws-rest"/);
+});
+
+test('the backup\'s card tags a covering chore with "covering for <name>", resolved via the nameById map and escaped', () => {
+  const { sandbox } = newHub();
+  const nameById = new Map([[9, 'Sam Rivera']]);
+  const html = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 11, title: 'Take out trash', icon: '🗑️', done: false, rot: false, covering_for: 9 }] },
+    { readonly: true, nameById });
+  assert.match(html, /class="chore-covering">covering for Sam Rivera<\/span>/);
+
+  // XSS-safety: a hostile resolved name must be escaped, never injected raw
+  const hostileById = new Map([[9, '<img src=x onerror=alert(1)>']]);
+  const hostile = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 11, title: 'Take out trash', icon: '🗑️', done: false, rot: false, covering_for: 9 }] },
+    { readonly: true, nameById: hostileById });
+  assert.ok(!hostile.includes('<img'), 'covering-for name is escaped, not injected raw');
+
+  // no covering_for -> no tag at all
+  const plain = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 12, title: 'Dishes', icon: '🍽️', done: false, rot: false, covering_for: null }] },
+    { readonly: true, nameById });
+  assert.ok(!plain.includes('chore-covering'), 'no covering tag when covering_for is null');
+
+  // covering_for set but no nameById supplied -> tag omitted, never crashes or
+  // leaks a raw numeric id into the row
+  const noMap = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 11, title: 'Take out trash', icon: '🗑️', done: false, rot: false, covering_for: 9 }] },
+    { readonly: true });
+  assert.ok(!noMap.includes('chore-covering'), 'no crash and no tag when nameById is absent');
+});
+
 test('the wall auto-reloads on a build-token change, but not mid-interaction, and never loops', async () => {
   const { document, sandbox } = newHub();
   // seeded modals -> hidden (production initial state) so the wall reads idle

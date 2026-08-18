@@ -365,12 +365,19 @@ function weekStripHtml(week) {
 }
 
 function choreRowHtml(ch, firstName, opts = {}) {
-  const { readonly = false, editing = false } = opts;
+  const { readonly = false, editing = false, nameById = null } = opts;
   const icon = ch.icon ? `<span class="chore-icon">${escapeHtml(ch.icon)}</span>` : '';
   const rot = ch.rot ? `<span class="chore-rot">↻ ${escapeHtml(firstName)}</span>` : '';
+  // Backup's card: this row is standing in for an away person's fixed chore
+  // (chores.py tags it covering_for=<away person id>). Resolve the name from
+  // the people list the caller built (nameById) rather than trusting a raw id
+  // straight into markup — same escapeHtml discipline as every other name sink.
+  const coveringName = ch.covering_for != null && nameById ? nameById.get(ch.covering_for) : null;
+  const covering = coveringName
+    ? `<span class="chore-covering">covering for ${escapeHtml(coveringName)}</span>` : '';
   const cls = `chore-row${ch.done ? ' done' : ''}${readonly ? ' readonly' : ''}${editing ? ' is-editing' : ''}`;
   const body = `<span class="chore-check">✓</span>`
-    + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}</span>`;
+    + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}${covering}</span>`;
   if (readonly) return `<div class="${cls}">${body}</div>`;   // past/future: look, don't touch
   // edit mode: the tap opens the editor (Task 5), it does NOT complete the
   // chore — so the row carries data-edit-chore, never data-chore. The trash
@@ -387,26 +394,38 @@ function choreRowHtml(ch, firstName, opts = {}) {
 }
 
 function personCardHtml(p, opts = {}) {
-  const { readonly = false, editing = false } = opts;
+  const { readonly = false, editing = false, nameById = null } = opts;
   const first = (p.person.name || '').split(' ')[0];
   // The 🔥 count is chore-days finished in a row (a day with no chores neither
   // counts nor breaks it; see chores.streak), NOT today's completed count. The
   // tooltip spells this out since the bare number can't; no visible sub-label.
+  // An away day is rest-day-neutral (see chores.streak/week_strip), so the
+  // streak keeps showing even while away — it hasn't broken, it's paused.
   const streak = p.streak >= 2
     ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
       + `🔥 ${p.streak}</span>` : '';
-  const rows = p.chores.length
-    ? p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing })).join('')
-    : (editing ? '' : `<div class="cal-empty">nothing this day</div>`);
-  // edit mode grows a per-person "+ Add chore" row (wired in Task 5); it's the
-  // only way to reach the add editor for a person, so it shows even for someone
-  // with no chores yet.
-  const addRow = editing
-    ? `<button class="chore-row chore-add" type="button" data-add-chore="${p.person.id}">`
-      + `<span class="chore-check chore-add-plus">+</span>`
-      + `<span class="chore-body"><span class="chore-title">Add chore</span></span>`
-      + `</button>`
-    : '';
+  let rows;
+  let addRow = '';
+  if (p.away) {
+    // Away: their fixed chores reassigned to a backup (or paused) and
+    // rotations skip them, so p.chores is empty for this entry — a bare
+    // "nothing this day"/"0/0" would misreport a rest day as an away one.
+    // Show the badge in place of the chore list instead; static, no animation.
+    rows = `<div class="away-badge">Away ✈️</div>`;
+  } else {
+    rows = p.chores.length
+      ? p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing, nameById })).join('')
+      : (editing ? '' : `<div class="cal-empty">nothing this day</div>`);
+    // edit mode grows a per-person "+ Add chore" row (wired in Task 5); it's the
+    // only way to reach the add editor for a person, so it shows even for someone
+    // with no chores yet.
+    addRow = editing
+      ? `<button class="chore-row chore-add" type="button" data-add-chore="${p.person.id}">`
+        + `<span class="chore-check chore-add-plus">+</span>`
+        + `<span class="chore-body"><span class="chore-title">Add chore</span></span>`
+        + `</button>`
+      : '';
+  }
   // --pc drives the done check + strike color: completion wears YOUR color
   return `<div class="card person-card${editing ? ' is-editing' : ''}" data-person="${p.person.id}" style="--pc:${safeColor(p.person.color)}">`
     + `<div class="person-head">`
@@ -473,9 +492,10 @@ async function renderChoresFull(prefetched) {
     choreAdminError = false;
     awayOpenFor = null;        // close any open away sub-form too
   }
+  const nameById = new Map(people.map((p) => [p.person.id, p.person.name]));
   host.innerHTML = choresNavHtml()
     + (people.length
-      ? people.map((p) => personCardHtml(p, { readonly, editing })).join('')
+      ? people.map((p) => personCardHtml(p, { readonly, editing, nameById })).join('')
       : `<div class="cal-empty">no people yet</div>`)
     + peopleAdmin;
 }
@@ -594,9 +614,12 @@ function renderPeople(data) {
     lastPeople = [];
     return;
   }
+  // id -> name map so a backup's "covering for <name>" tag (choreRowHtml) can
+  // resolve the away person by id without a second fetch.
+  const nameById = new Map(data.people.map((p) => [p.person.id, p.person.name]));
   host.innerHTML =
     sectionHead('Chores', { overlay: 'chores', expandLabel: 'All chores' })
-    + data.people.map((p) => personCardHtml(p, { readonly: false, editing: false })).join('');
+    + data.people.map((p) => personCardHtml(p, { readonly: false, editing: false, nameById })).join('');
   fireCelebrations(data.people);
   lastPeople = data.people;
 }

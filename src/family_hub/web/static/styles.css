@@ -906,6 +906,10 @@ body {
 .ws-partial { background: color-mix(in srgb, var(--warn) 60%, transparent); }
 .ws-none { background: color-mix(in srgb, var(--crit) 45%, transparent); }
 .ws-rest { background: var(--edge); }
+/* away is its own dim, informational state — NOT the red "missed" (ws-none) and
+   visibly distinct from the neutral gray "no chores that day" (ws-rest): a
+   dim wash of the accent hue reads as "paused for a reason", not "failed". */
+.ws-away { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 .ws-today { outline: 1px solid var(--ink); outline-offset: 1px; }
 
 .chore-row {
@@ -1006,6 +1010,22 @@ body {
 .chore-rot {
   font-family: var(--mono); font-size: 10px;
   letter-spacing: 0.04em; color: var(--faint);
+}
+/* Away card (wall, read-only): replaces the chore list entirely while the
+   streak chip in .person-head stays put. Static — no transition/animation,
+   so it's reduced-motion safe with no extra media-query guard needed. */
+.away-badge {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 2px; padding: 12px 4px;
+  font-size: 15px; font-weight: 600;
+  color: var(--dim);
+}
+/* Backup's card: a small static tag on the chore row that's covering for
+   someone away (chores.js covering_for). Echoes .chore-rot's quiet mono
+   treatment so it reads as metadata, not a second title. */
+.chore-covering {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.02em; color: var(--faint);
 }
 
 /* --------------------------- to-dos -------------------------- */

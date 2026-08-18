@@ -166,8 +166,14 @@ def test_celebration_is_reduced_motion_guarded():
 
 
 def test_week_strip_state_classes_are_styled():
-    for cls in (".ws-done", ".ws-partial", ".ws-none", ".ws-rest"):
+    for cls in (".ws-done", ".ws-partial", ".ws-none", ".ws-rest", ".ws-away"):
         assert _css_rule(cls).strip(), f"{cls} week-strip state is unstyled"
+
+
+def test_wall_renders_away_state():
+    js = ALL_JS
+    assert "away" in js.lower()          # away branch in card render
+    assert ".week-away" in CSS or "away" in CSS   # 5th week-strip state styled
 
 
 def test_overlay_and_home_pill_styled():
