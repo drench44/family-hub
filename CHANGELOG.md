@@ -10,6 +10,16 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- Laundry is now real-time. A server-side watcher polls Home Assistant every
+  5 seconds for the whole cycle (not just near a projected finish) and pushes
+  every change to open walls over a live stream (`GET /api/laundry/stream`),
+  so the card reflects a machine's actual status within seconds instead of up
+  to ~1.5 minutes. Finish detection and the cycle log no longer depend on a
+  browser being open — the server observes every transition itself. The old
+  endgame fast lane (chained 10s re-polls + a two-speed server cache) is
+  retired; the 60s poll remains as a fallback.
+
 ## [1.2.1] — 2026-08-18
 
 ### Fixed

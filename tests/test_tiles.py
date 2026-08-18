@@ -500,53 +500,28 @@ def test_laundry_past_mirrors_future_refusals():
     assert mt is not None and 29 < mt < 31
 
 
-def test_laundry_endgame_window():
-    # the endgame — a running machine within a couple of minutes of its
-    # projected finish, or just past it — is what tightens the cache TTL and
-    # (in hub.js) the poll cadence, so the brief lg_thinq "end" status can't
-    # slip between polls. Bounded behind, so a stale latched projection
-    # can't pin fast polling for hours.
-    import datetime as dt
-    iso = lambda mins: (dt.datetime.now(dt.timezone.utc)
-                        + dt.timedelta(minutes=mins)).isoformat()
-    run = lambda f: {"phase": "running", "finishes_at": f}
-    assert tiles._laundry_endgame([run(iso(1))]) is True     # about to finish
-    assert tiles._laundry_endgame([run(iso(-2))]) is True    # just past it
-    assert tiles._laundry_endgame([run(iso(-4))]) is True    # deep in the
-    # behind-side of the window — catches an AHEAD/BEHIND bounds swap
-    # decisively (iso(-2) alone sits inside a swapped window's margin)
-    assert tiles._laundry_endgame([run(iso(10))]) is False   # mid-cycle
-    assert tiles._laundry_endgame([run(iso(-30))]) is False  # stale latch
-    assert tiles._laundry_endgame([{"phase": "idle", "finishes_at": iso(1)}]) is False
-    assert tiles._laundry_endgame([run(None)]) is False
-    assert tiles._laundry_endgame([]) is False
-
-
-def test_laundry_cache_ttl_tightens_in_the_endgame():
-    # inside the endgame the laundry cache must expire on the fast TTL so
-    # the frontend's chained re-polls actually reach HA; a mid-cycle machine
-    # keeps the relaxed TTL (don't hammer HA all cycle long)
-    import datetime as dt
+def test_laundry_cache_ttl_matches_watcher_cadence():
+    # One flat TTL, sized just under the background watcher's 5s cadence
+    # (app.LAUNDRY_WATCH_S): each watcher tick reaches HA while any request
+    # landing between ticks reuses the still-warm cache. The old two-speed
+    # endgame TTL is gone — the watcher IS the fast lane now, everywhere,
+    # not just near a projected finish.
     import time as _time
-    iso = lambda mins: (dt.datetime.now(dt.timezone.utc)
-                        + dt.timedelta(minutes=mins)).isoformat()
-
-    def states(finish):
-        return {"sensor.w_status": ha_state("running"),
-                "sensor.w_rem": ha_state(finish),
-                "sensor.d_status": ha_state("power_off"),
-                "sensor.d_rem": ha_state("unknown")}
 
     tiles.reset_caches()
-    t = run_laundry(laundry_handler(states(iso(1))))
+    t = run_laundry(laundry_handler({
+        "sensor.w_status": ha_state("running"),
+        "sensor.w_rem": ha_state("unknown"),
+        "sensor.d_status": ha_state("power_off"),
+        "sensor.d_rem": ha_state("unknown")}))
     assert t["machines"][0]["phase"] == "running"
-    fast = tiles._laundry_cache["http://ha"][0] - _time.monotonic()
-    assert fast <= tiles.LAUNDRY_ENDGAME_TTL + 0.5
-
-    tiles.reset_caches()
-    run_laundry(laundry_handler(states(iso(30))))
-    slow = tiles._laundry_cache["http://ha"][0] - _time.monotonic()
-    assert slow > tiles.LAUNDRY_ENDGAME_TTL + 1
+    ttl = tiles._laundry_cache["http://ha"][0] - _time.monotonic()
+    assert ttl <= tiles.LAUNDRY_TTL + 0.5
+    assert tiles.LAUNDRY_TTL <= 5.0, \
+        "cache TTL must stay under the watcher cadence or ticks re-read a warm cache"
+    # the endgame machinery must be fully retired, not half-removed
+    assert not hasattr(tiles, "LAUNDRY_ENDGAME_TTL")
+    assert not hasattr(tiles, "_laundry_endgame")
 
 
 def test_laundry_unconfigured_or_tokenless_unavailable():
