@@ -140,6 +140,18 @@ def test_todo_and_reminder_rows_and_actions_are_big_tap_targets():
     assert am and int(am.group(1)) >= 44, ".todo-act (delete/move) must be a >= 44px tap target"
 
 
+def test_todo_digest_card_tier_classes_are_styled():
+    # The wall To-Do card is a 3-tier digest (todoDigest/todoCardHtml in hub.js):
+    # a labelled head per tier, its open count, and a "+N more" tap-through. Pin
+    # that each class is styled so the digest can't render unstyled, and that the
+    # "+N more" control clears the ~44px tap floor (CLAUDE.md) like the rows.
+    for cls in (".todo-grp-head", ".todo-grp-count", ".todo-more"):
+        assert _css_rule(cls).strip(), f"{cls} (To-Do digest card) is unstyled"
+    more = _css_rule(".todo-more")
+    mm = re.search(r"min-height:\s*(\d+)px", more)
+    assert mm and int(mm.group(1)) >= 44, ".todo-more must be a >= 44px tap target"
+
+
 def test_reminder_bucket_list_reuses_the_shared_row_and_box_classes():
     # The iCloud reminders view is built from the same .todo-row(-full)/.card
     # chrome as the local list — not a parallel styling system that could drift.
@@ -252,15 +264,16 @@ def test_mobile_app_shell_scrolls_content_not_the_body():
         "phone body must not scroll — the .wrap content region does"
     assert "display:flex" in body and "flex-direction:column" in body, \
         "phone body must be a flex column app shell"
-    # the body must size to the DYNAMIC viewport, driven by an innerHeight-backed
-    # CSS var (--app-h) with a 100dvh fallback — see the tab-bar-gap fix. On iOS
-    # a stale 100dvh after a bfcache restore left the in-flow tab bar floating
-    # above a gap until a reload; the var is refreshed on pageshow/visibility.
+    # the body must size to the DYNAMIC viewport, driven by a measured CSS var
+    # (--app-h, from innerHeight + visualViewport) with a 100dvh fallback — see
+    # the tab-bar-gap fix. On iOS a stale 100dvh after a bfcache restore left
+    # the in-flow tab bar floating above a gap until a reload; the var is
+    # refreshed on pageshow/visibility/vv-resize plus settle re-measures.
     # It must ALSO clear the base rule's min-height:100vh floor (100vh > 100dvh
     # on iOS pushes the bar below the fold).
     assert "100dvh" in body, "phone body must fall back to the dynamic viewport (100dvh)"
     assert "var(--app-h" in body, \
-        "phone body height must use the innerHeight-backed --app-h var (gap fix)"
+        "phone body height must use the measured --app-h var (gap fix)"
     assert "min-height:0" in body or "min-height:100dvh" in body, \
         "phone body must clear the base min-height:100vh floor (min-height:0), " \
         "or the tab bar drops below the fold on iOS"
