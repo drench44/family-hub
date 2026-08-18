@@ -617,8 +617,15 @@ function renderPeople(data) {
   // id -> name map so a backup's "covering for <name>" tag (choreRowHtml) can
   // resolve the away person by id without a second fetch.
   const nameById = new Map(data.people.map((p) => [p.person.id, p.person.name]));
+  // away_ok===false means the server's away overlay build threw and it shipped
+  // the wall with NOBODY marked away as a fail-soft. Surface a small note (same
+  // spirit as the todos "couldn't load" note) so a genuinely-away person isn't
+  // silently shown as present with a full chore list.
+  const awayNote = data.away_ok === false
+    ? `<div class="cal-note">away status unavailable</div>` : '';
   host.innerHTML =
     sectionHead('Chores', { overlay: 'chores', expandLabel: 'All chores' })
+    + awayNote
     + data.people.map((p) => personCardHtml(p, { readonly: false, editing: false, nameById })).join('');
   fireCelebrations(data.people);
   lastPeople = data.people;

@@ -8,9 +8,12 @@ decoded on read; `kv` values are JSON-encoded blobs.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+
+log = logging.getLogger("family_hub.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people(
@@ -443,20 +446,28 @@ def add_away_period(conn, person_id: int, start_date: str,
     return int(cur.lastrowid)
 
 
-def close_away_period(conn, period_id: int, end_date: str) -> None:
-    conn.execute("UPDATE away_periods SET end_date = ? WHERE id = ?",
-                 (end_date, period_id))
+def get_away_period(conn, period_id: int) -> dict | None:
+    r = conn.execute("SELECT * FROM away_periods WHERE id = ?",
+                     (period_id,)).fetchone()
+    return dict(r) if r is not None else None
+
+
+def close_away_period(conn, period_id: int, end_date: str) -> bool:
+    cur = conn.execute("UPDATE away_periods SET end_date = ? WHERE id = ?",
+                       (end_date, period_id))
     conn.commit()
+    return cur.rowcount > 0
 
 
-def update_away_period(conn, period_id: int, **fields) -> None:
+def update_away_period(conn, period_id: int, **fields) -> bool:
     cols = {k: v for k, v in fields.items() if k in _AWAY_FIELDS}
     if not cols:
-        return
+        return get_away_period(conn, period_id) is not None
     assignments = ", ".join(f"{k} = ?" for k in cols)
-    conn.execute(f"UPDATE away_periods SET {assignments} WHERE id = ?",
-                 (*cols.values(), period_id))
+    cur = conn.execute(f"UPDATE away_periods SET {assignments} WHERE id = ?",
+                       (*cols.values(), period_id))
     conn.commit()
+    return cur.rowcount > 0
 
 
 def delete_away_period(conn, period_id: int) -> bool:
@@ -484,9 +495,21 @@ def away_map(conn, from_date: str, to_date: str) -> dict[int, dict]:
     lo = date.fromisoformat(from_date)
     hi = date.fromisoformat(to_date)
     out: dict[int, dict] = {}
-    for r in conn.execute("SELECT * FROM away_periods"):
-        start = date.fromisoformat(r["start_date"])
-        end = date.fromisoformat(r["end_date"]) if r["end_date"] else hi
+    # ORDER BY makes overlapping rows resolve deterministically: rows are folded
+    # in start_date/id order, so a later row wins the backup_on assignment for
+    # any date the two share.
+    for r in conn.execute(
+            "SELECT * FROM away_periods ORDER BY start_date, id"):
+        # Fault isolation: one corrupt date string (bad row) must not disable
+        # away for the whole household -- skip only that row, keep the rest.
+        try:
+            start = date.fromisoformat(r["start_date"])
+            end = date.fromisoformat(r["end_date"]) if r["end_date"] else hi
+        except (ValueError, TypeError):
+            log.warning("away_map: skipping period id=%s person_id=%s with "
+                        "unparseable dates (start=%r end=%r)",
+                        r["id"], r["person_id"], r["start_date"], r["end_date"])
+            continue
         a = max(start, lo)
         b = min(end, hi)
         if a > b:

@@ -611,7 +611,34 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
         fdb.replace_day_log(c, d_str, rows)
 
 
-def _people_day(c, d: dt.date) -> list[dict]:
+def _away_view(c, d: dt.date):
+    """Build the away overlay for date ``d``: who's away (and their backup for
+    fixed chores) plus the full per-person away-date map used for streak/week
+    rest-day math. Returns ``(amap, away_view, away_ok)`` where ``away_view`` is
+    the ``{"ids", "backup"}`` dict ``plan_rows`` consumes.
+
+    Fails soft, same spirit as the todos block in hub() / _links(): a bad
+    overlay build must not blank the whole wall over one broken row. On failure
+    it returns an empty overlay with ``away_ok=False`` so callers can surface a
+    degraded-state note instead of silently rendering an away person as present.
+    Shared by _people_day (the wall render) AND complete() (so a backup tapping
+    a covering chore resolves to the SAME assignee the wall showed)."""
+    d_str = d.isoformat()
+    window_from = (d - dt.timedelta(days=370)).isoformat()
+    try:
+        amap = fdb.away_map(c, window_from, d_str)
+        away_today = {pid for pid, info in amap.items()
+                      if d_str in info["dates"]}
+        backup_today = {pid: amap[pid]["backup_on"].get(d_str)
+                        for pid in away_today}
+        return amap, {"ids": away_today, "backup": backup_today}, True
+    except Exception:
+        log.error("away overlay failed; serving with no away overlay",
+                  exc_info=True)
+        return {}, {"ids": set(), "backup": {}}, False
+
+
+def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
     """The per-person chore plan for date ``d`` — done flags, rotation tags,
     and streak/week computed AS OF that day. Shared by the hub home feed
     (d=today) and the full-screen chores day browser.
@@ -627,23 +654,8 @@ def _people_day(c, d: dt.date) -> list[dict]:
     people = fdb.list_people(c)
 
     window_from = (d - dt.timedelta(days=370)).isoformat()
-    # Away overlay: who's away on d (and their backup, for fixed chores), plus
-    # the per-person away-date sets used below for streak/week rest-day math.
-    # Fails soft, same spirit as the todos block in hub() / _links(): a bad
-    # overlay build must not blank the whole wall over one broken row.
-    try:
-        amap = fdb.away_map(c, window_from, d_str)
-        away_today = {pid for pid, info in amap.items()
-                     if d_str in info["dates"]}
-        backup_today = {pid: amap[pid]["backup_on"].get(d_str)
-                        for pid in away_today}
-        away_view = {"ids": away_today, "backup": backup_today}
-    except Exception:
-        log.error("away overlay failed; serving with no away overlay",
-                  exc_info=True)
-        amap = {}
-        away_today = set()
-        away_view = {"ids": set(), "backup": {}}
+    amap, away_view, away_ok = _away_view(c, d)
+    away_today = away_view["ids"]
 
     if d < today:
         rows = fdb.day_log(c, d_str)
@@ -678,7 +690,7 @@ def _people_day(c, d: dt.date) -> list[dict]:
         entry["away"] = pid in away_today
         entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
         entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
-    return plan
+    return plan, away_ok
 
 
 @app.get("/api/hub")
@@ -708,9 +720,14 @@ def hub():
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
     reminders_block = (remlogic.group(_visible_reminders(c), today)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
+    people, away_ok = _people_day(c, today)
     return {
         "date": today.isoformat(),
-        "people": _people_day(c, today),
+        "people": people,
+        # Mirrors todos_ok: False when the away overlay build threw and the wall
+        # is rendering with nobody marked away, so it can show a small note
+        # instead of silently presenting a genuinely-away person as present.
+        "away_ok": away_ok,
         "todos": todos_block,
         "todos_ok": todos_ok,
         "reminders": reminders_block,
@@ -747,7 +764,8 @@ def chores_day(date: str):
     if abs((d - _today()).days) > 366:
         raise HTTPException(422, "date out of range")
     c = _db()
-    return {"date": d.isoformat(), "people": _people_day(c, d)}
+    people, _ = _people_day(c, d)
+    return {"date": d.isoformat(), "people": people}
 
 
 # --- chores completion ----------------------------------------------------
@@ -784,10 +802,21 @@ def complete(chore_id: int, body: CompleteBody | None = None):
         if not chlogic.occurs(chore, d):
             raise HTTPException(422, "chore does not occur on that date")
         if person_id is None:
-            active_ids = {p["id"] for p in fdb.list_people(c)}
-            person_id = chlogic.assignee_id(chore, d, active_ids)
-        if person_id is None:
-            raise HTTPException(422, "no resolvable assignee")
+            # Resolve the assignee the SAME way the wall did (plan_rows +
+            # _people_day), applying the away overlay -- otherwise a backup
+            # tapping a covering FIXED chore (client sends no person_id) would
+            # be credited to the away owner via assignee_id's fixed_person_id,
+            # silently breaking the backup's streak once the day ages. The row
+            # plan_rows produces already carries the backup as person_id.
+            _, away_view, _ = _away_view(c, d)
+            rows = chlogic.plan_rows(fdb.list_chores(c), fdb.list_people(c),
+                                     d, away_view)
+            row = next((r for r in rows if r["chore_id"] == chore_id), None)
+            if row is None:
+                # No resolvable assignee (e.g. away owner with no available
+                # backup -> the chore paused for the day).
+                raise HTTPException(422, "no resolvable assignee")
+            person_id = row["person_id"]
     # Validate the (possibly client-supplied) person_id against a real person
     # before writing, so a malformed request can't record an invisible orphan
     # completion. _person_row raises 404 for an unknown id. (Fresh DBs also
@@ -1396,6 +1425,14 @@ def admin_away_open(a: AwayIn):
         if a.backup_person_id == a.person_id:
             raise HTTPException(422, "backup cannot be the same person")
         _person_row(c, a.backup_person_id)
+    # One open period per person: a second "going away" while the first is still
+    # open would create overlapping rows for the same person (the wall would
+    # resolve them nondeterministically without the away_map ORDER BY, and the
+    # UI has no way to show two). Mirror /everyone's skip behavior with a clear
+    # 409 for the single-person API.
+    if any(r["person_id"] == a.person_id
+           for r in fdb.list_away_periods(c, include_closed=False)):
+        raise HTTPException(409, "person already has an open away period")
     start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
     pid = fdb.add_away_period(c, a.person_id, start, None, a.backup_person_id)
     return next(r for r in _away_rows(c) if r["id"] == pid)
@@ -1418,10 +1455,26 @@ def admin_away_everyone(a: AwayEveryoneIn):
 @app.patch("/api/admin/away/{pid}")
 def admin_away_patch(pid: int, a: AwayPatch):
     c = _db()
+    row = fdb.get_away_period(c, pid)
+    if row is None:
+        raise HTTPException(404, "unknown away period")
     fields = a.model_dump(exclude_unset=True)
     for k in ("start_date", "end_date"):
         if fields.get(k) is not None:
             fields[k] = _valid_date(fields[k])
+    # A backup change must pass the same checks as opening: real person, not the
+    # away person themselves. (None clears the backup and is always allowed.)
+    if fields.get("backup_person_id") is not None:
+        if fields["backup_person_id"] == row["person_id"]:
+            raise HTTPException(422, "backup cannot be the same person")
+        _person_row(c, fields["backup_person_id"])          # 404 if unknown
+    # end_date must not precede the effective start_date, else away_map silently
+    # voids the whole period (its a>b skip). Compare against the incoming start
+    # when the patch moves it, otherwise the stored one.
+    end = fields.get("end_date")
+    start = fields.get("start_date", row["start_date"])
+    if end is not None and end < start:
+        raise HTTPException(422, "end_date must not be before start_date")
     fdb.update_away_period(c, pid, **fields)
     return {"ok": True}
 
@@ -1429,8 +1482,16 @@ def admin_away_patch(pid: int, a: AwayPatch):
 @app.post("/api/admin/away/{pid}/back")
 def admin_away_back(pid: int, a: AwayBackIn | None = None):
     c = _db()
+    row = fdb.get_away_period(c, pid)
+    if row is None:
+        raise HTTPException(404, "unknown away period")
     end = (_valid_date(a.end_date) if a and a.end_date
            else (_today() - dt.timedelta(days=1)).isoformat())
+    # Guard the fast "Going away" (start=today) then immediate "I'm back"
+    # (end defaults to yesterday) double-tap: end < start would silently void
+    # the period via away_map's a>b skip.
+    if end < row["start_date"]:
+        raise HTTPException(422, "end_date must not be before start_date")
     fdb.close_away_period(c, pid, end)
     return {"ok": True}
 
