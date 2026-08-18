@@ -18,8 +18,11 @@ CREATE TABLE IF NOT EXISTS people(
   sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS chores(
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
-  schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+  schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once','interval')),
   days_mask INTEGER NOT NULL DEFAULT 0,
+  week_interval INTEGER NOT NULL DEFAULT 1,   -- 'days': 1=weekly, 2=biweekly
+  interval_days INTEGER,                       -- 'interval': every N days from epoch
+  due_times TEXT NOT NULL DEFAULT '[]',        -- JSON ["HH:MM",...] -> iOS notifications
   assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
   fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
   rotation_epoch TEXT NOT NULL,
@@ -107,7 +110,8 @@ CREATE TABLE IF NOT EXISTS caldav_collections(
 # Columns a caller may set through update_person / add_chore validation.
 _PERSON_FIELDS = {"name", "color", "sort", "active"}
 _CHORE_COLUMNS = {
-    "title", "icon", "schedule_kind", "days_mask", "assign_kind",
+    "title", "icon", "schedule_kind", "days_mask", "week_interval",
+    "interval_days", "due_times", "assign_kind",
     "fixed_person_id", "rotation_order", "rotation_epoch", "sort", "active",
 }
 _TODO_FIELDS = {"title", "bucket"}
@@ -194,6 +198,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             (tbl,)).fetchone()
         if row and "AUTOINCREMENT" not in row["sql"].upper():
             _rebuild_with_autoincrement(conn, tbl, ddl, cols)
+    # 2026-08-18: richer routines — every-N-days ('interval' kind), biweekly
+    # (week_interval), and due-time notifications (due_times). Adds three columns
+    # and widens schedule_kind to allow 'interval'. A DB that already carries
+    # AUTOINCREMENT + the 'once' CHECK went through neither rebuild above, so
+    # migrate it here. Idempotent: skips once 'interval' is in the CHECK.
+    chores_sql2 = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chores'"
+    ).fetchone()
+    if chores_sql2 and "'interval'" not in chores_sql2["sql"]:
+        _migrate_chores_routines(conn)
 
 
 def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
@@ -260,6 +274,49 @@ def _widen_chore_schedule_check(conn: sqlite3.Connection) -> None:
           schedule_kind TEXT NOT NULL
             CHECK(schedule_kind IN ('daily','days','once')),
           days_mask INTEGER NOT NULL DEFAULT 0,
+          assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+          fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+          rotation_epoch TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)""")
+        conn.execute("""INSERT INTO chores_new(
+          id, title, icon, schedule_kind, days_mask, assign_kind,
+          fixed_person_id, rotation_order, rotation_epoch, sort, active)
+          SELECT id, title, icon, schedule_kind, days_mask, assign_kind,
+          fixed_person_id, rotation_order, rotation_epoch, sort, active
+          FROM chores""")
+        conn.execute("DROP TABLE chores")
+        conn.execute("ALTER TABLE chores_new RENAME TO chores")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_iso
+
+
+def _migrate_chores_routines(conn: sqlite3.Connection) -> None:
+    """Rebuild `chores` with the richer-routine columns (week_interval,
+    interval_days, due_times) and the widened schedule_kind CHECK ('interval'),
+    preserving every row (new columns take their defaults), as ONE atomic
+    transaction — same crash-safety contract as _widen_chore_schedule_check. Keeps
+    AUTOINCREMENT so a DB that already earned it never regresses to id reuse."""
+    prior_iso = conn.isolation_level
+    try:
+        conn.isolation_level = None        # explicit BEGIN/COMMIT/ROLLBACK are ours
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute("DROP TABLE IF EXISTS chores_new")
+        conn.execute("""CREATE TABLE chores_new(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+          icon TEXT NOT NULL DEFAULT '',
+          schedule_kind TEXT NOT NULL
+            CHECK(schedule_kind IN ('daily','days','once','interval')),
+          days_mask INTEGER NOT NULL DEFAULT 0,
+          week_interval INTEGER NOT NULL DEFAULT 1,
+          interval_days INTEGER,
+          due_times TEXT NOT NULL DEFAULT '[]',
           assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
           fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
           rotation_epoch TEXT NOT NULL,
@@ -413,12 +470,15 @@ def delete_person(conn, pid: int) -> bool:
 # --- chores ---------------------------------------------------------------
 
 def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,
-              fixed_person_id, rotation_order, rotation_epoch) -> int:
+              fixed_person_id, rotation_order, rotation_epoch,
+              week_interval=1, interval_days=None, due_times=None) -> int:
     cur = conn.execute(
-        """INSERT INTO chores(title, icon, schedule_kind, days_mask, assign_kind,
+        """INSERT INTO chores(title, icon, schedule_kind, days_mask, week_interval,
+                              interval_days, due_times, assign_kind,
                               fixed_person_id, rotation_order, rotation_epoch)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
-        (title, icon, schedule_kind, days_mask, assign_kind, fixed_person_id,
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (title, icon, schedule_kind, days_mask, week_interval, interval_days,
+         json.dumps(due_times or []), assign_kind, fixed_person_id,
          json.dumps(rotation_order), rotation_epoch))
     conn.commit()
     return int(cur.lastrowid)
@@ -427,6 +487,7 @@ def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,
 def _chore_row(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["rotation_order"] = json.loads(d["rotation_order"])
+    d["due_times"] = json.loads(d.get("due_times") or "[]")
     return d
 
 
@@ -444,6 +505,8 @@ def update_chore(conn, cid: int, **fields) -> None:
         return
     if "rotation_order" in cols:
         cols["rotation_order"] = json.dumps(cols["rotation_order"])
+    if "due_times" in cols:
+        cols["due_times"] = json.dumps(cols["due_times"] or [])
     assignments = ", ".join(f"{k} = ?" for k in cols)
     conn.execute(f"UPDATE chores SET {assignments} WHERE id = ?",
                  (*cols.values(), cid))

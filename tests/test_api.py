@@ -2231,3 +2231,53 @@ def test_tiles_laundry_route_end_to_end_real_tile(client, monkeypatch):
     cached = ftiles._laundry_cache["http://ha:8123"][1]
     assert "last_done" not in cached["machines"][0]
     ftiles.reset_caches()
+
+
+# --- richer chore routines: interval / biweekly / due-times (P1) ----------
+
+def _mk_person(client, name="Ana"):
+    return client.post("/api/admin/people",
+                       json={"name": name, "color": "#5BC9F0"}).json()["id"]
+
+
+def test_chore_interval_biweekly_and_due_times(client, app_mod):
+    pid = _mk_person(client)
+    r = client.post("/api/admin/chores", json={
+        "title": "Counters", "schedule_kind": "interval", "interval_days": 3,
+        "assign_kind": "fixed", "fixed_person_id": pid})
+    assert r.status_code == 200
+    ch = r.json()
+    assert ch["schedule_kind"] == "interval" and ch["interval_days"] == 3
+    assert ch["due_times"] == []
+    r = client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "days", "days_mask": 1,
+        "week_interval": 2, "due_times": ["07:00", "18:30"],
+        "assign_kind": "fixed", "fixed_person_id": pid})
+    assert r.status_code == 200
+    ch2 = r.json()
+    assert ch2["week_interval"] == 2 and ch2["due_times"] == ["07:00", "18:30"]
+
+
+def test_chore_recurrence_validation(client, app_mod):
+    pid = _mk_person(client)
+    base = {"title": "x", "assign_kind": "fixed", "fixed_person_id": pid}
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "interval"}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "interval", "interval_days": 0}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "interval", "interval_days": 400}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "days", "days_mask": 1, "week_interval": 3}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "daily", "due_times": ["25:00"]}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "daily", "due_times": ["7am"]}).status_code == 422
+
+
+def test_chore_kind_change_clears_dependent_fields(client, app_mod):
+    pid = _mk_person(client)
+    cid = client.post("/api/admin/chores", json={
+        "title": "x", "schedule_kind": "interval", "interval_days": 5,
+        "assign_kind": "fixed", "fixed_person_id": pid}).json()["id"]
+    r = client.patch(f"/api/admin/chores/{cid}", json={"schedule_kind": "daily"})
+    assert r.status_code == 200
+    ch = r.json()
+    assert ch["schedule_kind"] == "daily" and ch["interval_days"] is None
+    assert ch["week_interval"] == 1
+    # converting TO interval requires interval_days
+    assert client.patch(f"/api/admin/chores/{cid}", json={"schedule_kind": "interval"}).status_code == 422

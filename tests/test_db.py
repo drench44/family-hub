@@ -608,3 +608,42 @@ def test_integrations_seed_toggle_and_default(conn):
     rows = {r["id"]: r for r in fdb.list_integrations(conn)}
     assert rows["weather"]["enabled"] is False and rows["weather"]["kind"] == "weather"
     assert rows["weather"]["config"] == {}
+
+
+def test_migrate_chores_routines_from_old_shape(tmp_path):
+    """A DB already at the 'once'+AUTOINCREMENT chores shape (no routine columns,
+    'interval' not in the CHECK) migrates on ensure_schema: new columns appear
+    with defaults, every row is preserved, and 'interval' is now insertable."""
+    import sqlite3
+    from family_hub import db as fdb
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    c.executescript("""
+      CREATE TABLE chores(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+        icon TEXT NOT NULL DEFAULT '',
+        schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+        days_mask INTEGER NOT NULL DEFAULT 0,
+        assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+        fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+        rotation_epoch TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+      INSERT INTO chores(title, schedule_kind, assign_kind, rotation_epoch)
+        VALUES('Dishes','daily','fixed','2026-08-01');
+    """)
+    c.commit()
+    c.close()
+
+    conn = fdb.connect(p)
+    fdb.ensure_schema(conn)
+    rows = fdb.list_chores(conn, include_inactive=True)
+    assert [r["title"] for r in rows] == ["Dishes"]          # row preserved
+    assert rows[0]["week_interval"] == 1
+    assert rows[0]["interval_days"] is None
+    assert rows[0]["due_times"] == []
+    # the widened CHECK now accepts 'interval'
+    fdb.add_chore(conn, title="Filter", icon="", schedule_kind="interval",
+                  days_mask=0, assign_kind="fixed", fixed_person_id=None,
+                  rotation_order=[], rotation_epoch="2026-08-01", interval_days=3)
+    assert fdb.list_chores(conn, include_inactive=True)[-1]["interval_days"] == 3
+    conn.close()
