@@ -14,6 +14,7 @@ import datetime as dt
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -1392,6 +1393,7 @@ async def tile_laundry():
             # a blip on an idle or freshly-emptied machine is still nothing.
             came_from = (prev if prev != "offline"
                          else fdb.kv_get(c, nonoff_key))
+            note = None
             if (phase == "done" and m.get("status_since")
                     and prev not in ("done", "offline")
                     and fdb.kv_get(c, done_key) != m["status_since"]):
@@ -1419,14 +1421,22 @@ async def tile_laundry():
                         and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0):
                     fdb.kv_set(c, done_key, m["finishes_at"])
                     fdb.kv_set(c, missed_key, m["finishes_at"])
+                    note = "missed_finish"
                 else:
                     if came_from == "running" and mt is not None and mt < 0:
                         log.warning(
                             "laundry %s: left its cycle with a stale finish "
                             "projection (%s); stamping the exit moment "
                             "instead", m["id"], m["finishes_at"])
+                        note = "stale_projection"
+                    else:
+                        # cancel (future projection), a paused exit, or an
+                        # exit with no usable projection at all
+                        note = "cycle_exit"
                     if m.get("status_since"):
                         fdb.kv_set(c, done_key, m["status_since"])
+                if prev == "offline":
+                    note += "+offline_bridge"
             if phase in ("running", "paused", "reserved", "done", "error"):
                 # any sign of machine activity retires the synthetic Done (a
                 # real observed done replaces it; a new cycle supersedes it).
@@ -1435,6 +1445,34 @@ async def tile_laundry():
                 if fdb.kv_get(c, missed_key):
                     fdb.kv_set(c, missed_key, None)
             if phase and phase != prev:
+                # the cycle log records every observed RAW transition (the
+                # synthesis below is presentation, never logged as fact) —
+                # the evidence base for tuning the finish heuristics and
+                # diagnosing any finish the wall got wrong. Logged BEFORE
+                # phase_key consumes the transition, with a deliberate
+                # failure asymmetry:
+                #  - locked/busy (OperationalError) aborts this machine's
+                #    pass, so kv AND log retry WHOLE next poll (every kv
+                #    write above is idempotent on that retry) — the row is
+                #    not lost exactly when the DB is flaky, which is when
+                #    the log matters most;
+                #  - any other error warns and advances anyway — the
+                #    essential completion memory must never be wedged
+                #    behind the diagnostic log (SQLITE_FULL can block an
+                #    INSERT while in-place kv updates still succeed);
+                #  - a failure AFTER the row lands duplicates it next poll
+                #    — deliberate: a duplicate is detectable in analysis,
+                #    a lost row isn't.
+                try:
+                    fdb.laundry_log_add(c, m["id"], prev, phase,
+                                        m.get("status"), m.get("finishes_at"),
+                                        m.get("status_since"), note)
+                except sqlite3.OperationalError:
+                    raise
+                except Exception:
+                    log.warning("laundry %s: cycle-log write failed; "
+                                "advancing the transition anyway",
+                                m["id"], exc_info=True)
                 fdb.kv_set(c, phase_key, phase)
             if phase and phase != "offline":
                 fdb.kv_set(c, nonoff_key, phase)
@@ -1449,11 +1487,33 @@ async def tile_laundry():
                     m["status_since"] = ms
             m["last_done"] = fdb.kv_get(c, done_key)
     except Exception:
-        log.warning("laundry: completion-memory kv unavailable; serving the "
-                    "tile without last_done", exc_info=True)
+        log.warning("laundry: completion-memory kv / cycle-log write failed; "
+                    "serving the tile without last_done (the interrupted "
+                    "transition retries next poll)", exc_info=True)
         for m in machines:
             m.setdefault("last_done", None)
     return {**t, "machines": machines}
+
+
+@app.get("/api/laundry/log")
+async def laundry_log_route(machine: str | None = None, limit: int = 200):
+    """The laundry cycle log: observed phase transitions newest-first — the
+    evidence base for tuning finish detection (projection accuracy, endgame
+    window, missed-done hold) and diagnosing any finish the wall got wrong.
+    Fail-soft like every tile read: a DB hiccup serves an empty list loudly
+    logged, never a 500."""
+    if not (1 <= limit <= 1000):
+        # loud 422 like the calendar route — silent truncation is the wrong
+        # default for a log someone pages through by hand (the db-side
+        # clamp stays as the defensive floor)
+        raise HTTPException(422, "limit out of range (1-1000)")
+    if DEMO:
+        return fdemo.demo_laundry_log()
+    try:
+        return {"entries": fdb.laundry_log_recent(_db(), machine, limit)}
+    except Exception:
+        log.warning("laundry: cycle log unavailable", exc_info=True)
+        return {"entries": []}
 
 
 @app.get("/api/tiles/camera.jpg")

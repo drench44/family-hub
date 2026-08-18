@@ -2266,6 +2266,10 @@ def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeyp
                         tile_with("idle", "power_off", t_stop, finishes=iso(-15)))
     m = machine()
     assert m["last_done"] == t_stop and m["phase"] == "idle"
+    # the paused exit's cycle-log note labels it honestly — a mislabeled
+    # note is silently wrong tuning evidence
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "cycle_exit"
 
     # running -> OFFLINE alone stamps nothing (HA blind mid-cycle is not a
     # finish; the drum may still be turning) ...
@@ -2300,6 +2304,81 @@ def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeyp
     assert m["last_done"] == t_end and m["phase"] == "idle"
 
 
+def test_laundry_cycle_log_records_transitions_only(client, app_mod, monkeypatch):
+    # every observed RAW phase transition lands in the cycle log with its
+    # diagnostic note; steady-state polls add nothing; the endpoint serves
+    # newest-first and the synthesized done presentation is never logged
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    poll = lambda: client.get("/api/tiles/laundry").json()
+    entries = lambda: client.get("/api/laundry/log").json()["entries"]
+
+    t_fin = iso(-3)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "rinsing", iso(-40), finishes=iso(20)))
+    poll()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(-1), finishes=t_fin))
+    poll()   # missed finish: presented done, logged as the RAW idle it was
+    poll()   # steady state: no new row
+    rows = entries()
+    assert [r["phase"] for r in rows] == ["idle", "running"]   # newest first
+    assert rows[0]["prev_phase"] == "running"
+    assert rows[0]["note"] == "missed_finish"
+    assert rows[0]["finishes_at"] == t_fin
+    assert rows[1]["prev_phase"] is None and rows[1]["note"] is None
+    # ?machine= filters, ?limit= clamps
+    assert entries() == client.get("/api/laundry/log?machine=washer").json()["entries"]
+    assert client.get("/api/laundry/log?machine=dryer").json()["entries"] == []
+    assert len(client.get("/api/laundry/log?limit=1").json()["entries"]) == 1
+    # out-of-range limits 422 loudly (calendar-route precedent) — silent
+    # truncation is wrong for a log someone pages through by hand
+    assert client.get("/api/laundry/log?limit=0").status_code == 422
+    assert client.get("/api/laundry/log?limit=5000").status_code == 422
+    # fail-soft: a broken log read serves an empty list, never a 500
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr("family_hub.db.laundry_log_recent", boom)
+    r = client.get("/api/laundry/log")
+    assert r.status_code == 200 and r.json() == {"entries": []}
+
+
+def test_laundry_cycle_log_write_failure_retries_the_transition(client, monkeypatch):
+    # the log write runs BEFORE phase_key consumes the transition: a flaky
+    # DB at exactly the wrong moment must lose NOTHING — the same
+    # transition (kv stamps and log row) retries whole on the next poll
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    poll = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+    entries = lambda: client.get("/api/laundry/log").json()["entries"]
+
+    t_fin = iso(-2)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "rinsing", iso(-30), finishes=iso(20)))
+    poll()
+    assert len(entries()) == 1
+    # the DB goes flaky for exactly the finish transition
+    import sqlite3
+    real_add = fdb.laundry_log_add
+    def flaky(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr("family_hub.db.laundry_log_add", flaky)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=t_fin))
+    m = poll()   # fail-soft response, transition NOT consumed
+    assert m["last_done"] is None
+    assert len(entries()) == 1
+    # DB heals: the SAME poll payload now lands the whole transition —
+    # stamp, synthesized Done, and the log row with its note
+    monkeypatch.setattr("family_hub.db.laundry_log_add", real_add)
+    m = poll()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+    rows = entries()
+    assert len(rows) == 2 and rows[0]["note"] == "missed_finish"
+
+
 def test_tiles_laundry_route_missed_done_bounds(client, app_mod, monkeypatch, caplog):
     # two bounds keep the synthetic Done honest. STAMPING: a projection
     # staler than the hold window at the exit is likely a LATCHED
@@ -2324,6 +2403,8 @@ def test_tiles_laundry_route_missed_done_bounds(client, app_mod, monkeypatch, ca
     assert m["last_done"] == t_off and m["phase"] == "idle"
     assert any("stale finish projection" in r.message for r in caplog.records), \
         "the refused stale projection must be visible in the logs"
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "stale_projection"
 
     # presentation decay: seed kv exactly as a restart would find it — a
     # missed stamp just past the hold — and poll idle
@@ -2359,6 +2440,9 @@ def test_tiles_laundry_route_blip_straddled_finish_presents_done(client, monkeyp
     m = machine()
     assert m["last_done"] == t_fin
     assert m["phase"] == "done" and m["status_since"] == t_fin
+    # the log row carries both facts: a missed finish, resolved across a blip
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "missed_finish+offline_bridge"
     # a FURTHER blip on the now-idle machine changes nothing: provenance is
     # idle, so no re-stamp — and the held Done survives the blip
     monkeypatch.setattr("family_hub.tiles.laundry_tile",
