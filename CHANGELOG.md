@@ -10,6 +10,17 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Away / pause mode for chores: mark a family member away (open-ended — set it
+  when they leave, tap "I'm back" when they return, back-date it if you forgot)
+  and their away days read as rest, so a trip never breaks a streak. Rotation
+  turns fall to whoever's home; a fixed chore can pass to an optional backup,
+  who is shown "covering for" it and gets the streak credit — on the wall AND
+  through the iCloud mirror (the reminder moves to the backup's list and an iOS
+  check-off credits them). "Pause everyone" covers whole-family trips. Away is
+  a pure overlay over the frozen history: nothing recorded is ever rewritten,
+  and deleting an away period restores exactly what was there before.
+
 ### Changed
 - Laundry is now real-time. A server-side watcher polls Home Assistant every
   5 seconds for the whole cycle (not just near a projected finish) and pushes
@@ -30,6 +41,36 @@ rolls that section to a dated version via `python scripts/release.py`.
   powering the machine on clears Done immediately — including mid-hold —
   and a stale end stamp is never re-presented as a fresh Done (the refusal
   is recorded in the cycle log).
+- A chore mirror error left latched from an earlier two-way tick no longer haunts
+  the settings row forever: switching iCloud back to read-only now clears the
+  stale error on the next tick.
+- Coming home no longer costs you your streak. If someone covered your chore
+  while you were away and you tap "I'm back" the same day, the day now counts
+  as finished for you, exactly as the tick on your card already showed. The
+  same fix keeps the covering person's day whole when someone leaves mid-day.
+- A one-time chore that falls inside an away stretch with nobody to cover it
+  no longer disappears for good — it stays on the away person's card (and
+  their phone) instead of pausing into a day that never comes back.
+- Deactivating someone who is still marked away no longer leaves their chores
+  parked on their fill-in forever.
+- Chores on your phone follow the away overlay properly: checking one off in
+  Reminders now credits whoever the wall says owns it today, a chore you
+  finish on the wall is no longer marked done on the away person's phone, and
+  a reminder you already completed never reopens itself.
+- A chore mirror that fails now says so in settings instead of failing quietly
+  behind a green badge.
+- The fill-in picker only offers people who can actually cover — nobody who
+  has left the household or is away themselves — so a covered chore can't
+  quietly disappear.
+- "Pause everyone" no longer locks the chore editor: you can still add and
+  edit chores for someone while they're away.
+- Browsing back to a past day still shows who the fill-in was covering for,
+  long after the trip has ended.
+- The day browser now carries the same "away status unavailable" note the
+  main screen shows, and tapping a chore off while that's broken asks you to
+  try again instead of crediting the wrong person.
+- `chore_mirror_horizon_days` (how far ahead chores are pushed to each phone)
+  is now a real setting in `config.json`, documented in the example file.
 
 ## [1.2.1] — 2026-08-18
 
@@ -42,10 +83,6 @@ rolls that section to a dated version via `python scripts/release.py`.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.
-- Native chores: deleting (or unmapping) the last person whose chores mirror to
-  iCloud no longer orphans their reminders — the mirror reconcile now still prunes
-  existing rows when nothing is mapped, instead of early-returning. (Caught in the
-  live deploy verification.)
 
 ## [1.2.0] — 2026-08-17
 

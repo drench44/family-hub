@@ -1705,6 +1705,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   const completeCalls = [];
   const adminChoreCalls = [];   // POST/PATCH /api/admin/chores writes from the editor
   const adminPeopleCalls = [];  // POST/PATCH/DELETE /api/admin/people from the people editor
+  const adminAwayCalls = [];    // POST /api/admin/away(/{id}/back|/everyone) from away controls
   const okJson = (v) => ({ ok: true, status: 200, json: async () => v });
   const sandbox = {
     document,
@@ -1727,8 +1728,11 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
           return okJson({});
         }
         if (url === '/api/admin/state') {
-          return okJson({ people: adminState.people, chores: adminState.chores,
-            reminder_lists: adminState.reminder_lists || [] });
+          return okJson({
+            people: adminState.people, chores: adminState.chores,
+            away_periods: adminState.away_periods || [],
+            reminder_lists: adminState.reminder_lists || [],
+          });
         }
         if (/\/api\/admin\/chores(\/\d+)?$/.test(url)) {
           adminChoreCalls.push({
@@ -1740,6 +1744,14 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
         }
         if (/\/api\/admin\/people(\/\d+)?$/.test(url)) {
           adminPeopleCalls.push({
+            url,
+            method: (opts && opts.method) || 'GET',
+            body: opts && opts.body ? JSON.parse(opts.body) : null,
+          });
+          return okJson({ id: 99 });
+        }
+        if (/\/api\/admin\/away(\/\d+)?(\/back|\/everyone)?$/.test(url)) {
+          adminAwayCalls.push({
             url,
             method: (opts && opts.method) || 'GET',
             body: opts && opts.body ? JSON.parse(opts.body) : null,
@@ -1784,7 +1796,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   };
   return {
     sandbox, document, registry, choresFull, completeCalls, adminChoreCalls,
-    adminPeopleCalls, tap, tapConfirm, read,
+    adminPeopleCalls, adminAwayCalls, tap, tapConfirm, read,
   };
 }
 
@@ -2446,6 +2458,155 @@ test('people admin: a rename invalidates the cache so the re-render shows fresh 
   assert.match(ctx.choresFull.innerHTML, /Samuel/, 'the re-render shows the fresh name');
 });
 
+// --- away controls on the Chores page (edit mode) -------------------------
+
+test('people admin: no open period shows "Going away"; tapping it reveals the sub-form', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  assert.ok(ctx.choresFull.querySelector('[data-paway="1"]'), '"Going away" control for Sam');
+  assert.ok(!ctx.choresFull.querySelector('[data-pback]'), 'no "I\'m back" control — nobody is away');
+  assert.ok(!ctx.choresFull.querySelector('[data-paway-backup="1"]'), 'sub-form starts closed');
+  ctx.tap('[data-paway="1"]');
+  assert.ok(ctx.choresFull.querySelector('[data-paway-backup="1"]'), 'backup select revealed');
+  assert.ok(ctx.choresFull.querySelector('[data-paway-start="1"]'), 'start date revealed');
+  assert.ok(ctx.choresFull.querySelector('[data-paway-submit="1"]'), 'Confirm control revealed');
+});
+
+test('people admin: Confirm on the away sub-form POSTs {person_id, backup_person_id, start_date}', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  ctx.choresFull.querySelector('[data-paway-backup="1"]').value = '2';
+  ctx.choresFull.querySelector('[data-paway-start="1"]').value = '2026-08-20';
+  ctx.tap('[data-paway-submit="1"]');
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away');
+  assert.ok(post, 'POST /api/admin/away fired');
+  assert.deepEqual(post.body, { person_id: 1, backup_person_id: 2, start_date: '2026-08-20' });
+});
+
+test('people admin: Confirm with no backup/date picked sends just {person_id}', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  ctx.choresFull.querySelector('[data-paway-start="1"]').value = '';   // clear the default
+  ctx.tap('[data-paway-submit="1"]');
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away');
+  assert.deepEqual(post.body, { person_id: 1 }, 'no optional fields sent when left blank');
+});
+
+test('people admin: an open period shows "I\'m back" instead, and the away-now roster names them', async () => {
+  const adminState = {
+    people: SAMPLE_ADMIN.people, chores: SAMPLE_ADMIN.chores,
+    away_periods: [{ id: 55, person_id: 1, start_date: '2026-08-10', end_date: null, backup_person_id: 2 }],
+  };
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, adminState);
+  await enterEditWithPeople(ctx);
+  assert.ok(!ctx.choresFull.querySelector('[data-paway="1"]'), 'no "Going away" while already away');
+  assert.ok(ctx.choresFull.querySelector('[data-pback="55"]'), '"I\'m back" carries the period id');
+  assert.match(ctx.choresFull.innerHTML, /Away now/, 'the away-now roster renders');
+  assert.match(ctx.choresFull.innerHTML, /Sam Rivera/, 'names who is away');
+  assert.match(ctx.choresFull.innerHTML, /Alex Kim/, 'names the backup');
+  ctx.tap('[data-pback="55"]');
+  await flush();
+  const back = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away/55/back');
+  assert.ok(back, 'POST /api/admin/away/55/back fired');
+});
+
+test('people admin: the backup picker offers only people who can actually cover', async () => {
+  // I6: an inactive person, or one who is away themselves, silently paused
+  // every covered chore at resolve time — and the server now 422s the write.
+  // Keep them out of the picker entirely.
+  const adminState = {
+    people: [
+      { id: 1, name: 'Sam Rivera', color: '#5BC9F0', active: 1 },
+      { id: 2, name: 'Alex Kim', color: '#8AE0AD', active: 1 },
+      { id: 3, name: 'Gone Kid', color: '#E39A2A', active: 0 },
+      { id: 4, name: 'Also Away', color: '#C39BEA', active: 1 },
+    ],
+    chores: SAMPLE_ADMIN.chores,
+    away_periods: [
+      { id: 70, person_id: 4, start_date: '2026-08-10', end_date: null, backup_person_id: null },
+      { id: 71, person_id: 2, start_date: '2026-08-01', end_date: '2026-08-05', backup_person_id: null },
+    ],
+  };
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, adminState);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  // read the <select>'s own markup out of the rendered HTML (the whole card
+  // naturally names everyone, so only the options can be asserted on)
+  const opts = ctx.choresFull.innerHTML
+    .match(/<select[^>]*data-paway-backup="1"[^>]*>([\s\S]*?)<\/select>/)[1];
+  assert.match(opts, /value=""[^>]*>No backup/, 'no-backup stays the default');
+  assert.match(opts, /Alex Kim/, 'an active, home person is offered (a CLOSED period is fine)');
+  assert.ok(!opts.includes('Gone Kid'), 'an inactive person is not offered');
+  assert.ok(!opts.includes('Also Away'), 'someone away themselves is not offered');
+  assert.ok(!opts.includes('Sam Rivera'), 'never yourself');
+  // and the away button itself only shows for active people
+  assert.ok(!ctx.choresFull.querySelector('[data-paway="3"]'),
+    'no "Going away" on an inactive person (Pause everyone skips them too)');
+  assert.ok(ctx.choresFull.querySelector('[data-pback="70"]'),
+    'an OPEN period keeps its "I\'m back" control so it can always be closed');
+});
+
+test('people admin: "Pause everyone" POSTs /api/admin/away/everyone with an empty body', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway-all="1"]');
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away/everyone');
+  assert.ok(post, 'POST /api/admin/away/everyone fired');
+  assert.deepEqual(post.body, {}, 'sent as {} — the endpoint requires SOME JSON body');
+});
+
+test('people admin: a FAILED away-open shows a toast and runs no refresh', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  let polls = 0;
+  ctx.sandbox.fetch = async (url) => {
+    if (/\/api\/hub/.test(url)) { polls++; throw new Error('offline'); }
+    if (url === '/api/admin/away') return failResp(422, 'backup cannot be the same person');
+    throw new Error('offline in test');
+  };
+  ctx.tap('[data-paway-submit="1"]');
+  await flush();
+  assert.match(readToast(ctx), /backup cannot be the same person/i, 'a toast surfaces the failure reason');
+  assert.equal(polls, 0, 'no refresh poll ran after the failed write');
+});
+
+test('renderChoresFull: away_ok===false shows the same degraded-state note the wall does', async () => {
+  // M4/I10: /api/chores/day carries away_ok now. Without the note, a browsed
+  // day rendered a genuinely-away person as present, with a full chore list
+  // and nothing to say the overlay had failed.
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  ctx.read('choreState.day = "2026-08-13";');          // a browsed (fetched) day
+  ctx.sandbox.fetch = async (url) => {
+    if (/\/api\/chores\/day\?date=2026-08-13/.test(url)) {
+      return okResp({ date: '2026-08-13', people: SAMPLE_PEOPLE, away_ok: false });
+    }
+    throw new Error('offline in test');
+  };
+  await ctx.sandbox.renderChoresFull();
+  assert.match(ctx.choresFull.innerHTML, /away status unavailable/, 'the note renders');
+  assert.match(ctx.choresFull.innerHTML, /Sam Rivera/, 'the cards render alongside it');
+});
+
+test('renderChoresFull: a healthy day (and today from the hub payload) shows NO note', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  ctx.read('choreState.day = "2026-08-13";');
+  ctx.sandbox.fetch = async () => okResp(
+    { date: '2026-08-13', people: SAMPLE_PEOPLE, away_ok: true });
+  await ctx.sandbox.renderChoresFull();
+  assert.doesNotMatch(ctx.choresFull.innerHTML, /away status unavailable/);
+  // today paints from the prefetched hub payload, which carries the flag itself
+  ctx.read('choreState.day = data_date; hubData = { people: _people, away_ok: false };');
+  await ctx.sandbox.renderChoresFull(SAMPLE_PEOPLE);
+  assert.match(ctx.choresFull.innerHTML, /away status unavailable/,
+    "today's note comes from the hub payload it was painted from");
+});
+
 test('sectionHead emits a .shead with tick, label, and an expand button', () => {
   const { sandbox } = newHub();
   const html = sandbox.sectionHead('Chores', { overlay: 'chores', expandLabel: 'All chores' });
@@ -2498,6 +2659,35 @@ test('renderPeople puts an "All chores" expand button in the #people header', ()
   assert.match(host.innerHTML, /All chores/, 'button carries the expected label');
   // The person card itself still rendered alongside the new header.
   assert.match(host.innerHTML, /Sam/);
+});
+
+test('renderPeople: away_ok===false shows an "away status unavailable" note', () => {
+  const { document, sandbox } = newHub();
+  const people = [{
+    person: { id: 1, name: 'Sam', color: '#5BC9F0' },
+    chores: [{ id: 10, title: 'Feed cat', icon: '', rot: false, done: false }],
+    streak: 0, week: ['done', 'today'], total: 1, done_count: 0,
+  }];
+  sandbox.renderPeople({ people, away_ok: false });
+  const host = document.getElementById('people');
+  assert.match(host.innerHTML, /away status unavailable/,
+    'a degraded-state note renders when the server flags away_ok=false');
+  // the cards still render alongside the note (fail-soft, not a blank card)
+  assert.match(host.innerHTML, /Sam/);
+});
+
+test('renderPeople: away_ok true/omitted shows NO note', () => {
+  const { document, sandbox } = newHub();
+  const people = [{
+    person: { id: 1, name: 'Sam', color: '#5BC9F0' },
+    chores: [], streak: 0, week: ['today'], total: 0, done_count: 0,
+  }];
+  sandbox.renderPeople({ people });                       // away_ok omitted
+  assert.doesNotMatch(document.getElementById('people').innerHTML,
+    /away status unavailable/, 'no note in the healthy case');
+  sandbox.renderPeople({ people, away_ok: true });
+  assert.doesNotMatch(document.getElementById('people').innerHTML,
+    /away status unavailable/, 'no note when away_ok is true');
 });
 
 test('renderTodoSlot: header sits OUTSIDE the .card, the list sits INSIDE it (Task 3 re-box)', () => {
@@ -4382,6 +4572,90 @@ test('the streak chip shows the fire count with an honest tooltip (no misleading
   const none = sandbox.personCardHtml(
     { person: { id: 'p2', name: 'Milo', color: '#E39A2A' }, streak: 1, chores: [], week: [] });
   assert.ok(!none.includes('chip-streak'), 'no streak chip below the threshold');
+});
+
+test('an away person: the Away badge replaces the chore list, the streak stays visible, no "0/0" empty state', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.personCardHtml(
+    { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 4, away: true, chores: [], week: [] });
+  assert.match(html, /class="away-badge">Away ✈️<\/div>/, 'away badge renders');
+  assert.match(html, /class="chip-streak"[^>]*>🔥 4<\/span>/, 'streak chip stays visible while away');
+  assert.ok(!html.includes('chore-row'), 'no chore rows (not even the empty state) while away');
+  assert.ok(!html.includes('cal-empty'), 'no "nothing this day" text — that would read as a rest day, not away');
+  assert.ok(!/\b0\s*\/\s*0\b/.test(html), 'no literal 0/0 anywhere in the markup');
+  // edit mode KEEPS the "+ Add chore" row: "Pause everyone" must not lock the
+  // chore editor for the whole family until they get home (I8).
+  const editing = sandbox.personCardHtml(
+    { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 0, away: true, chores: [], week: [] },
+    { editing: true });
+  assert.match(editing, /data-add-chore="p1"/, 'a paused person stays manageable in edit mode');
+  assert.match(editing, /class="away-badge">Away ✈️<\/div>/);
+  // an active (not away) person is unaffected: normal empty state, no badge
+  const present = sandbox.personCardHtml(
+    { person: { id: 'p4', name: 'Rae', color: '#2AAE7A' }, streak: 0, away: false, chores: [], week: [] });
+  assert.ok(!present.includes('away-badge'), 'away:false never shows the badge');
+  assert.match(present, /cal-empty">nothing this day/, 'away:false keeps the normal empty state');
+});
+
+test('an away card still shows the chores that survived the pause (a one-time chore nobody could cover)', () => {
+  const { sandbox } = newHub();
+  // I3: chores.plan_rows keeps a 'once' chore on its away owner rather than
+  // destroying its single dated occurrence, so the card must show both the
+  // badge and that row — hiding it would lose the task entirely.
+  const p = {
+    person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 0, away: true,
+    week: [],
+    chores: [{ id: 42, title: 'Vet appt', icon: '🐕', rot: false, done: false }],
+  };
+  const html = sandbox.personCardHtml(p);
+  assert.match(html, /class="away-badge">Away ✈️<\/div>/, 'the badge still leads');
+  assert.match(html, /data-chore="42"/, 'the surviving chore is tappable');
+  assert.match(html, /Vet appt/);
+  // and in edit mode it is editable alongside the add row
+  const editing = sandbox.personCardHtml(p, { editing: true });
+  assert.match(editing, /data-edit-chore="42"/);
+  assert.match(editing, /data-add-chore="p1"/);
+});
+
+test('weekStripHtml maps the "away" week state to its own dim class, distinct from ws-none/ws-rest', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.weekStripHtml(['done', 'none', 'rest', 'away', 'away', 'partial', 'done']);
+  assert.match(html, /<span class="ws-cell ws-away">/, 'away maps to ws-away, no other class mixed in');
+  assert.match(html, /ws-cell ws-none"/);
+  assert.match(html, /ws-cell ws-rest"/);
+});
+
+test('the backup\'s card tags a covering chore with "covering for <name>", resolved via the nameById map and escaped', () => {
+  const { sandbox } = newHub();
+  const nameById = new Map([[9, 'Sam Rivera']]);
+  const html = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 11, title: 'Take out trash', icon: '🗑️', done: false, rot: false, covering_for: 9 }] },
+    { readonly: true, nameById });
+  assert.match(html, /class="chore-covering">covering for Sam Rivera<\/span>/);
+
+  // XSS-safety: a hostile resolved name must be escaped, never injected raw
+  const hostileById = new Map([[9, '<img src=x onerror=alert(1)>']]);
+  const hostile = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 11, title: 'Take out trash', icon: '🗑️', done: false, rot: false, covering_for: 9 }] },
+    { readonly: true, nameById: hostileById });
+  assert.ok(!hostile.includes('<img'), 'covering-for name is escaped, not injected raw');
+
+  // no covering_for -> no tag at all
+  const plain = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 12, title: 'Dishes', icon: '🍽️', done: false, rot: false, covering_for: null }] },
+    { readonly: true, nameById });
+  assert.ok(!plain.includes('chore-covering'), 'no covering tag when covering_for is null');
+
+  // covering_for set but no nameById supplied -> tag omitted, never crashes or
+  // leaks a raw numeric id into the row
+  const noMap = sandbox.personCardHtml(
+    { person: { id: 2, name: 'Kai', color: '#7A5AF8' }, streak: 0, away: false, week: [],
+      chores: [{ id: 11, title: 'Take out trash', icon: '🗑️', done: false, rot: false, covering_for: 9 }] },
+    { readonly: true });
+  assert.ok(!noMap.includes('chore-covering'), 'no crash and no tag when nameById is absent');
 });
 
 test('the wall auto-reloads on a build-token change, but not mid-interaction, and never loops', async () => {

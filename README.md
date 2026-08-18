@@ -39,8 +39,8 @@ at one URL.
   multi-day events painted across their span, ended events struck through.
 - **Chores:** per-person cards in each person's color, streaks (🔥), a 7-day
   week strip, deterministic rotations, one-time chores due on a single date, a
-  browsable day history, and a one-shot confetti celebration when someone
-  clears their day.
+  browsable day history, an away/pause mode so a trip never breaks a streak,
+  and a one-shot confetti celebration when someone clears their day.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
   carry over until done, checked items linger struck-through until midnight,
@@ -72,8 +72,10 @@ at one URL.
   remaining-time timestamp works. Fails soft like weather/climate.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —
-  no phone needed. The same page works from any browser on the LAN, so a phone
-  or laptop manages everything too. No app to install.
+  no phone needed. Mark someone **away** here too, with an optional backup to
+  cover their chores, and tap **I'm back** when they return. The same page works
+  from any browser on the LAN, so a phone or laptop manages everything too. No
+  app to install.
 
 ## Architecture & trust model
 
@@ -321,7 +323,16 @@ render from that record — so editing a schedule, reshuffling a rotation,
 deactivating, or even deleting a chore changes today and the future only.
 Nobody's streak is rewritten by an edit, and a deleted chore still shows on
 the days it was actually done. Streaks count consecutive completed days (rest
-days skip, an unfinished today is forgiven). People and chores are managed
+days skip, an unfinished today is forgiven).
+**Away / pause:** mark someone away for a stretch — open-ended, so you set it
+when they leave and clear it when they're back — and those days read as rest,
+so a trip never breaks their streak; on return they pick up where they left
+off, whatever day it is. While away, a rotation turn falls to whoever's home,
+and a fixed chore can pass to an optional **backup** who covers it (and gets
+the credit). Away is a pure overlay on top of the frozen history — it never
+rewrites a recorded day, so clearing an away period restores exactly what was
+there, and you can even back-date one to repair a streak after the fact.
+People and chores are managed
 right on the wall's Chores page (tap **Edit**) — on the touchscreen or from any
 browser on the LAN. Deleting
 a person is history-safe: their frozen past days stay recorded, and they're

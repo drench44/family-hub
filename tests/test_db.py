@@ -366,9 +366,9 @@ def test_todos_bucket_check_constraint_via_public_api(conn):
 
 # --- occurrence log (frozen chore history) --------------------------------
 
-def _row(cid, pid, title="Dishes", icon="", rot=0):
+def _row(cid, pid, title="Dishes", icon="", rot=0, covering_for=None):
     return {"chore_id": cid, "person_id": pid, "title": title, "icon": icon,
-            "rot": rot}
+            "rot": rot, "covering_for": covering_for}
 
 
 def test_occurrence_log_replace_and_read(conn):
@@ -383,6 +383,47 @@ def test_occurrence_log_replace_and_read(conn):
     # an empty replace clears the day
     fdb.replace_day_log(conn, "2026-08-14", [])
     assert fdb.day_log(conn, "2026-08-14") == []
+
+
+def test_occurrence_log_persists_covering_for(conn):
+    """I9: a frozen row records WHICH away person it was standing in for, so a
+    past day keeps its "covering for <name>" explanation after the away period
+    ends (the away_periods row it used to be derived from may even be gone)."""
+    fdb.replace_day_log(conn, "2026-08-14",
+                        [_row(1, 8, covering_for=7), _row(2, 8, "Trash")])
+    rows = fdb.day_log(conn, "2026-08-14")
+    assert [r["covering_for"] for r in rows] == [7, None]
+    assert [r["covering_for"] for r in
+            fdb.logs_between(conn, "2026-08-14", "2026-08-14")] == [7, None]
+    assert fdb.log_row(conn, 1, "2026-08-14")["covering_for"] == 7
+    # the backfill path writes it too
+    fdb.backfill_occurrence_log(
+        conn, [("2026-08-13", [_row(1, 8, covering_for=7)])], "flag")
+    assert fdb.day_log(conn, "2026-08-13")[0]["covering_for"] == 7
+
+
+def test_covering_for_migration_is_idempotent_and_keeps_old_rows(tmp_path):
+    """The covering_for column lands on an EXISTING db by plain additive ALTER:
+    rows frozen before it stay exactly as they were (NULL = no covering info
+    recorded, never rewritten), and a second boot is a no-op."""
+    path = str(tmp_path / "old.db")
+    c = fdb.connect(path)
+    c.executescript("""
+      CREATE TABLE occurrence_log(
+        date TEXT NOT NULL, chore_id INTEGER NOT NULL, person_id INTEGER NOT NULL,
+        title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+        rot INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(date, chore_id));
+      INSERT INTO occurrence_log(date, chore_id, person_id, title)
+        VALUES('2026-08-10', 1, 7, 'Dishes');""")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.day_log(c, "2026-08-10") == [
+        {"date": "2026-08-10", "chore_id": 1, "person_id": 7, "title": "Dishes",
+         "icon": "", "rot": 0, "covering_for": None}]
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    fdb.replace_day_log(c, "2026-08-11", [_row(2, 8, covering_for=7)])
+    assert fdb.day_log(c, "2026-08-11")[0]["covering_for"] == 7
+    c.close()
 
 
 def test_occurrence_log_between(conn):
@@ -609,6 +650,98 @@ def test_integrations_seed_toggle_and_default(conn):
     assert rows["weather"]["enabled"] is False and rows["weather"]["kind"] == "weather"
     assert rows["weather"]["config"] == {}
 
+
+def test_away_period_crud_and_map(conn):
+    a = fdb.add_person(conn, "Ava", "#f00")
+    b = fdb.add_person(conn, "Bo", "#0f0")
+    pid = fdb.add_away_period(conn, a, "2026-08-14", None, backup_person_id=b)
+    rows = fdb.list_away_periods(conn)
+    assert len(rows) == 1 and rows[0]["end_date"] is None
+    # open-ended period covers from start through to_date
+    m = fdb.away_map(conn, "2026-08-10", "2026-08-16")
+    assert m[a]["dates"] == {"2026-08-14", "2026-08-15", "2026-08-16"}
+    assert m[a]["backup_on"]["2026-08-15"] == b
+    # closing clips the tail
+    fdb.close_away_period(conn, pid, "2026-08-15")
+    m2 = fdb.away_map(conn, "2026-08-10", "2026-08-20")
+    assert m2[a]["dates"] == {"2026-08-14", "2026-08-15"}
+    # window clipping: nothing before from_date
+    assert fdb.away_map(conn, "2026-08-16", "2026-08-20") == {}
+    # delete removes it
+    assert fdb.delete_away_period(conn, pid) is True
+    assert fdb.list_away_periods(conn) == []
+
+
+def test_away_schema_idempotent_on_existing_db(tmp_path):
+    p = str(tmp_path / "t.db")
+    fdb.connect(p).close()
+    # second connect re-runs SCHEMA; must not raise or wipe data
+    c = fdb.connect(p)
+    fdb.ensure_schema(c)
+    assert fdb.list_away_periods(c) == []
+    c.close()
+
+
+def test_delete_person_clears_away_rows(conn):
+    a = fdb.add_person(conn, "Ava", "#f00")
+    b = fdb.add_person(conn, "Bo", "#0f0")
+    fdb.add_away_period(conn, a, "2026-08-14", None, backup_person_id=b)
+    fdb.add_away_period(conn, b, "2026-08-14", None, backup_person_id=a)
+    fdb.delete_person(conn, a)
+    rows = fdb.list_away_periods(conn)
+    assert all(r["person_id"] != a for r in rows)         # a's own period gone
+    assert all(r["backup_person_id"] != a for r in rows)  # a's backup ref cleared
+
+
+def test_away_map_overlap_is_deterministic(conn):
+    """S1a: two overlapping open periods for one person with different backups
+    resolve deterministically -- rows fold in (start_date, id) order, so the
+    later row wins the backup_on for any shared date."""
+    a = fdb.add_person(conn, "Ava", "#f00")
+    b1 = fdb.add_person(conn, "Bo", "#0f0")
+    b2 = fdb.add_person(conn, "Cy", "#00f")
+    # Insert the LATER-start row first (smaller id) so rowid order != (start_date,
+    # id) order -- without the ORDER BY, SQLite's default rowid order would fold
+    # them the other way and flip the shared-date winner, so this genuinely
+    # exercises the deterministic ordering rather than passing by insertion luck.
+    fdb.add_away_period(conn, a, "2026-08-16", "2026-08-20", backup_person_id=b2)
+    fdb.add_away_period(conn, a, "2026-08-14", "2026-08-20", backup_person_id=b1)
+    m = fdb.away_map(conn, "2026-08-10", "2026-08-25")
+    assert m[a]["backup_on"]["2026-08-15"] == b1   # only the 8/14 row covers 8/15
+    assert m[a]["backup_on"]["2026-08-18"] == b2   # both cover 8/18 -> later start wins
+
+
+def test_away_map_skips_corrupt_row(conn, caplog):
+    """S1a: one row with an unparseable start_date must not disable away for the
+    whole household -- away_map skips only that row and still returns the valid
+    person's dates."""
+    import logging
+    a = fdb.add_person(conn, "Ava", "#f00")
+    x = fdb.add_person(conn, "Xan", "#0f0")
+    fdb.add_away_period(conn, a, "2026-08-14", "2026-08-16")
+    # inject a corrupt row directly, bypassing add_away_period's validation
+    conn.execute("INSERT INTO away_periods(person_id, start_date, end_date, "
+                 "backup_person_id, created_at) VALUES(?, ?, ?, ?, ?)",
+                 (x, "not-a-date", None, None, "2026-08-17T00:00:00Z"))
+    conn.commit()
+    with caplog.at_level(logging.WARNING, logger="family_hub.db"):
+        m = fdb.away_map(conn, "2026-08-10", "2026-08-20")
+    assert m[a]["dates"] == {"2026-08-14", "2026-08-15", "2026-08-16"}
+    assert x not in m                        # bad row skipped, not fatal
+    assert any("skipping period" in r.getMessage() for r in caplog.records)
+
+
+def test_close_and_update_away_report_rowcount(conn):
+    """S3: the mutators report whether a row was actually hit, so the API can
+    404 an unknown id instead of returning a reassuring ok."""
+    a = fdb.add_person(conn, "Ava", "#f00")
+    pid = fdb.add_away_period(conn, a, "2026-08-14")
+    assert fdb.close_away_period(conn, pid, "2026-08-16") is True
+    assert fdb.close_away_period(conn, 9999, "2026-08-16") is False
+    assert fdb.update_away_period(conn, pid, start_date="2026-08-13") is True
+    assert fdb.update_away_period(conn, 9999, start_date="2026-08-13") is False
+    assert fdb.get_away_period(conn, pid)["start_date"] == "2026-08-13"
+    assert fdb.get_away_period(conn, 9999) is None
 
 def test_migrate_chores_routines_from_old_shape(tmp_path):
     """A DB already at the 'once'+AUTOINCREMENT chores shape (no routine columns,
