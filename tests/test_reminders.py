@@ -112,3 +112,18 @@ def test_build_vtodo_no_due():
     ics = rem.build_vtodo("U2", "Someday", _NOW)
     r = rem.parse_vtodo(ics, "caldav:x")[0]
     assert r["due"] is None and "DUE" not in ics
+
+
+def test_build_chore_vtodo_all_day_and_timed():
+    from zoneinfo import ZoneInfo
+    now = dt.datetime(2026, 8, 18, 12, 0, tzinfo=dt.timezone.utc)
+    tz = ZoneInfo("America/Los_Angeles")   # PDT = UTC-7
+    a = rem.build_chore_vtodo("familyhub-chore-5-2026-08-20", "🧹 Sweep",
+                              dt.date(2026, 8, 20), [], now)
+    assert "VALUE=DATE:20260820" in a and "VALARM" not in a
+    t = rem.build_chore_vtodo("familyhub-chore-6-2026-08-20", "Feed dog",
+                              dt.date(2026, 8, 20), ["18:00", "07:00"], now, tz=tz)
+    assert "DUE:20260820T140000Z" in t                       # 07:00 PDT -> 14:00Z
+    assert "TRIGGER;VALUE=DATE-TIME:20260820T140000Z" in t   # typed absolute UTC
+    assert "20260821T010000Z" in t                           # 18:00 PDT -> next-day Z
+    assert t.count("BEGIN:VALARM") == 2
