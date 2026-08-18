@@ -37,7 +37,7 @@ _climate_cache: dict[str, tuple[float, dict]] = {}
 # between reads anywhere, not just near the projected finish.
 LAUNDRY_TTL = 4.0
 # How long a MISSED finish (running -> idle with the projection passed, see
-# app.tile_laundry) keeps presenting as Done before decaying to idle + the
+# app._laundry_annotate) keeps presenting as Done before decaying to idle + the
 # "last load" line. A real observed "end" holds Done until the door opens;
 # a machine that powered itself off gives no such signal, so the wall holds
 # the green Done long enough to be seen across the kitchen, not forever.
@@ -51,6 +51,7 @@ def reset_caches() -> None:
     _weather_cache.clear()
     _climate_cache.clear()
     _laundry_cache.clear()
+    _ha_warned.clear()
 
 
 async def climate_tile(client, cfg) -> dict:
@@ -313,6 +314,14 @@ def _laundry_ts(raw: object) -> str | None:
     return raw
 
 
+# Entities currently in a warned-about outage — failure logging is EDGE-
+# triggered (one warning going down, one info coming back) because the 5s
+# background watcher would otherwise turn a prolonged HA outage into ~48
+# warning lines a minute, drowning the log used to diagnose that very
+# outage (and burying any one-time crash line under the flood).
+_ha_warned: set[str] = set()
+
+
 async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
     """One HA entity state, or None on any failure (auth, LAN, non-dict body).
     Failures are per-entity so one flaky sensor can't sink the whole card."""
@@ -321,10 +330,20 @@ async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
                              headers={"Authorization": f"Bearer {token}"})
         r.raise_for_status()
         body = r.json()
-        return body if isinstance(body, dict) else None
+        if not isinstance(body, dict):
+            raise ValueError(f"non-dict body {type(body).__name__}")
     except Exception as e:
-        log.warning("laundry: HA state %s unavailable: %s", entity, e)
+        if entity not in _ha_warned:
+            _ha_warned.add(entity)
+            log.warning("laundry: HA state %s unavailable: %s "
+                        "(quiet until it recovers)", entity, e)
+        else:
+            log.debug("laundry: HA state %s still unavailable: %s", entity, e)
         return None
+    if entity in _ha_warned:
+        _ha_warned.discard(entity)
+        log.info("laundry: HA state %s recovered", entity)
+    return body
 
 
 async def laundry_tile(client, cfg, token: str) -> dict:

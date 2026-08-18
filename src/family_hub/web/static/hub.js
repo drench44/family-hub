@@ -2472,7 +2472,7 @@ let lnWasListed = null;
 function applyLaundry(data) {
   const before = JSON.stringify(laundryData);
   laundryData = data;
-  if (JSON.stringify(laundryData) !== before) renderLaundry();
+  if (JSON.stringify(data) !== before) renderLaundry();
   else laundryTick();   // still advance the countdown on the beat
 }
 
@@ -2480,7 +2480,9 @@ function applyLaundry(data) {
    discipline as weather/climate. This is the FALLBACK feed (and the wake
    catch-up): the stream below delivers changes in seconds, but a wall that
    can't hold a stream open must never be worse off than the old 60s poll. */
+let lnLastPoll = 0;   // lnWake skips the refetch when a poll JUST ran
 async function fetchLaundry() {
+  lnLastPoll = Date.now();
   try {
     const data = await j('/api/tiles/laundry');
     laundryFails = 0;
@@ -2508,7 +2510,25 @@ function lnConnect() {
   try {
     lnStream = new EventSource('/api/laundry/stream');
     lnStream.onmessage = (ev) => {
-      try { applyLaundry(JSON.parse(ev.data)); } catch (e) { /* keepalive/junk */ }
+      laundryFails = 0;   // a live stream IS the feed being healthy — don't
+      try {               // let 3 unlucky poll instants blank a correct card
+        applyLaundry(JSON.parse(ev.data));
+      } catch (e) {
+        // comment keepalives never reach onmessage, so this is a genuinely
+        // malformed data event — dropping it silently would let a broken
+        // server look healthy while delivering nothing
+        console.warn('laundry stream: unparseable event', e);
+      }
+    };
+    // EventSource auto-retries only NETWORK failures; an HTTP error (a 502
+    // landing mid-deploy, a wrong content-type) closes it for good, per
+    // spec. The always-visible wall kiosk never fires a wake event, so the
+    // 60s poll beat below re-arms a CLOSED stream — log the drop so the
+    // gap is visible in the console instead of only in the network tab.
+    lnStream.onerror = () => {
+      if (lnStream && lnStream.readyState === EventSource.CLOSED) {
+        console.warn('laundry stream: closed; will reconnect on the poll beat');
+      }
     };
   } catch (e) {
     lnStream = null;   // stream unavailable; the 60s poll still runs
@@ -2519,10 +2539,12 @@ function lnConnect() {
    resume it on return (same family of wake bugs as the app-height stamps,
    2026-08-17): every wake re-checks the stream AND refetches once — the
    reconnect covers the future, the fetch covers whatever changed while
-   suspended (a finished load must not wait for the next 60s poll). */
+   suspended (a finished load must not wait for the next 60s poll). The
+   refetch is skipped only when a poll JUST ran (pageshow fires right after
+   the boot fetch — no point fetching twice in the same second). */
 function lnWake() {
   lnConnect();
-  fetchLaundry();
+  if (Date.now() - lnLastPoll > 2000) fetchLaundry();
 }
 window.addEventListener('pageshow', lnWake);
 document.addEventListener('visibilitychange', () => {
@@ -3650,6 +3672,10 @@ fetchClimate();
 fetchLaundry();
 lnConnect();   // the laundry live stream (fetchLaundry stays as fallback)
 setInterval(scheduledPoll, POLL_MS);
+// the poll beat doubles as the stream's re-arm: lnConnect is idempotent on
+// an OPEN stream and revives a CLOSED one (see lnConnect for why EventSource
+// won't do that itself), so a mid-deploy 502 costs at most one poll interval
+setInterval(lnConnect, POLL_MS);
 setInterval(fetchWeather, POLL_MS);
 setInterval(fetchClimate, POLL_MS);
 setInterval(fetchLaundry, POLL_MS);
