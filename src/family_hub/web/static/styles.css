@@ -688,15 +688,25 @@ body {
 .ln-dryer .ln-flyp { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
 .ln-dryer .ln-w2 { fill: color-mix(in srgb, var(--p3) 45%, #FBF4E8); }
 .ln-dryer .ln-w3 { fill: color-mix(in srgb, var(--p3) 80%, #E8D9BF); }
-.ln-heap { transform-origin: 50px 66px; animation: ln-slosh 12.8s infinite; }
+/* the load SITS in the barrel: a static translate seats it against the
+   bottom of the drum (the circle clip carves it to the wall curve), and the
+   rock pivots near the contact point so it sways like a grounded mass, not
+   a pendulum. The same offset is baked into every slosh keyframe because a
+   running animation's transform replaces the static one — the static
+   translate is what keeps a done/reduced-motion heap seated. --ln-seat is
+   the ONE source for that depth (same one-constant rule as LN_RING_R in
+   hub.js: a partial retune would make the heap jump between its static
+   and animated states); the washer's 0.7px bob rides it via calc(). */
+.ln-heap { --ln-seat: 10px;
+  transform-origin: 50px 74px; transform: translate(0, var(--ln-seat));
+  animation: ln-slosh 12.8s infinite; }
 /* a done machine's load lies still (the cycle is over). Both longhands on
    purpose: .ln-washer .ln-heap re-sets animation-NAME at equal specificity,
    so `animation: none` alone survives only by declaration order — pausing
    too makes stillness robust against reordering. */
 .ln-ph-done .ln-heap { animation: none; animation-play-state: paused; }
-/* the washer's load sits lower — properly IN the water, not floating on it
-   (operator, 2026-08-17). The offset is baked into its own slosh keyframes
-   because the animation's transform would override a static translate. */
+/* the washer's slosh adds a slight bob — its load is buoyed by the water
+   (both machines seat at the same 10px depth; operator, 2026-08-17) */
 .ln-washer .ln-heap { animation-name: ln-slosh-w; }
 /* carrier: ride the wall from 6 o'clock to the ~11 o'clock detach point
    (-150 deg — the real release, per the tumble patent), hold while the
@@ -736,43 +746,69 @@ body {
   100%   { transform: translate(-8px, -29.9px) rotate(-360deg) scale(1, 1); }
 }
 @keyframes ln-slosh {
-  0%   { transform: rotate(0deg); animation-timing-function: ease-out; }
-  6%   { transform: rotate(5deg); animation-timing-function: ease-in-out; }
-  20%  { transform: rotate(3.4deg); animation-timing-function: ease-in-out; }
-  33%  { transform: rotate(5deg); animation-timing-function: ease-in-out; }
-  44%  { transform: rotate(0deg); animation-timing-function: ease-in-out; }
-  56%  { transform: rotate(-5deg); animation-timing-function: ease-in-out; }
-  70%  { transform: rotate(-3.4deg); animation-timing-function: ease-in-out; }
-  83%  { transform: rotate(-5deg); animation-timing-function: ease-in-out; }
-  94%  { transform: rotate(0deg); }
-  100% { transform: rotate(0deg); }
+  0%   { transform: translate(0, var(--ln-seat)) rotate(0deg); animation-timing-function: ease-out; }
+  6%   { transform: translate(0, var(--ln-seat)) rotate(5deg); animation-timing-function: ease-in-out; }
+  20%  { transform: translate(0, var(--ln-seat)) rotate(3.4deg); animation-timing-function: ease-in-out; }
+  33%  { transform: translate(0, var(--ln-seat)) rotate(5deg); animation-timing-function: ease-in-out; }
+  44%  { transform: translate(0, var(--ln-seat)) rotate(0deg); animation-timing-function: ease-in-out; }
+  56%  { transform: translate(0, var(--ln-seat)) rotate(-5deg); animation-timing-function: ease-in-out; }
+  70%  { transform: translate(0, var(--ln-seat)) rotate(-3.4deg); animation-timing-function: ease-in-out; }
+  83%  { transform: translate(0, var(--ln-seat)) rotate(-5deg); animation-timing-function: ease-in-out; }
+  94%  { transform: translate(0, var(--ln-seat)) rotate(0deg); }
+  100% { transform: translate(0, var(--ln-seat)) rotate(0deg); }
 }
 @keyframes ln-slosh-w {
-  0%   { transform: translate(0, 4.5px) rotate(0deg); animation-timing-function: ease-out; }
-  6%   { transform: translate(0, 3.8px) rotate(5deg); animation-timing-function: ease-in-out; }
-  20%  { transform: translate(0, 4.5px) rotate(3.4deg); animation-timing-function: ease-in-out; }
-  33%  { transform: translate(0, 3.8px) rotate(5deg); animation-timing-function: ease-in-out; }
-  44%  { transform: translate(0, 4.5px) rotate(0deg); animation-timing-function: ease-in-out; }
-  56%  { transform: translate(0, 3.8px) rotate(-5deg); animation-timing-function: ease-in-out; }
-  70%  { transform: translate(0, 4.5px) rotate(-3.4deg); animation-timing-function: ease-in-out; }
-  83%  { transform: translate(0, 3.8px) rotate(-5deg); animation-timing-function: ease-in-out; }
-  94%  { transform: translate(0, 4.5px) rotate(0deg); }
-  100% { transform: translate(0, 4.5px) rotate(0deg); }
+  0%   { transform: translate(0, var(--ln-seat)) rotate(0deg); animation-timing-function: ease-out; }
+  6%   { transform: translate(0, calc(var(--ln-seat) - .7px)) rotate(5deg); animation-timing-function: ease-in-out; }
+  20%  { transform: translate(0, var(--ln-seat)) rotate(3.4deg); animation-timing-function: ease-in-out; }
+  33%  { transform: translate(0, calc(var(--ln-seat) - .7px)) rotate(5deg); animation-timing-function: ease-in-out; }
+  44%  { transform: translate(0, var(--ln-seat)) rotate(0deg); animation-timing-function: ease-in-out; }
+  56%  { transform: translate(0, calc(var(--ln-seat) - .7px)) rotate(-5deg); animation-timing-function: ease-in-out; }
+  70%  { transform: translate(0, var(--ln-seat)) rotate(-3.4deg); animation-timing-function: ease-in-out; }
+  83%  { transform: translate(0, calc(var(--ln-seat) - .7px)) rotate(-5deg); animation-timing-function: ease-in-out; }
+  94%  { transform: translate(0, var(--ln-seat)) rotate(0deg); }
+  100% { transform: translate(0, var(--ln-seat)) rotate(0deg); }
 }
-/* wash water: translucent depth with a bright meniscus line, lapping gently
-   side to side while the drum spins (the water is the one thing in the drum
-   that does NOT rotate); foam rides the line, one fainter bubble above it */
-.ln-water { fill: color-mix(in srgb, var(--p2) 70%, #DDEEFF); opacity: .16;
+/* wash water: a dark, near-opaque pool — deliberately so (operator walked
+   it up from .16 to .8, 2026-08-17) so the load's lower half reads as UNDER
+   the water, not behind a tint. It draws AFTER the heap in lnPortholeSvg;
+   that z-order is load-bearing. The bright meniscus line laps gently side
+   to side while the drum spins (the water is the one thing in the drum
+   that does NOT rotate); foam rides the line, drift bubbles rise off it */
+.ln-water { fill: color-mix(in srgb, var(--p2) 55%, #0E2A45); opacity: .8;
   animation: ln-lap 2.8s ease-in-out infinite alternate; }
 .ln-waterline { fill: none; stroke: color-mix(in srgb, var(--p2) 40%, #EAF6FF);
   opacity: .65; stroke-width: 1.4; stroke-linecap: round;
   animation: ln-lap 2.8s ease-in-out infinite alternate; }
 @keyframes ln-lap { from { transform: translate(-2px, 0); } to { transform: translate(2px, .6px); } }
-.ln-sud { fill: #E8EEF4; opacity: .6; }
-.ln-sud-drift { opacity: .4; }
+/* foam rides the lap (same keyframes as the water, so it stays in phase);
+   drift bubbles break free of the surface, rise a few px and pop.
+   fill-mode backwards: the delayed bubbles must hold their 0% frame
+   (invisible) through the delay — the shorthand alone leaves them at the
+   static opacity for 1-2s after a render, then snaps them out.
+   A PAUSED washer shows no drift bubbles, and that's intended: the pause
+   re-render freezes ln-bub at its invisible 0% frame — no agitation, no
+   bubbles rising; the foam circles themselves stay put. */
+.ln-sud { fill: #E8EEF4; opacity: .6;
+  animation: ln-lap 2.8s ease-in-out infinite alternate; }
+.ln-sud-drift { opacity: .4; animation: ln-bub 3.8s ease-in infinite;
+  animation-fill-mode: backwards; }
+@keyframes ln-bub {
+  0%   { transform: translate(0, 3px); opacity: 0; }
+  20%  { opacity: .4; }
+  70%  { opacity: .3; }
+  100% { transform: translate(0, -10px); opacity: 0; }
+}
+/* dryer heat: a warm radial glow pooled low in the drum, breathing slowly;
+   under reduced motion the animation stops and the glow just holds */
+.ln-st-hthi { stop-color: #FFB35C; stop-opacity: .38; }
+.ln-st-htlo { stop-color: #FFB35C; stop-opacity: 0; }
+.ln-heatglow { animation: ln-heatpulse 4.2s ease-in-out infinite alternate; }
+@keyframes ln-heatpulse { from { opacity: .55; } to { opacity: 1; } }
 .ln-tumble { transform-origin: 50px 50px; animation: ln-drum 12.8s infinite; }
 .ln-ph-paused .ln-tumble, .ln-ph-paused .ln-flyp, .ln-ph-paused .ln-lift,
 .ln-ph-paused .ln-water, .ln-ph-paused .ln-waterline,
+.ln-ph-paused .ln-sud, .ln-ph-paused .ln-heatglow,
 .ln-ph-paused .ln-heap { animation-play-state: paused; }
 /* the drum reverses like the real machine: three turns one way, an eased
    stop, three turns back, another stop — a 12.8s master cycle every
@@ -789,8 +825,13 @@ body {
   100%  { transform: rotate(0deg); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ln-tumble, .ln-flyp, .ln-lift, .ln-heap,
-  .ln-water, .ln-waterline { animation: none; }
+  /* animation: none AND paused: .ln-washer .ln-heap re-sets animation-name
+     at higher specificity, so the washer heap's stillness would otherwise
+     hang on the shorthand's duration reset alone (same trap as the done
+     rule above) */
+  .ln-tumble, .ln-flyp, .ln-lift, .ln-heap, .ln-water, .ln-waterline,
+  .ln-sud, .ln-sud-drift, .ln-heatglow { animation: none;
+    animation-play-state: paused; }
   /* motionless fliers rest at their 0% spot, inside the heap */
   .ln-halo { animation: none; }   /* the static glow still marks the finish */
 }

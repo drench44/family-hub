@@ -31,6 +31,23 @@ _climate_cache: dict[str, tuple[float, dict]] = {}
 # flip reaches the wall within about one poll even with several devices
 # sharing the cache.
 LAUNDRY_TTL = 25.0
+# The cycle ENDGAME: lg_thinq holds "end" only briefly before the machine
+# powers itself off, so with the projected finish ~2 min out (or just past)
+# the whole done window can fit between normal polls — the live board then
+# never shows Done and never stamps a last load (operator, 2026-08-17).
+# Inside the endgame the cache tightens to this TTL and the frontend chains
+# short re-polls (hub.js lnEndgame), so a poll lands inside the window.
+# The endgame is bounded a few minutes past the projection too: a stale
+# latched remaining-time sensor must not pin fast polling for hours.
+LAUNDRY_ENDGAME_TTL = 5.0
+LAUNDRY_ENDGAME_AHEAD_MIN = 2.0
+LAUNDRY_ENDGAME_BEHIND_MIN = 5.0
+# How long a MISSED finish (running -> idle with the projection passed, see
+# app.tile_laundry) keeps presenting as Done before decaying to idle + the
+# "last load" line. A real observed "end" holds Done until the door opens;
+# a machine that powered itself off gives no such signal, so the wall holds
+# the green Done long enough to be seen across the kitchen, not forever.
+LAUNDRY_MISSED_DONE_HOLD_MIN = 30.0
 _laundry_cache: dict[str, tuple[float, dict]] = {}
 
 
@@ -260,18 +277,45 @@ def _laundry_phase(status: str | None, finishes_at: str | None) -> str:
     return "running" if _laundry_future(finishes_at) else "idle"
 
 
-def _laundry_future(iso: str | None) -> bool:
-    """True iff the ISO instant parses and lies in the future. Naive (no
-    offset) timestamps are refused — comparing them to now is a guess."""
+def _laundry_minutes_to(iso: str | None) -> float | None:
+    """Signed minutes from now until the ISO instant (negative = already
+    passed). None for anything unparseable — and for naive (no offset)
+    timestamps, which cannot honestly be compared to now."""
     if not iso:
-        return False
+        return None
     try:
         t = dt.datetime.fromisoformat(iso)
     except ValueError:
-        return False
+        return None
     if t.tzinfo is None:
-        return False
-    return t > dt.datetime.now(dt.timezone.utc)
+        return None
+    return (t - dt.datetime.now(dt.timezone.utc)).total_seconds() / 60.0
+
+
+def _laundry_future(iso: str | None) -> bool:
+    """True iff the instant parses and lies in the future. NOT the negation
+    of _laundry_past: both are False for naive/unparseable timestamps."""
+    mt = _laundry_minutes_to(iso)
+    return mt is not None and mt > 0
+
+
+def _laundry_past(iso: str | None) -> bool:
+    """True iff the instant parses and has already passed."""
+    mt = _laundry_minutes_to(iso)
+    return mt is not None and mt <= 0
+
+
+def _laundry_endgame(machines: list[dict]) -> bool:
+    """True iff any machine is running with its projected finish inside the
+    endgame window (a little ahead of the projection to a little behind it)
+    — the stretch where the brief "end" status could slip between polls."""
+    for m in machines:
+        if m.get("phase") != "running":
+            continue
+        mt = _laundry_minutes_to(m.get("finishes_at"))
+        if mt is not None and -LAUNDRY_ENDGAME_BEHIND_MIN <= mt <= LAUNDRY_ENDGAME_AHEAD_MIN:
+            return True
+    return False
 
 
 def _laundry_ts(raw: object) -> str | None:
@@ -353,7 +397,8 @@ async def laundry_tile(client, cfg, token: str) -> dict:
         # offline. Not cached, so recovery shows on the next poll.
         return {"available": False}
     result = {"available": True, "machines": out}
-    _laundry_cache[base] = (time.monotonic() + LAUNDRY_TTL, result)
+    ttl = LAUNDRY_ENDGAME_TTL if _laundry_endgame(out) else LAUNDRY_TTL
+    _laundry_cache[base] = (time.monotonic() + ttl, result)
     return result
 
 
