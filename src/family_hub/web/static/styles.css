@@ -732,7 +732,7 @@ body {
 /* wash water: translucent depth with a bright meniscus line, lapping gently
    side to side while the drum spins (the water is the one thing in the drum
    that does NOT rotate); foam rides the line, one bubble drifting free */
-.ln-water { fill: color-mix(in srgb, var(--p2) 55%, #0C1826); opacity: .5;
+.ln-water { fill: color-mix(in srgb, var(--p2) 70%, #DDEEFF); opacity: .16;
   animation: ln-lap 2.8s ease-in-out infinite alternate; }
 .ln-waterline { fill: none; stroke: color-mix(in srgb, var(--p2) 40%, #EAF6FF);
   opacity: .65; stroke-width: 1.4; stroke-linecap: round;
