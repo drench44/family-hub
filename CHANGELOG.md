@@ -31,6 +31,12 @@ rolls that section to a dated version via `python scripts/release.py`.
   their phone) instead of pausing into a day that never comes back.
 - Deactivating someone who is still marked away no longer leaves their chores
   parked on their fill-in forever.
+- Chores on your phone follow the away overlay properly: checking one off in
+  Reminders now credits whoever the wall says owns it today, a chore you
+  finish on the wall is no longer marked done on the away person's phone, and
+  a reminder you already completed never reopens itself.
+- A chore mirror that fails now says so in settings instead of failing quietly
+  behind a green badge.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.

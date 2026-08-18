@@ -866,6 +866,44 @@ def test_caldav_status_pending_survives_sync_failure(conn):
     assert st["pending"] == 1    # a queued wall edit stays visible during an outage
 
 
+def _two_way_mirror_fixture(conn):
+    """A mapped person + chore + two-way iCloud, ready to drive through
+    sync_once (returns the fake client)."""
+    pid = fdb.add_person(conn, "Emma", "#5BC9F0")
+    fdb.upsert_caldav_collection(conn, "caldav:rem", "VTODO", "Emma", None, "t")
+    fdb.update_person(conn, pid, reminder_list_id="caldav:rem")
+    fdb.add_chore(conn, title="Dishes", icon="", schedule_kind="daily", days_mask=0,
+                  assign_kind="fixed", fixed_person_id=pid, rotation_order=[],
+                  rotation_epoch="2026-08-01")
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    return WriteFake([{"id": "rem", "name": "Emma", "comp": "VTODO", "todos": []}])
+
+
+def test_sync_once_records_chore_mirror_status(conn):
+    """M1: the mirror reconcile's result was thrown away, so a mirror that died
+    every tick was invisible — the calendar badge stayed 'ok' forever. Each tick
+    now records a status the admin surface can read."""
+    client = _two_way_mirror_fixture(conn)
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    st = fdb.kv_get(conn, "chore_mirror_status")
+    assert st["ok"] is True and st["at"] == _NOW.isoformat()
+    assert st["created"] >= 1 and st["deleted"] == 0
+
+
+def test_sync_once_records_chore_mirror_failure(conn, monkeypatch):
+    """M1: reconcile() swallows its own exceptions and returns {"error": True}.
+    That signal must reach the status, not the floor."""
+    from family_hub import chore_mirror
+    client = _two_way_mirror_fixture(conn)
+    monkeypatch.setattr(chore_mirror, "reconcile",
+                        lambda *a, **k: {"created": 0, "moved": 0, "updated": 0,
+                                         "deleted": 0, "error": True})
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    st = fdb.kv_get(conn, "chore_mirror_status")
+    assert st["ok"] is False and st["at"] == _NOW.isoformat()
+
+
 def test_sync_once_mirrors_chores_to_icloud(conn):
     """End-to-end: a mapped person + chore, driven through sync_once with a real
     LOCAL-zone now, pushes the chore occurrences to iCloud with UTC DTSTAMP."""

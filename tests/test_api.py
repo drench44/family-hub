@@ -1379,6 +1379,28 @@ def test_hub_away_ok_by_default(client, app_mod):
     assert client.get("/api/hub").json()["away_ok"] is True
 
 
+def test_admin_state_and_settings_surface_a_failed_chore_mirror(client, app_mod):
+    """M1: a chore-mirror tick that reported an error must be visible — in
+    /api/admin/state, and as the 'error' state on the iCloud settings row (the
+    mirror runs inside that integration). Before this it failed silently
+    forever with every badge still reading ok."""
+    c = app_mod._db()
+    assert client.get("/api/admin/state").json()["chore_mirror_status"] == {}
+    fdb.kv_set(c, "chore_mirror_status",
+               {"ok": False, "at": "2026-08-17T12:00:00", "created": 0,
+                "moved": 0, "updated": 0, "deleted": 0})
+    assert client.get("/api/admin/state").json()["chore_mirror_status"]["ok"] is False
+    # the settings row for iCloud reads 'error' (the pure helper, since iCloud
+    # needs credentials to appear in the integrations list at all)
+    assert app_mod._integ_status("icloud_caldav", {"ok": True}, {},
+                                 {"ok": False}) == "error"
+    assert app_mod._integ_status("icloud_caldav", {"ok": True}, {},
+                                 {"ok": True}) == "ok"
+    assert app_mod._integ_status("google_calendar", {}, {"ok": True},
+                                 {"ok": False}) == "ok", \
+        "a mirror failure only marks the integration it runs inside"
+
+
 def test_admin_state_includes_away_periods(client, app_mod):
     c = app_mod._db()
     pid, _ = _seed_person_chore(client, title="Dishes")
