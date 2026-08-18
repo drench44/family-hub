@@ -31,6 +31,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Static asset cache-busting is unified to the app version (`?v=<version>`), so
   the css/js cache-busts can no longer drift apart or lag a branch.
 
+### Fixed
+- The release-tooling dry-run test no longer pins itself to the live repo's
+  `[Unreleased]` state, so the first real `scripts/release.py` cut (which empties
+  `[Unreleased]`) doesn't break the test suite.
+
 ## [1.0.0] — 2026-08-17
 
 The baseline: the family wall-dashboard as it runs in production.
