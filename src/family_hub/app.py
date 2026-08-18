@@ -8,6 +8,7 @@ trust model for every service on this box.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import datetime as dt
@@ -274,7 +275,17 @@ _http = httpx.AsyncClient()
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app):
+    # The laundry watcher (see "laundry: annotation, background watcher"
+    # below) lives on the app's own loop so it shares _http and the SSE
+    # waiters' Event. Armed only where the calendar sync would run and only
+    # with laundry configured; cancelled cleanly on shutdown.
+    watch = (asyncio.create_task(laundry_watch_loop())
+             if _laundry_watch_enabled() else None)
     yield
+    if watch is not None:
+        watch.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watch
     await _http.aclose()
 
 
@@ -1463,13 +1474,111 @@ async def tile_weather():
     return await tiles.weather_tile(_http, cfg)
 
 
-@app.get("/api/tiles/laundry")
-async def tile_laundry():
+# --- laundry: annotation, background watcher, live stream ------------------
+#
+# The laundry pipeline is PUSH-shaped end to end: LG ThinQ pushes into Home
+# Assistant within seconds (verified live 2026-08-18 — the remaining-time
+# sensor retimes mid-cycle), a background watcher here re-reads HA every
+# LAUNDRY_WATCH_S and keeps an annotated snapshot, and /api/laundry/stream
+# pushes each change to open walls over SSE. Before the watcher, the server
+# only looked at HA when a browser polled (60s cadence, 25s cache): every
+# status change took up to ~85s to reach the wall, and with no wall open the
+# cycle log + completion memory observed nothing at all.
+
+LAUNDRY_WATCH_S = 5.0
+# A snapshot older than this is treated as absent (watcher disabled or
+# wedged) and the tile route falls back to fetching HA inline, exactly the
+# pre-watcher behavior — the card must never go dark because a background
+# task died. Three missed ticks means genuinely stuck, not just busy.
+LAUNDRY_SNAPSHOT_FRESH_S = 15.0
+# At a 5s cadence a transient HA blip is far more likely to land on a tick
+# than under the old 60s poll, and an instant available:false push would
+# flicker "Laundry unavailable" across the kitchen for a hiccup that heals
+# itself. Hold the last good card this long before going honestly
+# unavailable (the frontend's own last-good discipline, TILE_FAIL_LIMIT,
+# covers fetch failures the same way).
+LAUNDRY_UNAVAIL_HOLD_S = 30.0
+
+_laundry_snapshot: dict | None = None
+_laundry_snapshot_ts: float = 0.0
+_laundry_unavail_since: float | None = None
+# The change signal for SSE waiters: each CHANGED tick swaps in a fresh
+# Event and sets the old one, so every waiter wakes exactly once per change
+# and re-arms on the new event. (Bound to the running loop at wait time;
+# in production the watcher and the stream handlers share the app's loop.)
+_laundry_change: asyncio.Event = asyncio.Event()
+
+
+def _laundry_watch_enabled() -> bool:
+    """The watcher runs only where the calendar sync would (not in DEMO, not
+    under DISABLE_SYNC) and only with laundry actually configured — an
+    unconfigured hub must not poll a nonexistent HA every 5s forever."""
+    return _sync_enabled() and bool(getattr(cfg, "laundry", None))
+
+
+async def _laundry_watch_tick() -> None:
+    """One watcher iteration: fetch from HA, run the transition synthesis
+    (kv completion memory + cycle log — see _laundry_annotate), publish the
+    snapshot, and wake stream waiters iff the payload changed. Every failure
+    is soft: log and leave the previous snapshot standing for the next tick."""
+    global _laundry_snapshot, _laundry_snapshot_ts, _laundry_unavail_since, \
+        _laundry_change
+    try:
+        t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
+        snap = _laundry_annotate(t) if t.get("available") else t
+    except Exception:
+        log.warning("laundry watch: tick failed; retrying on cadence",
+                    exc_info=True)
+        return
+    now = time.monotonic()
+    if snap.get("available"):
+        _laundry_unavail_since = None
+    else:
+        if _laundry_unavail_since is None:
+            _laundry_unavail_since = now
+        if (now - _laundry_unavail_since < LAUNDRY_UNAVAIL_HOLD_S
+                and _laundry_snapshot is not None
+                and _laundry_snapshot.get("available")):
+            # brief blip: keep the last good card standing (re-stamped fresh
+            # so the route keeps serving it); honest once the hold expires
+            _laundry_snapshot_ts = now
+            return
+    changed = snap != _laundry_snapshot
+    _laundry_snapshot = snap
+    _laundry_snapshot_ts = now
+    if changed:
+        waiters, _laundry_change = _laundry_change, asyncio.Event()
+        waiters.set()
+
+
+async def laundry_watch_loop() -> None:
+    while True:
+        await _laundry_watch_tick()
+        await asyncio.sleep(LAUNDRY_WATCH_S)
+
+
+async def _laundry_payload() -> dict:
+    """The current laundry tile: demo when canned, the watcher's snapshot
+    while fresh, else an inline fetch+annotate — the pre-watcher path, kept
+    both as the no-watcher mode (tests, DISABLE_SYNC) and as the fallback
+    that keeps the card alive if the watcher ever wedges."""
     if DEMO:
         return fdemo.demo_laundry()   # canned machines; no HA hit
+    if (_laundry_snapshot is not None
+            and time.monotonic() - _laundry_snapshot_ts < LAUNDRY_SNAPSHOT_FRESH_S):
+        return _laundry_snapshot
     t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
     if not t.get("available"):
         return t
+    return _laundry_annotate(t)
+
+
+@app.get("/api/tiles/laundry")
+async def tile_laundry():
+    return await _laundry_payload()
+
+
+def _laundry_annotate(t: dict) -> dict:
     # Completion memory: a machine sitting in "end" carries WHEN it finished
     # (status_since). Stamp that into the kv store so "finished at 2:14"
     # survives the machine being opened / powered off — and later restarts of
