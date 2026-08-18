@@ -904,6 +904,24 @@ def test_sync_once_records_chore_mirror_failure(conn, monkeypatch):
     assert st["ok"] is False and st["at"] == _NOW.isoformat()
 
 
+def test_sync_once_clears_stale_mirror_error_on_readonly(conn):
+    """M2: a mirror error latched from an earlier two-way tick must not haunt
+    the settings row forever. If the operator switches iCloud back to
+    read-only, the NEXT tick (which skips the mirror entirely) has to clear
+    the stale error rather than leaving chore_mirror_status stuck at ok=False
+    with no path back to a quiet chip."""
+    fdb.kv_set(conn, "chore_mirror_status",
+               {"ok": False, "at": "2026-08-01T00:00:00", "created": 0,
+                "moved": 0, "updated": 0, "deleted": 0})
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": True})
+    client = FakeCalDav([])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    st = fdb.kv_get(conn, "chore_mirror_status")
+    assert st.get("ok") is not False, \
+        "a readonly tick must clear a stale mirror error, not leave it latched"
+
+
 def test_sync_once_mirrors_chores_to_icloud(conn):
     """End-to-end: a mapped person + chore, driven through sync_once with a real
     LOCAL-zone now, pushes the chore occurrences to iCloud with UTC DTSTAMP."""

@@ -414,6 +414,15 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             flushed = flush_pending(client, conn, collections, now.isoformat())
             errors.extend(flushed["errors"])
             needs_auth = needs_auth or flushed["needs_auth"]
+        else:
+            # Two-way is off this tick, so the mirror didn't run — but an
+            # error latched from an earlier two-way tick must not haunt the
+            # settings row forever with no path to clear it. If the operator
+            # switched back to read-only, quiet the chip now.
+            prior_mirror = fdb.kv_get(conn, "chore_mirror_status") or {}
+            if prior_mirror.get("ok") is False:
+                fdb.kv_set(conn, "chore_mirror_status",
+                          {"ok": True, "disabled": True, "at": now.isoformat()})
 
         st = {"ok": not errors, "last_sync": now.isoformat(),
               "events": len(events), "reminders": remlogic.open_count(rem),
