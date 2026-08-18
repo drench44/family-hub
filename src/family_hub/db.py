@@ -15,7 +15,8 @@ from typing import Any
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL,
-  sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+  sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+  reminder_list_id TEXT);   -- caldav:<slug> of this person's iCloud chore list (P2)
 CREATE TABLE IF NOT EXISTS chores(
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
   schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once','interval')),
@@ -108,7 +109,7 @@ CREATE TABLE IF NOT EXISTS caldav_collections(
 """
 
 # Columns a caller may set through update_person / add_chore validation.
-_PERSON_FIELDS = {"name", "color", "sort", "active"}
+_PERSON_FIELDS = {"name", "color", "sort", "active", "reminder_list_id"}
 _CHORE_COLUMNS = {
     "title", "icon", "schedule_kind", "days_mask", "week_interval",
     "interval_days", "due_times", "assign_kind",
@@ -208,6 +209,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if chores_sql2 and "'interval'" not in chores_sql2["sql"]:
         _migrate_chores_routines(conn)
+    # 2026-08-18: people gained reminder_list_id (their iCloud chore list, P2).
+    # Nullable, so a plain additive ALTER is enough — no rebuild.
+    ppl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(people)")}
+    if "reminder_list_id" not in ppl_cols:
+        conn.execute("ALTER TABLE people ADD COLUMN reminder_list_id TEXT")
+        conn.commit()
 
 
 def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
