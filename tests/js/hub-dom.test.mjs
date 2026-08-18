@@ -2296,6 +2296,35 @@ test('renderPeople puts an "All chores" expand button in the #people header', ()
   assert.match(host.innerHTML, /Sam/);
 });
 
+test('renderPeople: away_ok===false shows an "away status unavailable" note', () => {
+  const { document, sandbox } = newHub();
+  const people = [{
+    person: { id: 1, name: 'Sam', color: '#5BC9F0' },
+    chores: [{ id: 10, title: 'Feed cat', icon: '', rot: false, done: false }],
+    streak: 0, week: ['done', 'today'], total: 1, done_count: 0,
+  }];
+  sandbox.renderPeople({ people, away_ok: false });
+  const host = document.getElementById('people');
+  assert.match(host.innerHTML, /away status unavailable/,
+    'a degraded-state note renders when the server flags away_ok=false');
+  // the cards still render alongside the note (fail-soft, not a blank card)
+  assert.match(host.innerHTML, /Sam/);
+});
+
+test('renderPeople: away_ok true/omitted shows NO note', () => {
+  const { document, sandbox } = newHub();
+  const people = [{
+    person: { id: 1, name: 'Sam', color: '#5BC9F0' },
+    chores: [], streak: 0, week: ['today'], total: 0, done_count: 0,
+  }];
+  sandbox.renderPeople({ people });                       // away_ok omitted
+  assert.doesNotMatch(document.getElementById('people').innerHTML,
+    /away status unavailable/, 'no note in the healthy case');
+  sandbox.renderPeople({ people, away_ok: true });
+  assert.doesNotMatch(document.getElementById('people').innerHTML,
+    /away status unavailable/, 'no note when away_ok is true');
+});
+
 test('renderTodoSlot: header sits OUTSIDE the .card, the list sits INSIDE it (Task 3 re-box)', () => {
   const { document, sandbox } = newHub();
   const data = {

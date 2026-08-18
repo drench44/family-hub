@@ -278,3 +278,54 @@ def test_week_strip_emits_away_state():
     away = {"2026-08-11"}
     assert ch.week_strip(occ, cbd, today, away) == \
         ["done", "rest", "rest", "rest", "away", "rest", "done"]
+
+
+# --- away coverage the analyzer wants (behavior looks correct; prove it) ------
+
+def test_plan_rows_all_rotation_members_away_returns_empty():
+    """F5: a 2-person rotation with BOTH members away resolves to no rows --
+    present_ids is empty, assignee_id filters the order to nothing and returns
+    None, so the chore is omitted. No ZeroDivision, no crash."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_rot(5, [1, 2])], people, d,
+                        {"ids": {1, 2}, "backup": {}})
+    assert rows == []
+
+
+def test_backup_who_is_also_away_pauses_fixed_chore():
+    """F4: A is away with backup B, but B is also away. The fixed chore has no
+    present cover, so plan_rows pauses it (row omitted) rather than assigning to
+    an away backup or crashing."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1, 2}, "backup": {1: 2}})
+    assert rows == []
+
+
+def test_backup_deleted_pauses_fixed_chore():
+    """F3: the away person's backup was deleted (no longer in the people list),
+    so the backup id isn't present -> the fixed chore pauses, no stale covering
+    row pointing at a deleted person."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A")]                    # backup id 2 deleted
+    rows = ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert rows == []
+
+
+def test_away_boundary_last_day_away_next_day_normal():
+    """F6: the last inclusive away day reads 'away'; the day immediately after
+    end_date reads its normal state -- proven through week_strip."""
+    today = dt.date(2026, 8, 17)           # Sunday; window 8/11..8/17
+    occ = {d: {1} for d in ("2026-08-14", "2026-08-15", "2026-08-16",
+                            "2026-08-17")}
+    cbd = {"2026-08-14": {1}, "2026-08-17": {1}}
+    away = {"2026-08-15", "2026-08-16"}    # end_date inclusive on 8/16
+    ws = ch.week_strip(occ, cbd, today, away)
+    # window index: [8/11,8/12,8/13,8/14,8/15,8/16,8/17]
+    assert ws[5] == "away", "8/16 is the last inclusive away day"
+    assert ws[6] == "done", "8/17 (day after end_date) is a normal completed day"
+    # and the streak counts the post-away day plus across the gap
+    assert ch.streak(occ, cbd, today, away) == 2

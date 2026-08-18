@@ -171,9 +171,21 @@ def test_week_strip_state_classes_are_styled():
 
 
 def test_wall_renders_away_state():
-    js = ALL_JS
-    assert "away" in js.lower()          # away branch in card render
-    assert ".week-away" in CSS or "away" in CSS   # 5th week-strip state styled
+    # F8: the old `"away" in js.lower()` was near-vacuous. Pin the actual class
+    # the away branch emits AND that it carries a non-empty CSS rule, so a real
+    # regression (renamed class, dropped style) is caught.
+    assert "away-badge" in ALL_JS, "the away branch must render the away-badge"
+    assert _css_rule(".away-badge").strip(), ".away-badge is unstyled"
+    # the 5th week-strip state (away) must also be a styled cell
+    assert _css_rule(".ws-away").strip(), ".ws-away (away week cell) is unstyled"
+
+
+def test_wall_surfaces_away_overlay_failure():
+    """S1b: when the server flags away_ok=false, the wall shows an unobtrusive
+    note instead of silently rendering a genuinely-away person as present. Pin
+    the flag check and the note text in hub.js (the DOM test proves it renders)."""
+    assert "away_ok" in ALL_JS, "renderPeople must read the away_ok degraded flag"
+    assert "away status unavailable" in ALL_JS, "the degraded-state note text"
 
 
 def test_overlay_and_home_pill_styled():
@@ -444,6 +456,10 @@ def test_admin_has_away_controls():
     (peopleAdminHtml in hub.js), not a wall-facing control — see
     test_admin_html_is_retired for why there's no separate admin surface at
     all. Guard the hooks the away endpoints and click-wiring depend on."""
+    # F9: these substring checks are a coarse smoke test -- the REAL guard for
+    # the away admin controls is the executable DOM suite (tests/js/*.mjs), which
+    # renders peopleAdminHtml and clicks the hooks end-to-end. Keep these as a
+    # cheap "the wiring didn't vanish" tripwire.
     assert "/api/admin/away" in ALL_JS
     assert "data-paway" in ALL_JS       # per-person "Going away" button hook
     assert "data-pback" in ALL_JS       # "I'm back" (closes an open period)
