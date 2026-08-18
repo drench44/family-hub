@@ -1103,6 +1103,9 @@ class PersonPatch(BaseModel):
     color: str | None = None
     sort: int | None = None
     active: int | None = None
+    # The iCloud reminder list (caldav:<slug>) this person's chores mirror into;
+    # null clears the mapping. Nullable, so absent from _PERSON_NONNULL_PATCH.
+    reminder_list_id: str | None = None
 
 
 class ChoreIn(BaseModel):
@@ -1248,7 +1251,12 @@ def _chore_row(c, cid: int) -> dict:
 def admin_state():
     c = _db()
     return {"people": fdb.list_people(c, include_inactive=True),
-            "chores": fdb.list_chores(c, include_inactive=True)}
+            "chores": fdb.list_chores(c, include_inactive=True),
+            # iCloud VTODO lists a person's chores can mirror into (P2 picker);
+            # empty until iCloud is connected and its reminder lists are synced.
+            "reminder_lists": [{"id": col["id"], "name": col["display_name"]}
+                               for col in fdb.list_caldav_collections(c)
+                               if col["comp_type"] == "VTODO"]}
 
 
 @app.post("/api/admin/people")
@@ -1269,6 +1277,11 @@ def admin_patch_person(pid: int, p: PersonPatch):
         name = fields.get("name", row["name"])
         color = fields.get("color", row["color"])
         fields["name"] = _validate_person(name, color)
+    if fields.get("reminder_list_id"):   # non-empty must be a real VTODO list
+        vtodo = {col["id"] for col in fdb.list_caldav_collections(c)
+                 if col["comp_type"] == "VTODO"}
+        if fields["reminder_list_id"] not in vtodo:
+            raise HTTPException(422, "unknown reminder list")
     fdb.update_person(c, pid, **fields)
     return _person_row(c, pid)
 

@@ -2281,3 +2281,19 @@ def test_chore_kind_change_clears_dependent_fields(client, app_mod):
     assert ch["week_interval"] == 1
     # converting TO interval requires interval_days
     assert client.patch(f"/api/admin/chores/{cid}", json={"schedule_kind": "interval"}).status_code == 422
+
+
+# --- P2: person -> iCloud reminder-list mapping ---------------------------
+
+def test_person_reminder_list_mapping(client, app_mod):
+    c = app_mod._db()
+    app_mod.fdb.upsert_caldav_collection(c, "caldav:emma", "VTODO", "Emma", None, "t")
+    pid = _mk_person(client, "Emma")
+    lists = client.get("/api/admin/state").json()["reminder_lists"]
+    assert {"id": "caldav:emma", "name": "Emma"} in lists
+    r = client.patch(f"/api/admin/people/{pid}", json={"reminder_list_id": "caldav:emma"})
+    assert r.status_code == 200 and r.json()["reminder_list_id"] == "caldav:emma"
+    assert client.patch(f"/api/admin/people/{pid}",
+                        json={"reminder_list_id": "caldav:nope"}).status_code == 422
+    r = client.patch(f"/api/admin/people/{pid}", json={"reminder_list_id": None})
+    assert r.status_code == 200 and r.json()["reminder_list_id"] is None

@@ -647,3 +647,25 @@ def test_migrate_chores_routines_from_old_shape(tmp_path):
                   rotation_order=[], rotation_epoch="2026-08-01", interval_days=3)
     assert fdb.list_chores(conn, include_inactive=True)[-1]["interval_days"] == 3
     conn.close()
+
+
+def test_migrate_people_reminder_list_id(tmp_path):
+    """An old people table (no reminder_list_id) gains the nullable column on
+    ensure_schema via a plain additive ALTER, preserving rows."""
+    import sqlite3
+    from family_hub import db as fdb
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    c.executescript("""
+      CREATE TABLE people(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+        color TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1);
+      INSERT INTO people(name, color) VALUES('Emma', '#5BC9F0');
+    """)
+    c.commit()
+    c.close()
+    conn = fdb.connect(p)
+    fdb.ensure_schema(conn)
+    ppl = fdb.list_people(conn, include_inactive=True)
+    assert ppl[0]["name"] == "Emma" and ppl[0]["reminder_list_id"] is None
+    conn.close()
