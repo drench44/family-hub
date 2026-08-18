@@ -937,21 +937,33 @@ def test_laundry_card_static_guards():
     assert m and re.search(r"\.some\(\(i\) => i\.id === 'laundry'\)",
                            hub[m.start():m.start() + 1600]), \
         "renderLaundry must re-check integration availability per render"
-    # the finish-endgame fast lane: near a projected finish the frontend
-    # chains short re-polls (and the server cache tightens in step) so the
-    # brief lg_thinq "end" status can't slip between 60s polls — without it
-    # the wall misses finishes entirely (live board, 2026-08-17)
-    assert "lnEndgame" in hub and "LN_FAST_POLL_MS" in hub
-    # ... and the JS window must stay PAIRED with the server's cache window:
-    # if they drift, the fast polls just re-read a still-warm cache and the
-    # whole lane silently does nothing
-    from family_hub import tiles as ftiles
-    ahead = re.search(r"const LN_ENDGAME_AHEAD_MIN = (\d+)", hub)
-    behind = re.search(r"const LN_ENDGAME_BEHIND_MIN = (\d+)", hub)
-    assert ahead and behind, "hub.js lnEndgame window constants missing"
-    assert (int(ahead.group(1)) == int(ftiles.LAUNDRY_ENDGAME_AHEAD_MIN)
-            and int(behind.group(1)) == int(ftiles.LAUNDRY_ENDGAME_BEHIND_MIN)), \
-        "hub.js lnEndgame window must match tiles.LAUNDRY_ENDGAME_*_MIN"
+    # the REAL-TIME lane: the wall holds an SSE subscription to the server's
+    # background watcher, so any status change reaches the card in seconds —
+    # everywhere in the cycle, not just near a projected finish (the old
+    # endgame fast lane this replaced). Losing any of this quietly demotes
+    # the card back to 60s-poll latency with every visible feature intact.
+    assert "new EventSource('/api/laundry/stream'" in hub, \
+        "the laundry card must subscribe to the live stream"
+    # both feeds converge on ONE applier (render-on-change discipline): the
+    # stream handler and the poll fallback must not each grow their own
+    assert re.search(r"function applyLaundry\(", hub), "applyLaundry missing"
+    assert hub.count("applyLaundry(") >= 3, \
+        "fetchLaundry AND the stream handler must feed applyLaundry"
+    # iOS suspends EventSource in background tabs and never resumes it —
+    # every wake path must reconnect AND refetch (the stream greeting covers
+    # new state, the fetch covers a wall whose stream died mid-suspend)
+    assert re.search(r"function lnConnect\(", hub), "lnConnect missing"
+    assert re.search(
+        r"(pageshow|visibilitychange)[^\n]*\n[^\n]*lnWake|lnWake[^\n]*pageshow",
+        hub) or "lnWake" in hub, "laundry wake handler missing"
+    for ev in ("pageshow", "visibilitychange"):
+        assert re.search(rf"addEventListener\('{ev}'[^\n]*\n?[^\n]*lnWake",
+                         hub), f"lnWake must run on {ev}"
+    # the endgame fast lane is GONE — a half-restored copy would fight the
+    # stream (stacked timers) without anyone noticing
+    for gone in ("lnEndgame", "LN_FAST_POLL_MS", "LN_ENDGAME_AHEAD_MIN",
+                 "LN_ENDGAME_BEHIND_MIN", "lnFastTimer"):
+        assert gone not in hub, f"{gone} should be fully retired"
     # every animated laundry class must be neutralized under reduced motion
     # (a class dropped from the block would leave the full 12.8s tumble
     # running for reduced-motion users with no test failing)

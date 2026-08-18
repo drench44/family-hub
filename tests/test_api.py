@@ -2420,6 +2420,10 @@ def test_laundry_watch_loop_starts_only_when_enabled_and_configured():
     import family_hub.app as appmod
     assert appmod.LAUNDRY_WATCH_S <= 10.0
     assert appmod._laundry_watch_enabled() is False   # DISABLE_SYNC=1 in tests
+    # PAIRED: the tile cache must expire under the watcher cadence, or every
+    # tick re-reads a still-warm cache and the "watcher" silently observes
+    # nothing new (the same drift trap the old endgame fast lane had)
+    assert ftiles.LAUNDRY_TTL < appmod.LAUNDRY_WATCH_S
 
 
 # The SSE stream is tested by driving its generator directly: this
