@@ -464,12 +464,14 @@ async function renderChoresFull(prefetched) {
   // person cards still paint instantly on the first pass.
   let peopleAdmin = '';
   if (editing) {
-    if (choreAdminPeople) peopleAdmin = peopleAdminHtml(choreAdminPeople);
+    if (choreAdminPeople) peopleAdmin = peopleAdminHtml(choreAdminPeople, choreAdminAway);
     else if (choreAdminError) peopleAdmin = `<div class="cal-empty">couldn’t load people — is the hub reachable? Tap Done, then Edit to retry.</div>`;
     else ensurePeopleThenRerender();
   } else {
     choreAdminPeople = null;   // drop stale cache when leaving edit
+    choreAdminAway = null;
     choreAdminError = false;
+    awayOpenFor = null;        // close any open away sub-form too
   }
   host.innerHTML = choresNavHtml()
     + (people.length
@@ -486,7 +488,9 @@ async function ensurePeopleThenRerender() {
   if (choreAdminLoading) return;   // a fetch from an earlier render pass is in flight
   choreAdminLoading = true;
   try {
-    choreAdminPeople = (await j('/api/admin/state')).people;
+    const state = await j('/api/admin/state');
+    choreAdminPeople = state.people;
+    choreAdminAway = state.away_periods || [];
     choreAdminError = false;
   } catch (e) {
     choreAdminError = true;   // render a visible note instead of vanishing
@@ -505,22 +509,75 @@ async function ensurePeopleThenRerender() {
    failed load so the section shows a visible note instead of vanishing
    silently. */
 let choreAdminPeople = null;
+let choreAdminAway = null;       // away_periods from /api/admin/state, same cache lifecycle
 let choreAdminError = false;
 let choreAdminLoading = false;   // in-flight guard: don't stack concurrent fetches
 
+/* Which person's "going away" sub-form (backup + start-date) is expanded —
+   at most one at a time. Reset whenever the cache it reads from goes stale
+   (leaving edit mode, or after any people/away mutation). */
+let awayOpenFor = null;
+
 /* The inline people-management section, shown under the person cards in edit
-   mode: rename/recolor, deactivate/reactivate, hard-delete, and add a person —
-   the whole household editable from the wall. */
-function peopleAdminHtml(people) {
-  const rows = (people || []).map((p) =>
-    `<div class="padmin-row${p.active ? '' : ' inactive'}" data-padmin="${p.id}">`
-    + `<span class="padmin-name" style="color:${safeColor(p.color)}">${escapeHtml(p.name)}</span>`
-    + `<button class="padmin-btn" type="button" data-pedit="${p.id}">Edit</button>`
-    + `<button class="padmin-btn" type="button" data-ptoggle="${p.id}">${p.active ? 'Deactivate' : 'Activate'}</button>`
-    + `<button class="padmin-btn padmin-del" type="button" data-pdel="${p.id}">Delete</button>`
-    + `</div>`).join('');
+   mode: rename/recolor, deactivate/reactivate, hard-delete, add a person, and
+   away — the whole household (including who's away and their fill-in) is
+   editable from the wall, with no separate admin surface. */
+function peopleAdminHtml(people, awayPeriods) {
+  const away = awayPeriods || [];
+  // At most one OPEN (end_date === null) period per person; that invariant is
+  // enforced by the away endpoints, so the last match wins if it's ever wrong.
+  const openByPerson = new Map();
+  away.forEach((r) => { if (r.end_date == null) openByPerson.set(r.person_id, r); });
+  const activePeople = (people || []).filter((p) => p.active);
+  const nameOf = (pid) => {
+    const p = (people || []).find((x) => x.id === pid);
+    return p ? p.name : `#${pid}`;
+  };
+  const todayStr = data_date || new Date().toISOString().slice(0, 10);
+
+  const rows = (people || []).map((p) => {
+    const open = openByPerson.get(p.id);
+    const awayBtn = open
+      ? `<button class="padmin-btn" type="button" data-pback="${open.id}">I’m back</button>`
+      : `<button class="padmin-btn" type="button" data-paway="${p.id}">Going away</button>`;
+    const backupOptions = activePeople.filter((x) => x.id !== p.id).map((x) =>
+      `<option value="${x.id}">${escapeHtml(x.name)}</option>`).join('');
+    const subform = (!open && awayOpenFor === p.id)
+      ? `<div class="padmin-away-form">`
+        + `<select class="txt-input" data-paway-backup="${p.id}">`
+        + `<option value="">No backup</option>${backupOptions}</select>`
+        + `<input class="txt-input" type="date" data-paway-start="${p.id}" value="${todayStr}">`
+        + `<button class="padmin-btn" type="button" data-paway-submit="${p.id}">Confirm</button>`
+        + `</div>`
+      : '';
+    return `<div class="padmin-row${p.active ? '' : ' inactive'}" data-padmin="${p.id}">`
+      + `<span class="padmin-name" style="color:${safeColor(p.color)}">${escapeHtml(p.name)}</span>`
+      + `<button class="padmin-btn" type="button" data-pedit="${p.id}">Edit</button>`
+      + `<button class="padmin-btn" type="button" data-ptoggle="${p.id}">${p.active ? 'Deactivate' : 'Activate'}</button>`
+      + `<button class="padmin-btn padmin-del" type="button" data-pdel="${p.id}">Delete</button>`
+      + awayBtn
+      + `</div>`
+      + subform;
+  }).join('');
+
+  // "Away now" summary: every currently-open period, named (+ backup, if set).
+  const awayNow = away.filter((r) => r.end_date == null);
+  const awayNowHtml = awayNow.length
+    ? `<div class="padmin-away-now">`
+      + `<div class="padmin-away-now-label">Away now</div>`
+      + awayNow.map((r) => `<div class="padmin-away-item">${escapeHtml(nameOf(r.person_id))}`
+        + (r.backup_person_id
+          ? ` <span class="padmin-away-backup-name">(backup: ${escapeHtml(nameOf(r.backup_person_id))})</span>`
+          : '')
+        + `</div>`).join('')
+      + `</div>`
+    : '';
+
   return `<div class="padmin">`
-    + `<div class="padmin-head">People</div>`
+    + `<div class="padmin-head"><span class="padmin-head-label">People</span>`
+    + `<button class="padmin-btn" type="button" data-paway-all="1">Pause everyone</button>`
+    + `</div>`
+    + awayNowHtml
     + rows
     + `<button class="chore-row chore-add" type="button" data-padd="1">`
     + `<span class="chore-check chore-add-plus">+</span>`
@@ -2743,8 +2800,64 @@ async function openChoreEditor(seed) {
    activate shows there too), and repaint the chores view staying in edit. */
 async function refreshPeopleAdmin() {
   choreAdminPeople = null;
+  choreAdminAway = null;
+  awayOpenFor = null;
   await poll();
   if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
+}
+
+/* ------------------------------------------------------ away controls */
+
+/* Open (or fail) an away period for `pid`, reading the optional backup/start
+   fields straight out of the DOM (the sub-form is plain HTML, not a tracked
+   model, the same as the rest of peopleAdminHtml). Reads through
+   #chores-full so it works whether the row lives in a real document or the
+   fake-DOM test harness (both give that host a real querySelector). */
+async function submitAwayOpen(pid) {
+  const host = document.getElementById('chores-full');
+  const backupEl = host && host.querySelector(`[data-paway-backup="${pid}"]`);
+  const startEl = host && host.querySelector(`[data-paway-start="${pid}"]`);
+  const body = { person_id: pid };
+  if (backupEl && backupEl.value) body.backup_person_id = Number(backupEl.value);
+  if (startEl && startEl.value) body.start_date = startEl.value;
+  try {
+    await j('/api/admin/away', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    showToast(e.message || 'Couldn’t start away — check the hub and try again.');
+    return;
+  }
+  await refreshPeopleAdmin();
+}
+
+/* Close an open away period ("I'm back") — no body needed; the server ends it
+   as of yesterday by default. */
+async function submitAwayBack(periodId) {
+  try {
+    await j(`/api/admin/away/${periodId}/back`, { method: 'POST' });
+  } catch (e) {
+    showToast(e.message || 'Couldn’t mark them back — check the hub and try again.');
+    return;
+  }
+  await refreshPeopleAdmin();
+}
+
+/* "Pause everyone" — opens an away period (starting today) for every active
+   person who doesn't already have one open. The body model is required even
+   though every field is optional, so send {} rather than nothing. */
+async function submitAwayEveryone() {
+  try {
+    await j('/api/admin/away/everyone', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  } catch (e) {
+    showToast(e.message || 'Couldn’t pause everyone — check the hub and try again.');
+    return;
+  }
+  await refreshPeopleAdmin();
 }
 
 /* POST/PATCH a person via the shared person form. On failure the editor stays
@@ -2960,6 +3073,20 @@ document.addEventListener('click', (e) => {
   if (ptoggle) { togglePersonActive(Number(ptoggle.dataset.ptoggle)); return; }
   const pdel = e.target.closest('[data-pdel]');
   if (pdel) { openPersonDeleteConfirm(Number(pdel.dataset.pdel)); return; }
+  // away controls: pause everyone, "I'm back" (closes an open period), the
+  // per-person "Going away" sub-form's Confirm, then the toggle that opens it
+  if (e.target.closest('[data-paway-all]')) { submitAwayEveryone(); return; }
+  const pback = e.target.closest('[data-pback]');
+  if (pback) { submitAwayBack(Number(pback.dataset.pback)); return; }
+  const pawaySubmit = e.target.closest('[data-paway-submit]');
+  if (pawaySubmit) { submitAwayOpen(Number(pawaySubmit.dataset.pawaySubmit)); return; }
+  const paway = e.target.closest('[data-paway]');
+  if (paway) {
+    const pid = Number(paway.dataset.paway);
+    awayOpenFor = awayOpenFor === pid ? null : pid;   // toggle the sub-form
+    renderChoresFull(hubData ? hubData.people : null);
+    return;
+  }
   // to-dos: action buttons first, then check-off rows, then the add controls
   const tmove = e.target.closest('[data-todo-move]');
   if (tmove) { moveTodo(tmove.dataset.tid, tmove.dataset.todoMove); return; }

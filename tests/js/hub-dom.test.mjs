@@ -1470,6 +1470,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   const completeCalls = [];
   const adminChoreCalls = [];   // POST/PATCH /api/admin/chores writes from the editor
   const adminPeopleCalls = [];  // POST/PATCH/DELETE /api/admin/people from the people editor
+  const adminAwayCalls = [];    // POST /api/admin/away(/{id}/back|/everyone) from away controls
   const okJson = (v) => ({ ok: true, status: 200, json: async () => v });
   const sandbox = {
     document,
@@ -1492,7 +1493,10 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
           return okJson({});
         }
         if (url === '/api/admin/state') {
-          return okJson({ people: adminState.people, chores: adminState.chores });
+          return okJson({
+            people: adminState.people, chores: adminState.chores,
+            away_periods: adminState.away_periods || [],
+          });
         }
         if (/\/api\/admin\/chores(\/\d+)?$/.test(url)) {
           adminChoreCalls.push({
@@ -1504,6 +1508,14 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
         }
         if (/\/api\/admin\/people(\/\d+)?$/.test(url)) {
           adminPeopleCalls.push({
+            url,
+            method: (opts && opts.method) || 'GET',
+            body: opts && opts.body ? JSON.parse(opts.body) : null,
+          });
+          return okJson({ id: 99 });
+        }
+        if (/\/api\/admin\/away(\/\d+)?(\/back|\/everyone)?$/.test(url)) {
+          adminAwayCalls.push({
             url,
             method: (opts && opts.method) || 'GET',
             body: opts && opts.body ? JSON.parse(opts.body) : null,
@@ -1548,7 +1560,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   };
   return {
     sandbox, document, registry, choresFull, completeCalls, adminChoreCalls,
-    adminPeopleCalls, tap, tapConfirm, read,
+    adminPeopleCalls, adminAwayCalls, tap, tapConfirm, read,
   };
 }
 
@@ -2146,6 +2158,88 @@ test('people admin: a rename invalidates the cache so the re-render shows fresh 
   await flush(); await flush();   // submit -> refreshPeopleAdmin -> re-fetch -> re-render
   assert.ok(stateCalls >= 2, 'the cache was invalidated and re-fetched');
   assert.match(ctx.choresFull.innerHTML, /Samuel/, 'the re-render shows the fresh name');
+});
+
+// --- away controls on the Chores page (edit mode) -------------------------
+
+test('people admin: no open period shows "Going away"; tapping it reveals the sub-form', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  assert.ok(ctx.choresFull.querySelector('[data-paway="1"]'), '"Going away" control for Sam');
+  assert.ok(!ctx.choresFull.querySelector('[data-pback]'), 'no "I\'m back" control — nobody is away');
+  assert.ok(!ctx.choresFull.querySelector('[data-paway-backup="1"]'), 'sub-form starts closed');
+  ctx.tap('[data-paway="1"]');
+  assert.ok(ctx.choresFull.querySelector('[data-paway-backup="1"]'), 'backup select revealed');
+  assert.ok(ctx.choresFull.querySelector('[data-paway-start="1"]'), 'start date revealed');
+  assert.ok(ctx.choresFull.querySelector('[data-paway-submit="1"]'), 'Confirm control revealed');
+});
+
+test('people admin: Confirm on the away sub-form POSTs {person_id, backup_person_id, start_date}', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  ctx.choresFull.querySelector('[data-paway-backup="1"]').value = '2';
+  ctx.choresFull.querySelector('[data-paway-start="1"]').value = '2026-08-20';
+  ctx.tap('[data-paway-submit="1"]');
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away');
+  assert.ok(post, 'POST /api/admin/away fired');
+  assert.deepEqual(post.body, { person_id: 1, backup_person_id: 2, start_date: '2026-08-20' });
+});
+
+test('people admin: Confirm with no backup/date picked sends just {person_id}', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  ctx.choresFull.querySelector('[data-paway-start="1"]').value = '';   // clear the default
+  ctx.tap('[data-paway-submit="1"]');
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away');
+  assert.deepEqual(post.body, { person_id: 1 }, 'no optional fields sent when left blank');
+});
+
+test('people admin: an open period shows "I\'m back" instead, and the away-now roster names them', async () => {
+  const adminState = {
+    people: SAMPLE_ADMIN.people, chores: SAMPLE_ADMIN.chores,
+    away_periods: [{ id: 55, person_id: 1, start_date: '2026-08-10', end_date: null, backup_person_id: 2 }],
+  };
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, adminState);
+  await enterEditWithPeople(ctx);
+  assert.ok(!ctx.choresFull.querySelector('[data-paway="1"]'), 'no "Going away" while already away');
+  assert.ok(ctx.choresFull.querySelector('[data-pback="55"]'), '"I\'m back" carries the period id');
+  assert.match(ctx.choresFull.innerHTML, /Away now/, 'the away-now roster renders');
+  assert.match(ctx.choresFull.innerHTML, /Sam Rivera/, 'names who is away');
+  assert.match(ctx.choresFull.innerHTML, /Alex Kim/, 'names the backup');
+  ctx.tap('[data-pback="55"]');
+  await flush();
+  const back = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away/55/back');
+  assert.ok(back, 'POST /api/admin/away/55/back fired');
+});
+
+test('people admin: "Pause everyone" POSTs /api/admin/away/everyone with an empty body', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway-all="1"]');
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away/everyone');
+  assert.ok(post, 'POST /api/admin/away/everyone fired');
+  assert.deepEqual(post.body, {}, 'sent as {} — the endpoint requires SOME JSON body');
+});
+
+test('people admin: a FAILED away-open shows a toast and runs no refresh', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  let polls = 0;
+  ctx.sandbox.fetch = async (url) => {
+    if (/\/api\/hub/.test(url)) { polls++; throw new Error('offline'); }
+    if (url === '/api/admin/away') return failResp(422, 'backup cannot be the same person');
+    throw new Error('offline in test');
+  };
+  ctx.tap('[data-paway-submit="1"]');
+  await flush();
+  assert.match(readToast(ctx), /backup cannot be the same person/i, 'a toast surfaces the failure reason');
+  assert.equal(polls, 0, 'no refresh poll ran after the failed write');
 });
 
 test('sectionHead emits a .shead with tick, label, and an expand button', () => {

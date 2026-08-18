@@ -433,6 +433,17 @@ def test_favicon_is_local_svg():
     assert (STATIC / "favicon.svg").exists()
 
 
+def test_admin_has_away_controls():
+    """Away mode is admin-only, set from the inline people-management section
+    (peopleAdminHtml in hub.js), not a wall-facing control — see
+    test_admin_html_is_retired for why there's no separate admin surface at
+    all. Guard the hooks the away endpoints and click-wiring depend on."""
+    assert "/api/admin/away" in ALL_JS
+    assert "data-paway" in ALL_JS       # per-person "Going away" button hook
+    assert "data-pback" in ALL_JS       # "I'm back" (closes an open period)
+    assert "data-paway-all" in ALL_JS   # "Pause everyone" header button
+
+
 def test_admin_html_is_retired():
     """admin.html/admin.js were retired 2026-08-15 — all management now lives on
     the wall's Chores page (tap Edit). Guard against either file creeping back:
