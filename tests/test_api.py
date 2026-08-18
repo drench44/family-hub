@@ -2191,6 +2191,185 @@ def test_tiles_laundry_route_restamps_only_across_a_real_new_cycle(client, monke
     assert last_done() == t2
 
 
+def _laundry_tile_with(phase, status, since, finishes=None):
+    async def tile(hclient, cfg, token):
+        return {"available": True, "machines": [
+            {"id": "washer", "label": "Washer", "kind": "washer",
+             "phase": phase, "status": status, "finishes_at": finishes,
+             "status_since": since}]}
+    return tile
+
+
+def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeypatch):
+    # LG machines auto-power-off a minute or two after "end", so a 60s poll
+    # can watch running -> power_off and never observe the done phase at all —
+    # the live board sat on a bare "Idle" with no last-load line
+    # (2026-08-17). An observed running -> idle transition with the projection
+    # passed IS a finished load: it stamps completion memory and is presented
+    # as the Done it was (until the hold window lapses — separate test).
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    # cycle runs, then the machine powers itself off past the poll window:
+    # the idle poll still carries the (now past) projected finish -> that
+    # exact moment is the stamp AND the wall shows Done at that moment
+    t_fin = iso(-3)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-40), finishes=t_fin))
+    assert machine()["last_done"] is None
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(-1), finishes=t_fin))
+    m = machine()
+    assert m["last_done"] == t_fin
+    assert m["phase"] == "done" and m["status_since"] == t_fin
+    # sitting idle: neither the stamp nor the held Done moves
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+    # an HA blip DURING the hold must not erase the held Done — offline is
+    # deliberately absent from the missed-memory clearing set
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    assert machine()["phase"] == "offline"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+
+    # next cycle CANCELED mid-run: projection still in the future -> the
+    # stamp falls back to the moment the machine left the cycle, and no
+    # Done is faked for a load that never finished
+    t_cancel = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-10), finishes=iso(30)))
+    m = machine()
+    assert m["last_done"] == t_fin      # still the old finish while running
+    assert m["phase"] == "running"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_cancel, finishes=iso(30)))
+    m = machine()
+    # idle presented (not a lingering Done): the new cycle retired the held
+    # missed-done, and a canceled cycle never creates one
+    assert m["last_done"] == t_cancel and m["phase"] == "idle"
+
+    # exit from PAUSED: pause freezes the drum while the projection keeps
+    # aging, so a "past" projection there is fiction — the stamp is the exit
+    # moment, and no Done is faked
+    t_stop = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("paused", "pause", iso(-20), finishes=iso(-15)))
+    assert machine()["phase"] == "paused"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_stop, finishes=iso(-15)))
+    m = machine()
+    assert m["last_done"] == t_stop and m["phase"] == "idle"
+
+    # running -> OFFLINE alone stamps nothing (HA blind mid-cycle is not a
+    # finish; the drum may still be turning) ...
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-5)))
+    assert machine()["last_done"] == t_stop   # observed: prev is now running
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    assert machine()["last_done"] == t_stop
+    # ... but the machine REAPPEARING idle closes the cycle across the blip:
+    # with no usable projection the stamp is the reappear moment, and no
+    # Done is faked (the projection-backed blip case has its own test)
+    t_back = iso(0)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_back))
+    m = machine()
+    assert m["last_done"] == t_back and m["phase"] == "idle"
+
+    # a REAL observed finish, then the door opens (done -> idle with a fresh
+    # status_since): the accurate end stamp survives — the door-open moment
+    # must not overwrite it — and Done does not linger past the door
+    t_end = iso(-2)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-30), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    assert machine()["phase"] == "done"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "initial", iso(0)))
+    m = machine()
+    assert m["last_done"] == t_end and m["phase"] == "idle"
+
+
+def test_tiles_laundry_route_missed_done_bounds(client, app_mod, monkeypatch, caplog):
+    # two bounds keep the synthetic Done honest. STAMPING: a projection
+    # staler than the hold window at the exit is likely a LATCHED
+    # previous-cycle value from a flaky remaining-time sensor — refused
+    # (with a warning), the exit moment stamps instead, no Done is faked.
+    # PRESENTATION: a held stamp older than the window decays to idle (what
+    # a restart finding an old stamp in kv must show), keeping the
+    # last-load line.
+    from family_hub import tiles as ftiles
+    tile_with = _laundry_tile_with
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    stale = iso(-(ftiles.LAUNDRY_MISSED_DONE_HOLD_MIN + 10))
+    t_off = iso(0)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-90), finishes=stale))
+    client.get("/api/tiles/laundry")
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_off, finishes=stale))
+    with caplog.at_level("WARNING"):
+        m = client.get("/api/tiles/laundry").json()["machines"][0]
+    assert m["last_done"] == t_off and m["phase"] == "idle"
+    assert any("stale finish projection" in r.message for r in caplog.records), \
+        "the refused stale projection must be visible in the logs"
+
+    # presentation decay: seed kv exactly as a restart would find it — a
+    # missed stamp just past the hold — and poll idle
+    old = iso(-(ftiles.LAUNDRY_MISSED_DONE_HOLD_MIN + 5))
+    c = app_mod._db()
+    app_mod.fdb.kv_set(c, "laundry_missed_washer", old)
+    app_mod.fdb.kv_set(c, "laundry_done_washer", old)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = client.get("/api/tiles/laundry").json()["machines"][0]
+    assert m["last_done"] == old and m["phase"] == "idle"
+
+
+def test_tiles_laundry_route_blip_straddled_finish_presents_done(client, monkeypatch):
+    # a finish landing exactly inside an HA blip (running -> offline ->
+    # idle) is still a finish: the last non-offline phase is tracked
+    # separately, so the recent past projection stamps and presents Done —
+    # while a blip on a machine that never ran stays silent
+    tile_with = _laundry_tile_with
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    t_fin = iso(-2)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-30), finishes=iso(3)))
+    assert machine()["phase"] == "running"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    assert machine()["phase"] == "offline"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=t_fin))
+    m = machine()
+    assert m["last_done"] == t_fin
+    assert m["phase"] == "done" and m["status_since"] == t_fin
+    # a FURTHER blip on the now-idle machine changes nothing: provenance is
+    # idle, so no re-stamp — and the held Done survives the blip
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=t_fin))
+    m = machine()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+
+
 def test_tiles_laundry_route_end_to_end_real_tile(client, monkeypatch):
     # The real wiring, unmocked: route -> tiles.laundry_tile -> (mock HTTP
     # transport) -> HA-shaped states. Catches an env-var typo or argument

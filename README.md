@@ -49,8 +49,12 @@ at one URL.
   the wall.
 - **Laundry:** washer + dryer as porthole cards fed by Home Assistant — a
   timer-dial ring counts the minutes down, the drum tumbles while a cycle
-  runs, and a finished load shows a check with *when* it finished (remembered
-  even after the machine is opened or powered off). Built for LG ThinQ's
+  runs (wash water and suds in the washer, a heat glow in the dryer), and a
+  finished load shows a check with *when* it finished (remembered even
+  after the machine is opened or powered off). Machines that power
+  themselves off right after the end-of-cycle chime don't slip through:
+  polling tightens near the projected finish, and a finish that still lands
+  between polls is reconstructed and shown as Done. Built for LG ThinQ's
   sensors, but any HA integration exposing a status enum + a remaining-time
   timestamp works. Fails soft like weather/climate.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
