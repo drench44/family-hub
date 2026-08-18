@@ -4,6 +4,19 @@ Public family wall-dashboard: FastAPI + SQLite + vanilla JS. Keep any
 deployment-specific data (real calendar IDs, LAN IPs, camera URLs, secrets) out
 of this repo — it's public.
 
+## Adding a feature — run the gauntlet, every gate
+
+Any new feature (or substantial rework of one) works through
+[`docs/adding-a-feature.md`](docs/adding-a-feature.md) **as a checklist, in
+order, to the last item** — registry toggle, fail-soft server side, DEMO
+payload, mobile surface + tab-bar re-fit, motion/reduced-motion, tests + the
+structural guards, all visual gates, README + `docs/hub.png` regenerated in
+the same PR, the three-agent review (re-run if the branch grew after the
+first pass), and live post-deploy verification. Every item there cites the
+real shipped bug that created it; "it renders" is not "it's done". When a
+gate catches something new, fix it AND add both the guard and the checklist
+line that would have caught it.
+
 ## Code review before merge — required
 
 Any substantive change in this repo goes through review BEFORE it merges (or
