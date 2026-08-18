@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-08-17
+
 ### Added
 - Backup-health badge: the wall header shows an amber "Backup stale" pill once
   the last successful `hub.db` backup is older than `BACKUP_STALE_HOURS`
