@@ -54,8 +54,10 @@ at one URL.
 - **Laundry:** washer + dryer as porthole cards fed by Home Assistant — a
   timer-dial ring counts the minutes down, the drum tumbles while a cycle
   runs (wash water and suds in the washer, a heat glow in the dryer), and a
-  finished load shows a check with *when* it finished (remembered even
-  after the machine is opened or powered off). The card is real-time: a
+  finished load shows a check with *when* it finished — held for half an
+  hour even after the machine shuts itself down, then kept as a quiet
+  "last load" line (powering the machine back on clears the check early:
+  someone's collecting it). The card is real-time: a
   server-side watcher re-reads Home Assistant every 5 seconds for the whole
   cycle and pushes each change to open walls over a live stream
   (`GET /api/laundry/stream`, server-sent events), so a status change shows

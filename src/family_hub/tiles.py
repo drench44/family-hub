@@ -36,11 +36,15 @@ _climate_cache: dict[str, tuple[float, dict]] = {}
 # speed all cycle long, so the brief lg_thinq "end" status can't slip
 # between reads anywhere, not just near the projected finish.
 LAUNDRY_TTL = 4.0
-# How long a MISSED finish (running -> idle with the projection passed, see
-# app._laundry_annotate) keeps presenting as Done before decaying to idle + the
-# "last load" line. A real observed "end" holds Done until the door opens;
-# a machine that powered itself off gives no such signal, so the wall holds
-# the green Done long enough to be seen across the kitchen, not forever.
+# How long a finished-but-uncollected load keeps presenting as Done — for a
+# MISSED finish (running -> idle with the projection passed) AND for an
+# observed "end" followed by the machine's own auto power-off (these LG
+# machines turn themselves off 30-90s after the chime, so waiting for a
+# person-shaped signal before decaying would wait until the NEXT cycle);
+# both in app._laundry_annotate. A
+# person powering the machine on clears the hold; otherwise it decays to
+# idle + the "last load" line after this window — long enough to be seen
+# across the kitchen, not forever.
 LAUNDRY_MISSED_DONE_HOLD_MIN = 30.0
 _laundry_cache: dict[str, tuple[float, dict]] = {}
 
