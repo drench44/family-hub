@@ -1162,7 +1162,8 @@ const TAB_FEATURES = {
   todos: ['todos'],
   cal: ['google_calendar', 'ics_calendar', 'icloud_caldav'],
   cams: ['cameras'],
-  weather: ['weather', 'climate', 'laundry'],
+  weather: ['weather', 'climate'],
+  laundry: ['laundry'],
 };
 
 // A custom dashboard panel (links.panels entry that isn't the weather/climate
@@ -2219,15 +2220,24 @@ function lnLines(m, now = Date.now()) {
   }
 }
 
-/* The porthole: a front-loader door drawn as SVG. The bezel doubles as a
-   kitchen-timer dial — the arc is the minutes left mapped onto a 60-minute
-   face (a >1h cycle shows a full ring that starts draining inside the final
-   hour). The drum shows the state: tumbling garments while running (CSS
-   rotation on the group, paused for paused-phase and reduced-motion), a
-   check when done, empty when idle. Washer drums run water-cool, dryers
-   warm — set by the ln-washer / ln-dryer class on the machine block. */
+/* The porthole: a front-loader door drawn as SVG — brushed-steel bezel,
+   dark curved glass, the stainless drum behind it. The thin illuminated
+   halo OUTSIDE the steel is the data ring: minutes left mapped onto a
+   60-minute dial (a >1h cycle shows a full ring that starts draining
+   inside the final hour), a breathing full ring while a finished load
+   waits. The drum shows the state: the heap + a cascade of tumbling
+   pieces while running (see the tumble-physics CSS), the lit resting
+   load + a check when done, empty when idle. Washer loads run water-
+   cool, dryers warm — via the ln-washer / ln-dryer machine class. */
+// The data ring's geometry, shared by BOTH writers — lnPortholeSvg (full
+// renders) and laundryTick (in-place updates). One constant, or the tick
+// silently redraws the dial at the wrong circumference (caught in review:
+// a 45-min wash read 69% instead of 75% after the first tick).
+const LN_RING_R = 47.5;
+const LN_RING_C = 2 * Math.PI * LN_RING_R;
+
 function lnPortholeSvg(m, now = Date.now()) {
-  const R = 44, C = 2 * Math.PI * R;
+  const R = LN_RING_R, C = LN_RING_C;   // data ring: a thin halo outside the steel
   const mins = lnMinutesLeft(m.finishes_at, now);
   let frac = 0;
   if (m.phase === 'done') frac = 1;
@@ -2238,28 +2248,103 @@ function lnPortholeSvg(m, now = Date.now()) {
     ? `<circle class="ln-arc" cx="50" cy="50" r="${R}"`
       + ` stroke-dasharray="${(frac * C).toFixed(1)} ${C.toFixed(1)}"/>`
     : '';
-  let inner = '';
-  if (m.phase === 'running' || m.phase === 'paused') {
-    // three tumbling garments + two suds bubbles, rotating about the drum
-    // center; the drift animation on each blob keeps the tumble organic
-    inner = `<g class="ln-tumble">`
-      + `<ellipse class="ln-g ln-g1" cx="50" cy="68" rx="13" ry="8"/>`
-      + `<ellipse class="ln-g ln-g2" cx="36" cy="58" rx="9" ry="6"/>`
-      + `<ellipse class="ln-g ln-g3" cx="62" cy="56" rx="8" ry="6"/>`
-      + `<circle class="ln-sud" cx="43" cy="43" r="2.5"/>`
-      + `<circle class="ln-sud" cx="58" cy="47" r="1.8"/>`
-      + `</g>`;
+  // Gradients/clips need per-machine ids — two portholes share one document,
+  // and duplicate SVG ids silently resolve to the first.
+  const gid = String(m.id).replace(/[^a-zA-Z0-9_-]/g, '') || 'm';
+  const spinning = m.phase === 'running' || m.phase === 'paused';
+  // Drum furniture: inner-drum hub, two perforation rings, three lifter
+  // baffles — the stainless drum you actually see through the door. While a
+  // cycle runs it rides the tumble group (the DRUM spins, like the real
+  // machine); idle shows it standing still, honestly empty.
+  const drum = `<circle class="ln-hub" cx="50" cy="50" r="16"/>`
+    + `<circle class="ln-perf" cx="50" cy="50" r="25"/>`
+    + `<circle class="ln-perf" cx="50" cy="50" r="31"/>`
+    + [0, 120, 240].map((a) =>
+      `<rect class="ln-baffle" x="47.6" y="15.5" width="4.8" height="10.5" rx="2.4"`
+      + ` transform="rotate(${a} 50 50)"/>`).join('');
+  let inner;
+  // The resting load: a folded heap in two cloth shades with fold shadows
+  // and a top-edge sheen. Spinning machines slosh it (ln-slosh, with drag
+  // inertia toward the rising wall); a done machine shows it lying still
+  // under the cycle-complete light — the clothes really are in there.
+  const heap = `<g class="ln-heap">`
+    + `<path class="ln-cl1" d="M30 66 C28 58 34 53 40 55 C43 49 51 48 55 53`
+    +   ` C60 49 68 52 68 59 C72 62 70 69 64 71 C58 75 42 75 36 72 C31 70 29 69 30 66 Z"/>`
+    + `<path class="ln-cl2" d="M52 53 C53 47 61 45 65 49 C69 52 67 58 61 58 C56 59 52 57 52 53 Z"/>`
+    + `<path class="ln-fold" d="M36 66 C41 63 46 64 50 68"/>`
+    + `<path class="ln-fold" d="M52 60 C56 58 60 60 63 64"/>`
+    + `<path class="ln-sheen" d="M42 53.5 C46 51 51 51 55 53.5"/>`
+    + `</g>`;
+  if (spinning) {
+    // Tumble choreography grounded in the real physics (Whirlpool patent
+    // US9822476: tumble ~48 RPM, articles ride the drum from 6 o'clock and
+    // DETACH at ~11 o'clock — before top-of-travel, where <1G centripetal
+    // loses to gravity; LG: direction reverses with a pause). The 12.8s
+    // master: three fast revolutions one way with a CASCADE of three
+    // staggered pieces lifting and falling, an eased stop, three mirrored
+    // revolutions (the second trio lives in a horizontally-mirrored group,
+    // so it climbs the opposite wall), another stop. One carrier + one fall
+    // keyframe set serves all six pieces via animation-delay phase shifts;
+    // each flier's .ln-lift carrier rotates about the drum center so the
+    // carry is EXACTLY circular, and the fall is ballistic — the release
+    // velocity continues the carry velocity (endpoints computed so landing
+    // equals the next cycle's start; the wrap snap is invisible). Fliers
+    // draw UNDER the heap so they emerge from and vanish into it. The
+    // washer's water stays LEVEL outside all of it, foam riding the line.
+    const wads = [
+      'M-6 -1 C-6 -5 -1 -7 3 -5 C6.5 -3.5 6.5 1 3.5 3 C0 5 -4.5 3.5 -6 -1 Z',
+      'M-4 0 C-4.5 -3.5 -1 -5 2 -4 C4.5 -3 4.5 .5 2.5 2 C0 3.5 -3 3 -4 0 Z',
+      'M-5 1 C-6 -2.5 -2 -5.5 1.5 -4.5 C5 -3.5 5.5 0 3 2.5 C.5 4.5 -3.5 4 -5 1 Z',
+    ];
+    const trio = (base) => wads.map((d, i) =>
+      `<g class="ln-lift" style="animation-delay:${(base + i * 0.55).toFixed(2)}s">`
+      + `<g transform="translate(50 66)">`
+      + `<path class="ln-flyp ln-w${i + 1}" style="animation-delay:${(base + i * 0.55).toFixed(2)}s" d="${d}"/>`
+      + `</g></g>`).join('');
+    inner = `<g class="ln-tumble">${drum}</g>`
+      + trio(0)
+      + `<g transform="matrix(-1 0 0 1 100 0)">${trio(6.4)}</g>`
+      + heap
+      + (m.kind !== 'dryer'
+        ? `<path class="ln-water" d="M11 66 Q 30 61 50 66 T 89 66 L 89 90 L 11 90 Z"/>`
+          + `<path class="ln-waterline" d="M11 66 Q 30 61 50 66 T 89 66"/>`
+          + `<circle class="ln-sud" cx="41" cy="64" r="2.7"/>`
+          + `<circle class="ln-sud" cx="47" cy="62.4" r="1.9"/>`
+          + `<circle class="ln-sud" cx="60" cy="64.5" r="2.2"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="55" cy="56" r="1.2"/>`
+        : '');
   } else if (m.phase === 'done') {
-    inner = `<path class="ln-check" d="M36 51 L46 61 L65 40"/>`;
+    // the cycle-complete light: the drum glows softly over the finished
+    // load, which lies still until the door opens
+    inner = `<circle class="ln-donewash" cx="50" cy="50" r="37"/>` + drum
+      + heap
+      + `<path class="ln-check" d="M36 51 L46 61 L65 40"/>`;
   } else if (m.phase === 'error') {
-    inner = `<text class="ln-bang" x="50" y="60" text-anchor="middle">!</text>`;
+    inner = drum + `<text class="ln-bang" x="50" y="60" text-anchor="middle">!</text>`;
+  } else {
+    inner = drum;   // idle/offline: the still, empty drum
   }
   return `<svg class="ln-door" viewBox="0 0 100 100" aria-hidden="true">`
-    + `<circle class="ln-bezel" cx="50" cy="50" r="${R}"/>`
+    + `<defs>`
+    + `<linearGradient id="lnbz-${gid}" x1="0" y1="0" x2="1" y2="1">`
+    + `<stop class="ln-st-bzhi" offset="0"/><stop class="ln-st-bzmid" offset=".45"/>`
+    + `<stop class="ln-st-bzlo" offset="1"/></linearGradient>`
+    + `<radialGradient id="lngl-${gid}" cx=".38" cy=".3" r=".9">`
+    + `<stop class="ln-st-glhi" offset="0"/><stop class="ln-st-glmid" offset=".55"/>`
+    + `<stop class="ln-st-gllo" offset="1"/></radialGradient>`
+    + `<clipPath id="lncl-${gid}"><circle cx="50" cy="50" r="37"/></clipPath>`
+    + `</defs>`
+    + `<circle class="ln-bezel" cx="50" cy="50" r="43" stroke="url(#lnbz-${gid})"/>`
+    // a fat translucent ring behind the data ring; breathes while done.
+    // r=46 (not R): at R=47.5 its 7px stroke would clip flat against the
+    // 0..100 viewBox at 12/3/6/9 o'clock — the headline signal, ruined
+    + (m.phase === 'done' ? `<circle class="ln-halo" cx="50" cy="50" r="46"/>` : '')
     + arc
-    + `<circle class="ln-glass" cx="50" cy="50" r="36"/>`
-    + inner
-    + `<path class="ln-glint" d="M30 34 A26 26 0 0 1 46 25" fill="none"/>`
+    + `<circle class="ln-glass" cx="50" cy="50" r="37" fill="url(#lngl-${gid})"/>`
+    + `<g clip-path="url(#lncl-${gid})">${inner}</g>`
+    + `<circle class="ln-lip" cx="50" cy="50" r="38.2"/>`
+    + `<path class="ln-glint" d="M25 37 A 31 31 0 0 1 41 22 A 35 35 0 0 0 28 46 Z"/>`
+    + `<path class="ln-glint ln-glint2" d="M63 76 A 30 30 0 0 0 74 66 A 33 33 0 0 1 60 79 Z"/>`
     + `</svg>`;
 }
 
@@ -2331,9 +2416,8 @@ function laundryTick(now = Date.now()) {
     const arc = el.querySelector('.ln-arc');
     const mins = lnMinutesLeft(m.finishes_at, now);
     if (arc && (m.phase === 'running' || m.phase === 'paused') && mins !== null) {
-      const C = 2 * Math.PI * 44;
       arc.setAttribute('stroke-dasharray',
-        `${(Math.min(1, mins / 60) * C).toFixed(1)} ${C.toFixed(1)}`);
+        `${(Math.min(1, mins / 60) * LN_RING_C).toFixed(1)} ${LN_RING_C.toFixed(1)}`);
     }
   });
 }

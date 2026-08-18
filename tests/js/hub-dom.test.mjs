@@ -475,7 +475,8 @@ function seedTabbar(document) {
     '<button class="tab-btn" data-tab="todos">To-Dos</button>' +
     '<button class="tab-btn" data-tab="cal">Calendar</button>' +
     '<button class="tab-btn" data-tab="cams">Cameras</button>' +
-    '<button class="tab-btn" data-tab="weather">Weather</button>';
+    '<button class="tab-btn" data-tab="weather">Weather</button>' +
+    '<button class="tab-btn" data-tab="laundry">Laundry</button>';
   return bar;
 }
 
@@ -4948,6 +4949,20 @@ test('laundry card: portholes render running + done machines with the timer arc'
   assert.doesNotMatch(dryerHtml, /ln-tumble/);
   const full = /class="ln-arc"[^>]*stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(dryerHtml);
   assert.ok(Math.abs(full[1] / full[2] - 1) < 0.01, 'done ring is full');
+  // string-built SVG that no browser validates: the group tree must balance
+  // (a truncated/duplicated <g> ships silently otherwise — caught for real
+  // on this branch: a doubled ln-heap put the water on the slosh) and each
+  // machine renders exactly ONE heap
+  assert.equal((html.match(/<g[\s>]/g) || []).length,
+    (html.match(/<\/g>/g) || []).length, 'unbalanced <g> groups');
+  assert.equal((html.match(/class="ln-heap"/g) || []).length, 2,
+    'exactly one heap per machine');
+  // per-machine SVG ids: gradients/clips must not collide across machines
+  // (duplicate SVG ids silently resolve to the first)
+  assert.match(html, /id="lnbz-washer"/);
+  assert.match(html, /id="lnbz-dryer"/);
+  assert.match(html, /url\(#lngl-washer\)/);
+  assert.match(html, /url\(#lngl-dryer\)/);
   // the glanceable lines
   assert.match(html, /<span class="num">23<\/span><span class="ln-unit">min<\/span>/);
   assert.match(html, /Rinsing · done 2:23pm/);
@@ -4990,15 +5005,22 @@ test('laundryTick: countdown + arc update in place without rebuilding the drum',
   assert.equal(after, before, 'machine element identity preserved (no re-render)');
   assert.equal(after.querySelector('.num').textContent, '18');
   assert.equal(after.querySelector('.ln-sub').textContent, 'Rinsing · done 2:23pm');
-  const dash = after.querySelector('.ln-arc').getAttribute('stroke-dasharray');
+  const arcEl = after.querySelector('.ln-arc');
+  const dash = arcEl.getAttribute('stroke-dasharray');
   const [len, circ] = dash.split(' ').map(Number);
   assert.ok(Math.abs(len / circ - 18 / 60) < 0.01, 'arc drained to 18 min');
+  // the tick's circumference must match the RENDERED ring's radius — the
+  // two writers (render + tick) once diverged silently (44 vs 47.5) and a
+  // ratio-only assertion was blind to it
+  const ringR = Number(arcEl.getAttribute('r'));
+  assert.ok(Math.abs(circ - 2 * Math.PI * ringR) < 0.1,
+    `tick circumference ${circ} must equal 2πr of the rendered ring (r=${ringR})`);
   // count -> word shape change (finish slips past) rebuilds just the big line
   sandbox.laundryTick(LN_NOW + 40 * 60000);
   assert.match(washer().querySelector('.ln-big').innerHTML, /Any minute/);
 });
 
-test('updateTabVisibility + applyWallLayout: laundry alone keeps the weather tab and panels column', () => {
+test('updateTabVisibility + applyWallLayout: laundry has its own tab; alone it keeps the panels column', () => {
   const { sandbox, document } = newHub();
   seedTabbar(document);
   seedWallGrid(document);
@@ -5008,24 +5030,37 @@ test('updateTabVisibility + applyWallLayout: laundry alone keeps the weather tab
     { id: 'climate', enabled: false, group: 'integration' },
     { id: 'laundry', enabled: true, group: 'integration' },
   ] });
-  const weatherTab = document.querySelectorAll('.tab-btn')
-    .find((b) => b.dataset.tab === 'weather');
-  assert.equal(weatherTab.hidden, false,
-    'weather tab survives on laundry alone (it hosts the laundry card)');
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('laundry').hidden, false, 'laundry gets its own tab');
+  assert.equal(byTab('weather').hidden, true,
+    'weather tab no longer survives on laundry alone (laundry moved out)');
   const grid = document.querySelector('.hub-grid');
   assert.match(grid.style.gridTemplateAreas || '', /panels/,
-    'panels column survives on laundry alone');
-  // ...and off drops both (no custom panels in this sandbox)
+    'the WALL panels column still hosts the laundry slot, so it survives');
+  // ...and laundry off drops its tab + the column (no custom panels here)
   sandbox.renderIntegrations({ integrations: [
     { id: 'chores', enabled: true, group: 'feature' },
     { id: 'weather', enabled: false, group: 'integration' },
     { id: 'climate', enabled: false, group: 'integration' },
     { id: 'laundry', enabled: false, group: 'integration' },
   ] });
-  assert.equal(weatherTab.hidden, true);
+  assert.equal(byTab('laundry').hidden, true);
   assert.doesNotMatch(grid.style.gridTemplateAreas || '', /panels/);
   assert.equal(document.body.classList.contains('integ-off-laundry'), true,
     'the CSS hook that hides #laundry-slot is stamped');
+  // active-tab fallback: parked on the laundry tab when it goes away
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'laundry', enabled: true, group: 'integration' },
+  ] });
+  sandbox.setTab('laundry');
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'laundry', enabled: false, group: 'integration' },
+  ] });
+  assert.equal(document.body.dataset.tab, 'chores',
+    'hiding the active laundry tab falls back to the first visible tab');
 });
 
 
