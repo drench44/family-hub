@@ -616,6 +616,9 @@ body {
    legend. Motion: the tumble while running, the halo breath while done; both
    stop under prefers-reduced-motion (the static glow keeps the attention). */
 .laundry-slot { display: flex; flex-direction: column; gap: 12px; }
+/* the slot div always exists (see laundrySlotHtml); on an unconfigured wall
+   it stays empty — collapse it so it can't leave a phantom column gap */
+.laundry-slot:empty { display: none; }
 .ln { padding: 16px 12px 14px; }
 .ln-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ln-m { display: flex; flex-direction: column; align-items: center; text-align: center;

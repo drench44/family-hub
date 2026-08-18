@@ -1567,14 +1567,16 @@ function climateSlotHtml() {
 }
 
 /* Laundry has no links.panels entry (nothing to embed or expand into — the
-   card IS the whole surface), so its slot rides the panels column whenever
-   the integration is available (present in the /api/hub integrations list).
+   card IS the whole surface), so its slot rides the panels column. The slot
+   div is built UNCONDITIONALLY, like weather/climate: buildPanels runs once
+   per page life, so gating the div on the integration list FROZE a moment's
+   availability forever — a wall that happened to reload during a transient
+   server-side outage lost the card until a manual refresh (live board,
+   2026-08-17). Availability is renderLaundry's per-poll decision instead.
    The slot exists even while toggled off: body.integ-off-laundry CSS hides
    it, so flipping the switch back on is instant, matching weather/climate. */
 function laundrySlotHtml() {
-  const avail = ((hubData && hubData.integrations) || [])
-    .some((i) => i.id === 'laundry');
-  return avail ? `<div class="laundry-slot" id="laundry-slot"></div>` : '';
+  return `<div class="laundry-slot" id="laundry-slot"></div>`;
 }
 
 function buildPanels() {
@@ -2395,7 +2397,19 @@ function laundryCardHtml(ln, now = Date.now()) {
    never a blanked column. */
 function renderLaundry(ln = laundryData, now = Date.now()) {
   const host = document.getElementById('laundry-slot');
-  if (!host) return;   // integration not available; no slot was built
+  if (!host) return;   // panels not built yet
+  // Three cases, re-checked EVERY render (the old build-time gate froze a
+  // transient outage into a missing card until manual refresh):
+  //  - unlisted AND nothing good to show: render nothing — an unconfigured
+  //    wall must not show a dead "unavailable" card;
+  //  - unlisted BUT the tile still reports available (an /api/hub hiccup or
+  //    partial payload): keep the card — live data outranks a missing
+  //    registry entry, and blanking a mid-cycle card would be worse;
+  //  - listed with the feed down: the honest "Laundry unavailable" below.
+  // The card returns by itself the moment the integration reappears.
+  const listed = ((hubData && hubData.integrations) || [])
+    .some((i) => i.id === 'laundry');
+  if (!listed && (ln == null || !ln.available)) { host.innerHTML = ''; return; }
   const head = sectionHead('Laundry');
   const body = ln == null
     ? `<div class="card wx-loading" aria-hidden="true"></div>`
@@ -2454,6 +2468,9 @@ const LN_FAST_POLL_MS = 10000;
 const LN_ENDGAME_AHEAD_MIN = 2;
 const LN_ENDGAME_BEHIND_MIN = 5;
 let lnFastTimer = null;
+// last-seen laundry LISTING state — renderIntegrations repaints the slot on
+// a flip (see there); null = not yet observed, so the first poll paints once
+let lnWasListed = null;
 function lnEndgame(machines) {
   return (machines || []).some((m) => {
     if (m.phase !== 'running') return false;
@@ -3151,6 +3168,17 @@ function renderIntegrations(data) {
     document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
   updateTabVisibility(list);
   applyWallLayout(list);
+  // A laundry LISTING flip must repaint the laundry slot NOW: fetchLaundry's
+  // payload-diff can't see it (the tile can stay byte-identical, e.g.
+  // {"available": false} across a token outage), so without this the wall
+  // sticks on a blank slot where "Laundry unavailable" is owed — or keeps a
+  // stale card after unlisting. Only a FLIP repaints (renderLaundry rebuilds
+  // innerHTML, which restarts the tumble mid-spin — never do it per poll).
+  const lnListed = list.some((i) => i.id === 'laundry');
+  if (lnListed !== lnWasListed) {
+    lnWasListed = lnListed;
+    renderLaundry();
+  }
   const host = document.getElementById('integrations-ctl');
   if (!host) return;
   const row = (it) => {
