@@ -106,6 +106,17 @@ CREATE TABLE IF NOT EXISTS caldav_collections(
   ctag TEXT,
   sync_token TEXT,
   last_seen_at TEXT);
+-- Chore mirror ledger (P3): one row per (chore occurrence) mirrored into a
+-- person's iCloud list, mapping it to the cal_objects row + stable UID so the
+-- reconcile can create/move/prune and two-way completion can map an iCloud
+-- check-off back to (chore, date, person).
+CREATE TABLE IF NOT EXISTS chore_mirror(
+  chore_id INTEGER NOT NULL,
+  date TEXT NOT NULL,                 -- occurrence date 'YYYY-MM-DD'
+  person_id INTEGER NOT NULL,
+  cal_object_id TEXT NOT NULL,        -- the cal_objects row we created
+  uid TEXT NOT NULL,                  -- 'familyhub-chore-<id>-<date>'
+  PRIMARY KEY(chore_id, date));
 """
 
 # Columns a caller may set through update_person / add_chore validation.
@@ -964,6 +975,35 @@ def list_caldav_collections(conn, comp_type: str | None = None) -> list[dict]:
         d["enabled"] = bool(d["enabled"])
         out.append(d)
     return out
+
+
+# --- chore mirror ledger (P3) ---------------------------------------------
+
+def upsert_chore_mirror(conn, chore_id: int, date: str, person_id: int,
+                        cal_object_id: str, uid: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO chore_mirror(chore_id, date, person_id, "
+        "cal_object_id, uid) VALUES(?, ?, ?, ?, ?)",
+        (chore_id, date, person_id, cal_object_id, uid))
+    conn.commit()
+
+
+def list_chore_mirror(conn) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM chore_mirror")]
+
+
+def delete_chore_mirror(conn, chore_id: int, date: str) -> None:
+    conn.execute("DELETE FROM chore_mirror WHERE chore_id = ? AND date = ?",
+                 (chore_id, date))
+    conn.commit()
+
+
+def get_chore_mirror_by_uid(conn, uid: str) -> dict | None:
+    """Map an iCloud object's UID back to its (chore, date, person) — the P4
+    two-way completion path uses this to record a check-off done in iOS."""
+    row = conn.execute("SELECT * FROM chore_mirror WHERE uid = ?",
+                       (uid,)).fetchone()
+    return dict(row) if row is not None else None
 
 
 def caldav_collection_enabled(conn, cid: str, default: bool = True) -> bool:

@@ -147,3 +147,49 @@ def build_vtodo(uid: str, title: str, now: dt.datetime, due=None) -> str:
         todo.add("DUE", due)   # a date -> VALUE=DATE; a datetime -> timed
     cal.add_component(todo)
     return cal.to_ical().decode("utf-8")
+
+
+def _local_to_utc(d: dt.date, hhmm: str, tz) -> dt.datetime:
+    """date + 'HH:MM' interpreted in the wall's zone `tz`, converted to UTC —
+    RFC 5545 requires absolute DUE/alarm times in UTC; the device shows them back
+    in its own local zone (the family shares one)."""
+    h, m = hhmm.split(":")
+    local = dt.datetime(d.year, d.month, d.day, int(h), int(m), tzinfo=tz)
+    return local.astimezone(dt.timezone.utc)
+
+
+def build_chore_vtodo(uid: str, title: str, due_date: dt.date,
+                      due_times, now: dt.datetime, tz=None) -> str:
+    """A VTODO for one chore occurrence mirrored into a person's iCloud list.
+    No `due_times` (or no `tz`) -> an all-day reminder due that date. With times
+    -> DUE at the first time and one VALARM per time (absolute UTC triggers, the
+    EKAlarm equivalent) so iOS fires a native notification at each. `tz` is the
+    wall's zone; the local 'HH:MM' times are converted to UTC per RFC 5545."""
+    import icalendar
+    cal = icalendar.Calendar()
+    cal.add("VERSION", "2.0")
+    cal.add("PRODID", "-//family-hub//caldav//EN")
+    todo = icalendar.Todo()
+    nowu = _utc(now)
+    todo.add("UID", uid)
+    todo.add("SUMMARY", title)
+    todo.add("DTSTAMP", nowu)
+    todo.add("CREATED", nowu)
+    todo.add("LAST-MODIFIED", nowu)
+    todo.add("SEQUENCE", 0)
+    todo.add("STATUS", "NEEDS-ACTION")
+    times = sorted({t for t in (due_times or [])})
+    if times and tz is not None:
+        todo.add("DUE", _local_to_utc(due_date, times[0], tz))
+        for t in times:
+            alarm = icalendar.Alarm()
+            alarm.add("ACTION", "DISPLAY")
+            alarm.add("DESCRIPTION", title)
+            # absolute trigger MUST be typed DATE-TIME (untyped defaults to DURATION)
+            alarm.add("TRIGGER", _local_to_utc(due_date, t, tz),
+                      parameters={"VALUE": "DATE-TIME"})
+            todo.add_component(alarm)
+    else:
+        todo.add("DUE", due_date)                              # all-day VALUE=DATE
+    cal.add_component(todo)
+    return cal.to_ical().decode("utf-8")

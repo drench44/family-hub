@@ -387,6 +387,11 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         # click instantly regardless of when the push lands.
         cfg_row = fdb.integration_config(conn, "icloud_caldav") or {}
         if not cfg_row.get("readonly", True):
+            # Project the wall's chore plan into each mapped person's list FIRST
+            # (queues creates/deletes into the outbox), so this same flush pushes
+            # them. Runs after the pull so its prune sees fresh completion state.
+            from . import chore_mirror
+            chore_mirror.reconcile(conn, cfg, now)
             flushed = flush_pending(client, conn, collections, now.isoformat())
             errors.extend(flushed["errors"])
             needs_auth = needs_auth or flushed["needs_auth"]
