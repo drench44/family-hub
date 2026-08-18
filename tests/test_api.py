@@ -2572,6 +2572,269 @@ def test_tiles_laundry_route_restamps_only_across_a_real_new_cycle(client, monke
     assert last_done() == t2
 
 
+def _laundry_tile_with(phase, status, since, finishes=None):
+    async def tile(hclient, cfg, token):
+        return {"available": True, "machines": [
+            {"id": "washer", "label": "Washer", "kind": "washer",
+             "phase": phase, "status": status, "finishes_at": finishes,
+             "status_since": since}]}
+    return tile
+
+
+def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeypatch):
+    # LG machines auto-power-off a minute or two after "end", so a 60s poll
+    # can watch running -> power_off and never observe the done phase at all —
+    # the live board sat on a bare "Idle" with no last-load line
+    # (2026-08-17). An observed running -> idle transition with the projection
+    # passed IS a finished load: it stamps completion memory and is presented
+    # as the Done it was (until the hold window lapses — separate test).
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    # cycle runs, then the machine powers itself off past the poll window:
+    # the idle poll still carries the (now past) projected finish -> that
+    # exact moment is the stamp AND the wall shows Done at that moment
+    t_fin = iso(-3)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-40), finishes=t_fin))
+    assert machine()["last_done"] is None
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(-1), finishes=t_fin))
+    m = machine()
+    assert m["last_done"] == t_fin
+    assert m["phase"] == "done" and m["status_since"] == t_fin
+    # sitting idle: neither the stamp nor the held Done moves
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+    # an HA blip DURING the hold must not erase the held Done — offline is
+    # deliberately absent from the missed-memory clearing set
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    assert machine()["phase"] == "offline"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+
+    # next cycle CANCELED mid-run: projection still in the future -> the
+    # stamp falls back to the moment the machine left the cycle, and no
+    # Done is faked for a load that never finished
+    t_cancel = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-10), finishes=iso(30)))
+    m = machine()
+    assert m["last_done"] == t_fin      # still the old finish while running
+    assert m["phase"] == "running"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_cancel, finishes=iso(30)))
+    m = machine()
+    # idle presented (not a lingering Done): the new cycle retired the held
+    # missed-done, and a canceled cycle never creates one
+    assert m["last_done"] == t_cancel and m["phase"] == "idle"
+
+    # exit from PAUSED: pause freezes the drum while the projection keeps
+    # aging, so a "past" projection there is fiction — the stamp is the exit
+    # moment, and no Done is faked
+    t_stop = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("paused", "pause", iso(-20), finishes=iso(-15)))
+    assert machine()["phase"] == "paused"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_stop, finishes=iso(-15)))
+    m = machine()
+    assert m["last_done"] == t_stop and m["phase"] == "idle"
+    # the paused exit's cycle-log note labels it honestly — a mislabeled
+    # note is silently wrong tuning evidence
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "cycle_exit"
+
+    # running -> OFFLINE alone stamps nothing (HA blind mid-cycle is not a
+    # finish; the drum may still be turning) ...
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-5)))
+    assert machine()["last_done"] == t_stop   # observed: prev is now running
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    assert machine()["last_done"] == t_stop
+    # ... but the machine REAPPEARING idle closes the cycle across the blip:
+    # with no usable projection the stamp is the reappear moment, and no
+    # Done is faked (the projection-backed blip case has its own test)
+    t_back = iso(0)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_back))
+    m = machine()
+    assert m["last_done"] == t_back and m["phase"] == "idle"
+
+    # a REAL observed finish, then the door opens (done -> idle with a fresh
+    # status_since): the accurate end stamp survives — the door-open moment
+    # must not overwrite it — and Done does not linger past the door
+    t_end = iso(-2)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-30), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    assert machine()["phase"] == "done"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "initial", iso(0)))
+    m = machine()
+    assert m["last_done"] == t_end and m["phase"] == "idle"
+
+
+def test_laundry_cycle_log_records_transitions_only(client, app_mod, monkeypatch):
+    # every observed RAW phase transition lands in the cycle log with its
+    # diagnostic note; steady-state polls add nothing; the endpoint serves
+    # newest-first and the synthesized done presentation is never logged
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    poll = lambda: client.get("/api/tiles/laundry").json()
+    entries = lambda: client.get("/api/laundry/log").json()["entries"]
+
+    t_fin = iso(-3)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "rinsing", iso(-40), finishes=iso(20)))
+    poll()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(-1), finishes=t_fin))
+    poll()   # missed finish: presented done, logged as the RAW idle it was
+    poll()   # steady state: no new row
+    rows = entries()
+    assert [r["phase"] for r in rows] == ["idle", "running"]   # newest first
+    assert rows[0]["prev_phase"] == "running"
+    assert rows[0]["note"] == "missed_finish"
+    assert rows[0]["finishes_at"] == t_fin
+    assert rows[1]["prev_phase"] is None and rows[1]["note"] is None
+    # ?machine= filters, ?limit= clamps
+    assert entries() == client.get("/api/laundry/log?machine=washer").json()["entries"]
+    assert client.get("/api/laundry/log?machine=dryer").json()["entries"] == []
+    assert len(client.get("/api/laundry/log?limit=1").json()["entries"]) == 1
+    # out-of-range limits 422 loudly (calendar-route precedent) — silent
+    # truncation is wrong for a log someone pages through by hand
+    assert client.get("/api/laundry/log?limit=0").status_code == 422
+    assert client.get("/api/laundry/log?limit=5000").status_code == 422
+    # fail-soft: a broken log read serves an empty list, never a 500
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr("family_hub.db.laundry_log_recent", boom)
+    r = client.get("/api/laundry/log")
+    assert r.status_code == 200 and r.json() == {"entries": []}
+
+
+def test_laundry_cycle_log_write_failure_retries_the_transition(client, monkeypatch):
+    # the log write runs BEFORE phase_key consumes the transition: a flaky
+    # DB at exactly the wrong moment must lose NOTHING — the same
+    # transition (kv stamps and log row) retries whole on the next poll
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    poll = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+    entries = lambda: client.get("/api/laundry/log").json()["entries"]
+
+    t_fin = iso(-2)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "rinsing", iso(-30), finishes=iso(20)))
+    poll()
+    assert len(entries()) == 1
+    # the DB goes flaky for exactly the finish transition
+    import sqlite3
+    real_add = fdb.laundry_log_add
+    def flaky(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr("family_hub.db.laundry_log_add", flaky)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=t_fin))
+    m = poll()   # fail-soft response, transition NOT consumed
+    assert m["last_done"] is None
+    assert len(entries()) == 1
+    # DB heals: the SAME poll payload now lands the whole transition —
+    # stamp, synthesized Done, and the log row with its note
+    monkeypatch.setattr("family_hub.db.laundry_log_add", real_add)
+    m = poll()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+    rows = entries()
+    assert len(rows) == 2 and rows[0]["note"] == "missed_finish"
+
+
+def test_tiles_laundry_route_missed_done_bounds(client, app_mod, monkeypatch, caplog):
+    # two bounds keep the synthetic Done honest. STAMPING: a projection
+    # staler than the hold window at the exit is likely a LATCHED
+    # previous-cycle value from a flaky remaining-time sensor — refused
+    # (with a warning), the exit moment stamps instead, no Done is faked.
+    # PRESENTATION: a held stamp older than the window decays to idle (what
+    # a restart finding an old stamp in kv must show), keeping the
+    # last-load line.
+    from family_hub import tiles as ftiles
+    tile_with = _laundry_tile_with
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    stale = iso(-(ftiles.LAUNDRY_MISSED_DONE_HOLD_MIN + 10))
+    t_off = iso(0)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-90), finishes=stale))
+    client.get("/api/tiles/laundry")
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", t_off, finishes=stale))
+    with caplog.at_level("WARNING"):
+        m = client.get("/api/tiles/laundry").json()["machines"][0]
+    assert m["last_done"] == t_off and m["phase"] == "idle"
+    assert any("stale finish projection" in r.message for r in caplog.records), \
+        "the refused stale projection must be visible in the logs"
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "stale_projection"
+
+    # presentation decay: seed kv exactly as a restart would find it — a
+    # missed stamp just past the hold — and poll idle
+    old = iso(-(ftiles.LAUNDRY_MISSED_DONE_HOLD_MIN + 5))
+    c = app_mod._db()
+    app_mod.fdb.kv_set(c, "laundry_missed_washer", old)
+    app_mod.fdb.kv_set(c, "laundry_done_washer", old)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = client.get("/api/tiles/laundry").json()["machines"][0]
+    assert m["last_done"] == old and m["phase"] == "idle"
+
+
+def test_tiles_laundry_route_blip_straddled_finish_presents_done(client, monkeypatch):
+    # a finish landing exactly inside an HA blip (running -> offline ->
+    # idle) is still a finish: the last non-offline phase is tracked
+    # separately, so the recent past projection stamps and presents Done —
+    # while a blip on a machine that never ran stays silent
+    tile_with = _laundry_tile_with
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    t_fin = iso(-2)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "running", iso(-30), finishes=iso(3)))
+    assert machine()["phase"] == "running"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    assert machine()["phase"] == "offline"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=t_fin))
+    m = machine()
+    assert m["last_done"] == t_fin
+    assert m["phase"] == "done" and m["status_since"] == t_fin
+    # the log row carries both facts: a missed finish, resolved across a blip
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "missed_finish+offline_bridge"
+    # a FURTHER blip on the now-idle machine changes nothing: provenance is
+    # idle, so no re-stamp — and the held Done survives the blip
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=t_fin))
+    m = machine()
+    assert m["last_done"] == t_fin and m["phase"] == "done"
+
+
 def test_tiles_laundry_route_end_to_end_real_tile(client, monkeypatch):
     # The real wiring, unmocked: route -> tiles.laundry_tile -> (mock HTTP
     # transport) -> HA-shaped states. Catches an env-var typo or argument
@@ -2612,3 +2875,154 @@ def test_tiles_laundry_route_end_to_end_real_tile(client, monkeypatch):
     cached = ftiles._laundry_cache["http://ha:8123"][1]
     assert "last_done" not in cached["machines"][0]
     ftiles.reset_caches()
+
+
+# --- richer chore routines: interval / biweekly / due-times (P1) ----------
+
+def _mk_person(client, name="Ana"):
+    return client.post("/api/admin/people",
+                       json={"name": name, "color": "#5BC9F0"}).json()["id"]
+
+
+def test_chore_interval_biweekly_and_due_times(client, app_mod):
+    pid = _mk_person(client)
+    r = client.post("/api/admin/chores", json={
+        "title": "Counters", "schedule_kind": "interval", "interval_days": 3,
+        "assign_kind": "fixed", "fixed_person_id": pid})
+    assert r.status_code == 200
+    ch = r.json()
+    assert ch["schedule_kind"] == "interval" and ch["interval_days"] == 3
+    assert ch["due_times"] == []
+    r = client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "days", "days_mask": 1,
+        "week_interval": 2, "due_times": ["07:00", "18:30"],
+        "assign_kind": "fixed", "fixed_person_id": pid})
+    assert r.status_code == 200
+    ch2 = r.json()
+    assert ch2["week_interval"] == 2 and ch2["due_times"] == ["07:00", "18:30"]
+
+
+def test_chore_recurrence_validation(client, app_mod):
+    pid = _mk_person(client)
+    base = {"title": "x", "assign_kind": "fixed", "fixed_person_id": pid}
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "interval"}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "interval", "interval_days": 0}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "interval", "interval_days": 400}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "days", "days_mask": 1, "week_interval": 3}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "daily", "due_times": ["25:00"]}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "schedule_kind": "daily", "due_times": ["7am"]}).status_code == 422
+
+
+def test_chore_kind_change_clears_dependent_fields(client, app_mod):
+    pid = _mk_person(client)
+    cid = client.post("/api/admin/chores", json={
+        "title": "x", "schedule_kind": "interval", "interval_days": 5,
+        "assign_kind": "fixed", "fixed_person_id": pid}).json()["id"]
+    r = client.patch(f"/api/admin/chores/{cid}", json={"schedule_kind": "daily"})
+    assert r.status_code == 200
+    ch = r.json()
+    assert ch["schedule_kind"] == "daily" and ch["interval_days"] is None
+    assert ch["week_interval"] == 1
+    # converting TO interval requires interval_days
+    assert client.patch(f"/api/admin/chores/{cid}", json={"schedule_kind": "interval"}).status_code == 422
+
+
+# --- P2: person -> iCloud reminder-list mapping ---------------------------
+
+def test_person_reminder_list_mapping(client, app_mod):
+    c = app_mod._db()
+    app_mod.fdb.upsert_caldav_collection(c, "caldav:emma", "VTODO", "Emma", None, "t")
+    pid = _mk_person(client, "Emma")
+    lists = client.get("/api/admin/state").json()["reminder_lists"]
+    assert {"id": "caldav:emma", "name": "Emma"} in lists
+    r = client.patch(f"/api/admin/people/{pid}", json={"reminder_list_id": "caldav:emma"})
+    assert r.status_code == 200 and r.json()["reminder_list_id"] == "caldav:emma"
+    assert client.patch(f"/api/admin/people/{pid}",
+                        json={"reminder_list_id": "caldav:nope"}).status_code == 422
+    r = client.patch(f"/api/admin/people/{pid}", json={"reminder_list_id": None})
+    assert r.status_code == 200 and r.json()["reminder_list_id"] is None
+# --- backup-health badge: pure _backup_status + /api/hub `backup` block ---
+
+_BT0 = dt.datetime(2026, 8, 18, 12, 0, tzinfo=dt.timezone.utc)
+
+
+def test_backup_status_unknown(app_mod):
+    assert app_mod._backup_status(None, _BT0, 129600) == {
+        "known": False, "last_success": None, "age_s": None,
+        "stale": False, "threshold_s": 129600}
+
+
+def test_backup_status_fresh(app_mod):
+    s = app_mod._backup_status(_BT0 - dt.timedelta(hours=1), _BT0, 129600)
+    assert s["known"] is True and s["age_s"] == 3600 and s["stale"] is False
+
+
+def test_backup_status_stale(app_mod):
+    s = app_mod._backup_status(_BT0 - dt.timedelta(hours=40), _BT0, 129600)  # 144000 > 129600
+    assert s["stale"] is True and s["age_s"] == 144000
+
+
+def test_backup_status_boundary(app_mod):
+    assert app_mod._backup_status(_BT0 - dt.timedelta(seconds=129600), _BT0, 129600)["stale"] is False
+    assert app_mod._backup_status(_BT0 - dt.timedelta(seconds=129601), _BT0, 129600)["stale"] is True
+
+
+def test_hub_carries_backup_block(client):
+    b = client.get("/api/hub").json()["backup"]
+    assert set(b) >= {"known", "stale", "age_s", "last_success", "threshold_s"}
+    assert b["known"] is False   # no heartbeat yet on a fresh db -> muted, not a false alarm
+
+
+def test_build_backup_reads_kv_heartbeat(app_mod, tmp_path):
+    conn = fdb.connect(str(tmp_path / "hb.db"))
+    fdb.ensure_schema(conn)
+    at = _BT0 - dt.timedelta(hours=2)
+    fdb.kv_set(conn, "backup_status",
+               {"at": at.isoformat(), "snapshot": "hub-x.db", "bytes": 9000})
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is True and s["age_s"] == 7200 and s["stale"] is False
+
+
+def test_build_backup_unknown_on_empty_kv(app_mod, tmp_path):
+    conn = fdb.connect(str(tmp_path / "empty.db"))
+    fdb.ensure_schema(conn)
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is False and s["stale"] is False
+
+
+def test_build_backup_malformed_timestamp_is_unknown(app_mod, tmp_path):
+    # A garbage/format-drifted "at" must fail SAFE to unknown, never crash or
+    # report a false-fresh timestamp.
+    conn = fdb.connect(str(tmp_path / "bad.db"))
+    fdb.ensure_schema(conn)
+    fdb.kv_set(conn, "backup_status", {"at": "not-a-date"})
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is False and s["stale"] is False
+
+
+def test_build_backup_naive_timestamp_coerced_to_utc(app_mod, tmp_path):
+    # The script writes tz-aware ISO, but a naive "at" must still be read as UTC
+    # rather than crashing on naive-vs-aware subtraction.
+    conn = fdb.connect(str(tmp_path / "naive.db"))
+    fdb.ensure_schema(conn)
+    naive = (_BT0 - dt.timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    fdb.kv_set(conn, "backup_status", {"at": naive})
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is True and s["age_s"] == 3600
+
+
+def test_hub_survives_backup_read_error(client, monkeypatch):
+    # A backup-status read that throws must NOT 500 the whole wall: /api/hub
+    # stays 200 and the block degrades to unknown (fails-soft, like todos).
+    import family_hub.db as fdbmod
+    orig = fdbmod.kv_get
+
+    def boom(conn, key):
+        if key == "backup_status":
+            raise RuntimeError("kv read blew up")
+        return orig(conn, key)
+
+    monkeypatch.setattr(fdbmod, "kv_get", boom)
+    r = client.get("/api/hub")
+    assert r.status_code == 200
+    assert r.json()["backup"]["known"] is False

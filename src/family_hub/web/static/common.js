@@ -87,6 +87,26 @@ function fmtTime(iso) {
   return min === 0 ? `${hh}${ap}` : `${hh}:${String(min).padStart(2, '0')}${ap}`;
 }
 
+/* Backup-health header badge. Pure: maps the /api/hub `backup` block to a
+   descriptor {show, level, text, title}. Hidden while the backup is healthy,
+   still 'unknown' (no heartbeat recorded yet), or the payload is missing;
+   amber only once a KNOWN backup has gone stale. */
+function fmtBackupAge(s) {
+  if (s == null) return '—';
+  const h = Math.round(s / 3600);
+  return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+function backupBadge(status) {
+  if (!status || !status.known || !status.stale) return { show: false };
+  const age = fmtBackupAge(status.age_s);
+  return {
+    show: true,
+    level: 'warn',
+    text: `⚠ Backup stale (${age})`,
+    title: `No successful backup in ${age} (warns past ${fmtBackupAge(status.threshold_s)})`,
+  };
+}
+
 /* 'YYYY-MM-DD' -> 'Today' | 'Tomorrow' | 'Wed 8/19' (relative to todayStr).
    Dates are built from their own components (local midnight) so the weekday is
    timezone-independent. */
@@ -422,12 +442,42 @@ function choreDaysMask(days) {
   return arr.reduce((m, i) => m | (1 << i), 0);
 }
 
-/* Form `repeat` ('daily'|'weekly'|'once') <-> API schedule_kind
-   ('daily'|'days'|'once'). A one-time chore is always one person on one date. */
+/* Form `repeat` ('daily'|'weekly'|'interval'|'once') <-> API schedule_kind
+   ('daily'|'days'|'interval'|'once'). Biweekly is NOT its own repeat value: it
+   is 'weekly' carrying week_interval 2, the same shape the backend stores (and
+   the same shape iOS's EKRecurrenceRule uses — frequency weekly, interval 2). A
+   one-time chore is always one person on one date. */
 function choreScheduleKind(repeat) {
   if (repeat === 'weekly') return 'days';
+  if (repeat === 'interval') return 'interval';
   if (repeat === 'once') return 'once';
   return 'daily';
+}
+
+/* interval_days is "every N days" from creation, 1–365. Mirror the server's
+   clamp so an out-of-range field is corrected here (and empty/NaN -> null,
+   which the server rejects for an interval chore — caught inline before we
+   POST, see buildChoreForm's submit guard). */
+function clampIntervalDays(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(n, 365);
+}
+
+/* due_times drive later phone notifications: up to 6 "HH:MM" (24h) strings.
+   Drop anything that isn't a real time, de-dupe, sort ascending (zero-padded
+   HH:MM sorts lexicographically), cap at 6 — mirroring the server's rules so
+   the payload is clean regardless of what the form collected. */
+function normalizeDueTimes(times) {
+  const re = /^([01]\d|2[0-3]):([0-5]\d)$/;
+  const seen = new Set();
+  const out = [];
+  (Array.isArray(times) ? times : []).forEach((t) => {
+    const v = typeof t === 'string' ? t.trim() : '';
+    if (re.test(v) && !seen.has(v)) { seen.add(v); out.push(v); }
+  });
+  out.sort();
+  return out.slice(0, 6);
 }
 
 function buildChorePayload(f) {
@@ -438,6 +488,14 @@ function buildChorePayload(f) {
     icon: (f.icon || '').trim(),
     schedule_kind: kind,
     days_mask: kind === 'days' ? choreDaysMask(f.days) : 0,
+    // Weekly cadence: 2 == biweekly, else weekly. Only 'days' carries it; every
+    // other kind sends the neutral 1, the same way days_mask sends 0 off-weekly.
+    week_interval: kind === 'days' && Number(f.weekInterval) === 2 ? 2 : 1,
+    // Only an 'interval' chore carries a gap; null keeps it off the other kinds
+    // (the server would clamp it away, but we don't send noise).
+    interval_days: kind === 'interval' ? clampIntervalDays(f.intervalDays) : null,
+    // Reminder times apply to any kind (0–6 HH:MM, sorted, de-duped).
+    due_times: normalizeDueTimes(f.times),
     assign_kind: assign,
     fixed_person_id: assign === 'fixed'
       ? (f.person === null || f.person === '' || f.person === undefined ? null : Number(f.person))
@@ -452,11 +510,18 @@ function choreToModel(ch) {
   const days = new Set();
   for (let i = 0; i < 7; i++) if ((ch.days_mask >> i) & 1) days.add(i);
   const repeat = ch.schedule_kind === 'days' ? 'weekly'
-    : (ch.schedule_kind === 'once' ? 'once' : 'daily');
+    : ch.schedule_kind === 'interval' ? 'interval'
+      : ch.schedule_kind === 'once' ? 'once' : 'daily';
   return {
     title: ch.title, icon: ch.icon,
     repeat,
-    days, assign: ch.assign_kind, fixed_person_id: ch.fixed_person_id,
+    days,
+    // 2 == biweekly; anything else (incl. absent) reads as plain weekly.
+    weekInterval: Number(ch.week_interval) === 2 ? 2 : 1,
+    // Seed the number field: '' when absent so the input renders empty.
+    intervalDays: ch.interval_days == null ? '' : ch.interval_days,
+    times: Array.isArray(ch.due_times) ? ch.due_times.slice() : [],
+    assign: ch.assign_kind, fixed_person_id: ch.fixed_person_id,
     rot: ch.rotation_order.slice(),
     // For a one-time chore the due date is stored as rotation_epoch.
     date: ch.schedule_kind === 'once' ? (ch.rotation_epoch || '') : '',
@@ -501,10 +566,27 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       <div class="segmented f-repeat">
         <button class="seg-btn" type="button" data-repeat="daily">Daily</button>
         <button class="seg-btn" type="button" data-repeat="weekly">Weekly</button>
+        <button class="seg-btn" type="button" data-repeat="interval">Every N days</button>
         <button class="seg-btn" type="button" data-repeat="once">Once</button>
       </div>
       <div class="day-chips f-days"></div>
+      <div class="segmented f-weekfreq">
+        <button class="seg-btn" type="button" data-weekfreq="1">Every week</button>
+        <button class="seg-btn" type="button" data-weekfreq="2">Every 2 weeks</button>
+      </div>
+      <div class="interval-row f-interval">
+        <span class="interval-word">Every</span>
+        <input class="txt-input interval-num f-intervaldays" type="number" min="1" max="365" inputmode="numeric" autocomplete="off">
+        <span class="interval-word">days</span>
+      </div>
       <input class="txt-input f-date" type="date"></div>
+    <div class="field"><label>Reminder times</label>
+      <div class="time-add">
+        <input class="txt-input time-input f-timeinput" type="time" autocomplete="off">
+        <button class="time-add-btn f-timeadd" type="button">Add time</button>
+      </div>
+      <div class="time-list f-times"></div>
+      <div class="hint">Optional phone-reminder times, up to 6.</div></div>
     <div class="field"><label>Who does it</label>
       <div class="segmented f-assign">
         <button class="seg-btn" type="button" data-assign="fixed">One person</button>
@@ -521,6 +603,8 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
   $('.f-title').value = model.title || '';
   $('.f-icon').value = model.icon || '';
   $('.f-date').value = model.date || (model.repeat === 'once' ? todayISO() : '');
+  $('.f-intervaldays').value = model.intervalDays == null || model.intervalDays === ''
+    ? '' : String(model.intervalDays);
   const active = people.filter((p) => p.active);
   $('.f-person').innerHTML = active.map((p) =>
     `<option value="${p.id}"${p.id === model.fixed_person_id ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
@@ -529,11 +613,29 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
     $('.f-repeat').querySelectorAll('.seg-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.repeat === model.repeat));
     $('.f-days').classList.toggle('hidden', model.repeat !== 'weekly');
+    $('.f-weekfreq').classList.toggle('hidden', model.repeat !== 'weekly');
+    $('.f-interval').classList.toggle('hidden', model.repeat !== 'interval');
     $('.f-date').classList.toggle('hidden', model.repeat !== 'once');
   };
   const paintDays = () => {
     $('.f-days').innerHTML = DAY_LABELS.map((d, i) =>
       `<button class="day-chip${model.days.has(i) ? ' selected' : ''}" type="button" data-day="${i}">${d}</button>`).join('');
+  };
+  const paintWeekFreq = () => {
+    const wk = model.weekInterval === 2 ? 2 : 1;
+    $('.f-weekfreq').querySelectorAll('.seg-btn').forEach((b) =>
+      b.classList.toggle('active', Number(b.dataset.weekfreq) === wk));
+  };
+  // Reminder-time chips render the app's compact time label ("20:00" -> "8pm"),
+  // the same fmtTime the calendar uses. The whole chip is the remove button
+  // (data-remtime index), mirroring the rotation list's tap-to-remove chips.
+  const paintTimes = () => {
+    const full = model.times.length >= 6;
+    $('.time-add').classList.toggle('hidden', full);
+    $('.f-times').innerHTML = model.times.length
+      ? model.times.map((t, i) =>
+        `<button class="time-chip" type="button" data-remtime="${i}">${escapeHtml(fmtTime('T' + t))} ✕</button>`).join('')
+      : `<div class="hint">No reminder times yet.</div>`;
   };
   const paintAssign = () => {
     // A one-time chore is always one person — hide the Rotation choice entirely
@@ -559,7 +661,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       }).join('')
       : `<div class="hint">No turns yet — add people above.</div>`;
   };
-  paintRepeat(); paintDays(); paintAssign(); paintRotation();
+  paintRepeat(); paintDays(); paintWeekFreq(); paintTimes(); paintAssign(); paintRotation();
 
   $('.f-repeat').onclick = (e) => {
     const b = e.target.closest('[data-repeat]');
@@ -569,6 +671,9 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       model.assign = 'fixed';                       // one-time is one person
       if (!$('.f-date').value) $('.f-date').value = todayISO();
     }
+    // Seed a sensible cadence the first time "Every N days" is chosen so the
+    // field is never empty (empty would fail the server's interval rule).
+    if (model.repeat === 'interval' && !$('.f-intervaldays').value) $('.f-intervaldays').value = '2';
     paintRepeat();
     paintAssign();                                  // rotation choice shows/hides with once
   };
@@ -578,6 +683,28 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
     const i = Number(b.dataset.day);
     if (model.days.has(i)) model.days.delete(i); else model.days.add(i);
     paintDays();
+  };
+  $('.f-weekfreq').onclick = (e) => {
+    const b = e.target.closest('[data-weekfreq]');
+    if (!b) return;
+    model.weekInterval = Number(b.dataset.weekfreq) === 2 ? 2 : 1;
+    paintWeekFreq();
+  };
+  $('.f-timeadd').onclick = () => {
+    const v = ($('.f-timeinput').value || '').trim();
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(v)) return;   // empty/partial: no-op
+    if (!model.times.includes(v) && model.times.length < 6) {
+      model.times.push(v);
+      model.times.sort();
+    }
+    $('.f-timeinput').value = '';
+    paintTimes();
+  };
+  $('.f-times').onclick = (e) => {
+    const b = e.target.closest('[data-remtime]');
+    if (!b) return;
+    model.times.splice(Number(b.dataset.remtime), 1);
+    paintTimes();
   };
   $('.f-assign').onclick = (e) => {
     const b = e.target.closest('[data-assign]');
@@ -598,17 +725,29 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
   $('[data-submit]').onclick = () => {
     // Serialization lives in buildChorePayload above (pure, tested).
     const assign = model.repeat === 'once' ? 'fixed' : model.assign;
+    const err = $('.f-error');
+    err.classList.add('hidden');
+    // Mirror the server's "interval needs 1–365" rule for an inline message
+    // instead of a generic toast (clampIntervalDays would send null otherwise).
+    if (model.repeat === 'interval' && clampIntervalDays($('.f-intervaldays').value) === null) {
+      err.textContent = 'Enter how many days between (1–365).';
+      err.classList.remove('hidden');
+      return;
+    }
     const body = buildChorePayload({
       title: $('.f-title').value,
       icon: $('.f-icon').value,
       repeat: model.repeat,
       days: model.days,
+      weekInterval: model.weekInterval,
+      intervalDays: $('.f-intervaldays').value,
+      times: model.times,
       assign,
       person: assign === 'fixed' ? $('.f-person').value : null,
       rot: model.rot,
       date: $('.f-date').value,
     });
-    onsubmit(body, $('.f-error'));
+    onsubmit(body, err);
   };
 }
 
@@ -620,23 +759,61 @@ function todayISO() {
 }
 
 function freshChoreModel() {
-  return { title: '', icon: '', repeat: 'daily', days: new Set(), assign: 'fixed', fixed_person_id: null, rot: [], date: '' };
+  return { title: '', icon: '', repeat: 'daily', days: new Set(),
+    weekInterval: 1, intervalDays: '', times: [],
+    assign: 'fixed', fixed_person_id: null, rot: [], date: '' };
 }
 
 function freshPersonModel() {
   return { name: '', color: SWATCHES[0] };
 }
 
+/* The PATCH body that maps a person to an iCloud chore list. The picker's
+   "— none —" option is value '', which clears the mapping to null; any real
+   list id maps straight through. Pure so the null-clear is unit-testable
+   (a wrong body would silently mis-map or 422). */
+function reminderListBody(value) {
+  return { reminder_list_id: value ? value : null };
+}
+
+/* The iCloud-list mapping block for the person editor (edit mode only — a new
+   person has no id to PATCH yet). `opts` carries {reminderLists, reminderListId,
+   twoWay}. With lists it renders a picker + the one-time sharing note; with no
+   lists it renders a single "connect iCloud" line instead of a dead dropdown.
+   Kept as an HTML string so buildPersonForm can drop it into the same template
+   pass (the live wiring + PATCH is added after). */
+function mirrorFieldHtml(opts) {
+  if (!opts || !opts.edit) return '';
+  const lists = opts.reminderLists || [];
+  const listId = opts.reminderListId || '';
+  if (!lists.length) {
+    return `<div class="field"><label>iCloud chore list</label>`
+      + `<div class="hint" data-plist-empty>Connect iCloud in Settings to mirror this person’s chores to a list.</div></div>`;
+  }
+  const options = `<option value=""${listId ? '' : ' selected'}>— none —</option>`
+    + lists.map((l) =>
+      `<option value="${escapeHtml(l.id)}"${l.id === listId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
+  const offNow = !!listId && !opts.twoWay;
+  return `<div class="field"><label>iCloud chore list</label>`
+    + `<select class="txt-input" data-plist>${options}</select>`
+    + `<div class="hint" data-plist-share>Chores are written to this person’s list in the hub’s iCloud account. To see them on their own iPhone, share that list to their Apple ID once from iCloud Reminders (open the list → Share List).</div>`
+    + `<div class="hint${offNow ? '' : ' hidden'}" data-plist-readonly>Two-way sync is off, so chores won’t reach iCloud yet. Turn it on in Settings → iCloud.</div>`
+    + `<div class="form-error hidden" data-plist-err></div></div>`;
+}
+
 /* One reusable person form (name + color swatches) for the Chores-page inline
-   people editor. `model` seeds it; `onsubmit(body,
-   errEl)` fires with {name, color}. DOM hooks are data-* attributes (not
-   classes) so the form needs no styling of its own — it reuses .txt-input /
-   .swatches / .form-error / .btn-primary. */
-function buildPersonForm(host, model, submitLabel, onsubmit) {
+   people editor. `model` seeds it; `onsubmit(body, errEl)` fires with
+   {name, color}. `opts` (edit mode) adds the iCloud-list picker: it PATCHes
+   live via `opts.onListChange(value)` — resolving false to revert + show an
+   inline error — separate from the name/color Save. DOM hooks are data-*
+   attributes (not classes) so the form needs no styling of its own — it reuses
+   .txt-input / .swatches / .form-error / .btn-primary. */
+function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
   host.innerHTML = `
     <div class="field"><label>Name / nickname</label>
       <input class="txt-input" data-pname maxlength="30" autocomplete="off"></div>
     <div class="field"><label>Color</label><div class="swatches" data-pswatches></div></div>
+    ${mirrorFieldHtml(opts)}
     <div class="form-error hidden" data-perror></div>
     <button class="btn-primary" type="button" data-psubmit>${escapeHtml(submitLabel)}</button>`;
   const $ = (sel) => host.querySelector(sel);
@@ -644,6 +821,35 @@ function buildPersonForm(host, model, submitLabel, onsubmit) {
   const paint = () => paintSwatches($('[data-pswatches]'), model.color,
     (hx) => { model.color = hx; paint(); });
   paint();
+
+  // Live iCloud-list mapping (edit mode with lists available). The select
+  // PATCHes on change and reflects the two-way-off note against the current
+  // selection; a failed PATCH reverts to the last committed value.
+  const sel = $('[data-plist]');
+  if (sel && opts && opts.onListChange) {
+    const twoWay = !!opts.twoWay;
+    let committed = opts.reminderListId || '';
+    const paintReadonly = () => {
+      const el = $('[data-plist-readonly]');
+      if (el) el.classList.toggle('hidden', !(sel.value && !twoWay));
+    };
+    sel.onchange = async () => {
+      const errEl = $('[data-plist-err]');
+      if (errEl) errEl.classList.add('hidden');
+      const value = sel.value;
+      sel.disabled = true;
+      const ok = await opts.onListChange(value);
+      sel.disabled = false;
+      if (ok === false) {
+        sel.value = committed;   // PATCH failed: undo the visible selection
+        if (errEl) { errEl.textContent = 'Couldn’t update the list — check the hub and try again.'; errEl.classList.remove('hidden'); }
+      } else {
+        committed = value;
+      }
+      paintReadonly();
+    };
+  }
+
   $('[data-psubmit]').onclick = () =>
     onsubmit({ name: $('[data-pname]').value.trim(), color: model.color }, $('[data-perror]'));
 }
