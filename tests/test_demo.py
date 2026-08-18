@@ -11,6 +11,10 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from family_hub import chores as chlogic
+from family_hub import db
+from family_hub import demo
+
 
 def _write_cfg(tmp_path):
     p = tmp_path / "config.json"
@@ -49,15 +53,22 @@ def test_demo_hub_seeds_the_sample_family(demo_client):
     hub = demo_client.get("/api/hub").json()
     names = [row["person"]["name"] for row in hub["people"]]
     assert names == ["Ava", "Milo", "Ruby"], names
-    # Ava has her four chores today, three of them done (Brush the dog not).
+    milo = next(r for r in hub["people"] if r["person"]["name"] == "Milo")
+    # Ava has her four chores today, three of them done (Brush the dog not),
+    # plus a fifth row: Milo's daily "Feed the fish", which she's covering
+    # since he's seeded away (see test_demo_seeds_an_away_person_with_backup).
     ava = next(r for r in hub["people"] if r["person"]["name"] == "Ava")
     titles = {c["title"] for c in ava["chores"]}
-    assert {"Laundry", "Clean rabbit cage", "Workout", "Brush the dog"} <= titles
-    assert ava["done_count"] == 3 and ava["total"] == 4
+    assert {"Laundry", "Clean rabbit cage", "Workout", "Brush the dog",
+            "Feed the fish"} <= titles
+    assert ava["done_count"] == 3 and ava["total"] == 5
     assert ava["streak"] >= 1 and len(ava["week"]) == 7
-    # Milo's chores are scheduled off today, so his card is empty today.
-    milo = next(r for r in hub["people"] if r["person"]["name"] == "Milo")
+    covering = next(c for c in ava["chores"] if c["title"] == "Feed the fish")
+    assert covering["covering_for"] == milo["person"]["id"]
+    # Milo's own two chores are scheduled off today AND he's away, so his card
+    # shows the away badge (never his own chore rows) regardless.
     assert milo["chores"] == []
+    assert milo["away"] is True
 
 
 def test_demo_hub_has_calendar_and_todos(demo_client):
@@ -221,6 +232,53 @@ def test_partial_demo_seed_is_wiped_so_the_next_open_retries(tmp_path, monkeypat
     probe = fdb.connect(str(tmp_path / "hub.db"))
     assert probe.execute("SELECT COUNT(*) FROM people").fetchone()[0] == 0
     probe.close()
+
+
+def test_demo_seeds_an_away_person_with_backup(tmp_path):
+    """Task 8: the DEMO seed marks one demo person away with a real backup, so
+    the away card and 'covering for' tag are visible with no real data."""
+    c = db.connect(str(tmp_path / "t.db"))
+    db.ensure_schema(c)
+    demo.seed_demo(c, dt.date(2026, 8, 17))
+    periods = db.list_away_periods(c)
+    assert periods, "demo should seed at least one away period"
+    assert any(p["backup_person_id"] is not None for p in periods)
+    c.close()
+
+
+def test_demo_away_state_is_coherent_for_today(tmp_path):
+    """Row-count-of-away_periods is not enough: prove the seed is actually
+    coherent by resolving today's live plan (the same call app.py's
+    _people_day makes for d == today) and checking the away person has no rows
+    of their own while the backup carries a row tagged covering_for back to
+    them."""
+    c = db.connect(str(tmp_path / "t.db"))
+    db.ensure_schema(c)
+    today = dt.date(2026, 8, 17)
+    demo.seed_demo(c, today)
+
+    people = db.list_people(c)
+    by_name = {p["name"]: p["id"] for p in people}
+    milo_id, ava_id = by_name["Milo"], by_name["Ava"]
+
+    periods = db.list_away_periods(c)
+    away_period = next(p for p in periods if p["person_id"] == milo_id)
+    assert away_period["backup_person_id"] == ava_id
+    assert away_period["end_date"] is None    # still away today and onward
+
+    today_str = today.isoformat()
+    amap = db.away_map(c, today_str, today_str)
+    away_today = {pid for pid, info in amap.items() if today_str in info["dates"]}
+    backup_today = {pid: amap[pid]["backup_on"].get(today_str) for pid in away_today}
+    away_view = {"ids": away_today, "backup": backup_today}
+    rows = chlogic.plan_rows(db.list_chores(c), people, today, away_view)
+
+    milo_rows = [r for r in rows if r["person_id"] == milo_id]
+    assert milo_rows == [], "away person must have no own rows on an away day"
+    covering = [r for r in rows if r["covering_for"] == milo_id]
+    assert covering, "the backup must carry at least one covering row"
+    assert all(r["person_id"] == ava_id for r in covering)
+    c.close()
 
 
 def test_demo_laundry_tile_is_canned_and_live_shaped(demo_client):
