@@ -596,32 +596,94 @@ function todoRowHtml(t, full) {
     + `</div>`;
 }
 
-/* Counts OPEN items only (not done_at) in one bucket, so the wall card can
-   render three independent chips: N now / N soon / N later. */
-function todoBucketCount(list) {
-  return (list || []).filter((t) => !t.done_at).length;
+/* How many rows the wall card shows across all three tiers before it starts
+   folding items behind "+N more". Chosen so the card stays a bounded digest,
+   never an infinite list (CLAUDE.md: the wall is a fixed-height surface). */
+const TODO_CARD_BUDGET = 9;
+
+/* Allocate the row budget across the Now/Soon/Later tiers for the wall card.
+   Returns one group per NON-EMPTY tier: { bucket, openCount, rows, moreOpen }.
+
+   Two rules make it a useful digest rather than a truncated list:
+   - Open (actionable) items win the budget. They're allocated first, in
+     priority order now -> soon -> later, and every tier that has open work is
+     guaranteed at least one visible row (so a long Now list can't bury Soon/
+     Later entirely). `moreOpen` is the count of open items folded away — that's
+     what the "+N more" control advertises.
+   - Done-today lingerers (items completed today still shown struck-through for
+     the rest of the day, see todos.py) only fill budget LEFT OVER after every
+     tier's open items are placed. They never displace actionable work and are
+     never counted in `moreOpen`. */
+function todoDigest(buckets, budget) {
+  const b = buckets || {};
+  const tiers = ['now', 'soon', 'later'].map((bucket) => {
+    const items = b[bucket] || [];
+    return {
+      bucket,
+      open: items.filter((t) => !t.done_at),
+      done: items.filter((t) => t.done_at),
+      showOpen: 0,
+      showDone: 0,
+    };
+  });
+  // Phase 1 — open items, priority order, min one row per tier that has any.
+  const openTiers = tiers.filter((t) => t.open.length);
+  let remaining = budget;
+  openTiers.forEach((t, i) => {
+    const reserveForRest = openTiers.length - 1 - i; // hold one row per lower tier
+    t.showOpen = Math.min(t.open.length, Math.max(1, remaining - reserveForRest));
+    remaining -= t.showOpen;
+  });
+  // Phase 2 — spend whatever's left on done-today lingerers, same priority.
+  tiers.forEach((t) => {
+    t.showDone = Math.min(t.done.length, Math.max(0, remaining));
+    remaining -= t.showDone;
+  });
+  return tiers
+    .map((t) => ({
+      bucket: t.bucket,
+      openCount: t.open.length,
+      rows: [...t.open.slice(0, t.showOpen), ...t.done.slice(0, t.showDone)],
+      moreOpen: t.open.length - t.showOpen,
+    }))
+    .filter((g) => g.rows.length);
 }
 
 function todoCardHtml(todos, ok = true) {
-  const b = todos || {};
-  const nowItems = (b.now || []).slice(0, 5);
-  const rows = !ok
+  let body;
+  if (!ok) {
     // NOT "is the hub reachable?" — /api/hub just answered, so it demonstrably
     // is; this is an internal read error (logged server-side at ERROR). Don't
     // send the family to power-cycle a router that's fine.
-    ? `<div class="cal-empty">couldn’t load the list — something went wrong</div>`
-    : nowItems.length
-      ? nowItems.map((t) => todoRowHtml(t, false)).join('')
+    body = `<div class="cal-empty">couldn’t load the list — something went wrong</div>`;
+  } else {
+    const groups = todoDigest(todos, TODO_CARD_BUDGET);
+    body = groups.length
+      ? groups.map((g) => {
+        const label = g.bucket[0].toUpperCase() + g.bucket.slice(1);
+        // Omit the count on a tier that's only done-today lingerers (0 open):
+        // "Now 0" above struck-through rows reads oddly on the wall. The label
+        // + struck rows still say "you finished these today".
+        const count = g.openCount > 0 ? `<span class="todo-grp-count">${g.openCount}</span>` : '';
+        const more = g.moreOpen > 0
+          // A tap-through to the full list, where the folded items live. Reuses
+          // the overlay wiring (data-overlay="todos"); .todo-more is handled
+          // alongside .expand in the click listener.
+          ? `<button class="todo-more" type="button" data-overlay="todos">+${g.moreOpen} more</button>`
+          : '';
+        return `<div class="todo-grp">`
+          + `<div class="todo-grp-head">${label}${count}</div>`
+          + g.rows.map((t) => todoRowHtml(t, false)).join('')
+          + more
+          + `</div>`;
+      }).join('')
       : `<div class="cal-empty">nothing on the list</div>`;
-  const chips = [['now', true], ['soon', false], ['later', false]]
-    .map(([bk, isNow]) => `<span class="chip${isNow ? ' now' : ''}">`
-      + `${todoBucketCount(b[bk])} ${bk}</span>`).join('');
-  // Header stays OUTSIDE the box (sectionHead, Task 2); the rows + count
-  // chips are the boxed unit, matching .cal-day/.person-card (Task 3).
+  }
+  // Header stays OUTSIDE the box (sectionHead); the tier groups are the boxed
+  // unit, matching .cal-day/.person-card.
   return sectionHead('To-Do', { overlay: 'todos', expandLabel: 'Full list' })
     + `<div class="card todo">`
-    + rows
-    + `<div class="foot">${chips}</div>`
+    + body
     + `</div>`;
 }
 
@@ -2865,6 +2927,10 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (chore) return;
+  // The wall To-Do card's "+N more" tap-through opens the full list, same as
+  // the header's Full-list expand — it just carries its own compact styling.
+  const tmore = e.target.closest('.todo-more');
+  if (tmore) { openOverlay(tmore.dataset.overlay); return; }
   const expand = e.target.closest('.expand');
   if (expand) { openOverlay(expand.dataset.overlay); return; }
   const tile = e.target.closest('.tile');
