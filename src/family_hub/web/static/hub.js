@@ -2569,61 +2569,96 @@ function laundryTick(now = Date.now()) {
   });
 }
 
-/* The finish ENDGAME: lg_thinq holds "end" only briefly before the machine
-   powers itself off, so inside the final couple of minutes (or just past the
-   projected finish) the whole done window can slip between 60s polls — the
-   wall then misses the finish entirely (live board, 2026-08-17). While any
-   machine is in that window, chain short re-polls; the server's laundry
-   cache tightens its TTL in step (tiles.LAUNDRY_ENDGAME_TTL) so these
-   fetches see fresh HA state. The window is bounded a few minutes past the
-   projection so a stale latched remaining-time sensor can't pin fast
-   polling for hours; past it, the server's missed-finish memory takes over.
-   The window bounds are PAIRED with tiles.LAUNDRY_ENDGAME_AHEAD_MIN /
-   _BEHIND_MIN (a static guard holds them equal): drift apart and the fast
-   polls just re-read a still-warm cache. */
-const LN_FAST_POLL_MS = 10000;
-const LN_ENDGAME_AHEAD_MIN = 2;
-const LN_ENDGAME_BEHIND_MIN = 5;
-let lnFastTimer = null;
 // last-seen laundry LISTING state — renderIntegrations repaints the slot on
 // a flip (see there); null = not yet observed, so the first poll paints once
 let lnWasListed = null;
-function lnEndgame(machines) {
-  return (machines || []).some((m) => {
-    if (m.phase !== 'running') return false;
-    const t = Date.parse(m.finishes_at);
-    if (isNaN(t)) return false;
-    const min = (t - Date.now()) / 60000;
-    return min <= LN_ENDGAME_AHEAD_MIN && min >= -LN_ENDGAME_BEHIND_MIN;
-  });
+
+/* THE real-time lane: both feeds — the live stream below and the poll
+   fallback — converge here. Re-render ONLY when the payload actually
+   changed: an innerHTML rebuild restarts the tumble animation mid-spin,
+   and an idle pair reads identical for hours. laundryTick keeps the
+   countdown moving between real changes. */
+function applyLaundry(data) {
+  const before = JSON.stringify(laundryData);
+  laundryData = data;
+  if (JSON.stringify(data) !== before) renderLaundry();
+  else laundryTick();   // still advance the countdown on the beat
 }
 
 /* Poll the fail-soft laundry endpoint on the hub cadence; same last-good-card
-   discipline as weather/climate. Re-render ONLY when the payload actually
-   changed — an innerHTML rebuild restarts the tumble animation mid-spin, and
-   an idle pair polls identical for hours. laundryTick keeps the countdown
-   moving between real changes. */
+   discipline as weather/climate. This is the FALLBACK feed (and the wake
+   catch-up): the stream below delivers changes in seconds, but a wall that
+   can't hold a stream open must never be worse off than the old 60s poll. */
+let lnLastPoll = 0;   // lnWake skips the refetch when a poll JUST ran
 async function fetchLaundry() {
-  const before = JSON.stringify(laundryData);
+  lnLastPoll = Date.now();
   try {
-    laundryData = await j('/api/tiles/laundry');
+    const data = await j('/api/tiles/laundry');
     laundryFails = 0;
+    applyLaundry(data);
   } catch (e) {
     laundryFails += 1;
-    if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) laundryData = { available: false };
+    if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) {
+      applyLaundry({ available: false });
+    } else {
+      laundryTick();   // last good card stands; keep its countdown honest
+    }
   }
-  // (re)arm the endgame fast lane off the fresh payload BEFORE rendering:
-  // a render throw must not dissolve the chain in exactly the window it
-  // exists for. Clearing first keeps the 60s master poll and the chain
-  // from ever stacking timers.
-  clearTimeout(lnFastTimer);
-  lnFastTimer = null;
-  if (lnEndgame(laundryData && laundryData.machines)) {
-    lnFastTimer = setTimeout(fetchLaundry, LN_FAST_POLL_MS);
-  }
-  if (JSON.stringify(laundryData) !== before) renderLaundry();
-  else laundryTick();   // still advance the countdown on the poll beat
 }
+
+/* The live stream: /api/laundry/stream (SSE) pushes the same payload as
+   /api/tiles/laundry the moment the server's background watcher observes a
+   change, so the card tracks the real machines within seconds — everywhere
+   in the cycle, not just near a projected finish (the old endgame fast-lane
+   re-polls this replaced). EventSource reconnects by itself after a dropped
+   connection; lnConnect is idempotent so wake paths can call it freely. */
+let lnStream = null;
+function lnConnect() {
+  if (!window.EventSource) return;   // poll fallback carries the card alone
+  if (lnStream && lnStream.readyState !== EventSource.CLOSED) return;
+  try {
+    lnStream = new EventSource('/api/laundry/stream');
+    lnStream.onmessage = (ev) => {
+      laundryFails = 0;   // a live stream IS the feed being healthy — don't
+      try {               // let 3 unlucky poll instants blank a correct card
+        applyLaundry(JSON.parse(ev.data));
+      } catch (e) {
+        // comment keepalives never reach onmessage, so this is a genuinely
+        // malformed data event — dropping it silently would let a broken
+        // server look healthy while delivering nothing
+        console.warn('laundry stream: unparseable event', e);
+      }
+    };
+    // EventSource auto-retries only NETWORK failures; an HTTP error (a 502
+    // landing mid-deploy, a wrong content-type) closes it for good, per
+    // spec. The always-visible wall kiosk never fires a wake event, so the
+    // 60s poll beat below re-arms a CLOSED stream — log the drop so the
+    // gap is visible in the console instead of only in the network tab.
+    lnStream.onerror = () => {
+      if (lnStream && lnStream.readyState === EventSource.CLOSED) {
+        console.warn('laundry stream: closed; will reconnect on the poll beat');
+      }
+    };
+  } catch (e) {
+    lnStream = null;   // stream unavailable; the 60s poll still runs
+  }
+}
+
+/* iOS suspends an EventSource when the tab backgrounds and does NOT always
+   resume it on return (same family of wake bugs as the app-height stamps,
+   2026-08-17): every wake re-checks the stream AND refetches once — the
+   reconnect covers the future, the fetch covers whatever changed while
+   suspended (a finished load must not wait for the next 60s poll). The
+   refetch is skipped only when a poll JUST ran (pageshow fires right after
+   the boot fetch — no point fetching twice in the same second). */
+function lnWake() {
+  lnConnect();
+  if (Date.now() - lnLastPoll > 2000) fetchLaundry();
+}
+window.addEventListener('pageshow', lnWake);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') lnWake();
+});
 
 let fitDebounce = null;
 /* Fit-to-screen. The wall is authored at a fixed 1920x1080 canvas. On the
@@ -3814,7 +3849,12 @@ initVersion();
 fetchWeather();
 fetchClimate();
 fetchLaundry();
+lnConnect();   // the laundry live stream (fetchLaundry stays as fallback)
 setInterval(scheduledPoll, POLL_MS);
+// the poll beat doubles as the stream's re-arm: lnConnect is idempotent on
+// an OPEN stream and revives a CLOSED one (see lnConnect for why EventSource
+// won't do that itself), so a mid-deploy 502 costs at most one poll interval
+setInterval(lnConnect, POLL_MS);
 setInterval(fetchWeather, POLL_MS);
 setInterval(fetchClimate, POLL_MS);
 setInterval(fetchLaundry, POLL_MS);

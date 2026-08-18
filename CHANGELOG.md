@@ -21,11 +21,26 @@ rolls that section to a dated version via `python scripts/release.py`.
   a pure overlay over the frozen history: nothing recorded is ever rewritten,
   and deleting an away period restores exactly what was there before.
 
+### Changed
+- Laundry is now real-time. A server-side watcher polls Home Assistant every
+  5 seconds for the whole cycle (not just near a projected finish) and pushes
+  every change to open walls over a live stream (`GET /api/laundry/stream`),
+  so the card reflects a machine's actual status within seconds instead of up
+  to ~1.5 minutes. Finish detection and the cycle log no longer depend on a
+  browser being open — the server observes every transition itself. The old
+  endgame fast lane (chained 10s re-polls + a two-speed server cache) is
+  retired; the 60s poll remains as a fallback.
+
 ### Fixed
-- Native chores: deleting (or unmapping) the last person whose chores mirror to
-  iCloud no longer orphans their reminders — the mirror reconcile now still prunes
-  existing rows when nothing is mapped, instead of early-returning. (Caught in the
-  live deploy verification.)
+- An observed washer/dryer finish now keeps showing **Done** through the
+  machine's own auto power-off (LG machines turn themselves off 30–90s
+  after the end-of-cycle chime with the load still inside), for the same
+  30-minute hold a missed finish gets. Previously a perfectly observed
+  finish showed Done for barely a minute — and the real-time watcher
+  observes every finish, so every finish took that short path. A person
+  powering the machine on clears Done immediately — including mid-hold —
+  and a stale end stamp is never re-presented as a fresh Done (the refusal
+  is recorded in the cycle log).
 - A chore mirror error left latched from an earlier two-way tick no longer haunts
   the settings row forever: switching iCloud back to read-only now clears the
   stale error on the next tick.
@@ -56,6 +71,15 @@ rolls that section to a dated version via `python scripts/release.py`.
   try again instead of crediting the wrong person.
 - `chore_mirror_horizon_days` (how far ahead chores are pushed to each phone)
   is now a real setting in `config.json`, documented in the example file.
+
+## [1.2.1] — 2026-08-18
+
+### Fixed
+- Weather sky clouds now drift smoothly at any width. The drift animation exited
+  at a fixed offset tuned to the narrow desktop column, so on the wider
+  mobile/full-screen weather view a cloud was still mid-sky when it snapped back
+  to the left — a visible "reset". The exit is now relative to the sky's own
+  width, so the wrap-around always happens off-screen.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.

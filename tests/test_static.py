@@ -209,6 +209,32 @@ def test_celebration_is_reduced_motion_guarded():
     assert "prefers-reduced-motion" in CSS, "celebration must be reduced-motion guarded"
 
 
+def test_cloud_drift_exit_is_container_relative():
+    # The cloud drift must exit relative to the ACTUAL sky width, not a fixed px.
+    # A fixed-px exit (translateX(420px)) cleared the 338px desktop column but
+    # left the cloud mid-sky on the wider mobile/full-screen weather view, so it
+    # snapped back on-screen — the visible "crazy reset". The fix: .sky is a
+    # query container and the keyframe exits at 100cqw (+ margin), off-screen at
+    # any width. Don't regress either half.
+    # `\.sky\s*\{` (not `\.sky\b`) binds this to the bare `.sky {` rule — `\b`
+    # would also match `.sky-cloud {`, `.sky-sun {`, etc., letting container-type
+    # on the wrong selector satisfy it falsely (cqw would then resolve against
+    # the wrong ancestor).
+    assert re.search(r"\.sky\s*\{[^{}]*container-type\s*:\s*inline-size",
+                     CSS), ".sky must be a query container (container-type: inline-size)"
+    drift = re.search(r"@keyframes\s+drift\s*\{(?:[^{}]|\{[^{}]*\})*\}", CSS)
+    assert drift, "missing @keyframes drift"
+    to = re.search(r"\bto\s*\{[^{}]*\}", drift.group(0))
+    assert to and "cqw" in to.group(0), \
+        "cloud drift 'to' must exit at a container-relative width (100cqw), " \
+        "not a fixed px that re-breaks the wide sky"
+    # The "reset happens off-screen" promise also relies on .sky clipping — drop
+    # overflow:hidden and a cloud driving to 100cqw+20px spills visibly past the
+    # right edge instead of vanishing.
+    assert re.search(r"\.sky\s*\{[^{}]*overflow\s*:\s*hidden", CSS), \
+        ".sky must keep overflow:hidden so the off-screen drift exit stays clipped"
+
+
 def test_week_strip_state_classes_are_styled():
     for cls in (".ws-done", ".ws-partial", ".ws-none", ".ws-rest", ".ws-away"):
         assert _css_rule(cls).strip(), f"{cls} week-strip state is unstyled"
@@ -944,21 +970,53 @@ def test_laundry_card_static_guards():
     assert m and re.search(r"\.some\(\(i\) => i\.id === 'laundry'\)",
                            hub[m.start():m.start() + 1600]), \
         "renderLaundry must re-check integration availability per render"
-    # the finish-endgame fast lane: near a projected finish the frontend
-    # chains short re-polls (and the server cache tightens in step) so the
-    # brief lg_thinq "end" status can't slip between 60s polls — without it
-    # the wall misses finishes entirely (live board, 2026-08-17)
-    assert "lnEndgame" in hub and "LN_FAST_POLL_MS" in hub
-    # ... and the JS window must stay PAIRED with the server's cache window:
-    # if they drift, the fast polls just re-read a still-warm cache and the
-    # whole lane silently does nothing
-    from family_hub import tiles as ftiles
-    ahead = re.search(r"const LN_ENDGAME_AHEAD_MIN = (\d+)", hub)
-    behind = re.search(r"const LN_ENDGAME_BEHIND_MIN = (\d+)", hub)
-    assert ahead and behind, "hub.js lnEndgame window constants missing"
-    assert (int(ahead.group(1)) == int(ftiles.LAUNDRY_ENDGAME_AHEAD_MIN)
-            and int(behind.group(1)) == int(ftiles.LAUNDRY_ENDGAME_BEHIND_MIN)), \
-        "hub.js lnEndgame window must match tiles.LAUNDRY_ENDGAME_*_MIN"
+    # the REAL-TIME lane: the wall holds an SSE subscription to the server's
+    # background watcher, so any status change reaches the card in seconds —
+    # everywhere in the cycle, not just near a projected finish (the old
+    # endgame fast lane this replaced). Losing any of this quietly demotes
+    # the card back to 60s-poll latency with every visible feature intact.
+    assert "new EventSource('/api/laundry/stream'" in hub, \
+        "the laundry card must subscribe to the live stream"
+    # both feeds converge on ONE applier (render-on-change discipline): the
+    # POLL body and the STREAM handler must each route through applyLaundry —
+    # a bare count would pass on the definition + one caller, letting the
+    # other feed drift onto its own render path
+    assert re.search(r"function applyLaundry\(", hub), "applyLaundry missing"
+    fetch_body = re.search(r"async function fetchLaundry\(\) \{(.*?)\n\}",
+                           hub, re.S)
+    assert fetch_body and "applyLaundry(" in fetch_body.group(1), \
+        "fetchLaundry must feed applyLaundry"
+    onmsg = re.search(r"\.onmessage = \(ev\) => \{(.*?)\n    \};", hub, re.S)
+    assert onmsg and "applyLaundry(" in onmsg.group(1), \
+        "the stream handler must feed applyLaundry"
+    # the wall kiosk never fires a wake event, and EventSource does NOT
+    # auto-retry an HTTP-level failure (a 502 mid-deploy closes it for
+    # good) — the poll beat must re-arm the stream or the kiosk silently
+    # loses real-time forever after one bad deploy window
+    assert re.search(r"setInterval\(lnConnect, POLL_MS\)", hub), \
+        "the poll beat must re-arm a CLOSED stream (setInterval lnConnect)"
+    assert re.search(r"\.onerror = ", hub[hub.index("function lnConnect"):]
+                     [:1500]), "a dropped stream must at least log (onerror)"
+    # ... and the lane must actually OPEN at boot: lnConnect defined but
+    # never called leaves the whole feature dark with every guard green
+    assert re.search(r"^lnConnect\(\);", hub, re.M), \
+        "bootstrap must call lnConnect()"
+    # iOS suspends EventSource in background tabs and never resumes it —
+    # every wake path must reconnect AND refetch (the stream greeting covers
+    # new state, the fetch covers a wall whose stream died mid-suspend)
+    assert re.search(r"function lnConnect\(", hub), "lnConnect missing"
+    wake_body = re.search(r"function lnWake\(\) \{(.*?)\n\}", hub, re.S)
+    assert wake_body and "lnConnect()" in wake_body.group(1) \
+        and "fetchLaundry()" in wake_body.group(1), \
+        "lnWake must reconnect the stream AND refetch"
+    for ev in ("pageshow", "visibilitychange"):
+        assert re.search(rf"addEventListener\('{ev}'[^\n]*\n?[^\n]*lnWake",
+                         hub), f"lnWake must run on {ev}"
+    # the endgame fast lane is GONE — a half-restored copy would fight the
+    # stream (stacked timers) without anyone noticing
+    for gone in ("lnEndgame", "LN_FAST_POLL_MS", "LN_ENDGAME_AHEAD_MIN",
+                 "LN_ENDGAME_BEHIND_MIN", "lnFastTimer"):
+        assert gone not in hub, f"{gone} should be fully retired"
     # every animated laundry class must be neutralized under reduced motion
     # (a class dropped from the block would leave the full 12.8s tumble
     # running for reduced-motion users with no test failing)
