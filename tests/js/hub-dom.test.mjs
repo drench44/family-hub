@@ -39,6 +39,7 @@ const SEEDED_IDS = [
   'ev-card',
   'chore-modal', 'chore-card', 'chore-editor',
   'confirm-modal', 'confirm-card', 'confirm-msg', 'confirm-sub',
+  'settings-version',
 ];
 
 function makeClassList() {
@@ -4165,6 +4166,10 @@ test('buildPanels renders native slots for weather + climate, an iframe embed fo
   assert.ok(!html.includes('id="frame-climate"'), 'the climate iframe embed is gone');
   // any other panel keeps its iframe embed
   assert.match(html, /id="frame-almanac"/);
+  // the laundry slot is built UNCONDITIONALLY — hubData is null here, and
+  // that's the point: build-time availability gating froze a transient
+  // outage into a missing card until manual refresh (live board 2026-08-17)
+  assert.match(html, /id="laundry-slot"/);
 });
 
 /* ---------------------------------------------------------- climate card */
@@ -5174,6 +5179,12 @@ const LN_DRYER_DONE = {
 // Same mount trick as renderWeatherHtml: pre-register a real slot host.
 function renderLaundryHtml(payload) {
   const { document, sandbox } = newHub();
+  // a CONFIGURED install: the integration is listed in hubData. renderLaundry
+  // blanks the slot for UNLISTED installs (the unconfigured-wall case — its
+  // own test below), so every configured-semantics test needs this seed.
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'laundry', kind: 'laundry', name: 'Laundry', enabled: true }] };",
+    sandbox);
   const slot = document.createElement('div');
   slot._id = 'laundry-slot';
   document.body.appendChild(slot);
@@ -5282,6 +5293,59 @@ test('renderLaundry: loading placeholder, offline note, and label escaping', () 
   assert.doesNotMatch(r.html, /<img/);
 });
 
+test('renderLaundry: unlisted integration blanks the slot; the card returns by itself', () => {
+  // the 2026-08-17 live-board regression: the slot div used to be built only
+  // when the integration was listed at page-build time, so a wall that
+  // reloaded during a transient server-side outage lost the card until a
+  // manual refresh. Now the slot always exists and listing is re-checked
+  // per render — vanish blanks it, reappearance restores it, no refresh.
+  const { slot, sandbox } = renderLaundryHtml(null);
+  vm.runInContext('hubData = { integrations: [] };', sandbox);
+  sandbox.renderLaundry({ available: false }, LN_NOW);
+  assert.equal(slot.innerHTML, '', 'unlisted + unavailable renders nothing');
+  // deliberate asymmetry: a GOOD payload keeps rendering even while
+  // unlisted — an /api/hub hiccup must not blank a live mid-cycle card
+  // (same keep-last-good philosophy as fetchLaundry's failure counter)
+  sandbox.renderLaundry({ available: true, machines: [LN_WASHER_RUNNING] }, LN_NOW);
+  assert.match(slot.innerHTML, /ln-m ln-washer/,
+    'a good payload renders even while unlisted');
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'laundry', enabled: true }] };", sandbox);
+  sandbox.renderLaundry({ available: true, machines: [LN_WASHER_RUNNING] }, LN_NOW);
+  assert.match(slot.innerHTML, /ln-m ln-washer/, 'card returns on reappearance');
+});
+
+test('a laundry listing flip repaints the slot even when the tile payload is unchanged', async () => {
+  // fetchLaundry's payload-diff cannot see a LISTING change: across a token
+  // outage the tile stays byte-identical ({"available": false}), so only
+  // renderIntegrations noticing the flip keeps the slot honest — without it
+  // the wall sticks blank where "Laundry unavailable" is owed (silent-
+  // failure review, 2026-08-17).
+  const { document, sandbox } = newHub();
+  await flush();
+  const slot = document.createElement('div');
+  slot._id = 'laundry-slot';
+  document.body.appendChild(slot);
+  const down = { available: false };
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => down });
+  // boot unlisted (token outage): blank slot
+  vm.runInContext('hubData = { integrations: [] };', sandbox);
+  await sandbox.fetchLaundry();
+  sandbox.renderIntegrations({ integrations: [] });
+  assert.equal(slot.innerHTML, '', 'unlisted + unavailable: blank');
+  // the token returns (relist) while HA itself is still down — the tile
+  // payload has not changed a byte, but the honest line must appear
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'laundry', enabled: true }] };", sandbox);
+  sandbox.renderIntegrations({ integrations: [{ id: 'laundry', enabled: true }] });
+  assert.match(slot.innerHTML, /Laundry unavailable/,
+    'relisting repaints the honest unavailable line');
+  // ...and unlisting again blanks it, same identical payload
+  vm.runInContext('hubData = { integrations: [] };', sandbox);
+  sandbox.renderIntegrations({ integrations: [] });
+  assert.equal(slot.innerHTML, '', 'unlisting repaints back to blank');
+});
+
 test('laundryTick: countdown + arc update in place without rebuilding the drum', async () => {
   const payload = { available: true, machines: [LN_WASHER_RUNNING, LN_DRYER_DONE] };
   const { slot, document, sandbox } = renderLaundryHtml(payload);
@@ -5364,6 +5428,9 @@ test('updateTabVisibility + applyWallLayout: laundry has its own tab; alone it k
 test('fetchLaundry: keeps the last good card through transient failures, gives up after the limit', async () => {
   const { document, sandbox } = newHub();
   await flush();   // let the load-time fetchLaundry() (offline stub) settle first
+  // configured install: the integration is listed (see renderLaundryHtml)
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'laundry', enabled: true }] };", sandbox);
   const slot = document.createElement('div');
   slot._id = 'laundry-slot';
   document.body.appendChild(slot);
@@ -5596,4 +5663,53 @@ test('todoCardHtml: a tier that is only done-today lingerers shows its label wit
   assert.match(html, /todo-grp-head">Now<\/div>/, 'the label shows, with no count badge');
   assert.ok(!/todo-grp-count/.test(html), 'no "0" count badge on a done-only tier');
   assert.match(html, /todo-row done/, 'the completed row still lingers, struck through');
+});
+
+// --- version readout (debug/ops) -------------------------------------------
+// initVersion() fetches /api/version and paintVersion() writes a quiet
+// "family-hub v<version>" line into the Settings overlay. No panel, no dot.
+
+test('initVersion + paintVersion write the version into the Settings line', async () => {
+  const { sandbox, document } = newHub();
+  sandbox.fetch = async () => ({ ok: true, json: async () => ({ version: '2.3.1', build: 'abc123def456' }) });
+  await sandbox.initVersion();
+  sandbox.paintVersion();
+  assert.equal(document.getElementById('settings-version').textContent, 'family-hub v2.3.1');
+});
+
+test('a non-ok response does not clobber an already-painted version', async () => {
+  // Paint a real version first, THEN a non-ok fetch: the line must not be
+  // leaked-into or blanked by the failure (proves the ok-guard, not just the
+  // seeded-blank default).
+  const { sandbox, document } = newHub();
+  sandbox.fetch = async () => ({ ok: true, json: async () => ({ version: '2.3.1', build: 'abc123def456' }) });
+  await sandbox.initVersion();
+  sandbox.fetch = async () => ({ ok: false, json: async () => ({ version: 'LEAK' }) });
+  await sandbox.initVersion();
+  sandbox.paintVersion();
+  assert.equal(document.getElementById('settings-version').textContent, 'family-hub v2.3.1');
+});
+
+test('a rejected fetch leaves the line blank and does not throw (offline wall)', async () => {
+  const { sandbox, document } = newHub();
+  sandbox.fetch = async () => { throw new Error('offline'); };
+  await sandbox.initVersion();   // resolves rather than rejecting
+  sandbox.paintVersion();
+  assert.equal(document.getElementById('settings-version').textContent, '');
+});
+
+test('renderSettingsFull emits the version line and paints the fetched version into it', async () => {
+  // Guards the integration: renderSettingsFull must both EMIT #settings-version
+  // and CALL paintVersion(). Delete either and this fails (the earlier tests use
+  // the seeded stand-in and would still pass).
+  const { sandbox, document } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.fetch = async () => ({ ok: true, json: async () => ({ version: '4.5.6', build: 'abcabcabcabc' }) });
+  await sandbox.initVersion();
+  sandbox.renderSettingsFull();
+  assert.match(host.innerHTML, /id="settings-version"/, 'the overlay markup includes the version line');
+  assert.equal(document.getElementById('settings-version').textContent, 'family-hub v4.5.6',
+    'renderSettingsFull calls paintVersion(), so the line shows the fetched version');
 });

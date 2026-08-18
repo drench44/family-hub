@@ -87,6 +87,26 @@ function fmtTime(iso) {
   return min === 0 ? `${hh}${ap}` : `${hh}:${String(min).padStart(2, '0')}${ap}`;
 }
 
+/* Backup-health header badge. Pure: maps the /api/hub `backup` block to a
+   descriptor {show, level, text, title}. Hidden while the backup is healthy,
+   still 'unknown' (no heartbeat recorded yet), or the payload is missing;
+   amber only once a KNOWN backup has gone stale. */
+function fmtBackupAge(s) {
+  if (s == null) return '—';
+  const h = Math.round(s / 3600);
+  return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+function backupBadge(status) {
+  if (!status || !status.known || !status.stale) return { show: false };
+  const age = fmtBackupAge(status.age_s);
+  return {
+    show: true,
+    level: 'warn',
+    text: `⚠ Backup stale (${age})`,
+    title: `No successful backup in ${age} (warns past ${fmtBackupAge(status.threshold_s)})`,
+  };
+}
+
 /* 'YYYY-MM-DD' -> 'Today' | 'Tomorrow' | 'Wed 8/19' (relative to todayStr).
    Dates are built from their own components (local midnight) so the weekday is
    timezone-independent. */

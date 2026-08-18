@@ -901,15 +901,56 @@ def test_laundry_card_static_guards():
     # the timer arc + tumble only exist inside .ln-door SVG markup built by
     # lnPortholeSvg; the renderer must be wired into the poll loop
     assert "fetchLaundry" in hub and "renderLaundry" in hub and "laundryTick" in hub
+    # the slot div is built UNCONDITIONALLY: buildPanels runs once per page
+    # life, so gating the div on build-time availability froze a transient
+    # server-side outage into a missing card until a manual refresh (live
+    # board, 2026-08-17). Availability is renderLaundry's per-poll decision.
+    assert re.search(r"function laundrySlotHtml\(\) \{\s*\n?\s*return `<div class=\"laundry-slot\"",
+                     hub), "laundrySlotHtml must build the slot unconditionally"
+    m = re.search(r"function renderLaundry\(", hub)
+    assert m and re.search(r"\.some\(\(i\) => i\.id === 'laundry'\)",
+                           hub[m.start():m.start() + 1600]), \
+        "renderLaundry must re-check integration availability per render"
+    # the finish-endgame fast lane: near a projected finish the frontend
+    # chains short re-polls (and the server cache tightens in step) so the
+    # brief lg_thinq "end" status can't slip between 60s polls — without it
+    # the wall misses finishes entirely (live board, 2026-08-17)
+    assert "lnEndgame" in hub and "LN_FAST_POLL_MS" in hub
+    # ... and the JS window must stay PAIRED with the server's cache window:
+    # if they drift, the fast polls just re-read a still-warm cache and the
+    # whole lane silently does nothing
+    from family_hub import tiles as ftiles
+    ahead = re.search(r"const LN_ENDGAME_AHEAD_MIN = (\d+)", hub)
+    behind = re.search(r"const LN_ENDGAME_BEHIND_MIN = (\d+)", hub)
+    assert ahead and behind, "hub.js lnEndgame window constants missing"
+    assert (int(ahead.group(1)) == int(ftiles.LAUNDRY_ENDGAME_AHEAD_MIN)
+            and int(behind.group(1)) == int(ftiles.LAUNDRY_ENDGAME_BEHIND_MIN)), \
+        "hub.js lnEndgame window must match tiles.LAUNDRY_ENDGAME_*_MIN"
     # every animated laundry class must be neutralized under reduced motion
     # (a class dropped from the block would leave the full 12.8s tumble
     # running for reduced-motion users with no test failing)
     rm_block = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*?)\n\}", CSS, re.S)
     assert rm_block, "prefers-reduced-motion block missing"
+    # exact-token match, not substring: ".ln-sud" would otherwise ride on
+    # ".ln-sud-drift" (and ".ln-heat" on ".ln-heatglow"), leaving the
+    # shorter class removable with no test failing
     for cls in ("ln-tumble", "ln-flyp", "ln-lift", "ln-heap",
-                "ln-water", "ln-waterline", "ln-halo"):
-        assert f".{cls}" in rm_block.group(1), \
+                "ln-water", "ln-waterline", "ln-sud", "ln-sud-drift",
+                "ln-heatglow", "ln-halo"):
+        assert re.search(rf"\.{re.escape(cls)}(?![\w-])", rm_block.group(1)), \
             f"reduced-motion must neutralize .{cls}"
+    # a paused machine must LOOK paused: the freeze rule (the one whose
+    # declaration block STARTS with animation-play-state, unlike the done/
+    # reduced-motion rules) must cover every animated class. ln-sud-drift
+    # needs no entry — drift bubbles carry ln-sud in the markup, and the
+    # two-class paused selector out-specifies the drift animation rule.
+    paused = re.search(r"([^{}]+)\{\s*animation-play-state:\s*paused", CSS)
+    assert paused, "paused-phase freeze rule missing"
+    for cls in ("ln-tumble", "ln-flyp", "ln-lift", "ln-water",
+                "ln-waterline", "ln-sud", "ln-heatglow", "ln-heap"):
+        assert re.search(rf"\.ln-ph-paused \.{re.escape(cls)}(?![\w-])",
+                         paused.group(1)), \
+            f"paused phase must freeze .{cls}"
     # the phone Laundry tab shows ONLY the laundry slot from the shared
     # .panels section, and the Weather tab no longer duplicates it
     assert re.search(r'body\[data-tab="laundry"\] \.panels > :not\(\.laundry-slot\)'
@@ -934,3 +975,41 @@ def test_css_braces_balanced():
             depth -= 1
             assert depth >= 0, f"stray closing brace at offset {i}"
     assert depth == 0, f"unbalanced braces: depth {depth} at EOF"
+
+
+# --- versioning guards ------------------------------------------------------
+# The asset cache-busts are unified to the app version (scripts/release.py is
+# the sole writer). These pin that invariant so a stray hand-edit that
+# reintroduces a drifting ?v= number fails CI, the way f712ac0 would have.
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_version_file_is_clean_semver():
+    v = (ROOT / "VERSION").read_text().strip()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", v), f"VERSION must be clean SemVer, got {v!r}"
+
+
+def test_every_asset_cache_bust_equals_the_version():
+    version = (ROOT / "VERSION").read_text().strip()
+    index = (STATIC / "index.html").read_text()
+    busts = re.findall(r"\?v=([\w.]+)", index)
+    assert busts, "index.html should carry ?v= cache-busts on its assets"
+    drifted = sorted({b for b in busts if b != version})
+    assert not drifted, (f"asset cache-busts must all equal VERSION ({version}); "
+                         f"drifted: {drifted} — run scripts/release.py, don't hand-edit ?v=")
+
+
+def test_dunder_version_matches_the_version_file():
+    import family_hub
+    assert family_hub.__version__ == (ROOT / "VERSION").read_text().strip()
+
+
+def test_dockerfile_ships_version():
+    """The running app reads VERSION at the repo root (=/app in the image) for
+    /api/version + family_hub.__version__. If the Dockerfile doesn't COPY it,
+    the readout silently falls back to '0.0.0+unknown' — fail-soft hiding a real
+    break. Guard so the image always carries it."""
+    dockerfile = (ROOT / "web.Dockerfile").read_text()
+    assert re.search(r"COPY\s+.*\bVERSION\b", dockerfile), \
+        "web.Dockerfile must COPY VERSION into the image"

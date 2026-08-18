@@ -1575,14 +1575,16 @@ function climateSlotHtml() {
 }
 
 /* Laundry has no links.panels entry (nothing to embed or expand into — the
-   card IS the whole surface), so its slot rides the panels column whenever
-   the integration is available (present in the /api/hub integrations list).
+   card IS the whole surface), so its slot rides the panels column. The slot
+   div is built UNCONDITIONALLY, like weather/climate: buildPanels runs once
+   per page life, so gating the div on the integration list FROZE a moment's
+   availability forever — a wall that happened to reload during a transient
+   server-side outage lost the card until a manual refresh (live board,
+   2026-08-17). Availability is renderLaundry's per-poll decision instead.
    The slot exists even while toggled off: body.integ-off-laundry CSS hides
    it, so flipping the switch back on is instant, matching weather/climate. */
 function laundrySlotHtml() {
-  const avail = ((hubData && hubData.integrations) || [])
-    .some((i) => i.id === 'laundry');
-  return avail ? `<div class="laundry-slot" id="laundry-slot"></div>` : '';
+  return `<div class="laundry-slot" id="laundry-slot"></div>`;
 }
 
 function buildPanels() {
@@ -2309,17 +2311,30 @@ function lnPortholeSvg(m, now = Date.now()) {
       + `<g transform="translate(50 66)">`
       + `<path class="ln-flyp ln-w${i + 1}" style="animation-delay:${(base + i * 0.55).toFixed(2)}s" d="${d}"/>`
       + `</g></g>`).join('');
-    inner = `<g class="ln-tumble">${drum}</g>`
+    // the dryer's tell is HEAT: a warm radial glow low in the drum,
+    // breathing slowly. Drawn UNDER the drum art and load so it reads as
+    // hot air behind the clothes. (Rising steam squiggles were tried and
+    // rejected: over a tan heap at porthole size they read as the wrong
+    // emoji — operator, 2026-08-17.)
+    inner = (m.kind === 'dryer'
+        ? `<circle class="ln-heatglow" cx="50" cy="50" r="37" fill="url(#lnht-${gid})"/>`
+        : '')
+      + `<g class="ln-tumble">${drum}</g>`
       + trio(0)
       + `<g transform="matrix(-1 0 0 1 100 0)">${trio(6.4)}</g>`
       + heap
       + (m.kind !== 'dryer'
-        ? `<path class="ln-water" d="M11 66 Q 30 61 50 66 T 89 66 L 89 90 L 11 90 Z"/>`
-          + `<path class="ln-waterline" d="M11 66 Q 30 61 50 66 T 89 66"/>`
-          + `<circle class="ln-sud" cx="41" cy="64" r="2.7"/>`
-          + `<circle class="ln-sud" cx="47" cy="62.4" r="1.9"/>`
-          + `<circle class="ln-sud" cx="60" cy="64.5" r="2.2"/>`
-          + `<circle class="ln-sud ln-sud-drift" cx="55" cy="56" r="1.2"/>`
+        ? `<path class="ln-water" d="M11 70 Q 30 65 50 70 T 89 70 L 89 90 L 11 90 Z"/>`
+          + `<path class="ln-waterline" d="M11 70 Q 30 65 50 70 T 89 70"/>`
+          + `<circle class="ln-sud" cx="33.5" cy="69.6" r="1.6"/>`
+          + `<circle class="ln-sud" cx="41" cy="68" r="2.7"/>`
+          + `<circle class="ln-sud" cx="47" cy="66.4" r="1.9"/>`
+          + `<circle class="ln-sud" cx="52.5" cy="67.7" r="1.5"/>`
+          + `<circle class="ln-sud" cx="60" cy="68.5" r="2.2"/>`
+          + `<circle class="ln-sud" cx="66" cy="69.7" r="1.8"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="55" cy="63" r="1.2"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="44" cy="64.5" r=".9" style="animation-delay:1.3s"/>`
+          + `<circle class="ln-sud ln-sud-drift" cx="63.5" cy="63.8" r="1.05" style="animation-delay:2.4s"/>`
         : '');
   } else if (m.phase === 'done') {
     // the cycle-complete light: the drum glows softly over the finished
@@ -2340,6 +2355,9 @@ function lnPortholeSvg(m, now = Date.now()) {
     + `<radialGradient id="lngl-${gid}" cx=".38" cy=".3" r=".9">`
     + `<stop class="ln-st-glhi" offset="0"/><stop class="ln-st-glmid" offset=".55"/>`
     + `<stop class="ln-st-gllo" offset="1"/></radialGradient>`
+    + `<radialGradient id="lnht-${gid}" cx=".5" cy=".72" r=".8">`
+    + `<stop class="ln-st-hthi" offset="0"/><stop class="ln-st-htlo" offset="1"/>`
+    + `</radialGradient>`
     + `<clipPath id="lncl-${gid}"><circle cx="50" cy="50" r="37"/></clipPath>`
     + `</defs>`
     + `<circle class="ln-bezel" cx="50" cy="50" r="43" stroke="url(#lnbz-${gid})"/>`
@@ -2387,7 +2405,19 @@ function laundryCardHtml(ln, now = Date.now()) {
    never a blanked column. */
 function renderLaundry(ln = laundryData, now = Date.now()) {
   const host = document.getElementById('laundry-slot');
-  if (!host) return;   // integration not available; no slot was built
+  if (!host) return;   // panels not built yet
+  // Three cases, re-checked EVERY render (the old build-time gate froze a
+  // transient outage into a missing card until manual refresh):
+  //  - unlisted AND nothing good to show: render nothing — an unconfigured
+  //    wall must not show a dead "unavailable" card;
+  //  - unlisted BUT the tile still reports available (an /api/hub hiccup or
+  //    partial payload): keep the card — live data outranks a missing
+  //    registry entry, and blanking a mid-cycle card would be worse;
+  //  - listed with the feed down: the honest "Laundry unavailable" below.
+  // The card returns by itself the moment the integration reappears.
+  const listed = ((hubData && hubData.integrations) || [])
+    .some((i) => i.id === 'laundry');
+  if (!listed && (ln == null || !ln.available)) { host.innerHTML = ''; return; }
   const head = sectionHead('Laundry');
   const body = ln == null
     ? `<div class="card wx-loading" aria-hidden="true"></div>`
@@ -2430,6 +2460,35 @@ function laundryTick(now = Date.now()) {
   });
 }
 
+/* The finish ENDGAME: lg_thinq holds "end" only briefly before the machine
+   powers itself off, so inside the final couple of minutes (or just past the
+   projected finish) the whole done window can slip between 60s polls — the
+   wall then misses the finish entirely (live board, 2026-08-17). While any
+   machine is in that window, chain short re-polls; the server's laundry
+   cache tightens its TTL in step (tiles.LAUNDRY_ENDGAME_TTL) so these
+   fetches see fresh HA state. The window is bounded a few minutes past the
+   projection so a stale latched remaining-time sensor can't pin fast
+   polling for hours; past it, the server's missed-finish memory takes over.
+   The window bounds are PAIRED with tiles.LAUNDRY_ENDGAME_AHEAD_MIN /
+   _BEHIND_MIN (a static guard holds them equal): drift apart and the fast
+   polls just re-read a still-warm cache. */
+const LN_FAST_POLL_MS = 10000;
+const LN_ENDGAME_AHEAD_MIN = 2;
+const LN_ENDGAME_BEHIND_MIN = 5;
+let lnFastTimer = null;
+// last-seen laundry LISTING state — renderIntegrations repaints the slot on
+// a flip (see there); null = not yet observed, so the first poll paints once
+let lnWasListed = null;
+function lnEndgame(machines) {
+  return (machines || []).some((m) => {
+    if (m.phase !== 'running') return false;
+    const t = Date.parse(m.finishes_at);
+    if (isNaN(t)) return false;
+    const min = (t - Date.now()) / 60000;
+    return min <= LN_ENDGAME_AHEAD_MIN && min >= -LN_ENDGAME_BEHIND_MIN;
+  });
+}
+
 /* Poll the fail-soft laundry endpoint on the hub cadence; same last-good-card
    discipline as weather/climate. Re-render ONLY when the payload actually
    changed — an innerHTML rebuild restarts the tumble animation mid-spin, and
@@ -2443,6 +2502,15 @@ async function fetchLaundry() {
   } catch (e) {
     laundryFails += 1;
     if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) laundryData = { available: false };
+  }
+  // (re)arm the endgame fast lane off the fresh payload BEFORE rendering:
+  // a render throw must not dissolve the chain in exactly the window it
+  // exists for. Clearing first keeps the 60s master poll and the chain
+  // from ever stacking timers.
+  clearTimeout(lnFastTimer);
+  lnFastTimer = null;
+  if (lnEndgame(laundryData && laundryData.machines)) {
+    lnFastTimer = setTimeout(fetchLaundry, LN_FAST_POLL_MS);
   }
   if (JSON.stringify(laundryData) !== before) renderLaundry();
   else laundryTick();   // still advance the countdown on the poll beat
@@ -2604,6 +2672,7 @@ async function poll() {
     renderPeople(data);
     renderTodoSlot(data);
     renderIntegrations(data);
+    renderBackup(data);
     pruneEvIndex();
     document.body.dataset.conn = 'up';
     document.getElementById('conn-word').textContent = 'live';
@@ -2611,6 +2680,19 @@ async function poll() {
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
   }
+}
+
+// Header backup badge: absent when healthy/unknown, amber when the backup has
+// gone stale. Driven by the `backup` block folded into /api/hub.
+function renderBackup(data) {
+  const el = document.getElementById('backup-badge');
+  if (!el) return;
+  const b = backupBadge(data && data.backup);
+  if (!b.show) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
+  el.hidden = false;
+  el.className = `backup-badge ${b.level}`;
+  el.textContent = b.text;
+  el.title = b.title;
 }
 
 // The 60s interval must not STACK polls: with the fetch timeout above, a poll to
@@ -3134,6 +3216,17 @@ function renderIntegrations(data) {
     document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
   updateTabVisibility(list);
   applyWallLayout(list);
+  // A laundry LISTING flip must repaint the laundry slot NOW: fetchLaundry's
+  // payload-diff can't see it (the tile can stay byte-identical, e.g.
+  // {"available": false} across a token outage), so without this the wall
+  // sticks on a blank slot where "Laundry unavailable" is owed — or keeps a
+  // stale card after unlisting. Only a FLIP repaints (renderLaundry rebuilds
+  // innerHTML, which restarts the tumble mid-spin — never do it per poll).
+  const lnListed = list.some((i) => i.id === 'laundry');
+  if (lnListed !== lnWasListed) {
+    lnWasListed = lnListed;
+    renderLaundry();
+  }
   const host = document.getElementById('integrations-ctl');
   if (!host) return;
   const row = (it) => {
@@ -3232,8 +3325,12 @@ function renderSettingsFull() {
     + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
-    + `</div>`;
+    + `</div>`
+    // A quiet deployed-version line for debugging ("what's actually running?").
+    // Filled from /api/version by paintVersion(); blank until it resolves.
+    + `<div class="settings-version" id="settings-version"></div>`;
   reflectThemeControls();
+  paintVersion();
   renderIntegrations(hubData || { integrations: lastIntegrations });
   renderTodoSourcePicker();
   renderCaldavPanel();
@@ -3509,9 +3606,32 @@ document.addEventListener('keydown', (e) => {
   if (pop && pop.classList.contains('open')) closeThemePop();
 });
 
+/* ---- Version readout (debug/ops) --------------------------------------
+   A quiet "family-hub v<version>" line in the Settings overlay, from
+   /api/version — so you can see what's actually deployed without a shell. Not
+   a feature surface: no changelog, no panel. Fail-soft — a failed fetch just
+   leaves the line blank. The changelog itself lives on GitHub. */
+let appVersion = null;
+
+// Paint the version into the Settings overlay's line, whenever both the fetched
+// version and the (re-rendered) element are present.
+function paintVersion() {
+  const el = document.getElementById('settings-version');
+  if (el) el.textContent = appVersion ? `family-hub v${appVersion}` : '';
+}
+
+function initVersion() {
+  // Returns the chain so tests can await it; production ignores the return.
+  return fetch('/api/version')
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('bad status'))))
+    .then((d) => { appVersion = d && d.version; paintVersion(); })
+    .catch(() => { /* offline / error page / pre-deploy — line stays blank */ });
+}
+
 tickClock();
 setInterval(tickClock, 1000);
 poll().then(probeCamera);
+initVersion();
 fetchWeather();
 fetchClimate();
 fetchLaundry();

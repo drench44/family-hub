@@ -19,3 +19,7 @@ __pycache__/
 .clubhouse/agents.json
 .clubhouse/agents.json.bak
 .clubhouse/settings.local.json
+
+# Playwright MCP browser-session artifacts (snapshots can contain real
+# house data — never commit)
+.playwright-mcp/

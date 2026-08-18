@@ -141,6 +141,28 @@ prune "$OUT/monthly" "$MONTHLY_KEEP"
 
 echo "family-hub-backup OK: hub-$HOURLY.db ($BYTES bytes) $(date -u +%FT%TZ)"
 
+# Record a heartbeat in the live hub.db so the dashboard header can show backup
+# health -- a STALE heartbeat also catches "backups stopped running at all"
+# (timer disabled, box asleep), which nothing else surfaces. Best-effort: a
+# good, verified snapshot must NEVER fail over this telemetry write, so it runs
+# after the OK line and can only exit 0. But a PERSISTENT write failure would
+# show a false 'stale' badge, so surface the cause on STDOUT (the backup's own
+# log) instead of swallowing it -- while keeping stderr clean and rc 0. A fresh
+# install whose hub.db has no kv table yet reads as this same skipped note.
+# python3 (already required above) keeps it dependency-free (no sqlite3 CLI).
+if ! hb_err="$(python3 - "$DB" "hub-$HOURLY.db" "$BYTES" 2>&1 <<'PY'
+import sqlite3, sys, json, datetime as dt
+db, name, nbytes = sys.argv[1], sys.argv[2], int(sys.argv[3])
+c = sqlite3.connect(db, timeout=5)
+c.execute("INSERT OR REPLACE INTO kv(key, value) VALUES('backup_status', ?)",
+          (json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                       "snapshot": name, "bytes": nbytes}),))
+c.commit(); c.close()
+PY
+)"; then
+  echo "family-hub-backup: heartbeat write skipped (snapshot OK): $(printf '%s' "$hb_err" | tail -1)"
+fi
+
 # Off-box mirror of the whole tiered tree, unless suppressed (FH_SKIP_REMOTE=1,
 # used by the pre-deploy snapshot which only needs a local restore point).
 #
