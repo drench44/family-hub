@@ -1468,12 +1468,14 @@ def admin_away_patch(pid: int, a: AwayPatch):
         if fields["backup_person_id"] == row["person_id"]:
             raise HTTPException(422, "backup cannot be the same person")
         _person_row(c, fields["backup_person_id"])          # 404 if unknown
-    # end_date must not precede the effective start_date, else away_map silently
-    # voids the whole period (its a>b skip). Compare against the incoming start
-    # when the patch moves it, otherwise the stored one.
-    end = fields.get("end_date")
-    start = fields.get("start_date", row["start_date"])
-    if end is not None and end < start:
+    # The effective end_date must not precede the effective start_date, else
+    # away_map silently voids the whole period (its a>b skip). "Effective"
+    # covers both directions: an incoming end_date earlier than the (possibly
+    # also-incoming) start, AND an incoming start_date pushed later than the
+    # row's already-stored end_date when the patch doesn't re-supply end_date.
+    effective_start = fields.get("start_date", row["start_date"])
+    effective_end = fields.get("end_date", row["end_date"])
+    if effective_end is not None and effective_end < effective_start:
         raise HTTPException(422, "end_date must not be before start_date")
     fdb.update_away_period(c, pid, **fields)
     return {"ok": True}
