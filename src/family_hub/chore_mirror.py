@@ -114,6 +114,8 @@ class _OwnerResolver:
         self._dates = sorted(dates)
         self._plans: dict[str, dict] = {}
         self._amap = None
+        self._people = None
+        self._chores = None
         self._live_ok = True
 
     def _live(self, diso: str) -> dict:

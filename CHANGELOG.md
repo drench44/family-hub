@@ -22,6 +22,13 @@ rolls that section to a dated version via `python scripts/release.py`.
   and deleting an away period restores exactly what was there before.
 
 ### Fixed
+- Native chores: deleting (or unmapping) the last person whose chores mirror to
+  iCloud no longer orphans their reminders — the mirror reconcile now still prunes
+  existing rows when nothing is mapped, instead of early-returning. (Caught in the
+  live deploy verification.)
+- A chore mirror error left latched from an earlier two-way tick no longer haunts
+  the settings row forever: switching iCloud back to read-only now clears the
+  stale error on the next tick.
 - Coming home no longer costs you your streak. If someone covered your chore
   while you were away and you tap "I'm back" the same day, the day now counts
   as finished for you, exactly as the tick on your card already showed. The
@@ -52,13 +59,6 @@ rolls that section to a dated version via `python scripts/release.py`.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.
-
-
-### Fixed
-- Native chores: deleting (or unmapping) the last person whose chores mirror to
-  iCloud no longer orphans their reminders — the mirror reconcile now still prunes
-  existing rows when nothing is mapped, instead of early-returning. (Caught in the
-  live deploy verification.)
 
 ## [1.2.0] — 2026-08-17
 
