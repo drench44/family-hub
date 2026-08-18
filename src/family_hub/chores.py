@@ -147,7 +147,10 @@ def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
     home). A fixed chore assigned to an away person reassigns to their backup
     if the backup is present (active and not away), tagging the row
     ``covering_for=<away pid>``; with no available backup the chore pauses
-    for the day (row omitted) rather than crashing."""
+    for the day (row omitted) rather than crashing -- except a one-time
+    ('once') chore, which stays with its away owner because pausing its single
+    dated occurrence would destroy it. An owner who is no longer active is
+    dropped before any of that: inactive beats away-cover."""
     away = away or {"ids": set(), "backup": {}}
     away_ids = away.get("ids", set())
     backup = away.get("backup", {})
@@ -162,15 +165,24 @@ def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
         aid = assignee_id(chore, d, present_ids)
         if aid is None:
             continue
+        # An owner who is no longer in the household (deactivated or deleted)
+        # drops out BEFORE the away branch: inactive beats away-cover. With the
+        # order reversed, deactivating someone who still had an open away period
+        # parked their chores on the backup forever.
+        if aid not in active_ids:
+            continue
         covering_for = None
         if aid in away_ids:                      # only fixed chores reach here
             b = backup.get(aid)
-            if b is None or b not in present_ids:
+            if b is not None and b in present_ids:
+                covering_for = aid
+                aid = b
+            elif chore["schedule_kind"] != "once":
                 continue                         # no available backup -> pause
-            covering_for = aid
-            aid = b
-        if aid not in present_ids:               # inactive/away, no cover
-            continue
+            # A 'once' chore is a DATED COMMITMENT: it occurs on exactly one day
+            # and never again, so pausing it destroys it outright. With nobody
+            # available to cover, it stays on the away owner's card (the wall
+            # renders it alongside their Away badge) instead of vanishing.
         rows.append({"chore_id": chore["id"], "person_id": aid,
                      "title": chore["title"], "icon": chore["icon"],
                      "rot": 1 if chore["assign_kind"] == "rotation" else 0,

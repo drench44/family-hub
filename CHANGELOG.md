@@ -26,6 +26,11 @@ rolls that section to a dated version via `python scripts/release.py`.
   while you were away and you tap "I'm back" the same day, the day now counts
   as finished for you, exactly as the tick on your card already showed. The
   same fix keeps the covering person's day whole when someone leaves mid-day.
+- A one-time chore that falls inside an away stretch with nobody to cover it
+  no longer disappears for good — it stays on the away person's card (and
+  their phone) instead of pausing into a day that never comes back.
+- Deactivating someone who is still marked away no longer leaves their chores
+  parked on their fill-in forever.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.
