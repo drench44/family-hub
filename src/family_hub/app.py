@@ -33,6 +33,7 @@ from . import integrations as fintegrations
 from . import reminders as remlogic
 from . import tiles
 from . import todos as tdlogic
+from . import version as fversion
 from . import caldav_service
 from . import caldav_sync
 from .calendar_sync import GoogleCalendarClient, sync_once
@@ -109,6 +110,10 @@ def _compute_build() -> str:
 
 
 BUILD = _compute_build()
+# The human-facing release identity (distinct from BUILD, the asset-content
+# hash): the SemVer from VERSION. Read once at import like BUILD — a deploy
+# restarts the process and picks up the new version.
+APP_VERSION = fversion.read_version()
 # \Z (end of string), not $ — in non-MULTILINE mode $ also matches just before a
 # trailing newline, so "#ff0000\n" would slip through and reach the client as a
 # CSS color. \Z anchors the true end.
@@ -599,6 +604,13 @@ def _config_panel_links() -> list[dict]:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/version")
+def api_version():
+    """The deployed version + build hash — a debug/ops readout ("what's actually
+    running?"). The changelog itself lives on GitHub, not here."""
+    return {"version": APP_VERSION, "build": BUILD}
 
 
 def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
