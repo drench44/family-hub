@@ -143,8 +143,14 @@ echo "family-hub-backup OK: hub-$HOURLY.db ($BYTES bytes) $(date -u +%FT%TZ)"
 
 # Off-box mirror of the whole tiered tree, unless suppressed (FH_SKIP_REMOTE=1,
 # used by the pre-deploy snapshot which only needs a local restore point).
+#
+# NOT `rsync -a`: a NAS export (the intended target) commonly squashes client
+# uids to one account, so preserving owner/group/perms fails with EPERM (rsync
+# exit 23) even though the data copies fine -- which would false-trip the exit-2
+# REMOTE FAIL every run. We only need content + mtimes off-box, so copy those
+# and let the target own the perms: -r -t, and explicitly --no-owner/group/perms.
 if [ -n "$REMOTE" ] && [ "$SKIP_REMOTE" != "1" ]; then
-  rsync -a --delete "$OUT/" "$REMOTE/" \
+  rsync -rt --delete --no-owner --no-group --no-perms "$OUT/" "$REMOTE/" \
     || { echo "family-hub-backup REMOTE FAIL: $REMOTE $(date -u +%FT%TZ)" >&2; exit 2; }
   echo "family-hub-backup REMOTE OK: $REMOTE"
 fi
