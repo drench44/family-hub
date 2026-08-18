@@ -122,19 +122,28 @@ def _all_done(occ: set, completions_by_date: dict, d: dt.date) -> bool:
     return occ <= done
 
 
-def streak(occ_by_date: dict, completions_by_date: dict, today: dt.date) -> int:
+def streak(occ_by_date: dict, completions_by_date: dict, today: dt.date,
+           away_dates: set | None = None) -> int:
     """Consecutive days (walking back from today) where the person had >=1
     recorded chore and completed all of them. ``occ_by_date`` maps 'YYYY-MM-DD'
     -> set of chore_ids assigned to the person that day. Rest days (no entry)
     are skipped. An unfinished today is forgiven — it doesn't break the streak,
-    but also doesn't count. Capped at 365 calendar days."""
+    but also doesn't count. ``away_dates`` (optional set of 'YYYY-MM-DD') are
+    treated as rest days regardless of what was logged, so an away stretch
+    never breaks the streak. Capped at 365 calendar days."""
+    away = away_dates or set()
     d = today
     todays = occ_by_date.get(today.isoformat())
-    if todays and not _all_done(todays, completions_by_date, today):
+    if today.isoformat() not in away and todays \
+            and not _all_done(todays, completions_by_date, today):
         d = today - dt.timedelta(days=1)
     count = 0
     for _ in range(365):
-        occ = occ_by_date.get(d.isoformat())
+        ds = d.isoformat()
+        if ds in away:                 # away day == rest, regardless of log
+            d -= dt.timedelta(days=1)
+            continue
+        occ = occ_by_date.get(ds)
         if not occ:
             d -= dt.timedelta(days=1)
             continue
@@ -147,16 +156,21 @@ def streak(occ_by_date: dict, completions_by_date: dict, today: dt.date) -> int:
 
 
 def week_strip(occ_by_date: dict, completions_by_date: dict,
-               today: dt.date) -> list[str]:
-    """7 entries oldest->today, each 'done'|'partial'|'none'|'rest'."""
+               today: dt.date, away_dates: set | None = None) -> list[str]:
+    """7 entries oldest->today, each 'done'|'partial'|'none'|'rest'|'away'."""
+    away = away_dates or set()
     out = []
     for i in range(6, -1, -1):
         d = today - dt.timedelta(days=i)
-        occ = occ_by_date.get(d.isoformat())
+        ds = d.isoformat()
+        if ds in away:
+            out.append("away")
+            continue
+        occ = occ_by_date.get(ds)
         if not occ:
             out.append("rest")
             continue
-        done = completions_by_date.get(d.isoformat(), set())
+        done = completions_by_date.get(ds, set())
         n = len(occ & done)
         if n == len(occ):
             out.append("done")

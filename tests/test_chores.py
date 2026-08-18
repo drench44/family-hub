@@ -181,3 +181,38 @@ def test_week_strip_composition():
     }
     assert ch.week_strip(occ, cbd, today) == \
         ["done", "rest", "partial", "rest", "rest", "none", "done"]
+
+
+def test_streak_treats_away_days_as_rest_and_preserves_across_gap():
+    today = dt.date(2026, 8, 17)                     # Sunday
+    # daily chore id 1; done through 8/12, away 8/13..8/16, back today undone
+    occ = {d: {1} for d in ("2026-08-10", "2026-08-11", "2026-08-12",
+                            "2026-08-13", "2026-08-14", "2026-08-15",
+                            "2026-08-16", "2026-08-17")}
+    done = {d: {1} for d in ("2026-08-10", "2026-08-11", "2026-08-12")}
+    away = {"2026-08-13", "2026-08-14", "2026-08-15", "2026-08-16"}
+    # Without away, 8/13 is an uncompleted day -> streak breaks after today's
+    # forgiveness, counting back only to 8/12 = 3. With away, the gap is rest,
+    # so it still reaches the 8/10-8/12 run = 3, but crucially does not BREAK.
+    assert ch.streak(occ, done, today, away) == 3
+    # Prove non-away would break at 8/16 (0 completed) instead:
+    assert ch.streak(occ, done, today) == 0  # 8/16 occurred, not done -> break
+
+
+def test_streak_backdated_away_repairs_without_touching_history():
+    today = dt.date(2026, 8, 17)
+    occ = {d: {1} for d in ("2026-08-14", "2026-08-15", "2026-08-16",
+                            "2026-08-17")}
+    done = {"2026-08-14": {1}, "2026-08-17": {1}}     # missed 15 & 16 (trip)
+    assert ch.streak(occ, done, today) == 1           # broken by 8/16
+    away = {"2026-08-15", "2026-08-16"}
+    assert ch.streak(occ, done, today, away) == 2     # 8/17 + 8/14 across gap
+
+
+def test_week_strip_emits_away_state():
+    today = dt.date(2026, 8, 13)                       # Thu; window Fri..Thu
+    occ = {d: {1} for d in ("2026-08-07", "2026-08-11", "2026-08-13")}
+    cbd = {"2026-08-07": {1}, "2026-08-13": {1}}
+    away = {"2026-08-11"}
+    assert ch.week_strip(occ, cbd, today, away) == \
+        ["done", "rest", "rest", "rest", "away", "rest", "done"]
