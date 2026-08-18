@@ -1,9 +1,12 @@
 [Unit]
-Description=Nightly family-hub SQLite snapshot
+Description=Hourly family-hub SQLite snapshot (tiered: hourly/daily/weekly/monthly)
 
 [Timer]
-OnCalendar=*-*-* 02:25:00
-RandomizedDelaySec=300
+# Top of every hour. The script keeps 48 hourly + 14 daily + 8 weekly +
+# 12 monthly snapshots, so hourly runs stay cheap on storage. Persistent=true
+# runs a missed snapshot after the box was off.
+OnCalendar=hourly
+RandomizedDelaySec=120
 Persistent=true
 
 [Install]

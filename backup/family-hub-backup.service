@@ -1,9 +1,15 @@
 [Unit]
-Description=Nightly SQLite snapshot of family-hub (chores/calendar) into the vault
+Description=Tiered SQLite snapshot of family-hub (chores/todos/calendar) into the vault + off-box
 
 [Service]
 Type=oneshot
-# EDIT: your user + wherever you installed the script; set FH_DB / FH_OUT
-# if your paths differ from the script's defaults.
+# EDIT: your user + wherever you installed the script.
 User=YOUR-USER
+# Box-side settings live in this env file (NOT in the public repo): at minimum
+#   FH_DB=/home/YOUR-USER/docker-services/family-hub/data/hub.db
+#   FH_OUT=/srv/backup/family-hub
+#   FH_REMOTE=/mnt/nas/family-hub      # off-box mirror (a NAS mount, etc.)
+# The leading '-' makes the file optional so a missing/renamed file doesn't
+# wedge the timer; off-box mirroring simply stays off until FH_REMOTE is set.
+EnvironmentFile=-/etc/family-hub-backup.env
 ExecStart=/home/YOUR-USER/bin/family-hub-backup.sh
