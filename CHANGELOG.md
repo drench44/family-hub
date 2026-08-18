@@ -11,6 +11,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Fixed
+- `changelog-guard` no longer fails a release PR: a diff that bumps
+  `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
+  rather than adding a bullet) is now exempt. Releases can PR on their own.
+
+
+### Fixed
 - Native chores: deleting (or unmapping) the last person whose chores mirror to
   iCloud no longer orphans their reminders — the mirror reconcile now still prunes
   existing rows when nothing is mapped, instead of early-returning. (Caught in the

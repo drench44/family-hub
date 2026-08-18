@@ -157,3 +157,14 @@ def test_main_base_fails_LOUD_on_unresolvable_ref(tmp_path, monkeypatch):
     monkeypatch.setattr(cc, "REPO_ROOT", repo)
     with pytest.raises(subprocess.CalledProcessError):
         cc.main(["--base", "no-such-ref"])
+
+
+# --- is_release exemption (a release rolls [Unreleased], can't add a bullet) --
+
+def test_release_diff_is_recognized():
+    assert cc.is_release(["VERSION", "CHANGELOG.md",
+                          "src/family_hub/web/static/index.html"]) is True
+
+
+def test_non_release_src_change_is_not_a_release():
+    assert cc.is_release(["src/family_hub/app.py", "CHANGELOG.md"]) is False
