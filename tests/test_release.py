@@ -118,14 +118,27 @@ def test_require_clean_tree_ok_when_clean(monkeypatch):
     release._require_clean_tree()   # must not raise
 
 
-def test_main_dry_run_writes_nothing():
-    """--dry-run must not mutate the release files (or touch git). Run against
-    the real repo and assert every byte is unchanged."""
-    files = [release.VERSION_FILE, release.CHANGELOG_FILE, release.INDEX_HTML]
-    before = [f.read_bytes() for f in files]
+def test_main_dry_run_writes_nothing(tmp_path, monkeypatch):
+    """--dry-run must not mutate the release files (or touch git). Runs against a
+    fixture with a NON-EMPTY [Unreleased] so it is independent of the live repo's
+    release state: right after a real release [Unreleased] is empty, which makes
+    a cut abort (rc 1) — so pinning this to the live tree broke the moment the
+    first real release landed. The fixture keeps the intent (dry-run mutates
+    nothing) without that coupling."""
+    vf = tmp_path / "VERSION"
+    vf.write_text("1.2.3\n")
+    cf = tmp_path / "CHANGELOG.md"
+    cf.write_text("# Changelog\n\n## [Unreleased]\n\n### Added\n- a change\n\n"
+                  "## [1.2.3] — 2026-01-01\n\n### Added\n- prior\n")
+    hf = tmp_path / "index.html"
+    hf.write_text('<link href="styles.css?v=1.2.3">\n')
+    monkeypatch.setattr(release, "VERSION_FILE", vf)
+    monkeypatch.setattr(release, "CHANGELOG_FILE", cf)
+    monkeypatch.setattr(release, "INDEX_HTML", hf)
+    before = [f.read_bytes() for f in (vf, cf, hf)]
     rc = release.main(["patch", "--dry-run"])
-    assert rc == 0
-    assert [f.read_bytes() for f in files] == before
+    assert rc == 0, "dry-run against a releasable tree succeeds"
+    assert [f.read_bytes() for f in (vf, cf, hf)] == before, "dry-run writes nothing"
 
 
 def _git(repo, *a):
