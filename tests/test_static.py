@@ -857,6 +857,16 @@ def test_laundry_card_static_guards():
     # the timer arc + tumble only exist inside .ln-door SVG markup built by
     # lnPortholeSvg; the renderer must be wired into the poll loop
     assert "fetchLaundry" in hub and "renderLaundry" in hub and "laundryTick" in hub
+    # the slot div is built UNCONDITIONALLY: buildPanels runs once per page
+    # life, so gating the div on build-time availability froze a transient
+    # server-side outage into a missing card until a manual refresh (live
+    # board, 2026-08-17). Availability is renderLaundry's per-poll decision.
+    assert re.search(r"function laundrySlotHtml\(\) \{\s*\n?\s*return `<div class=\"laundry-slot\"",
+                     hub), "laundrySlotHtml must build the slot unconditionally"
+    m = re.search(r"function renderLaundry\(", hub)
+    assert m and re.search(r"\.some\(\(i\) => i\.id === 'laundry'\)",
+                           hub[m.start():m.start() + 1600]), \
+        "renderLaundry must re-check integration availability per render"
     # the finish-endgame fast lane: near a projected finish the frontend
     # chains short re-polls (and the server cache tightens in step) so the
     # brief lg_thinq "end" status can't slip between 60s polls — without it
