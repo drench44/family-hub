@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-08-18
+
 ### Added
 - Away / pause mode for chores: mark a family member away (open-ended — set it
   when they leave, tap "I'm back" when they return, back-date it if you forgot)
