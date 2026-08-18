@@ -931,3 +931,41 @@ def test_css_braces_balanced():
             depth -= 1
             assert depth >= 0, f"stray closing brace at offset {i}"
     assert depth == 0, f"unbalanced braces: depth {depth} at EOF"
+
+
+# --- versioning guards ------------------------------------------------------
+# The asset cache-busts are unified to the app version (scripts/release.py is
+# the sole writer). These pin that invariant so a stray hand-edit that
+# reintroduces a drifting ?v= number fails CI, the way f712ac0 would have.
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_version_file_is_clean_semver():
+    v = (ROOT / "VERSION").read_text().strip()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", v), f"VERSION must be clean SemVer, got {v!r}"
+
+
+def test_every_asset_cache_bust_equals_the_version():
+    version = (ROOT / "VERSION").read_text().strip()
+    index = (STATIC / "index.html").read_text()
+    busts = re.findall(r"\?v=([\w.]+)", index)
+    assert busts, "index.html should carry ?v= cache-busts on its assets"
+    drifted = sorted({b for b in busts if b != version})
+    assert not drifted, (f"asset cache-busts must all equal VERSION ({version}); "
+                         f"drifted: {drifted} — run scripts/release.py, don't hand-edit ?v=")
+
+
+def test_dunder_version_matches_the_version_file():
+    import family_hub
+    assert family_hub.__version__ == (ROOT / "VERSION").read_text().strip()
+
+
+def test_dockerfile_ships_version():
+    """The running app reads VERSION at the repo root (=/app in the image) for
+    /api/version + family_hub.__version__. If the Dockerfile doesn't COPY it,
+    the readout silently falls back to '0.0.0+unknown' — fail-soft hiding a real
+    break. Guard so the image always carries it."""
+    dockerfile = (ROOT / "web.Dockerfile").read_text()
+    assert re.search(r"COPY\s+.*\bVERSION\b", dockerfile), \
+        "web.Dockerfile must COPY VERSION into the image"

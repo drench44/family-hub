@@ -31,3 +31,20 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  changelog-guard:
+    # A PR that changes app code under src/ must add a CHANGELOG [Unreleased]
+    # entry (docs-only / test-only diffs are exempt). Same check as the local
+    # .githooks/pre-commit hook.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need the PR base commit reachable for the diff
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python scripts/check_changelog.py --base "$BASE_SHA"

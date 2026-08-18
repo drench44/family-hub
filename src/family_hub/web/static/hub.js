@@ -3291,8 +3291,12 @@ function renderSettingsFull() {
     + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
-    + `</div>`;
+    + `</div>`
+    // A quiet deployed-version line for debugging ("what's actually running?").
+    // Filled from /api/version by paintVersion(); blank until it resolves.
+    + `<div class="settings-version" id="settings-version"></div>`;
   reflectThemeControls();
+  paintVersion();
   renderIntegrations(hubData || { integrations: lastIntegrations });
   renderTodoSourcePicker();
   renderCaldavPanel();
@@ -3568,9 +3572,32 @@ document.addEventListener('keydown', (e) => {
   if (pop && pop.classList.contains('open')) closeThemePop();
 });
 
+/* ---- Version readout (debug/ops) --------------------------------------
+   A quiet "family-hub v<version>" line in the Settings overlay, from
+   /api/version — so you can see what's actually deployed without a shell. Not
+   a feature surface: no changelog, no panel. Fail-soft — a failed fetch just
+   leaves the line blank. The changelog itself lives on GitHub. */
+let appVersion = null;
+
+// Paint the version into the Settings overlay's line, whenever both the fetched
+// version and the (re-rendered) element are present.
+function paintVersion() {
+  const el = document.getElementById('settings-version');
+  if (el) el.textContent = appVersion ? `family-hub v${appVersion}` : '';
+}
+
+function initVersion() {
+  // Returns the chain so tests can await it; production ignores the return.
+  return fetch('/api/version')
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('bad status'))))
+    .then((d) => { appVersion = d && d.version; paintVersion(); })
+    .catch(() => { /* offline / error page / pre-deploy — line stays blank */ });
+}
+
 tickClock();
 setInterval(tickClock, 1000);
 poll().then(probeCamera);
+initVersion();
 fetchWeather();
 fetchClimate();
 fetchLaundry();
