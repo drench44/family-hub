@@ -1407,6 +1407,16 @@ body.overlay-open { overflow: hidden; }
 }
 .padmin-row.inactive { opacity: 0.5; }
 .padmin-name { flex: 1; font-weight: 600; font-size: 17px; }
+/* At-a-glance "this person mirrors to an iCloud list" tag — informational, not
+   a control (no tap target). Accent pill from tokens so it reads in every
+   theme. */
+.padmin-badge {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.06em; white-space: nowrap;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px; padding: 3px 8px;
+}
 .padmin-btn {
   font-family: var(--mono); font-size: 12px; font-weight: 600;
   letter-spacing: 0.04em;

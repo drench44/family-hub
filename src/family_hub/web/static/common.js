@@ -748,16 +748,52 @@ function freshPersonModel() {
   return { name: '', color: SWATCHES[0] };
 }
 
+/* The PATCH body that maps a person to an iCloud chore list. The picker's
+   "— none —" option is value '', which clears the mapping to null; any real
+   list id maps straight through. Pure so the null-clear is unit-testable
+   (a wrong body would silently mis-map or 422). */
+function reminderListBody(value) {
+  return { reminder_list_id: value ? value : null };
+}
+
+/* The iCloud-list mapping block for the person editor (edit mode only — a new
+   person has no id to PATCH yet). `opts` carries {reminderLists, reminderListId,
+   twoWay}. With lists it renders a picker + the one-time sharing note; with no
+   lists it renders a single "connect iCloud" line instead of a dead dropdown.
+   Kept as an HTML string so buildPersonForm can drop it into the same template
+   pass (the live wiring + PATCH is added after). */
+function mirrorFieldHtml(opts) {
+  if (!opts || !opts.edit) return '';
+  const lists = opts.reminderLists || [];
+  const listId = opts.reminderListId || '';
+  if (!lists.length) {
+    return `<div class="field"><label>iCloud chore list</label>`
+      + `<div class="hint" data-plist-empty>Connect iCloud in Settings to mirror this person’s chores to a list.</div></div>`;
+  }
+  const options = `<option value=""${listId ? '' : ' selected'}>— none —</option>`
+    + lists.map((l) =>
+      `<option value="${escapeHtml(l.id)}"${l.id === listId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
+  const offNow = !!listId && !opts.twoWay;
+  return `<div class="field"><label>iCloud chore list</label>`
+    + `<select class="txt-input" data-plist>${options}</select>`
+    + `<div class="hint" data-plist-share>Chores are written to this person’s list in the hub’s iCloud account. To see them on their own iPhone, share that list to their Apple ID once from iCloud Reminders (open the list → Share List).</div>`
+    + `<div class="hint${offNow ? '' : ' hidden'}" data-plist-readonly>Two-way sync is off, so chores won’t reach iCloud yet. Turn it on in Settings → iCloud.</div>`
+    + `<div class="form-error hidden" data-plist-err></div></div>`;
+}
+
 /* One reusable person form (name + color swatches) for the Chores-page inline
-   people editor. `model` seeds it; `onsubmit(body,
-   errEl)` fires with {name, color}. DOM hooks are data-* attributes (not
-   classes) so the form needs no styling of its own — it reuses .txt-input /
-   .swatches / .form-error / .btn-primary. */
-function buildPersonForm(host, model, submitLabel, onsubmit) {
+   people editor. `model` seeds it; `onsubmit(body, errEl)` fires with
+   {name, color}. `opts` (edit mode) adds the iCloud-list picker: it PATCHes
+   live via `opts.onListChange(value)` — resolving false to revert + show an
+   inline error — separate from the name/color Save. DOM hooks are data-*
+   attributes (not classes) so the form needs no styling of its own — it reuses
+   .txt-input / .swatches / .form-error / .btn-primary. */
+function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
   host.innerHTML = `
     <div class="field"><label>Name / nickname</label>
       <input class="txt-input" data-pname maxlength="30" autocomplete="off"></div>
     <div class="field"><label>Color</label><div class="swatches" data-pswatches></div></div>
+    ${mirrorFieldHtml(opts)}
     <div class="form-error hidden" data-perror></div>
     <button class="btn-primary" type="button" data-psubmit>${escapeHtml(submitLabel)}</button>`;
   const $ = (sel) => host.querySelector(sel);
@@ -765,6 +801,35 @@ function buildPersonForm(host, model, submitLabel, onsubmit) {
   const paint = () => paintSwatches($('[data-pswatches]'), model.color,
     (hx) => { model.color = hx; paint(); });
   paint();
+
+  // Live iCloud-list mapping (edit mode with lists available). The select
+  // PATCHes on change and reflects the two-way-off note against the current
+  // selection; a failed PATCH reverts to the last committed value.
+  const sel = $('[data-plist]');
+  if (sel && opts && opts.onListChange) {
+    const twoWay = !!opts.twoWay;
+    let committed = opts.reminderListId || '';
+    const paintReadonly = () => {
+      const el = $('[data-plist-readonly]');
+      if (el) el.classList.toggle('hidden', !(sel.value && !twoWay));
+    };
+    sel.onchange = async () => {
+      const errEl = $('[data-plist-err]');
+      if (errEl) errEl.classList.add('hidden');
+      const value = sel.value;
+      sel.disabled = true;
+      const ok = await opts.onListChange(value);
+      sel.disabled = false;
+      if (ok === false) {
+        sel.value = committed;   // PATCH failed: undo the visible selection
+        if (errEl) { errEl.textContent = 'Couldn’t update the list — check the hub and try again.'; errEl.classList.remove('hidden'); }
+      } else {
+        committed = value;
+      }
+      paintReadonly();
+    };
+  }
+
   $('[data-psubmit]').onclick = () =>
     onsubmit({ name: $('[data-pname]').value.trim(), color: model.color }, $('[data-perror]'));
 }

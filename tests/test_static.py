@@ -150,6 +150,15 @@ def test_chore_form_time_and_number_inputs_avoid_ios_zoom_and_are_tap_targets():
         assert m and int(m.group(1)) >= 44, f"{cls} must be a >= 44px tap target"
 
 
+def test_person_editor_icloud_list_picker_and_badge():
+    # The person→iCloud-list picker is a .txt-input <select> (so it inherits the
+    # guarded >=16px/>=44px box — no iOS zoom-on-focus, real tap target), and the
+    # "mirrored" badge shown next to a mapped person is styled.
+    assert '<select class="txt-input" data-plist>' in ALL_JS, \
+        "the iCloud-list picker must be a .txt-input <select> (>=16px font / >=44px tall)"
+    assert _css_rule(".padmin-badge").strip(), ".padmin-badge (iCloud mirror tag) is unstyled"
+
+
 def test_reminder_list_picker_avoids_ios_zoom_and_is_a_tap_target():
     # The reminders add row's list <select> shows on the phone To-Dos tab. A
     # sub-16px font makes iOS Safari zoom the page on focus (the same trap the
