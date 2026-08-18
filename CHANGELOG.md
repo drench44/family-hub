@@ -47,6 +47,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The day browser now carries the same "away status unavailable" note the
   main screen shows, and tapping a chore off while that's broken asks you to
   try again instead of crediting the wrong person.
+- `chore_mirror_horizon_days` (how far ahead chores are pushed to each phone)
+  is now a real setting in `config.json`, documented in the example file.
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`
   rather than adding a bullet) is now exempt. Releases can PR on their own.

@@ -27,12 +27,28 @@ def test_reconcile_creates_for_mapped_person(conn):
     pid = _person(conn, "Emma", "caldav:emma")
     _daily(conn, "Dishes", pid, icon="🍽")
     res = chore_mirror.reconcile(conn, _CFG, _NOW)
-    assert res["created"] == 8                       # today-1 .. today+7
+    assert res["created"] == 8                       # today .. today+7 inclusive
     pend = [o for o in fdb.caldav_pending(conn) if o["comp_type"] == "VTODO"]
     assert len(pend) == 8
     assert all(o["collection_id"] == "caldav:emma" for o in pend)
     assert all("🍽 Dishes" in o["raw_ics"] for o in pend)
     assert len(fdb.list_chore_mirror(conn)) == 8
+
+
+def test_reconcile_honors_the_configured_horizon(conn):
+    """chore_mirror_horizon_days is a real config knob (documented in
+    config.example.json), not just a constant: it decides how far ahead each
+    person's Reminders list is filled."""
+    import pathlib
+
+    from family_hub.config import load_config
+    pid = _person(conn, "Emma", "caldav:emma")
+    _daily(conn, "Dishes", pid)
+    res = chore_mirror.reconcile(
+        conn, SimpleNamespace(chore_mirror_horizon_days=2), _NOW)
+    assert res["created"] == 3                       # today .. today+2 inclusive
+    example = pathlib.Path(__file__).resolve().parent.parent / "config.example.json"
+    assert load_config(str(example)).chore_mirror_horizon_days == 7
 
 
 def test_reconcile_skips_unmapped_person(conn):
@@ -422,6 +438,155 @@ def test_once_chore_with_no_backup_stays_mirrored_while_away(conn):
     rows = fdb.list_chore_mirror(conn)
     assert [(m["chore_id"], m["date"], m["person_id"]) for m in rows] == \
         [(cid, due, milo)], "the dated commitment stays on the owner's list"
+
+
+def test_reconcile_biweekly_rotation_with_an_away_member_lands_correctly(conn):
+    """T4: the mirror only ever proved itself against DAILY chores. A biweekly
+    Mon+Tue rotation epoched on today (Mon 2026-08-17) occurs exactly twice in
+    the 8-day horizon: Mon -> A, Tue -> B. With A away and no backup, Monday's
+    turn falls to B (rotations skip away people) and BOTH reminders land on
+    B's list -- nothing may reach the away person's phone."""
+    a = _person(conn, "A", "caldav:a")
+    b = _person(conn, "B", "caldav:b")
+    cid = fdb.add_chore(conn, title="Recycling", icon="", schedule_kind="days",
+                        days_mask=0b11, week_interval=2, assign_kind="rotation",
+                        fixed_person_id=None, rotation_order=[a, b],
+                        rotation_epoch=_NOW.date().isoformat())
+    mon = _NOW.date().isoformat()
+    tue = (_NOW.date() + dt.timedelta(days=1)).isoformat()
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    ledger = {m["date"]: m["person_id"] for m in fdb.list_chore_mirror(conn)}
+    assert ledger == {mon: a, tue: b}, "on-cycle days only, in rotation order"
+
+    fdb.add_away_period(conn, a, mon)                 # A away, no backup
+    res = chore_mirror.reconcile(conn, _CFG, _NOW,
+                                 synced_collections={"caldav:a", "caldav:b"})
+    assert res["moved"] == 1
+    rows = fdb.list_chore_mirror(conn)
+    assert {m["date"]: m["person_id"] for m in rows} == {mon: b, tue: b}
+    assert all(m["cal_object_id"].startswith("caldav:b/") for m in rows), \
+        "nothing may sit on the away person's list"
+    assert fdb.get_cal_object(conn, f"caldav:a/familyhub-chore-{cid}-{mon}") is None
+
+
+def test_covering_reminder_carries_due_times_on_the_backups_object(conn):
+    """T5: a covered chore's reminder must keep its notification times -- the
+    whole point of due_times is that the phone buzzes. The module's default
+    _NOW is naive (which takes build_chore_vtodo's all-day branch), so this
+    uses a tz-AWARE now to exercise the timed DUE + VALARM path."""
+    from zoneinfo import ZoneInfo
+    now = dt.datetime(2026, 8, 17, 9, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    cid = fdb.add_chore(conn, title="Feed the fish", icon="🐟",
+                        schedule_kind="daily", days_mask=0, assign_kind="fixed",
+                        fixed_person_id=milo, rotation_order=[],
+                        rotation_epoch="2026-08-01",
+                        due_times=["07:30", "18:00"])
+    fdb.add_away_period(conn, milo, now.date().isoformat(),
+                        backup_person_id=ava)
+    chore_mirror.reconcile(conn, _CFG, now)
+    m = fdb.get_chore_mirror(conn, cid, now.date().isoformat())
+    assert m["person_id"] == ava
+    ics = fdb.get_cal_object(conn, m["cal_object_id"])["raw_ics"]
+    assert m["cal_object_id"].startswith("caldav:ava/")
+    assert "DUE:20260817T143000Z" in ics, "07:30 PDT -> 14:30Z, a TIMED due"
+    assert ics.count("BEGIN:VALARM") == 2, "one notification per due time"
+    assert "TRIGGER;VALUE=DATE-TIME:20260818T010000Z" in ics   # 18:00 PDT
+
+
+def test_away_period_ending_inside_the_horizon_splits_the_lists(conn):
+    """T7: one reconcile over a period that ENDS mid-horizon must split the
+    days: everything up to end_date on the backup's list, everything after on
+    the owner's. A single-pass bug here would park the whole horizon on one."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    _daily(conn, "Fish", milo)
+    today = _NOW.date()
+    fdb.add_away_period(conn, milo, today.isoformat(),
+                        (today + dt.timedelta(days=2)).isoformat(), ava)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    by_date = {m["date"]: m["person_id"] for m in fdb.list_chore_mirror(conn)}
+    for i in range(0, 8):
+        d = (today + dt.timedelta(days=i)).isoformat()
+        expected = ava if i <= 2 else milo
+        assert by_date[d] == expected, f"{d} belongs to {expected}"
+
+
+def test_return_keeps_a_completed_covering_reminder_and_rekeys_the_ledger(conn):
+    """T8: the backup FINISHED today's covering chore, then the owner comes
+    back. The moved branch re-keys the ledger to the owner and creates their
+    copy, but the backup's completed object is history and is never deleted --
+    the same asymmetry as test_reconcile_handoff_keeps_completed_old_reminder."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    cid = _daily(conn, "Fish", milo)
+    period = fdb.add_away_period(conn, milo, _NOW.date().isoformat(),
+                                 backup_person_id=ava)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    today = _NOW.date().isoformat()
+    covering = fdb.get_chore_mirror(conn, cid, today)
+    assert covering["person_id"] == ava
+    _complete_in_ios(conn, covering, title="Fish")
+
+    fdb.close_away_period(conn, period,
+                          (_NOW.date() - dt.timedelta(days=1)).isoformat())
+    chore_mirror.reconcile(conn, _CFG, _NOW,
+                           synced_collections={"caldav:milo", "caldav:ava"})
+    old = fdb.get_cal_object(conn, covering["cal_object_id"])
+    assert old is not None and "STATUS:COMPLETED" in old["raw_ics"], \
+        "the backup's finished reminder stays as their history"
+    assert old["sync_state"] == "SYNCED", "and is not queued for deletion"
+    now_row = fdb.get_chore_mirror(conn, cid, today)
+    assert now_row["person_id"] == milo
+    assert now_row["cal_object_id"].startswith("caldav:milo/")
+
+
+def test_an_away_backup_never_receives_the_chore_through_reconcile(conn):
+    """T9: Ava is Milo's backup but is away herself. plan_rows pauses the chore
+    (proven in test_backup_who_is_also_away_pauses_fixed_chore); this proves it
+    end-to-end through the mirror -- nothing may land on either list."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    _daily(conn, "Fish", milo)
+    today = _NOW.date().isoformat()
+    fdb.add_away_period(conn, ava, today)
+    fdb.add_away_period(conn, milo, today, backup_person_id=ava)
+    res = chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert res["created"] == 0
+    assert fdb.list_chore_mirror(conn) == []
+    assert [o for o in fdb.caldav_pending(conn) if o["comp_type"] == "VTODO"] == []
+
+
+def test_opening_a_period_after_reminders_exist_moves_and_prunes(conn):
+    """T10: both existing away-mirror tests open the period BEFORE the first
+    reconcile. This is the real-life direction -- reminders already on the
+    phones when someone leaves. With a backup the days MOVE to their list;
+    with none they are DELETED (the away person stops being nagged)."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    cid = _daily(conn, "Fish", milo)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert all(m["person_id"] == milo for m in fdb.list_chore_mirror(conn))
+    lists = {"caldav:milo", "caldav:ava"}
+
+    period = fdb.add_away_period(conn, milo, _NOW.date().isoformat(),
+                                 backup_person_id=ava)
+    res = chore_mirror.reconcile(conn, _CFG, _NOW, synced_collections=lists)
+    assert res["moved"] == 8 and res["deleted"] == 0
+    rows = fdb.list_chore_mirror(conn)
+    assert rows and all(m["person_id"] == ava
+                        and m["cal_object_id"].startswith("caldav:ava/")
+                        for m in rows)
+
+    # now drop the backup: with nobody covering, the chore pauses and every
+    # mirrored day is pruned rather than left ringing someone's phone
+    fdb.update_away_period(conn, period, backup_person_id=None)
+    res2 = chore_mirror.reconcile(conn, _CFG, _NOW, synced_collections=lists)
+    assert res2["deleted"] == 8 and res2["created"] == 0
+    assert fdb.list_chore_mirror(conn) == []
+    assert fdb.get_cal_object(
+        conn, f"caldav:ava/familyhub-chore-{cid}-{_NOW.date().isoformat()}") is None
 
 
 def test_reconcile_return_moves_reminder_back_to_owner(conn):

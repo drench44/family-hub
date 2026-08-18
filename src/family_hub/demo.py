@@ -125,16 +125,13 @@ def seed_demo(conn, today: dt.date) -> None:
     fdb.add_away_period(conn, milo, away_start, None, backup_person_id=ava)
     amap = fdb.away_map(conn, (today - dt.timedelta(days=6)).isoformat(),
                         today.isoformat())
-    milo_away = amap.get(milo, {"dates": set(), "backup_on": {}})
 
-    def away_view(d: dt.date) -> dict | None:
-        """The plan_rows() away overlay for day ``d``, or None on a day Milo
-        isn't away -- so history before his away period resolves exactly as
-        it did before this feature existed."""
-        ds = d.isoformat()
-        if ds not in milo_away["dates"]:
-            return None
-        return {"ids": {milo}, "backup": {milo: milo_away["backup_on"].get(ds)}}
+    def away_view(d: dt.date) -> dict:
+        """The plan_rows() away overlay for day ``d`` -- via the SAME shared
+        helper the wall and the iCloud mirror use, so the demo can never drift
+        from what the real render produces. A day nobody is away yields an
+        empty overlay, which resolves exactly as it did before this feature."""
+        return chlogic.away_view_on(amap, d.isoformat())
 
     # Which chore_ids count as "completed" on a day offset i days before today.
     # Ava fully completes the last 3 days then slips one earlier (capping her

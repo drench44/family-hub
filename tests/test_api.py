@@ -1907,6 +1907,28 @@ def test_complete_refuses_to_guess_when_the_away_overlay_is_broken(
     assert ok.status_code == 200
 
 
+def test_complete_422s_when_the_chore_has_no_resolvable_assignee(client, app_mod,
+                                                                 monkeypatch):
+    """T11: the away owner has no available backup, so the chore is PAUSED for
+    the day and appears on nobody's card. A completion for it (no person_id)
+    must 422 rather than fall back to the away owner and credit a day the wall
+    never asked them for."""
+    today = dt.date(2026, 8, 17)
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    A = _make_person(client, "Away")
+    cid = _fixed_chore(client, A, "Dishes")
+    client.post("/api/admin/away", json={"person_id": A})      # no backup
+    hub = client.get("/api/hub").json()
+    assert all(not any(ch["id"] == cid for ch in p["chores"])
+               for p in hub["people"]), "the chore is paused for the day"
+
+    r = client.post(f"/api/chores/{cid}/complete")
+    assert r.status_code == 422
+    assert r.json()["detail"] == "no resolvable assignee"
+    assert fdb.completions_between(app_mod._db(), today.isoformat(),
+                                   today.isoformat()) == []
+
+
 def test_chores_day_carries_away_ok(client, app_mod, monkeypatch):
     """M4/I10: the day browser reads the same degraded-state flag the wall
     does, so a failed overlay build shows a note instead of presenting an away
