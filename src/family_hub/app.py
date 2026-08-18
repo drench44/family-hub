@@ -625,10 +625,30 @@ def _people_day(c, d: dt.date) -> list[dict]:
     today = _today()
     d_str = d.isoformat()
     people = fdb.list_people(c)
+
+    window_from = (d - dt.timedelta(days=370)).isoformat()
+    # Away overlay: who's away on d (and their backup, for fixed chores), plus
+    # the per-person away-date sets used below for streak/week rest-day math.
+    # Fails soft, same spirit as the todos block in hub() / _links(): a bad
+    # overlay build must not blank the whole wall over one broken row.
+    try:
+        amap = fdb.away_map(c, window_from, d_str)
+        away_today = {pid for pid, info in amap.items()
+                     if d_str in info["dates"]}
+        backup_today = {pid: amap[pid]["backup_on"].get(d_str)
+                        for pid in away_today}
+        away_view = {"ids": away_today, "backup": backup_today}
+    except Exception:
+        log.error("away overlay failed; serving with no away overlay",
+                  exc_info=True)
+        amap = {}
+        away_today = set()
+        away_view = {"ids": set(), "backup": {}}
+
     if d < today:
         rows = fdb.day_log(c, d_str)
     else:
-        rows = chlogic.plan_rows(fdb.list_chores(c), people, d)
+        rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
         if d == today:
             _freeze_day(c, d_str, rows)
 
@@ -636,7 +656,6 @@ def _people_day(c, d: dt.date) -> list[dict]:
                      for r in fdb.completions_between(c, d_str, d_str)}
     plan = chlogic.day_plan(rows, people, completed_ids)
 
-    window_from = (d - dt.timedelta(days=370)).isoformat()
     logs = fdb.logs_between(c, window_from, d_str)
     history = fdb.completions_between(c, window_from, d_str)
     for entry in plan:
@@ -655,8 +674,10 @@ def _people_day(c, d: dt.date) -> list[dict]:
         for r in history:
             if r["person_id"] == pid:
                 cbd.setdefault(r["date"], set()).add(r["chore_id"])
-        entry["streak"] = chlogic.streak(occ, cbd, d)
-        entry["week"] = chlogic.week_strip(occ, cbd, d)
+        away_dates = amap.get(pid, {}).get("dates", set())
+        entry["away"] = pid in away_today
+        entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
+        entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
     return plan
 
 
@@ -1216,7 +1237,8 @@ def _chore_row(c, cid: int) -> dict:
 def admin_state():
     c = _db()
     return {"people": fdb.list_people(c, include_inactive=True),
-            "chores": fdb.list_chores(c, include_inactive=True)}
+            "chores": fdb.list_chores(c, include_inactive=True),
+            "away_periods": fdb.list_away_periods(c)}
 
 
 @app.post("/api/admin/people")
