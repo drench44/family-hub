@@ -654,7 +654,7 @@ body {
 .ln-ph-done .ln-arc { stroke: var(--good); }
 /* the finished-load beacon: a fat translucent ring under the data ring that
    breathes, plus the drum's cycle-complete light */
-.ln-halo { fill: none; stroke: var(--good); stroke-width: 8; opacity: .18;
+.ln-halo { fill: none; stroke: var(--good); stroke-width: 7; opacity: .18;
   animation: ln-breathe 2.6s ease-in-out infinite; }
 .ln-donewash { fill: var(--good); opacity: .1; }
 @keyframes ln-breathe { 50% { opacity: .42; } }
@@ -758,7 +758,7 @@ body {
 }
 /* wash water: translucent depth with a bright meniscus line, lapping gently
    side to side while the drum spins (the water is the one thing in the drum
-   that does NOT rotate); foam rides the line, one bubble drifting free */
+   that does NOT rotate); foam rides the line, one fainter bubble above it */
 .ln-water { fill: color-mix(in srgb, var(--p2) 70%, #DDEEFF); opacity: .16;
   animation: ln-lap 2.8s ease-in-out infinite alternate; }
 .ln-waterline { fill: none; stroke: color-mix(in srgb, var(--p2) 40%, #EAF6FF);
@@ -771,9 +771,9 @@ body {
 .ln-ph-paused .ln-tumble, .ln-ph-paused .ln-flyp, .ln-ph-paused .ln-lift,
 .ln-ph-paused .ln-water, .ln-ph-paused .ln-waterline,
 .ln-ph-paused .ln-heap { animation-play-state: paused; }
-/* the drum reverses like the real machine: two turns one way, an eased
-   stop, two turns back, another stop — a 16s master cycle every direction-
-   dependent animation below shares */
+/* the drum reverses like the real machine: three turns one way, an eased
+   stop, three turns back, another stop — a 12.8s master cycle every
+   direction-dependent animation below shares */
 @keyframes ln-drum {
   0%    { transform: rotate(0deg); animation-timing-function: ease-in; }
   5%    { transform: rotate(-140deg); animation-timing-function: linear; }
@@ -2042,10 +2042,13 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) .tab-btn { min-width: 0; }
 }
 
-/* Five tabs need to fit down to 380px with no horizontal scroll. Sibling media
-   query (not nested — older engines), same not-desktop guard so a forced-desktop
-   TV never picks up the smaller phone type. */
-@media (max-width: 380px) {
+/* SIX tabs (laundry joined 2026-08-17) need to fit with no horizontal
+   scroll: at 390px (iPhone 12–16 logical width) CALENDAR's mono label
+   overruns a sixth of the bar at the base type size, so the smaller type
+   applies up to 440px. Sibling media query (not nested — older engines),
+   same not-desktop guard so a forced-desktop TV never picks up the smaller
+   phone type. */
+@media (max-width: 440px) {
   :root:not([data-layout="desktop"]) .tab-btn { font-size: 9px; letter-spacing: 0.08em; padding: 6px 2px; }
 }
 /* <<< phone shell (max-width:1000px unless forced desktop) <<< */
