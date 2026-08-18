@@ -2220,13 +2220,15 @@ function lnLines(m, now = Date.now()) {
   }
 }
 
-/* The porthole: a front-loader door drawn as SVG. The bezel doubles as a
-   kitchen-timer dial — the arc is the minutes left mapped onto a 60-minute
-   face (a >1h cycle shows a full ring that starts draining inside the final
-   hour). The drum shows the state: tumbling garments while running (CSS
-   rotation on the group, paused for paused-phase and reduced-motion), a
-   check when done, empty when idle. Washer drums run water-cool, dryers
-   warm — set by the ln-washer / ln-dryer class on the machine block. */
+/* The porthole: a front-loader door drawn as SVG — brushed-steel bezel,
+   dark curved glass, the stainless drum behind it. The thin illuminated
+   halo OUTSIDE the steel is the data ring: minutes left mapped onto a
+   60-minute dial (a >1h cycle shows a full ring that starts draining
+   inside the final hour), a breathing full ring while a finished load
+   waits. The drum shows the state: the heap + a cascade of tumbling
+   pieces while running (see the tumble-physics CSS), the lit resting
+   load + a check when done, empty when idle. Washer loads run water-
+   cool, dryers warm — via the ln-washer / ln-dryer machine class. */
 function lnPortholeSvg(m, now = Date.now()) {
   const R = 47.5, C = 2 * Math.PI * R;   // data ring: a thin halo outside the steel
   const mins = lnMinutesLeft(m.finishes_at, now);
@@ -2326,8 +2328,10 @@ function lnPortholeSvg(m, now = Date.now()) {
     + `<clipPath id="lncl-${gid}"><circle cx="50" cy="50" r="37"/></clipPath>`
     + `</defs>`
     + `<circle class="ln-bezel" cx="50" cy="50" r="43" stroke="url(#lnbz-${gid})"/>`
-    // a fat translucent ring behind the data ring; breathes while done
-    + (m.phase === 'done' ? `<circle class="ln-halo" cx="50" cy="50" r="${R}"/>` : '')
+    // a fat translucent ring behind the data ring; breathes while done.
+    // r=46 (not R): at R=47.5 its 7px stroke would clip flat against the
+    // 0..100 viewBox at 12/3/6/9 o'clock — the headline signal, ruined
+    + (m.phase === 'done' ? `<circle class="ln-halo" cx="50" cy="50" r="46"/>` : '')
     + arc
     + `<circle class="ln-glass" cx="50" cy="50" r="37" fill="url(#lngl-${gid})"/>`
     + `<g clip-path="url(#lncl-${gid})">${inner}</g>`
