@@ -1396,12 +1396,16 @@ body.overlay-open { overflow: hidden; }
    admin page. */
 .padmin { margin-top: 28px; border-top: 1px solid var(--edge); padding-top: 18px; }
 .padmin-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 10px;
+}
+.padmin-head-label {
   font-family: var(--mono); font-size: 12px; font-weight: 600;
   letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--dim); margin-bottom: 10px;
+  color: var(--dim);
 }
 .padmin-row {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   min-height: 48px; padding: 6px 4px;
   border-bottom: 1px solid var(--edge);
 }
@@ -1418,6 +1422,28 @@ body.overlay-open { overflow: hidden; }
 .padmin-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .padmin-del { color: var(--crit); }
 .padmin-del:hover { color: var(--crit); border-color: var(--crit); }
+
+/* Away controls: the per-person "Going away" sub-form (backup + start date),
+   the "Away now" roster, and the "Pause everyone" header button. Reuses
+   .padmin-btn (tap targets) and .txt-input (form fields) rather than
+   inventing new control chrome. Static by design — no animation/transition,
+   so there's nothing for reduced-motion to guard here. */
+.padmin-away-form {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  width: 100%; padding: 4px 4px 16px; border-bottom: 1px solid var(--edge);
+}
+.padmin-away-form .txt-input { width: auto; flex: 1 1 160px; min-width: 140px; }
+.padmin-away-now {
+  margin-bottom: 14px; padding: 10px 12px;
+  background: var(--surface-2); border: 1px solid var(--edge); border-radius: 10px;
+}
+.padmin-away-now-label {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 6px;
+}
+.padmin-away-item { font-size: 15px; color: var(--ink); padding: 2px 0; }
+.padmin-away-backup-name { color: var(--dim); font-size: 13px; }
 
 /* ================== full calendar (overlay) ================== */
 .cal-ev { cursor: pointer; }
