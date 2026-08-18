@@ -2207,21 +2207,29 @@ function lnPortholeSvg(m, now = Date.now()) {
     // the .ln-fly path itself runs the scoop-up / hold / gravity-fall /
     // settle keyframes in the carrier's frame. Endpoints are computed so the
     // landing spot equals the cycle start — the 100%->0% wrap is invisible.
-    // The 16s master cycle reverses direction like the real machine: two
-    // carry-and-fall cycles one way, an eased stop, two mirrored cycles the
-    // other way (the second flier lives in a horizontally-mirrored group and
-    // runs the SAME trajectory half a master-cycle later, so it climbs the
-    // opposite wall), another stop, repeat. Clothes rest in the heap during
-    // the opposite direction's window — which is what a real reversal pause
-    // looks like.
+    // Tumble choreography grounded in the real physics (Whirlpool patent
+    // US9822476: tumble ~48 RPM, articles ride the drum from 6 o'clock and
+    // DETACH at ~11 o'clock — before top-of-travel, where <1G centripetal
+    // loses to gravity; LG: direction reverses with a pause). The 12.8s
+    // master: three fast revolutions one way with a CASCADE of three
+    // staggered pieces lifting and falling, an eased stop, three mirrored
+    // revolutions (the second trio lives in a horizontally-mirrored group,
+    // so it climbs the opposite wall), another stop. One carrier + one fall
+    // keyframe set serves all six pieces via animation-delay phase shifts.
+    const wads = [
+      'M-6 -1 C-6 -5 -1 -7 3 -5 C6.5 -3.5 6.5 1 3.5 3 C0 5 -4.5 3.5 -6 -1 Z',
+      'M-4 0 C-4.5 -3.5 -1 -5 2 -4 C4.5 -3 4.5 .5 2.5 2 C0 3.5 -3 3 -4 0 Z',
+      'M-5 1 C-6 -2.5 -2 -5.5 1.5 -4.5 C5 -3.5 5.5 0 3 2.5 C.5 4.5 -3.5 4 -5 1 Z',
+    ];
+    const trio = (base) => wads.map((d, i) =>
+      `<g class="ln-lift" style="animation-delay:${(base + i * 0.55).toFixed(2)}s">`
+      + `<g transform="translate(50 66)">`
+      + `<path class="ln-flyp ln-w${i + 1}" style="animation-delay:${(base + i * 0.55).toFixed(2)}s" d="${d}"/>`
+      + `</g></g>`).join('');
     inner = `<g class="ln-tumble">${drum}</g>`
-      + `<g class="ln-lift ln-lift1"><g transform="translate(50 66)">`
-      + `<path class="ln-fly ln-fly1" d="M-6 -1 C-6 -5 -1 -7 3 -5 C6.5 -3.5 6.5 1 3.5 3 C0 5 -4.5 3.5 -6 -1 Z"/>`
-      + `</g></g>`
-      + `<g transform="matrix(-1 0 0 1 100 0)">`
-      + `<g class="ln-lift ln-lift2"><g transform="translate(50 66)">`
-      + `<path class="ln-fly ln-fly2" d="M-4 0 C-4.5 -3.5 -1 -5 2 -4 C4.5 -3 4.5 0.5 2.5 2 C0 3.5 -3 3 -4 0 Z"/>`
-      + `</g></g></g>`
+      + trio(0)
+      + `<g transform="matrix(-1 0 0 1 100 0)">${trio(6.4)}</g>`
+      + `<g class="ln-heap">`
       + `<g class="ln-heap">`
       + `<path class="ln-cl1" d="M30 66 C28 58 34 53 40 55 C43 49 51 48 55 53`
       +   ` C60 49 68 52 68 59 C72 62 70 69 64 71 C58 75 42 75 36 72 C31 70 29 69 30 66 Z"/>`
