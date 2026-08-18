@@ -657,26 +657,64 @@ body {
   animation: ln-breathe 2.6s ease-in-out infinite; }
 .ln-donewash { fill: var(--good); opacity: .1; }
 @keyframes ln-breathe { 50% { opacity: .42; } }
-/* the load, drawn as cloth: a folded heap in two shades (cool in the washer,
-   warm in the dryer), fold shadows inside it, a sheen on the top edge, and a
-   stray piece riding the drum wall */
+/* the load, drawn as cloth in two shades (cool in the washer, warm in the
+   dryer): a folded heap with fold shadows and a top-edge sheen, plus two
+   loose pieces that tumble for real — see the ln-carry keyframes below */
 .ln-cl1 { fill: color-mix(in srgb, var(--p2) 78%, #10141A); opacity: .95; }
 .ln-cl2 { fill: color-mix(in srgb, var(--p2) 62%, #E8EEF4); opacity: .9; }
-.ln-stray { opacity: .75; }
 .ln-fold { fill: none; stroke: rgba(0, 0, 0, .32); stroke-width: 1.7;
   stroke-linecap: round; }
 .ln-sheen { fill: none; stroke: #FFFFFF; opacity: .22; stroke-width: 1.6;
   stroke-linecap: round; }
 .ln-dryer .ln-cl1 { fill: color-mix(in srgb, var(--p3) 78%, #141008); }
 .ln-dryer .ln-cl2 { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
+/* tumble physics. The heap sloshes in place at the drum floor; each flier is
+   a cloth wad (geometry centered on its own origin, positioned purely by the
+   keyframed transform) that is CARRIED up the drum wall at near-drum speed
+   (the linear segments), RELEASES near the top, FALLS on an accelerating arc
+   (the cubic-bezier gravity segment), then lands and settles back into the
+   heap. Rotation ends at a full -360° so the loop closes without a snap; the
+   two fliers run different periods and phases so the motion never reads as a
+   repeating loop. Transform-only animation — compositor-friendly for the
+   wall's modest hardware. */
+.ln-fly { fill: color-mix(in srgb, var(--p2) 62%, #E8EEF4); opacity: .9; }
+.ln-dryer .ln-fly { fill: color-mix(in srgb, var(--p3) 62%, #F4EBDD); }
+.ln-fly1 { animation: ln-carry1 2.9s infinite; }
+.ln-fly2 { animation: ln-carry2 3.7s -1.9s infinite; }
+.ln-heap { transform-origin: 50px 66px; animation: ln-slosh 2.6s ease-in-out infinite; }
+@keyframes ln-carry1 {
+  0%   { transform: translate(52px, 66px) rotate(0deg); animation-timing-function: linear; }
+  14%  { transform: translate(61px, 60px) rotate(-30deg); animation-timing-function: linear; }
+  28%  { transform: translate(66px, 50px) rotate(-70deg); animation-timing-function: linear; }
+  40%  { transform: translate(62px, 38px) rotate(-110deg); animation-timing-function: linear; }
+  46%  { transform: translate(57px, 33px) rotate(-140deg); animation-timing-function: cubic-bezier(.45, 0, .85, .45); }
+  68%  { transform: translate(42px, 60px) rotate(-265deg); animation-timing-function: ease-out; }
+  80%  { transform: translate(48px, 66.5px) rotate(-320deg); animation-timing-function: ease-in-out; }
+  100% { transform: translate(52px, 66px) rotate(-360deg); }
+}
+@keyframes ln-carry2 {
+  0%   { transform: translate(46px, 67px) rotate(0deg); animation-timing-function: linear; }
+  16%  { transform: translate(58px, 62px) rotate(-35deg); animation-timing-function: linear; }
+  32%  { transform: translate(65px, 52px) rotate(-75deg); animation-timing-function: linear; }
+  44%  { transform: translate(61px, 41px) rotate(-115deg); animation-timing-function: cubic-bezier(.45, 0, .85, .45); }
+  66%  { transform: translate(40px, 62px) rotate(-250deg); animation-timing-function: ease-out; }
+  80%  { transform: translate(43px, 67px) rotate(-305deg); animation-timing-function: ease-in-out; }
+  100% { transform: translate(46px, 67px) rotate(-360deg); }
+}
+@keyframes ln-slosh {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: translate(0, -1.5px) rotate(5deg); }
+}
 /* wash water: stays level while the drum spins; foam floats on it */
 .ln-water { fill: var(--p2); opacity: .22; }
 .ln-sud { fill: #E8EEF4; opacity: .55; }
 .ln-tumble { transform-origin: 50px 50px; animation: ln-spin 3.4s linear infinite; }
-.ln-ph-paused .ln-tumble { animation-play-state: paused; }
-@keyframes ln-spin { to { transform: rotate(360deg); } }
+.ln-ph-paused .ln-tumble, .ln-ph-paused .ln-fly1, .ln-ph-paused .ln-fly2,
+.ln-ph-paused .ln-heap { animation-play-state: paused; }
+@keyframes ln-spin { to { transform: rotate(-360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .ln-tumble { animation: none; }
+  .ln-tumble, .ln-fly1, .ln-fly2, .ln-heap { animation: none; }
+  /* motionless fliers rest at their 0% spot, inside the heap */
   .ln-halo { animation: none; }   /* the static glow still marks the finish */
 }
 .ln-check { fill: none; stroke: var(--good); stroke-width: 7;
