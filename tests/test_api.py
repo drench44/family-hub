@@ -2543,3 +2543,41 @@ def test_build_backup_unknown_on_empty_kv(app_mod, tmp_path):
     fdb.ensure_schema(conn)
     s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
     assert s["known"] is False and s["stale"] is False
+
+
+def test_build_backup_malformed_timestamp_is_unknown(app_mod, tmp_path):
+    # A garbage/format-drifted "at" must fail SAFE to unknown, never crash or
+    # report a false-fresh timestamp.
+    conn = fdb.connect(str(tmp_path / "bad.db"))
+    fdb.ensure_schema(conn)
+    fdb.kv_set(conn, "backup_status", {"at": "not-a-date"})
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is False and s["stale"] is False
+
+
+def test_build_backup_naive_timestamp_coerced_to_utc(app_mod, tmp_path):
+    # The script writes tz-aware ISO, but a naive "at" must still be read as UTC
+    # rather than crashing on naive-vs-aware subtraction.
+    conn = fdb.connect(str(tmp_path / "naive.db"))
+    fdb.ensure_schema(conn)
+    naive = (_BT0 - dt.timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    fdb.kv_set(conn, "backup_status", {"at": naive})
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is True and s["age_s"] == 3600
+
+
+def test_hub_survives_backup_read_error(client, monkeypatch):
+    # A backup-status read that throws must NOT 500 the whole wall: /api/hub
+    # stays 200 and the block degrades to unknown (fails-soft, like todos).
+    import family_hub.db as fdbmod
+    orig = fdbmod.kv_get
+
+    def boom(conn, key):
+        if key == "backup_status":
+            raise RuntimeError("kv read blew up")
+        return orig(conn, key)
+
+    monkeypatch.setattr(fdbmod, "kv_get", boom)
+    r = client.get("/api/hub")
+    assert r.status_code == 200
+    assert r.json()["backup"]["known"] is False
