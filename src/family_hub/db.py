@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS chore_mirror(
   person_id INTEGER NOT NULL,
   cal_object_id TEXT NOT NULL,        -- the cal_objects row we created
   uid TEXT NOT NULL,                  -- 'familyhub-chore-<id>-<date>'
+  sig TEXT,                           -- content signature; reconcile re-pushes on drift
   PRIMARY KEY(chore_id, date));
 """
 
@@ -986,11 +987,11 @@ def list_caldav_collections(conn, comp_type: str | None = None) -> list[dict]:
 # --- chore mirror ledger (P3) ---------------------------------------------
 
 def upsert_chore_mirror(conn, chore_id: int, date: str, person_id: int,
-                        cal_object_id: str, uid: str) -> None:
+                        cal_object_id: str, uid: str, sig: str | None = None) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO chore_mirror(chore_id, date, person_id, "
-        "cal_object_id, uid) VALUES(?, ?, ?, ?, ?)",
-        (chore_id, date, person_id, cal_object_id, uid))
+        "cal_object_id, uid, sig) VALUES(?, ?, ?, ?, ?, ?)",
+        (chore_id, date, person_id, cal_object_id, uid, sig))
     conn.commit()
 
 

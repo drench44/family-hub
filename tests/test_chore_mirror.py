@@ -129,3 +129,13 @@ def test_reconcile_completions_records_ios_checkoff_add_only(conn):
         "sequence": 2, "last_modified": None}, force=True)
     chore_mirror.reconcile_completions(conn, _NOW)
     assert fdb.completion_exists(conn, cid, today)               # still done on wall
+
+
+def test_reconcile_refreshes_mirrored_reminder_on_edit(conn):
+    pid, cid = _mirrored(conn)
+    m = fdb.get_chore_mirror(conn, cid, _NOW.date().isoformat())
+    fdb.update_chore(conn, cid, title="Wash dishes")     # content edit
+    res = chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert res["updated"] >= 1
+    assert "Wash dishes" in fdb.get_cal_object(conn, m["cal_object_id"])["raw_ics"]
+    assert chore_mirror.reconcile(conn, _CFG, _NOW)["updated"] == 0   # idempotent
