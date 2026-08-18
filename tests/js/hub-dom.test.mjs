@@ -39,6 +39,7 @@ const SEEDED_IDS = [
   'ev-card',
   'chore-modal', 'chore-card', 'chore-editor',
   'confirm-modal', 'confirm-card', 'confirm-msg', 'confirm-sub',
+  'settings-version',
 ];
 
 function makeClassList() {
@@ -5365,4 +5366,53 @@ test('todoCardHtml: a tier that is only done-today lingerers shows its label wit
   assert.match(html, /todo-grp-head">Now<\/div>/, 'the label shows, with no count badge');
   assert.ok(!/todo-grp-count/.test(html), 'no "0" count badge on a done-only tier');
   assert.match(html, /todo-row done/, 'the completed row still lingers, struck through');
+});
+
+// --- version readout (debug/ops) -------------------------------------------
+// initVersion() fetches /api/version and paintVersion() writes a quiet
+// "family-hub v<version>" line into the Settings overlay. No panel, no dot.
+
+test('initVersion + paintVersion write the version into the Settings line', async () => {
+  const { sandbox, document } = newHub();
+  sandbox.fetch = async () => ({ ok: true, json: async () => ({ version: '2.3.1', build: 'abc123def456' }) });
+  await sandbox.initVersion();
+  sandbox.paintVersion();
+  assert.equal(document.getElementById('settings-version').textContent, 'family-hub v2.3.1');
+});
+
+test('a non-ok response does not clobber an already-painted version', async () => {
+  // Paint a real version first, THEN a non-ok fetch: the line must not be
+  // leaked-into or blanked by the failure (proves the ok-guard, not just the
+  // seeded-blank default).
+  const { sandbox, document } = newHub();
+  sandbox.fetch = async () => ({ ok: true, json: async () => ({ version: '2.3.1', build: 'abc123def456' }) });
+  await sandbox.initVersion();
+  sandbox.fetch = async () => ({ ok: false, json: async () => ({ version: 'LEAK' }) });
+  await sandbox.initVersion();
+  sandbox.paintVersion();
+  assert.equal(document.getElementById('settings-version').textContent, 'family-hub v2.3.1');
+});
+
+test('a rejected fetch leaves the line blank and does not throw (offline wall)', async () => {
+  const { sandbox, document } = newHub();
+  sandbox.fetch = async () => { throw new Error('offline'); };
+  await sandbox.initVersion();   // resolves rather than rejecting
+  sandbox.paintVersion();
+  assert.equal(document.getElementById('settings-version').textContent, '');
+});
+
+test('renderSettingsFull emits the version line and paints the fetched version into it', async () => {
+  // Guards the integration: renderSettingsFull must both EMIT #settings-version
+  // and CALL paintVersion(). Delete either and this fails (the earlier tests use
+  // the seeded stand-in and would still pass).
+  const { sandbox, document } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.fetch = async () => ({ ok: true, json: async () => ({ version: '4.5.6', build: 'abcabcabcabc' }) });
+  await sandbox.initVersion();
+  sandbox.renderSettingsFull();
+  assert.match(host.innerHTML, /id="settings-version"/, 'the overlay markup includes the version line');
+  assert.equal(document.getElementById('settings-version').textContent, 'family-hub v4.5.6',
+    'renderSettingsFull calls paintVersion(), so the line shows the fetched version');
 });

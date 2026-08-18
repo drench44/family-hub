@@ -157,10 +157,22 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
 
 ## 10. Release
 
-- [ ] Cache-bust bumps in index.html for every changed asset — **checked
-      against the currently DEPLOYED version, not just your branch**: two
-      branches independently minted the same `v78`; the second had to bump
-      past the deployed copy or clients would keep stale caches.
+- [ ] **Add a `## [Unreleased]` entry in `CHANGELOG.md`** describing the
+      change (`### Added/Changed/Fixed`). This is enforced: the CI
+      `changelog-guard` job and the local `.githooks/pre-commit` hook both
+      BLOCK a PR that touches `src/**` without a new entry (docs-only /
+      test-only diffs are exempt). Run `scripts/install-hooks.sh` once so the
+      local hook is active.
+- [ ] Cut the version with `python scripts/release.py {major|minor|patch}` —
+      it bumps `VERSION`, rolls `[Unreleased]` into a dated release, **stamps
+      every `?v=` in index.html to the new version**, commits, and tags. Do
+      NOT hand-edit the `?v=` numbers: they are unified to the app version now,
+      so one command busts every asset at once (a `test_static.py` guard fails
+      any drift). This replaced the old per-asset manual bump that let two
+      branches mint the same `v78` and ship stale caches.
+- [ ] Because the wall's phone clients cache assets aggressively, treat a
+      deploy as a release (at least a `patch`) so `?v=` moves and phones pick
+      up the new bytes — the wall itself already auto-reloads on the build hash.
 - [ ] Privacy scan clean, CI green, PR merged.
 - [ ] Deploy via the deployment overlay's `deploy.sh` (frontend is BAKED
       into the image — a bare restart ships nothing).
