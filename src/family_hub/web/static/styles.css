@@ -687,6 +687,10 @@ body {
 .ln-fly1 { animation: ln-flycycle 16s infinite; }
 .ln-fly2 { animation: ln-flycycle 16s -8s infinite; }
 .ln-heap { transform-origin: 50px 66px; animation: ln-slosh 3.1s ease-in-out infinite; }
+/* the washer's load sits lower — properly IN the water, not floating on it
+   (operator, 2026-08-17). The offset is baked into its own slosh keyframes
+   because the animation's transform would override a static translate. */
+.ln-washer .ln-heap { animation-name: ln-slosh-w; }
 /* carrier: ride the wall up and over the top, hold while the piece falls;
    two cycles fit the active (spinning) half of the 16s master, then the
    piece rests in the heap while the drum runs the other way. The 22.5%
@@ -719,6 +723,10 @@ body {
 @keyframes ln-slosh {
   0%, 100% { transform: rotate(-2.5deg); }
   50% { transform: translate(0, -1px) rotate(3deg); }
+}
+@keyframes ln-slosh-w {
+  0%, 100% { transform: translate(0, 4.5px) rotate(-2.5deg); }
+  50% { transform: translate(0, 3.5px) rotate(3deg); }
 }
 }
 /* wash water: translucent depth with a bright meniscus line, lapping gently
