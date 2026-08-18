@@ -316,3 +316,28 @@ def test_heartbeat_absent_kv_table_is_silent_noop(tmp_path):
     r = _run(db, tmp_path / "out")
     assert r.returncode == 0
     assert "backup_status" not in r.stderr and "Traceback" not in r.stderr
+
+
+def test_heartbeat_not_written_when_backup_fails(tmp_path):
+    # The ordering guarantee: a FAILED backup must never advance the heartbeat,
+    # or the dashboard would show green over a broken backup — the exact silent
+    # failure this feature exists to catch. Source is a valid db with a kv table
+    # holding an OLD backup_status; force the run to fail (OUT under a file, so
+    # mkdir can't create the tiers even as root) and assert the row is untouched.
+    db = tmp_path / "hub.db"
+    c = sqlite3.connect(db)
+    c.execute("create table kv (key text primary key, value text not null)")
+    c.execute("insert into kv (key, value) values ('backup_status', ?)",
+              (json.dumps({"at": "2000-01-01T00:00:00+00:00", "snapshot": "old"}),))
+    c.commit()
+    c.close()
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")                 # a regular file...
+    r = _run(db, blocker / "out", check=False)   # ...so mkdir under it fails -> backup fails
+    assert r.returncode != 0, "an unwritable OUT must fail the backup"
+    c = sqlite3.connect(db)
+    val = json.loads(c.execute(
+        "select value from kv where key='backup_status'").fetchone()[0])
+    c.close()
+    assert val["at"] == "2000-01-01T00:00:00+00:00", \
+        "a failed backup must not advance the heartbeat (no false-green badge)"
