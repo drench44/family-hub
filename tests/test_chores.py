@@ -181,3 +181,49 @@ def test_week_strip_composition():
     }
     assert ch.week_strip(occ, cbd, today) == \
         ["done", "rest", "partial", "rest", "rest", "none", "done"]
+
+
+# --- new routine types: every-N-days + biweekly (P1) ----------------------
+
+def test_occurs_interval_every_n_days():
+    c = C(schedule_kind="interval", interval_days=3, rotation_epoch="2026-08-03")
+    e = dt.date(2026, 8, 3)
+    assert ch.occurs(c, e)                              # offset 0
+    assert ch.occurs(c, e + dt.timedelta(days=3))
+    assert ch.occurs(c, e + dt.timedelta(days=6))
+    assert not ch.occurs(c, e + dt.timedelta(days=1))
+    assert not ch.occurs(c, e + dt.timedelta(days=2))
+    assert not ch.occurs(c, e - dt.timedelta(days=3))   # before epoch
+
+
+def test_occurs_biweekly_skips_off_weeks():
+    c = C(schedule_kind="days", days_mask=0b1, week_interval=2,   # Monday, every 2 wks
+          rotation_epoch="2026-08-03")
+    assert ch.occurs(c, dt.date(2026, 8, 3))            # week 0 Mon — on
+    assert not ch.occurs(c, dt.date(2026, 8, 10))       # week 1 Mon — off
+    assert ch.occurs(c, dt.date(2026, 8, 17))           # week 2 Mon — on
+    assert not ch.occurs(c, dt.date(2026, 8, 24))       # week 3 — off
+    assert not ch.occurs(c, dt.date(2026, 8, 4))        # Tuesday, not masked
+    # default (no week_interval) is still weekly
+    weekly = C(schedule_kind="days", days_mask=0b1, rotation_epoch="2026-08-03")
+    assert ch.occurs(weekly, dt.date(2026, 8, 10))
+
+
+def test_rotation_advances_per_interval_occurrence():
+    c = C(schedule_kind="interval", interval_days=2, assign_kind="rotation",
+          rotation_order=[10, 20], fixed_person_id=None, rotation_epoch="2026-08-03")
+    ids = {10, 20}
+    e = dt.date(2026, 8, 3)
+    assert ch.assignee_id(c, e, ids) == 10                          # occ 0
+    assert ch.assignee_id(c, e + dt.timedelta(days=2), ids) == 20   # occ 1
+    assert ch.assignee_id(c, e + dt.timedelta(days=4), ids) == 10   # occ 2
+
+
+def test_rotation_advances_per_biweekly_occurrence():
+    c = C(schedule_kind="days", days_mask=0b1, week_interval=2, assign_kind="rotation",
+          rotation_order=[10, 20], fixed_person_id=None, rotation_epoch="2026-08-03")
+    ids = {10, 20}
+    # on-cycle Mondays only: 8/3 -> occ0, 8/17 -> occ1, 8/31 -> occ2
+    assert ch.assignee_id(c, dt.date(2026, 8, 3), ids) == 10
+    assert ch.assignee_id(c, dt.date(2026, 8, 17), ids) == 20
+    assert ch.assignee_id(c, dt.date(2026, 8, 31), ids) == 10

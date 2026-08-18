@@ -23,10 +23,20 @@ def _epoch(chore: dict) -> dt.date:
     return dt.date.fromisoformat(chore["rotation_epoch"])
 
 
+def _week_index(d: dt.date, epoch: dt.date) -> int:
+    """Monday-anchored week number of ``d`` relative to the epoch's week (0 = the
+    epoch's own week). Drives biweekly ('days' + week_interval) cycling so 'every
+    other week' means every other calendar week, independent of the weekday."""
+    d_mon = d - dt.timedelta(days=d.weekday())
+    e_mon = epoch - dt.timedelta(days=epoch.weekday())
+    return (d_mon - e_mon).days // 7
+
+
 def occurs(chore: dict, d: dt.date) -> bool:
     if not chore.get("active", 1):
         return False
-    if d < _epoch(chore):
+    epoch = _epoch(chore)
+    if d < epoch:
         return False
     kind = chore["schedule_kind"]
     if kind == "daily":
@@ -35,8 +45,17 @@ def occurs(chore: dict, d: dt.date) -> bool:
     # on exactly that day and never again. Past days still render from the
     # frozen occurrence_log, so it stays on the record after it drops off live.
     if kind == "once":
-        return d == _epoch(chore)
-    return bool((chore["days_mask"] >> d.weekday()) & 1)
+        return d == epoch
+    # Every-N-days from the epoch, ignoring weekday.
+    if kind == "interval":
+        n = chore.get("interval_days") or 1
+        return (d - epoch).days % n == 0
+    # 'days': masked weekday, optionally only every week_interval-th week
+    # (1 = weekly, the default and existing behavior; 2 = biweekly).
+    if not ((chore["days_mask"] >> d.weekday()) & 1):
+        return False
+    w = chore.get("week_interval") or 1
+    return _week_index(d, epoch) % w == 0
 
 
 def occurrences_before(chore: dict, d: dt.date) -> int:
@@ -47,20 +66,47 @@ def occurrences_before(chore: dict, d: dt.date) -> int:
     if d <= epoch:
         return 0
     total_days = (d - epoch).days
-    if chore["schedule_kind"] == "daily":
+    kind = chore["schedule_kind"]
+    if kind == "daily":
         return total_days
+    # Every-N-days: occurrences at offsets 0, N, 2N, ...; count those < total_days.
+    if kind == "interval":
+        n = chore.get("interval_days") or 1
+        return (total_days - 1) // n + 1   # total_days > 0 here
     # No 'once' branch: one-time chores are always assign_kind='fixed', and this
     # function only drives rotation assignment (assignee_id), so it's never
     # reached for them. A hypothetical rotating one-time chore would fall through
     # to the weekly math below (days_mask=0 -> 0) — add an explicit branch first
     # if that ever becomes a real kind.
     mask = chore["days_mask"]
-    full_weeks, rem = divmod(total_days, 7)
-    n = full_weeks * mask.bit_count()
-    wd = epoch.weekday()
-    for i in range(rem):
-        n += (mask >> ((wd + i) % 7)) & 1
-    return n
+    w = chore.get("week_interval") or 1
+    if w == 1:
+        # weekly (the default): existing closed form, byte-for-byte unchanged.
+        full_weeks, rem = divmod(total_days, 7)
+        n = full_weeks * mask.bit_count()
+        wd = epoch.weekday()
+        for i in range(rem):
+            n += (mask >> ((wd + i) % 7)) & 1
+        return n
+    # week_interval > 1 (biweekly): only every w-th Mon-anchored week is on-cycle.
+    # Count masked days in on-cycle weeks over [epoch, d) via f(hi) - f(lo), where
+    # j = epoch.weekday() + offset walks day columns and full-week groups g = j//7
+    # are on-cycle iff g % w == 0.
+    a = epoch.weekday()
+    pc = mask.bit_count()
+
+    def _f(m: int) -> int:
+        if m <= 0:
+            return 0
+        full, rem = divmod(m, 7)
+        # multiples of w in [0, full): 0, w, 2w, ... — that many on-cycle full weeks
+        on_cycle_full = 0 if full <= 0 else (full - 1) // w + 1
+        total = on_cycle_full * pc
+        if full % w == 0:                       # the partial trailing week is on-cycle
+            total += sum((mask >> k) & 1 for k in range(rem))
+        return total
+
+    return _f(a + total_days) - _f(a)
 
 
 def assignee_id(chore: dict, d: dt.date,
