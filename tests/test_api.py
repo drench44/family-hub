@@ -1303,6 +1303,12 @@ def test_away_person_freezes_no_rows_and_streak_continues(client, app_mod, monke
     """
     c = app_mod._db()
     return_day = dt.date(2026, 8, 17)
+    # Freeze today BEFORE seeding: admin_add_chore anchors rotation_epoch to
+    # _today(), and occurs() is False before the epoch -- seeding at the real
+    # clock made this test date-dependent (it broke the first midnight after
+    # it was written, when real-today moved past return_day).
+    monkeypatch.setattr(app_mod, "_today",
+                        lambda: return_day - dt.timedelta(days=7))
     pid, cid = _seed_person_chore(client, title="Dishes")
 
     pretrip_days = [return_day - dt.timedelta(days=i) for i in (7, 6, 5, 4)]
