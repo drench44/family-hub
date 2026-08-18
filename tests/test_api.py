@@ -1369,6 +1369,97 @@ def test_admin_state_includes_away_periods(client, app_mod):
     assert state["away_periods"][0]["person_id"] == pid
 
 
+# --- admin away endpoints ----------------------------------------------------
+
+def test_admin_away_create_close_delete(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    p2 = client.post("/api/admin/people", json={"name": "Sam", "color": "#F05B5B"}).json()["id"]
+
+    r = client.post("/api/admin/away", json={"person_id": p1, "backup_person_id": p2})
+    assert r.status_code == 200
+    body = r.json()
+    pid = body["id"]
+    assert body["person_id"] == p1
+    assert body["backup_person_id"] == p2
+    assert body["person_name"] == "Remy"
+    assert body["backup_name"] == "Sam"
+    assert body["start_date"] == "2026-08-17"
+    assert body["end_date"] is None
+
+    listed = client.get("/api/admin/away").json()["away_periods"]
+    assert any(p["id"] == pid for p in listed)
+
+    back = client.post(f"/api/admin/away/{pid}/back")
+    assert back.status_code == 200
+    listed = client.get("/api/admin/away").json()["away_periods"]
+    row = next(p for p in listed if p["id"] == pid)
+    assert row["end_date"] == "2026-08-16"  # yesterday of frozen _today
+
+    d = client.delete(f"/api/admin/away/{pid}")
+    assert d.status_code == 200
+    listed = client.get("/api/admin/away").json()["away_periods"]
+    assert not any(p["id"] == pid for p in listed)
+
+    assert client.delete(f"/api/admin/away/{pid}").status_code == 404
+
+
+def test_admin_away_patch_and_back_with_explicit_date(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
+
+    r = client.patch(f"/api/admin/away/{pid}", json={"start_date": "2026-08-10"})
+    assert r.status_code == 200
+    row = next(p for p in client.get("/api/admin/away").json()["away_periods"]
+               if p["id"] == pid)
+    assert row["start_date"] == "2026-08-10"
+
+    back = client.post(f"/api/admin/away/{pid}/back", json={"end_date": "2026-08-20"})
+    assert back.status_code == 200
+    row = next(p for p in client.get("/api/admin/away").json()["away_periods"]
+               if p["id"] == pid)
+    assert row["end_date"] == "2026-08-20"
+
+    assert client.patch("/api/admin/away/9999", json={"start_date": "2026-08-10"}).status_code == 200
+    assert client.patch(f"/api/admin/away/{pid}", json={"start_date": "bad-date"}).status_code == 422
+
+
+def test_admin_away_validation(client, app_mod):
+    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+
+    assert client.post("/api/admin/away", json={"person_id": 9999}).status_code == 404
+    assert client.post("/api/admin/away",
+                        json={"person_id": p1, "backup_person_id": p1}).status_code == 422
+    assert client.post("/api/admin/away",
+                        json={"person_id": p1, "backup_person_id": 9999}).status_code == 404
+
+
+def test_admin_away_everyone_opens_for_all_active(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    p2 = client.post("/api/admin/people", json={"name": "Sam", "color": "#F05B5B"}).json()["id"]
+    # deactivated person must be skipped entirely
+    p3 = client.post("/api/admin/people", json={"name": "Nan", "color": "#5BFF5B"}).json()["id"]
+    client.patch(f"/api/admin/people/{p3}", json={"active": 0})
+
+    # p1 already has an open away period -> everyone must SKIP them, not double-open
+    existing = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
+
+    r = client.post("/api/admin/away/everyone", json={})
+    assert r.status_code == 200
+    created = r.json()["created"]
+    assert len(created) == 1
+
+    listed = client.get("/api/admin/away").json()["away_periods"]
+    p1_periods = [p for p in listed if p["person_id"] == p1]
+    assert len(p1_periods) == 1 and p1_periods[0]["id"] == existing
+    p2_periods = [p for p in listed if p["person_id"] == p2]
+    assert len(p2_periods) == 1
+    assert p2_periods[0]["start_date"] == "2026-08-17"
+    assert not any(p["person_id"] == p3 for p in listed)
+
+
 def test_db_connection_is_per_thread(app_mod):
     """Regression guard for issue #29: request handlers run on a thread pool, so
     _db() must hand each thread its OWN connection. One shared connection let
