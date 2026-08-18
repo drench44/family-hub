@@ -479,7 +479,7 @@ def test_laundry_phase_mapping():
 def test_laundry_past_mirrors_future_refusals():
     # _laundry_past is NOT `not _laundry_future`: both refuse naive and
     # unparseable timestamps, so both are False there. The missed-finish
-    # stamp (app.tile_laundry) leans on that — a garbage projected finish
+    # stamp (app._laundry_annotate) leans on that — a garbage projected finish
     # must fall through to status_since, not be stamped as the completion.
     import datetime as dt
     future = (dt.datetime.now(dt.timezone.utc)
@@ -522,6 +522,32 @@ def test_laundry_cache_ttl_matches_watcher_cadence():
     # the endgame machinery must be fully retired, not half-removed
     assert not hasattr(tiles, "LAUNDRY_ENDGAME_TTL")
     assert not hasattr(tiles, "_laundry_endgame")
+
+
+def test_laundry_ha_outage_logging_is_edge_triggered(caplog):
+    # driven every 5s by the background watcher, per-failure warnings would
+    # turn a prolonged HA outage into ~48 log lines a minute — one warning
+    # on the way DOWN, one info on recovery, and the next outage warns anew
+    import logging
+
+    tiles.reset_caches()
+    fail = lambda req: httpx.Response(500)
+    ok = lambda req: httpx.Response(200, json={"state": "running"})
+
+    async def probe(handler):
+        async with make_client(handler) as client:
+            return await tiles._ha_state(client, "http://ha", "t", "sensor.x")
+
+    with caplog.at_level(logging.DEBUG, logger="family_hub.tiles"):
+        assert asyncio.run(probe(fail)) is None
+        assert asyncio.run(probe(fail)) is None    # same outage: quiet
+        assert asyncio.run(probe(ok)) is not None  # recovery: one info
+        assert asyncio.run(probe(fail)) is None    # NEW outage: warns again
+    warns = [r for r in caplog.records if r.levelno == logging.WARNING
+             and "unavailable" in r.getMessage()]
+    infos = [r for r in caplog.records if r.levelno == logging.INFO
+             and "recovered" in r.getMessage()]
+    assert len(warns) == 2 and len(infos) == 1
 
 
 def test_laundry_unconfigured_or_tokenless_unavailable():

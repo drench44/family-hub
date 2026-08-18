@@ -945,17 +945,37 @@ def test_laundry_card_static_guards():
     assert "new EventSource('/api/laundry/stream'" in hub, \
         "the laundry card must subscribe to the live stream"
     # both feeds converge on ONE applier (render-on-change discipline): the
-    # stream handler and the poll fallback must not each grow their own
+    # POLL body and the STREAM handler must each route through applyLaundry —
+    # a bare count would pass on the definition + one caller, letting the
+    # other feed drift onto its own render path
     assert re.search(r"function applyLaundry\(", hub), "applyLaundry missing"
-    assert hub.count("applyLaundry(") >= 3, \
-        "fetchLaundry AND the stream handler must feed applyLaundry"
+    fetch_body = re.search(r"async function fetchLaundry\(\) \{(.*?)\n\}",
+                           hub, re.S)
+    assert fetch_body and "applyLaundry(" in fetch_body.group(1), \
+        "fetchLaundry must feed applyLaundry"
+    onmsg = re.search(r"\.onmessage = \(ev\) => \{(.*?)\n    \};", hub, re.S)
+    assert onmsg and "applyLaundry(" in onmsg.group(1), \
+        "the stream handler must feed applyLaundry"
+    # the wall kiosk never fires a wake event, and EventSource does NOT
+    # auto-retry an HTTP-level failure (a 502 mid-deploy closes it for
+    # good) — the poll beat must re-arm the stream or the kiosk silently
+    # loses real-time forever after one bad deploy window
+    assert re.search(r"setInterval\(lnConnect, POLL_MS\)", hub), \
+        "the poll beat must re-arm a CLOSED stream (setInterval lnConnect)"
+    assert re.search(r"\.onerror = ", hub[hub.index("function lnConnect"):]
+                     [:1500]), "a dropped stream must at least log (onerror)"
+    # ... and the lane must actually OPEN at boot: lnConnect defined but
+    # never called leaves the whole feature dark with every guard green
+    assert re.search(r"^lnConnect\(\);", hub, re.M), \
+        "bootstrap must call lnConnect()"
     # iOS suspends EventSource in background tabs and never resumes it —
     # every wake path must reconnect AND refetch (the stream greeting covers
     # new state, the fetch covers a wall whose stream died mid-suspend)
     assert re.search(r"function lnConnect\(", hub), "lnConnect missing"
-    assert re.search(
-        r"(pageshow|visibilitychange)[^\n]*\n[^\n]*lnWake|lnWake[^\n]*pageshow",
-        hub) or "lnWake" in hub, "laundry wake handler missing"
+    wake_body = re.search(r"function lnWake\(\) \{(.*?)\n\}", hub, re.S)
+    assert wake_body and "lnConnect()" in wake_body.group(1) \
+        and "fetchLaundry()" in wake_body.group(1), \
+        "lnWake must reconnect the stream AND refetch"
     for ev in ("pageshow", "visibilitychange"):
         assert re.search(rf"addEventListener\('{ev}'[^\n]*\n?[^\n]*lnWake",
                          hub), f"lnWake must run on {ev}"

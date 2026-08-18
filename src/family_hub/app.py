@@ -2,17 +2,19 @@
 
 The wall page polls /api/hub and drives the /api/admin/* routes from its Chores
 edit mode (reachable from a phone too — same page); tiles proxy the box's other
-services. A background thread syncs Google Calendar every 5 min
-(disabled by DISABLE_SYNC=1 in tests). LAN-only, no auth — the established
-trust model for every service on this box.
+services. A background thread syncs Google Calendar every 5 min, and a
+background asyncio task watches Home Assistant's laundry sensors every 5s,
+pushing changes to open walls over SSE (both disabled by DISABLE_SYNC=1 in
+tests). LAN-only, no auth — the established trust model for every service
+on this box.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import dataclasses
-import json
 import datetime as dt
+import json
 import logging
 import os
 import re
@@ -279,15 +281,29 @@ async def _lifespan(_app):
     # The laundry watcher (see "laundry: annotation, background watcher"
     # below) lives on the app's own loop so it shares _http and the SSE
     # waiters' Event. Armed only where the calendar sync would run and only
-    # with laundry configured; cancelled cleanly on shutdown.
-    watch = (asyncio.create_task(laundry_watch_loop())
-             if _laundry_watch_enabled() else None)
-    yield
-    if watch is not None:
-        watch.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watch
-    await _http.aclose()
+    # with laundry configured; cancelled cleanly on shutdown. The done-
+    # callback is the loud backstop for the "impossible" exit: the loop
+    # armors every tick, so anything that still kills the task (a
+    # BaseException like MemoryError) must at least leave a log line.
+    watch = None
+    if _laundry_watch_enabled():
+        watch = asyncio.create_task(laundry_watch_loop())
+        watch.add_done_callback(
+            lambda t: t.cancelled()
+            or log.error("laundry watch: task exited (real-time lane dead; "
+                         "tile route falls back to inline fetch)",
+                         exc_info=t.exception()))
+    try:
+        yield
+    finally:
+        # aclose() must run even if shutdown itself raises — and awaiting a
+        # crashed (already-done) task re-raises its stored exception, which
+        # is NOT a CancelledError, so keep that from eating the cleanup too.
+        if watch is not None:
+            watch.cancel()
+            with contextlib.suppress(BaseException):
+                await watch
+        await _http.aclose()
 
 
 app = FastAPI(title="family-hub", lifespan=_lifespan)
@@ -1553,8 +1569,21 @@ async def _laundry_watch_tick() -> None:
 
 
 async def laundry_watch_loop() -> None:
+    # The tick guards its own fetch/annotate, but the loop still armors the
+    # whole body: an exception escaping the tick would otherwise kill this
+    # task PERMANENTLY and silently — the lifespan holds the task reference,
+    # so asyncio's "exception was never retrieved" warning never fires, and
+    # the route's inline fallback keeps the card looking healthy while the
+    # cycle log + completion memory quietly stop observing (the exact
+    # pre-watcher regression this loop exists to fix). CancelledError must
+    # pass through: it's the lifespan's shutdown signal, not a failure.
     while True:
-        await _laundry_watch_tick()
+        try:
+            await _laundry_watch_tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("laundry watch: tick crashed; continuing")
         await asyncio.sleep(LAUNDRY_WATCH_S)
 
 
@@ -1597,6 +1626,16 @@ async def laundry_stream():
     handles reconnection natively, and the 60s poll remains as the fallback
     for anything that can't hold a stream open."""
     async def gen():
+        if DEMO:
+            # canned machines never transition — greet once, then only
+            # keepalives. Re-reading demo_laundry() would re-time every
+            # payload and push a "change" each cycle, and each push is an
+            # innerHTML rebuild that restarts the tumble mid-spin on the
+            # demo wall (the churn applyLaundry exists to prevent).
+            yield f"data: {json.dumps(fdemo.demo_laundry())}\n\n"
+            while True:
+                await asyncio.sleep(LAUNDRY_STREAM_PING_S)
+                yield ": ping\n\n"
         last = None
         while True:
             waiter = _laundry_change   # arm BEFORE reading: no lost wakeup
@@ -1617,8 +1656,13 @@ async def laundry_stream():
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(waiter.wait(),
                                        timeout=LAUNDRY_STREAM_PING_S)
+    # X-Accel-Buffering: today the hub serves browsers directly, but the
+    # moment any reverse proxy lands in front, response buffering would
+    # queue these events indefinitely and the stream would "work" while
+    # delivering nothing — cheap to preempt now.
     return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache"})
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 def _laundry_annotate(t: dict) -> dict:
@@ -1764,8 +1808,8 @@ def _laundry_annotate(t: dict) -> dict:
 @app.get("/api/laundry/log")
 async def laundry_log_route(machine: str | None = None, limit: int = 200):
     """The laundry cycle log: observed phase transitions newest-first — the
-    evidence base for tuning finish detection (projection accuracy, endgame
-    window, missed-done hold) and diagnosing any finish the wall got wrong.
+    evidence base for tuning finish detection (projection accuracy, watcher
+    cadence, missed-done hold) and diagnosing any finish the wall got wrong.
     Fail-soft like every tile read: a DB hiccup serves an empty list loudly
     logged, never a 500."""
     if not (1 <= limit <= 1000):

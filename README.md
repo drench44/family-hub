@@ -65,9 +65,9 @@ at one URL.
   transition is also logged in the database (`GET /api/laundry/log`, a year
   of cycle history, covered by the standard backups) so the finish
   heuristics can be tuned from real cycles — and because the server does
-  the observing, the log fills even with no wall open. Built for LG ThinQ's sensors,
-  but any HA integration exposing a status enum + a remaining-time
-  timestamp works. Fails soft like weather/climate.
+  the observing, the log fills even with no wall open. Built for LG
+  ThinQ's sensors, but any HA integration exposing a status enum + a
+  remaining-time timestamp works. Fails soft like weather/climate.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —
   no phone needed. The same page works from any browser on the LAN, so a phone
