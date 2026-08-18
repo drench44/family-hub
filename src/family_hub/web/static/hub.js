@@ -2192,16 +2192,21 @@ function lnPortholeSvg(m, now = Date.now()) {
       + ` transform="rotate(${a} 50 50)"/>`).join('');
   let inner;
   if (spinning) {
-    // The load rides the drum; the water line stays LEVEL outside the tumble
-    // group (only the washer has one), with foam floating on it. The load is
-    // drawn as cloth, not shapes: one lumpy folded heap, a lighter garment
-    // tucked into it, a stray piece carried up the drum wall by a baffle,
-    // fold shadows inside the heap, and a sheen along the top edge.
-    inner = `<g class="ln-tumble">${drum}`
+    // Tumble physics: only the DRUM (furniture) rides the rigid rotation.
+    // The load itself obeys gravity — the heap sloshes at the bottom while
+    // two loose pieces get carried up the drum wall, release near the top,
+    // and fall on an accelerating arc back into the pile (the ln-carry
+    // keyframes; two different periods so the motion never reads as a loop).
+    // Fliers draw UNDER the heap so they emerge from behind it when picked
+    // up and disappear into it when they land. The washer's water line stays
+    // LEVEL outside all of it, with foam floating on top.
+    inner = `<g class="ln-tumble">${drum}</g>`
+      + `<path class="ln-fly ln-fly1" d="M-6 -1 C-6 -5 -1 -7 3 -5 C6.5 -3.5 6.5 1 3.5 3 C0 5 -4.5 3.5 -6 -1 Z"/>`
+      + `<path class="ln-fly ln-fly2" d="M-4 0 C-4.5 -3.5 -1 -5 2 -4 C4.5 -3 4.5 0.5 2.5 2 C0 3.5 -3 3 -4 0 Z"/>`
+      + `<g class="ln-heap">`
       + `<path class="ln-cl1" d="M30 66 C28 58 34 53 40 55 C43 49 51 48 55 53`
       +   ` C60 49 68 52 68 59 C72 62 70 69 64 71 C58 75 42 75 36 72 C31 70 29 69 30 66 Z"/>`
       + `<path class="ln-cl2" d="M52 53 C53 47 61 45 65 49 C69 52 67 58 61 58 C56 59 52 57 52 53 Z"/>`
-      + `<path class="ln-cl2 ln-stray" d="M31 36 C34 32 40 32 42 36 C43 39 40 42 36 41 C33 41 30 39 31 36 Z"/>`
       + `<path class="ln-fold" d="M36 66 C41 63 46 64 50 68"/>`
       + `<path class="ln-fold" d="M52 60 C56 58 60 60 63 64"/>`
       + `<path class="ln-sheen" d="M42 53.5 C46 51 51 51 55 53.5"/>`
