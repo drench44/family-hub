@@ -209,6 +209,32 @@ def test_celebration_is_reduced_motion_guarded():
     assert "prefers-reduced-motion" in CSS, "celebration must be reduced-motion guarded"
 
 
+def test_cloud_drift_exit_is_container_relative():
+    # The cloud drift must exit relative to the ACTUAL sky width, not a fixed px.
+    # A fixed-px exit (translateX(420px)) cleared the 338px desktop column but
+    # left the cloud mid-sky on the wider mobile/full-screen weather view, so it
+    # snapped back on-screen — the visible "crazy reset". The fix: .sky is a
+    # query container and the keyframe exits at 100cqw (+ margin), off-screen at
+    # any width. Don't regress either half.
+    # `\.sky\s*\{` (not `\.sky\b`) binds this to the bare `.sky {` rule — `\b`
+    # would also match `.sky-cloud {`, `.sky-sun {`, etc., letting container-type
+    # on the wrong selector satisfy it falsely (cqw would then resolve against
+    # the wrong ancestor).
+    assert re.search(r"\.sky\s*\{[^{}]*container-type\s*:\s*inline-size",
+                     CSS), ".sky must be a query container (container-type: inline-size)"
+    drift = re.search(r"@keyframes\s+drift\s*\{(?:[^{}]|\{[^{}]*\})*\}", CSS)
+    assert drift, "missing @keyframes drift"
+    to = re.search(r"\bto\s*\{[^{}]*\}", drift.group(0))
+    assert to and "cqw" in to.group(0), \
+        "cloud drift 'to' must exit at a container-relative width (100cqw), " \
+        "not a fixed px that re-breaks the wide sky"
+    # The "reset happens off-screen" promise also relies on .sky clipping — drop
+    # overflow:hidden and a cloud driving to 100cqw+20px spills visibly past the
+    # right edge instead of vanishing.
+    assert re.search(r"\.sky\s*\{[^{}]*overflow\s*:\s*hidden", CSS), \
+        ".sky must keep overflow:hidden so the off-screen drift exit stays clipped"
+
+
 def test_week_strip_state_classes_are_styled():
     for cls in (".ws-done", ".ws-partial", ".ws-none", ".ws-rest"):
         assert _css_rule(cls).strip(), f"{cls} week-strip state is unstyled"
