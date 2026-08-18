@@ -227,3 +227,27 @@ def test_rotation_advances_per_biweekly_occurrence():
     assert ch.assignee_id(c, dt.date(2026, 8, 3), ids) == 10
     assert ch.assignee_id(c, dt.date(2026, 8, 17), ids) == 20
     assert ch.assignee_id(c, dt.date(2026, 8, 31), ids) == 10
+
+
+def test_occurrences_before_biweekly_multibit_brute_force():
+    # Mon+Thu (0b1001), every 2 weeks — exercises _f with bit_count>1 across cycles
+    c = C(schedule_kind="days", days_mask=0b1001, week_interval=2,
+          rotation_epoch="2026-08-03")
+    epoch = dt.date(2026, 8, 3)
+    count, d = 0, epoch
+    for _ in range(400):
+        assert ch.occurrences_before(c, d) == count, d
+        if ch.occurs(c, d):
+            count += 1
+        d += dt.timedelta(days=1)
+
+
+def test_occurrences_before_interval_brute_force():
+    c = C(schedule_kind="interval", interval_days=5, rotation_epoch="2026-08-03")
+    epoch = dt.date(2026, 8, 3)
+    count, d = 0, epoch
+    for _ in range(200):
+        assert ch.occurrences_before(c, d) == count, d
+        if ch.occurs(c, d):
+            count += 1
+        d += dt.timedelta(days=1)

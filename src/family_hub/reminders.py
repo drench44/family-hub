@@ -86,9 +86,13 @@ def open_count(reminders: list[dict]) -> int:
 # --- write side (two-way): pure ICS transforms ----------------------------
 
 def _utc(now: dt.datetime) -> dt.datetime:
-    """A tz-aware UTC datetime, so icalendar emits '...Z' (global rule: store
-    UTC). A naive `now` is assumed already-UTC (the server calls it that way)."""
-    return now if now.tzinfo else now.replace(tzinfo=dt.timezone.utc)
+    """A UTC datetime, so icalendar emits '...Z' (global rule: store UTC). A
+    tz-aware `now` is CONVERTED to UTC (the mirror passes a LOCAL-zone now); a
+    naive one is assumed already-UTC. Converting — not just attaching — is what
+    keeps DTSTAMP/CREATED/LAST-MODIFIED RFC-5545-valid; a bare local TZID with no
+    VTIMEZONE would be rejected by iCloud."""
+    return now.astimezone(dt.timezone.utc) if now.tzinfo \
+        else now.replace(tzinfo=dt.timezone.utc)
 
 
 def set_completed(ics_data, completed: bool, now: dt.datetime) -> str:
