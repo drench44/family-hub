@@ -2200,6 +2200,76 @@ def _laundry_tile_with(phase, status, since, finishes=None):
     return tile
 
 
+def test_tiles_laundry_observed_finish_holds_done_through_auto_power_off(
+        client, monkeypatch):
+    # LG machines turn THEMSELVES off 30-90s after "end" with the load still
+    # inside (measured live: 29s and 79s). An observed done -> idle(power_off)
+    # exit is the machine's own act, not a person collecting the load — the
+    # wall must keep presenting Done for the same hold window a MISSED finish
+    # gets. Without this, perfect observation makes Done vanish in a minute
+    # while a missed finish holds 30 (operator report, 2026-08-18: "washer
+    # shows idle instead of done"). An exit to "initial" (a human powering
+    # the machine on) still decays immediately — that's the real seen-it
+    # signal this status enum offers.
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    # cycle runs, then the observed end
+    t_end = iso(-1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-30), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    assert machine()["phase"] == "done"
+    # ...the machine powers ITSELF off: Done must stand, at the observed end
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["phase"] == "done", "auto power-off must not eat an observed Done"
+    assert m["status_since"] == t_end
+    assert m["last_done"] == t_end
+    # steady state keeps holding (idle -> idle is not a transition)
+    assert machine()["phase"] == "done"
+    # the hold is diagnosable in the cycle log (raw transition + note)
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["phase"] == "idle" and rows[0]["note"] == "auto_off_hold"
+    # a new cycle retires the hold like any other machine activity
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "detecting", iso(0)))
+    assert machine()["phase"] == "running"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0), finishes=iso(5)))
+    m = machine()   # cancelled cycle: no Done faked, and the OLD hold stays
+    assert m["phase"] == "idle"
+
+
+def test_tiles_laundry_stale_observed_finish_does_not_hold(client, monkeypatch):
+    # The hold refuses a stale end stamp (server down between "end" and the
+    # auto power-off for longer than the hold window): presenting a
+    # 40-minute-old finish as a fresh green Done would be wrong-but-
+    # reassuring — decay straight to idle + the "last load" line.
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda delta_min: (now + dt.timedelta(minutes=delta_min)).isoformat()
+    tile_with = _laundry_tile_with
+    machine = lambda: client.get("/api/tiles/laundry").json()["machines"][0]
+
+    t_end = iso(-40)   # past LAUNDRY_MISSED_DONE_HOLD_MIN
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-70), finishes=t_end))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end))
+    assert machine()["phase"] == "done"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    m = machine()
+    assert m["phase"] == "idle"
+    assert m["last_done"] == t_end   # the accurate stamp still serves the line
+
+
 def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeypatch):
     # LG machines auto-power-off a minute or two after "end", so a 60s poll
     # can watch running -> power_off and never observe the done phase at all —

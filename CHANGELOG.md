@@ -10,6 +10,16 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- An observed washer/dryer finish now keeps showing **Done** through the
+  machine's own auto power-off (LG machines turn themselves off 30–90s
+  after the end-of-cycle chime with the load still inside), for the same
+  30-minute hold a missed finish gets. Previously a perfectly observed
+  finish showed Done for barely a minute — and the real-time watcher below
+  observes every finish, so every finish took that short path. A person
+  powering the machine on still clears Done immediately, and a stale end
+  stamp is never re-presented as a fresh Done.
+
 ### Changed
 - Laundry is now real-time. A server-side watcher polls Home Assistant every
   5 seconds for the whole cycle (not just near a projected finish) and pushes
