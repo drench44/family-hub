@@ -171,14 +171,22 @@ def test_plan_rows_away_person_own_chore_absent():
     assert ch.plan_rows([_fixed(5, 1)], people, d, {"ids": {1}, "backup": {}}) == []
 
 
-def test_covering_for_not_persisted_in_log_shape():
+def test_covering_for_is_part_of_the_frozen_row_shape():
+    """I9: covering_for travels with the row into the occurrence log (it is a
+    real column now), so a frozen past day keeps the "covering for <name>"
+    explanation even after the away period ends. day_plan reads it straight
+    back out, whether the rows came from the log or from a live resolve."""
     d = dt.date(2026, 8, 17)
     people = [{"id": 1, "name": "A", "color": "#f00"},
               {"id": 2, "name": "B", "color": "#0f0"}]
-    r = ch.plan_rows([_fixed(5, 1, "dog")], people, d,
-                     {"ids": {1}, "backup": {1: 2}})[0]
-    assert set(r) >= {"chore_id", "person_id", "title", "icon", "rot",
-                      "covering_for"}
+    rows = ch.plan_rows([_fixed(5, 1, "dog")], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert set(rows[0]) >= {"chore_id", "person_id", "title", "icon", "rot",
+                            "covering_for"}
+    assert rows[0]["covering_for"] == 1
+    plan = ch.day_plan(rows, people, set())
+    b_entry = next(e for e in plan if e["person"]["id"] == 2)
+    assert b_entry["chores"][0]["covering_for"] == 1
 
 
 def test_day_plan_shape_done_flags_and_rotation():

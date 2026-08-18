@@ -2514,6 +2514,42 @@ test('people admin: an open period shows "I\'m back" instead, and the away-now r
   assert.ok(back, 'POST /api/admin/away/55/back fired');
 });
 
+test('people admin: the backup picker offers only people who can actually cover', async () => {
+  // I6: an inactive person, or one who is away themselves, silently paused
+  // every covered chore at resolve time — and the server now 422s the write.
+  // Keep them out of the picker entirely.
+  const adminState = {
+    people: [
+      { id: 1, name: 'Sam Rivera', color: '#5BC9F0', active: 1 },
+      { id: 2, name: 'Alex Kim', color: '#8AE0AD', active: 1 },
+      { id: 3, name: 'Gone Kid', color: '#E39A2A', active: 0 },
+      { id: 4, name: 'Also Away', color: '#C39BEA', active: 1 },
+    ],
+    chores: SAMPLE_ADMIN.chores,
+    away_periods: [
+      { id: 70, person_id: 4, start_date: '2026-08-10', end_date: null, backup_person_id: null },
+      { id: 71, person_id: 2, start_date: '2026-08-01', end_date: '2026-08-05', backup_person_id: null },
+    ],
+  };
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, adminState);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-paway="1"]');
+  // read the <select>'s own markup out of the rendered HTML (the whole card
+  // naturally names everyone, so only the options can be asserted on)
+  const opts = ctx.choresFull.innerHTML
+    .match(/<select[^>]*data-paway-backup="1"[^>]*>([\s\S]*?)<\/select>/)[1];
+  assert.match(opts, /value=""[^>]*>No backup/, 'no-backup stays the default');
+  assert.match(opts, /Alex Kim/, 'an active, home person is offered (a CLOSED period is fine)');
+  assert.ok(!opts.includes('Gone Kid'), 'an inactive person is not offered');
+  assert.ok(!opts.includes('Also Away'), 'someone away themselves is not offered');
+  assert.ok(!opts.includes('Sam Rivera'), 'never yourself');
+  // and the away button itself only shows for active people
+  assert.ok(!ctx.choresFull.querySelector('[data-paway="3"]'),
+    'no "Going away" on an inactive person (Pause everyone skips them too)');
+  assert.ok(ctx.choresFull.querySelector('[data-pback="70"]'),
+    'an OPEN period keeps its "I\'m back" control so it can always be closed');
+});
+
 test('people admin: "Pause everyone" POSTs /api/admin/away/everyone with an empty body', async () => {
   const ctx = mountChoresFull(SAMPLE_PEOPLE);
   await enterEditWithPeople(ctx);
@@ -2538,6 +2574,37 @@ test('people admin: a FAILED away-open shows a toast and runs no refresh', async
   await flush();
   assert.match(readToast(ctx), /backup cannot be the same person/i, 'a toast surfaces the failure reason');
   assert.equal(polls, 0, 'no refresh poll ran after the failed write');
+});
+
+test('renderChoresFull: away_ok===false shows the same degraded-state note the wall does', async () => {
+  // M4/I10: /api/chores/day carries away_ok now. Without the note, a browsed
+  // day rendered a genuinely-away person as present, with a full chore list
+  // and nothing to say the overlay had failed.
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  ctx.read('choreState.day = "2026-08-13";');          // a browsed (fetched) day
+  ctx.sandbox.fetch = async (url) => {
+    if (/\/api\/chores\/day\?date=2026-08-13/.test(url)) {
+      return okResp({ date: '2026-08-13', people: SAMPLE_PEOPLE, away_ok: false });
+    }
+    throw new Error('offline in test');
+  };
+  await ctx.sandbox.renderChoresFull();
+  assert.match(ctx.choresFull.innerHTML, /away status unavailable/, 'the note renders');
+  assert.match(ctx.choresFull.innerHTML, /Sam Rivera/, 'the cards render alongside it');
+});
+
+test('renderChoresFull: a healthy day (and today from the hub payload) shows NO note', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  ctx.read('choreState.day = "2026-08-13";');
+  ctx.sandbox.fetch = async () => okResp(
+    { date: '2026-08-13', people: SAMPLE_PEOPLE, away_ok: true });
+  await ctx.sandbox.renderChoresFull();
+  assert.doesNotMatch(ctx.choresFull.innerHTML, /away status unavailable/);
+  // today paints from the prefetched hub payload, which carries the flag itself
+  ctx.read('choreState.day = data_date; hubData = { people: _people, away_ok: false };');
+  await ctx.sandbox.renderChoresFull(SAMPLE_PEOPLE);
+  assert.match(ctx.choresFull.innerHTML, /away status unavailable/,
+    "today's note comes from the hub payload it was painted from");
 });
 
 test('sectionHead emits a .shead with tick, label, and an expand button', () => {
@@ -4516,17 +4583,38 @@ test('an away person: the Away badge replaces the chore list, the streak stays v
   assert.ok(!html.includes('chore-row'), 'no chore rows (not even the empty state) while away');
   assert.ok(!html.includes('cal-empty'), 'no "nothing this day" text — that would read as a rest day, not away');
   assert.ok(!/\b0\s*\/\s*0\b/.test(html), 'no literal 0/0 anywhere in the markup');
-  // edit mode: no stray "+ Add chore" row alongside the away badge either
+  // edit mode KEEPS the "+ Add chore" row: "Pause everyone" must not lock the
+  // chore editor for the whole family until they get home (I8).
   const editing = sandbox.personCardHtml(
     { person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 0, away: true, chores: [], week: [] },
     { editing: true });
-  assert.ok(!editing.includes('chore-add'), 'no add-chore affordance while the card shows Away');
+  assert.match(editing, /data-add-chore="p1"/, 'a paused person stays manageable in edit mode');
   assert.match(editing, /class="away-badge">Away ✈️<\/div>/);
   // an active (not away) person is unaffected: normal empty state, no badge
   const present = sandbox.personCardHtml(
     { person: { id: 'p4', name: 'Rae', color: '#2AAE7A' }, streak: 0, away: false, chores: [], week: [] });
   assert.ok(!present.includes('away-badge'), 'away:false never shows the badge');
   assert.match(present, /cal-empty">nothing this day/, 'away:false keeps the normal empty state');
+});
+
+test('an away card still shows the chores that survived the pause (a one-time chore nobody could cover)', () => {
+  const { sandbox } = newHub();
+  // I3: chores.plan_rows keeps a 'once' chore on its away owner rather than
+  // destroying its single dated occurrence, so the card must show both the
+  // badge and that row — hiding it would lose the task entirely.
+  const p = {
+    person: { id: 'p1', name: 'Ava', color: '#3E9BE8' }, streak: 0, away: true,
+    week: [],
+    chores: [{ id: 42, title: 'Vet appt', icon: '🐕', rot: false, done: false }],
+  };
+  const html = sandbox.personCardHtml(p);
+  assert.match(html, /class="away-badge">Away ✈️<\/div>/, 'the badge still leads');
+  assert.match(html, /data-chore="42"/, 'the surviving chore is tappable');
+  assert.match(html, /Vet appt/);
+  // and in edit mode it is editable alongside the add row
+  const editing = sandbox.personCardHtml(p, { editing: true });
+  assert.match(editing, /data-edit-chore="42"/);
+  assert.match(editing, /data-add-chore="p1"/);
 });
 
 test('weekStripHtml maps the "away" week state to its own dim class, distinct from ws-none/ws-rest', () => {

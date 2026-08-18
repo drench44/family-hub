@@ -405,27 +405,31 @@ function personCardHtml(p, opts = {}) {
     ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
       + `🔥 ${p.streak}</span>` : '';
   let rows;
-  let addRow = '';
   if (p.away) {
-    // Away: their fixed chores reassigned to a backup (or paused) and
-    // rotations skip them, so p.chores is empty for this entry — a bare
-    // "nothing this day"/"0/0" would misreport a rest day as an away one.
-    // Show the badge in place of the chore list instead; static, no animation.
-    rows = `<div class="away-badge">Away ✈️</div>`;
+    // Away: their fixed chores are reassigned to a backup (or paused) and
+    // rotations skip them, so p.chores is normally empty for this entry — a
+    // bare "nothing this day"/"0/0" would misreport a rest day as an away one.
+    // Show the badge instead; static, no animation. Any rows that DO survive
+    // still render under it: a one-time chore nobody could cover stays with
+    // its away owner (chores.plan_rows keeps a dated commitment rather than
+    // destroying it), and hiding it would lose the task entirely.
+    rows = `<div class="away-badge">Away ✈️</div>`
+      + p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing, nameById })).join('');
   } else {
     rows = p.chores.length
       ? p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing, nameById })).join('')
       : (editing ? '' : `<div class="cal-empty">nothing this day</div>`);
-    // edit mode grows a per-person "+ Add chore" row (wired in Task 5); it's the
-    // only way to reach the add editor for a person, so it shows even for someone
-    // with no chores yet.
-    addRow = editing
-      ? `<button class="chore-row chore-add" type="button" data-add-chore="${p.person.id}">`
-        + `<span class="chore-check chore-add-plus">+</span>`
-        + `<span class="chore-body"><span class="chore-title">Add chore</span></span>`
-        + `</button>`
-      : '';
   }
+  // edit mode grows a per-person "+ Add chore" row (wired in Task 5); it's the
+  // only way to reach the add editor for a person, so it shows even for someone
+  // with no chores yet — and even while they're away, or "Pause everyone" would
+  // lock the whole chore editor until the family got home.
+  const addRow = editing
+    ? `<button class="chore-row chore-add" type="button" data-add-chore="${p.person.id}">`
+      + `<span class="chore-check chore-add-plus">+</span>`
+      + `<span class="chore-body"><span class="chore-title">Add chore</span></span>`
+      + `</button>`
+    : '';
   // --pc drives the done check + strike color: completion wears YOUR color
   return `<div class="card person-card${editing ? ' is-editing' : ''}" data-person="${p.person.id}" style="--pc:${safeColor(p.person.color)}">`
     + `<div class="person-head">`
@@ -465,9 +469,16 @@ async function renderChoresFull(prefetched) {
   const host = document.getElementById('chores-full');
   if (!host) return;
   let people = prefetched;
+  // Same degraded-state flag renderPeople reads: when the server's away overlay
+  // build failed it ships the day with NOBODY marked away, so the view owes a
+  // note rather than presenting a genuinely-away person as present. A prefetched
+  // day is today's hub payload, which carries the flag itself.
+  let awayOk = prefetched && hubData ? hubData.away_ok : undefined;
   if (!people) {
     try {
-      people = (await j(`/api/chores/day?date=${choreState.day}`)).people;
+      const day = await j(`/api/chores/day?date=${choreState.day}`);
+      people = day.people;
+      awayOk = day.away_ok;
     } catch (e) {
       host.innerHTML = choresNavHtml()
         + `<div class="cal-empty">couldn’t load that day — is the hub reachable?</div>`;
@@ -494,7 +505,10 @@ async function renderChoresFull(prefetched) {
     awayOpenFor = null;        // close any open away sub-form too
   }
   const nameById = new Map(people.map((p) => [p.person.id, p.person.name]));
+  const awayNote = awayOk === false
+    ? `<div class="cal-note">away status unavailable</div>` : '';
   host.innerHTML = choresNavHtml()
+    + awayNote
     + (people.length
       ? people.map((p) => personCardHtml(p, { readonly, editing, nameById })).join('')
       : `<div class="cal-empty">no people yet</div>`)
@@ -563,11 +577,20 @@ function peopleAdminHtml(people, awayPeriods) {
 
   const rows = (people || []).map((p) => {
     const open = openByPerson.get(p.id);
+    // "Going away" only for ACTIVE people (matching "Pause everyone", which
+    // skips inactive ones). An inactive person with a period still open keeps
+    // "I'm back" — otherwise there'd be no way to close it from the wall.
     const awayBtn = open
       ? `<button class="padmin-btn" type="button" data-pback="${open.id}">I’m back</button>`
-      : `<button class="padmin-btn" type="button" data-paway="${p.id}">Going away</button>`;
-    const backupOptions = activePeople.filter((x) => x.id !== p.id).map((x) =>
-      `<option value="${x.id}">${escapeHtml(x.name)}</option>`).join('');
+      : (p.active
+        ? `<button class="padmin-btn" type="button" data-paway="${p.id}">Going away</button>`
+        : '');
+    // Only someone who can actually DO the chores: active, and not away
+    // themselves. Offering an unavailable backup meant the covered chore
+    // silently paused at resolve time (and the server now 422s the write).
+    const backupOptions = activePeople
+      .filter((x) => x.id !== p.id && !openByPerson.has(x.id))
+      .map((x) => `<option value="${x.id}">${escapeHtml(x.name)}</option>`).join('');
     const subform = (!open && awayOpenFor === p.id)
       ? `<div class="padmin-away-form">`
         + `<select class="txt-input" data-paway-backup="${p.id}">`

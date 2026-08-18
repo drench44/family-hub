@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS occurrence_log(
   title TEXT NOT NULL,
   icon TEXT NOT NULL DEFAULT '',
   rot INTEGER NOT NULL DEFAULT 0,
+  covering_for INTEGER,   -- the away person this row is standing in for (P5)
   PRIMARY KEY(date, chore_id));
 CREATE TABLE IF NOT EXISTS events(
   id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
@@ -252,6 +253,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     ppl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(people)")}
     if "reminder_list_id" not in ppl_cols:
         conn.execute("ALTER TABLE people ADD COLUMN reminder_list_id TEXT")
+        conn.commit()
+    # 2026-08-18: occurrence_log gained covering_for — which away person a row
+    # is standing in for. Without it a frozen past day lost the "covering for
+    # <name>" explanation the moment the away period ended. Nullable, so a plain
+    # additive ALTER is enough; existing rows stay exactly as they were frozen
+    # (NULL = "no covering info recorded"), never rewritten.
+    occ_cols = {r["name"]
+                for r in conn.execute("PRAGMA table_info(occurrence_log)")}
+    if "covering_for" not in occ_cols:
+        conn.execute("ALTER TABLE occurrence_log ADD COLUMN covering_for INTEGER")
         conn.commit()
 
 
@@ -685,9 +696,9 @@ def replace_day_log(conn, date: str, rows: list[dict]) -> None:
         conn.execute("DELETE FROM occurrence_log WHERE date = ?", (date,))
         conn.executemany(
             "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-            "icon, rot) VALUES(?, ?, ?, ?, ?, ?)",
+            "icon, rot, covering_for) VALUES(?, ?, ?, ?, ?, ?, ?)",
             [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
-              r["rot"]) for r in rows])
+              r["rot"], r.get("covering_for")) for r in rows])
 
 
 def day_log(conn, date: str) -> list[dict]:
@@ -722,9 +733,9 @@ def backfill_occurrence_log(conn, day_rows: list, done_flag_key: str) -> None:
         for date, rows in day_rows:
             conn.executemany(
                 "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-                "icon, rot) VALUES(?, ?, ?, ?, ?, ?)",
+                "icon, rot, covering_for) VALUES(?, ?, ?, ?, ?, ?, ?)",
                 [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
-                  r["rot"]) for r in rows])
+                  r["rot"], r.get("covering_for")) for r in rows])
         conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
                      (done_flag_key, json.dumps(True)))
 

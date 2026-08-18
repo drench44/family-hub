@@ -366,9 +366,9 @@ def test_todos_bucket_check_constraint_via_public_api(conn):
 
 # --- occurrence log (frozen chore history) --------------------------------
 
-def _row(cid, pid, title="Dishes", icon="", rot=0):
+def _row(cid, pid, title="Dishes", icon="", rot=0, covering_for=None):
     return {"chore_id": cid, "person_id": pid, "title": title, "icon": icon,
-            "rot": rot}
+            "rot": rot, "covering_for": covering_for}
 
 
 def test_occurrence_log_replace_and_read(conn):
@@ -383,6 +383,47 @@ def test_occurrence_log_replace_and_read(conn):
     # an empty replace clears the day
     fdb.replace_day_log(conn, "2026-08-14", [])
     assert fdb.day_log(conn, "2026-08-14") == []
+
+
+def test_occurrence_log_persists_covering_for(conn):
+    """I9: a frozen row records WHICH away person it was standing in for, so a
+    past day keeps its "covering for <name>" explanation after the away period
+    ends (the away_periods row it used to be derived from may even be gone)."""
+    fdb.replace_day_log(conn, "2026-08-14",
+                        [_row(1, 8, covering_for=7), _row(2, 8, "Trash")])
+    rows = fdb.day_log(conn, "2026-08-14")
+    assert [r["covering_for"] for r in rows] == [7, None]
+    assert [r["covering_for"] for r in
+            fdb.logs_between(conn, "2026-08-14", "2026-08-14")] == [7, None]
+    assert fdb.log_row(conn, 1, "2026-08-14")["covering_for"] == 7
+    # the backfill path writes it too
+    fdb.backfill_occurrence_log(
+        conn, [("2026-08-13", [_row(1, 8, covering_for=7)])], "flag")
+    assert fdb.day_log(conn, "2026-08-13")[0]["covering_for"] == 7
+
+
+def test_covering_for_migration_is_idempotent_and_keeps_old_rows(tmp_path):
+    """The covering_for column lands on an EXISTING db by plain additive ALTER:
+    rows frozen before it stay exactly as they were (NULL = no covering info
+    recorded, never rewritten), and a second boot is a no-op."""
+    path = str(tmp_path / "old.db")
+    c = fdb.connect(path)
+    c.executescript("""
+      CREATE TABLE occurrence_log(
+        date TEXT NOT NULL, chore_id INTEGER NOT NULL, person_id INTEGER NOT NULL,
+        title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+        rot INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(date, chore_id));
+      INSERT INTO occurrence_log(date, chore_id, person_id, title)
+        VALUES('2026-08-10', 1, 7, 'Dishes');""")
+    c.commit()
+    fdb.ensure_schema(c)
+    assert fdb.day_log(c, "2026-08-10") == [
+        {"date": "2026-08-10", "chore_id": 1, "person_id": 7, "title": "Dishes",
+         "icon": "", "rot": 0, "covering_for": None}]
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    fdb.replace_day_log(c, "2026-08-11", [_row(2, 8, covering_for=7)])
+    assert fdb.day_log(c, "2026-08-11")[0]["covering_for"] == 7
+    c.close()
 
 
 def test_occurrence_log_between(conn):

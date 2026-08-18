@@ -633,7 +633,12 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
     history becomes frozen. Skips the write when the frozen rows already match,
     so the wall's constant polling doesn't churn the DB."""
     def key(r):
-        return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"])
+        # covering_for is part of the identity of a frozen row: person_id
+        # already changes whenever the covering does, but including it keeps
+        # the comparison exact (and catches a covering change that somehow
+        # didn't move the assignee).
+        return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"],
+                r.get("covering_for"))
     if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
             sorted(key(r) for r in rows):
         fdb.replace_day_log(c, d_str, rows)
@@ -845,8 +850,11 @@ def chores_day(date: str):
     if abs((d - _today()).days) > 366:
         raise HTTPException(422, "date out of range")
     c = _db()
-    people, _ = _people_day(c, d)
-    return {"date": d.isoformat(), "people": people}
+    people, away_ok = _people_day(c, d)
+    # Same degraded-state flag the hub payload carries: without it the day
+    # browser showed an away person as present, with a full chore list and no
+    # note, whenever the overlay build failed.
+    return {"date": d.isoformat(), "people": people, "away_ok": away_ok}
 
 
 # --- chores completion ----------------------------------------------------
@@ -889,7 +897,15 @@ def complete(chore_id: int, body: CompleteBody | None = None):
             # be credited to the away owner via assignee_id's fixed_person_id,
             # silently breaking the backup's streak once the day ages. The row
             # plan_rows produces already carries the backup as person_id.
-            _, away_view, _ = _away_view(c, d)
+            _, away_view, away_ok = _away_view(c, d)
+            if not away_ok:
+                # The overlay build failed, so we cannot tell who owns this
+                # chore today. Reading the wall is allowed to degrade (it shows
+                # a note); WRITING a completion under the wrong person is not --
+                # it would credit the away owner and break the real person's
+                # streak. Refuse and let the tap be retried. A client that
+                # supplies person_id explicitly is unaffected.
+                raise HTTPException(503, "away status unavailable; retry")
             rows = chlogic.plan_rows(fdb.list_chores(c), fdb.list_people(c),
                                      d, away_view)
             row = next((r for r in rows if r["chore_id"] == chore_id), None)
@@ -1580,6 +1596,30 @@ def _away_rows(c):
     return out
 
 
+# An explicit JSON null for start_date (a NOT NULL column) is a bad request,
+# not a 500 from the DB write — same rule as the person/chore patches.
+# end_date and backup_person_id are legitimately nullable (clearing them).
+_AWAY_NONNULL_PATCH = {"start_date"}
+
+
+def _validate_backup(c, backup_id: int, away_person_id: int,
+                     ignore_period_id: int | None = None) -> None:
+    """A backup must be someone who can actually do the chores: a real person,
+    not the away person, ACTIVE, and not themselves away. Picking someone who
+    is inactive or away is accepted by the DB but then silently pauses every
+    covered chore at resolve time — the family sees the chore vanish with no
+    explanation. Reject it at the source instead. (A backup who goes away
+    LATER is still handled by that resolve-time pause.)"""
+    if backup_id == away_person_id:
+        raise HTTPException(422, "backup cannot be the same person")
+    row = _person_row(c, backup_id)                 # 404 if unknown
+    if not row["active"]:
+        raise HTTPException(422, "backup must be an active person")
+    if any(r["person_id"] == backup_id and r["id"] != ignore_period_id
+           for r in fdb.list_away_periods(c, include_closed=False)):
+        raise HTTPException(422, "backup is away themselves")
+
+
 @app.get("/api/admin/away")
 def admin_away_list():
     return {"away_periods": _away_rows(_db())}
@@ -1590,9 +1630,7 @@ def admin_away_open(a: AwayIn):
     c = _db()
     _person_row(c, a.person_id)                     # 404 if unknown
     if a.backup_person_id is not None:
-        if a.backup_person_id == a.person_id:
-            raise HTTPException(422, "backup cannot be the same person")
-        _person_row(c, a.backup_person_id)
+        _validate_backup(c, a.backup_person_id, a.person_id)
     # One open period per person: a second "going away" while the first is still
     # open would create overlapping rows for the same person (the wall would
     # resolve them nondeterministically without the away_map ORDER BY, and the
@@ -1627,15 +1665,17 @@ def admin_away_patch(pid: int, a: AwayPatch):
     if row is None:
         raise HTTPException(404, "unknown away period")
     fields = a.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _AWAY_NONNULL_PATCH)
     for k in ("start_date", "end_date"):
         if fields.get(k) is not None:
             fields[k] = _valid_date(fields[k])
     # A backup change must pass the same checks as opening: real person, not the
-    # away person themselves. (None clears the backup and is always allowed.)
+    # away person themselves, active and not away. (None clears the backup and
+    # is always allowed.) This row's own period is excluded from the away check
+    # — it is the away person's, never the backup's.
     if fields.get("backup_person_id") is not None:
-        if fields["backup_person_id"] == row["person_id"]:
-            raise HTTPException(422, "backup cannot be the same person")
-        _person_row(c, fields["backup_person_id"])          # 404 if unknown
+        _validate_backup(c, fields["backup_person_id"], row["person_id"],
+                         ignore_period_id=pid)
     # The effective end_date must not precede the effective start_date, else
     # away_map silently voids the whole period (its a>b skip). "Effective"
     # covers both directions: an incoming end_date earlier than the (possibly
@@ -1643,7 +1683,8 @@ def admin_away_patch(pid: int, a: AwayPatch):
     # row's already-stored end_date when the patch doesn't re-supply end_date.
     effective_start = fields.get("start_date", row["start_date"])
     effective_end = fields.get("end_date", row["end_date"])
-    if effective_end is not None and effective_end < effective_start:
+    if effective_end is not None and effective_start is not None \
+            and effective_end < effective_start:
         raise HTTPException(422, "end_date must not be before start_date")
     fdb.update_away_period(c, pid, **fields)
     return {"ok": True}
