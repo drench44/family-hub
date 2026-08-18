@@ -14,6 +14,7 @@ import datetime as dt
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -32,6 +33,7 @@ from . import integrations as fintegrations
 from . import reminders as remlogic
 from . import tiles
 from . import todos as tdlogic
+from . import version as fversion
 from . import caldav_service
 from . import caldav_sync
 from . import chore_mirror
@@ -65,6 +67,11 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "web", "static")
 # "try it" run: no real calendars, cameras, or feeds needed. Every DEMO branch
 # below is gated on this flag, so an unset DEMO changes zero behavior.
 DEMO = os.environ.get("DEMO", "") == "1"
+
+# Dashboard backup-health: the header shows a "Backup stale" badge once the last
+# successful backup is older than this. 36h clears the nightly snapshot, so only
+# a genuinely missed/failed backup trips it.
+BACKUP_STALE_S = int(os.environ.get("BACKUP_STALE_HOURS", "36")) * 3600
 
 
 def _compute_build() -> str:
@@ -109,6 +116,10 @@ def _compute_build() -> str:
 
 
 BUILD = _compute_build()
+# The human-facing release identity (distinct from BUILD, the asset-content
+# hash): the SemVer from VERSION. Read once at import like BUILD — a deploy
+# restarts the process and picks up the new version.
+APP_VERSION = fversion.read_version()
 # \Z (end of string), not $ — in non-MULTILINE mode $ also matches just before a
 # trailing newline, so "#ff0000\n" would slip through and reach the client as a
 # CSS color. \Z anchors the true end.
@@ -601,6 +612,13 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/version")
+def api_version():
+    """The deployed version + build hash — a debug/ops readout ("what's actually
+    running?"). The changelog itself lives on GitHub, not here."""
+    return {"version": APP_VERSION, "build": BUILD}
+
+
 def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
     """Write the day's live-resolved plan into the occurrence log — the moment
     history becomes frozen. Skips the write when the frozen rows already match,
@@ -661,6 +679,36 @@ def _people_day(c, d: dt.date) -> list[dict]:
     return plan
 
 
+def _backup_status(last_success, now, stale_s):
+    """Pure: (last-success datetime or None, now, threshold secs) -> the /api/hub
+    `backup` block. 'known' is False before any heartbeat exists, so a fresh
+    deploy shows a muted 'unknown', never a false alarm."""
+    if last_success is None:
+        return {"known": False, "last_success": None, "age_s": None,
+                "stale": False, "threshold_s": stale_s}
+    age = int((now - last_success).total_seconds())
+    return {"known": True, "last_success": last_success.isoformat(), "age_s": age,
+            "stale": age > stale_s, "threshold_s": stale_s}
+
+
+def _build_backup(conn, now=None, stale_s=BACKUP_STALE_S):
+    """Read the 'backup_status' heartbeat the backup script writes into hub.db on
+    every successful snapshot ({"at": ISO, ...}) and derive staleness. family-hub
+    `kv` has no updated_at column, so the timestamp lives in the value. A stale
+    heartbeat also catches 'backups stopped running at all'."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    rec = fdb.kv_get(conn, "backup_status")
+    last = None
+    if isinstance(rec, dict) and rec.get("at"):
+        try:
+            last = dt.datetime.fromisoformat(rec["at"])
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=dt.timezone.utc)
+        except (ValueError, TypeError):
+            last = None
+    return _backup_status(last, now, stale_s)
+
+
 @app.get("/api/hub")
 def hub():
     c = _db()
@@ -688,6 +736,13 @@ def hub():
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
     reminders_block = (remlogic.group(_visible_reminders(c), today)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
+    # Backup health for the header badge — fails-soft like the todos block above:
+    # a read error must not 500 the whole wall over a status indicator.
+    try:
+        backup_block = _build_backup(c)
+    except Exception:
+        log.error("backup status read failed; serving unknown", exc_info=True)
+        backup_block = _backup_status(None, dt.datetime.now(dt.timezone.utc), BACKUP_STALE_S)
     return {
         "date": today.isoformat(),
         "people": _people_day(c, today),
@@ -711,6 +766,9 @@ def hub():
         # A deploy-changing token: the wall reloads itself when it changes, so a
         # baked frontend update reaches the kiosk without a manual refresh.
         "build": BUILD,
+        # Backup-health for the header badge: {known, last_success, age_s, stale,
+        # threshold_s}. From the heartbeat the backup script writes on success.
+        "backup": backup_block,
         # House-default display theme (or None). The wall/admin stamp it live
         # on a fresh device with no localStorage override; None => the shipped
         # grey/green/none stays. Never persisted client-side.
@@ -1417,13 +1475,15 @@ async def tile_laundry():
     # survives the machine being opened / powered off — and later restarts of
     # this server — then attach the remembered stamp to every machine.
     #
-    # Stamp ONLY on an observed TRANSITION into done (previous phase, kept in
-    # kv, was neither done nor offline). status_since is HA's last_changed,
-    # which resets on an HA restart or a done→unavailable→done cloud blip —
-    # naive re-stamping would overwrite the real 9:02pm finish with the 3am
-    # restart time. A genuine new cycle always passes through running/idle
-    # first; a blip or restart never does (it reads done→offline→done, or
-    # done→done with a moved last_changed — both refused here).
+    # Stamp ONLY on an observed TRANSITION (previous phase kept in kv): into
+    # done from neither done nor offline, or — the missed-finish path — from
+    # running/paused straight to idle (see the elif below). status_since is
+    # HA's last_changed, which resets on an HA restart or a
+    # done→unavailable→done cloud blip — naive re-stamping would overwrite
+    # the real 9:02pm finish with the 3am restart time. A genuine new cycle
+    # always passes through running/idle first; a blip or restart never does
+    # (it reads done→offline→done, or done→done with a moved last_changed —
+    # both refused here).
     #
     # The tile itself is cached in-process (tiles._laundry_cache), so copy
     # before annotating: the cached dict must stay un-mutated. And the kv
@@ -1435,21 +1495,139 @@ async def tile_laundry():
         for m in machines:
             done_key = f"laundry_done_{m['id']}"
             phase_key = f"laundry_phase_{m['id']}"
+            missed_key = f"laundry_missed_{m['id']}"
+            nonoff_key = f"laundry_nonoff_{m['id']}"
             phase = m.get("phase")
             prev = fdb.kv_get(c, phase_key)
+            # Provenance across an HA blip: prev collapses to "offline"
+            # while HA is blind, losing what the machine was DOING before —
+            # so the last non-offline phase is tracked in its own key. A
+            # finish straddled by a blip (running -> offline -> idle) is
+            # still a finish and gets the full missed-done treatment below;
+            # a blip on an idle or freshly-emptied machine is still nothing.
+            came_from = (prev if prev != "offline"
+                         else fdb.kv_get(c, nonoff_key))
+            note = None
             if (phase == "done" and m.get("status_since")
                     and prev not in ("done", "offline")
                     and fdb.kv_get(c, done_key) != m["status_since"]):
                 fdb.kv_set(c, done_key, m["status_since"])
+            elif phase == "idle" and came_from in ("running", "paused"):
+                # The missed finish: LG machines auto-power-off a minute or
+                # two after "end", so a 60s poll can watch running -> power_off
+                # and never see done at all — leaving the wall on a bare
+                # "Idle" with no completion memory (live board, 2026-08-17).
+                # A machine that WAS in a cycle (directly, or across an HA
+                # blip — came_from) and now reports idle has ended it. From
+                # RUNNING with the projection recently passed (within the
+                # Done-hold window — any staler and it's likely a LATCHED
+                # previous-cycle value from a flaky remaining-time sensor,
+                # not this load's finish) = a genuine finished load: stamp
+                # that exact moment AND remember it as a missed done
+                # (presented below as the real Done it was). Anything else —
+                # a canceled cycle (projection still future), a stale
+                # projection (warned, refused), or an exit from PAUSED
+                # (pause freezes the drum while the projection keeps aging,
+                # so a "past" projection there is fiction) — stamps only the
+                # moment the machine left the cycle, and never fakes a Done.
+                mt = tiles._laundry_minutes_to(m.get("finishes_at"))
+                if (came_from == "running" and mt is not None
+                        and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0):
+                    fdb.kv_set(c, done_key, m["finishes_at"])
+                    fdb.kv_set(c, missed_key, m["finishes_at"])
+                    note = "missed_finish"
+                else:
+                    if came_from == "running" and mt is not None and mt < 0:
+                        log.warning(
+                            "laundry %s: left its cycle with a stale finish "
+                            "projection (%s); stamping the exit moment "
+                            "instead", m["id"], m["finishes_at"])
+                        note = "stale_projection"
+                    else:
+                        # cancel (future projection), a paused exit, or an
+                        # exit with no usable projection at all
+                        note = "cycle_exit"
+                    if m.get("status_since"):
+                        fdb.kv_set(c, done_key, m["status_since"])
+                if prev == "offline":
+                    note += "+offline_bridge"
+            if phase in ("running", "paused", "reserved", "done", "error"):
+                # any sign of machine activity retires the synthetic Done (a
+                # real observed done replaces it; a new cycle supersedes it).
+                # Deliberately NOT cleared on offline: an HA blip mid-hold
+                # must not erase a finish the family hasn't seen yet.
+                if fdb.kv_get(c, missed_key):
+                    fdb.kv_set(c, missed_key, None)
             if phase and phase != prev:
+                # the cycle log records every observed RAW transition (the
+                # synthesis below is presentation, never logged as fact) —
+                # the evidence base for tuning the finish heuristics and
+                # diagnosing any finish the wall got wrong. Logged BEFORE
+                # phase_key consumes the transition, with a deliberate
+                # failure asymmetry:
+                #  - locked/busy (OperationalError) aborts this machine's
+                #    pass, so kv AND log retry WHOLE next poll (every kv
+                #    write above is idempotent on that retry) — the row is
+                #    not lost exactly when the DB is flaky, which is when
+                #    the log matters most;
+                #  - any other error warns and advances anyway — the
+                #    essential completion memory must never be wedged
+                #    behind the diagnostic log (SQLITE_FULL can block an
+                #    INSERT while in-place kv updates still succeed);
+                #  - a failure AFTER the row lands duplicates it next poll
+                #    — deliberate: a duplicate is detectable in analysis,
+                #    a lost row isn't.
+                try:
+                    fdb.laundry_log_add(c, m["id"], prev, phase,
+                                        m.get("status"), m.get("finishes_at"),
+                                        m.get("status_since"), note)
+                except sqlite3.OperationalError:
+                    raise
+                except Exception:
+                    log.warning("laundry %s: cycle-log write failed; "
+                                "advancing the transition anyway",
+                                m["id"], exc_info=True)
                 fdb.kv_set(c, phase_key, phase)
+            if phase and phase != "offline":
+                fdb.kv_set(c, nonoff_key, phase)
+            if phase == "idle":
+                # Present a remembered missed finish as the Done it really
+                # was — green ring, "at 9:02pm" — for the hold window, then
+                # decay to idle + the quiet "last load" line.
+                ms = fdb.kv_get(c, missed_key)
+                mt = tiles._laundry_minutes_to(ms) if ms else None
+                if mt is not None and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0:
+                    m["phase"] = "done"
+                    m["status_since"] = ms
             m["last_done"] = fdb.kv_get(c, done_key)
     except Exception:
-        log.warning("laundry: completion-memory kv unavailable; serving the "
-                    "tile without last_done", exc_info=True)
+        log.warning("laundry: completion-memory kv / cycle-log write failed; "
+                    "serving the tile without last_done (the interrupted "
+                    "transition retries next poll)", exc_info=True)
         for m in machines:
             m.setdefault("last_done", None)
     return {**t, "machines": machines}
+
+
+@app.get("/api/laundry/log")
+async def laundry_log_route(machine: str | None = None, limit: int = 200):
+    """The laundry cycle log: observed phase transitions newest-first — the
+    evidence base for tuning finish detection (projection accuracy, endgame
+    window, missed-done hold) and diagnosing any finish the wall got wrong.
+    Fail-soft like every tile read: a DB hiccup serves an empty list loudly
+    logged, never a 500."""
+    if not (1 <= limit <= 1000):
+        # loud 422 like the calendar route — silent truncation is the wrong
+        # default for a log someone pages through by hand (the db-side
+        # clamp stays as the defensive floor)
+        raise HTTPException(422, "limit out of range (1-1000)")
+    if DEMO:
+        return fdemo.demo_laundry_log()
+    try:
+        return {"entries": fdb.laundry_log_recent(_db(), machine, limit)}
+    except Exception:
+        log.warning("laundry: cycle log unavailable", exc_info=True)
+        return {"entries": []}
 
 
 @app.get("/api/tiles/camera.jpg")

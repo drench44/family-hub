@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 SCHEMA = """
@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS events(
   color_id TEXT,
   PRIMARY KEY(calendar_id, id));
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS laundry_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  machine TEXT NOT NULL,
+  prev_phase TEXT,
+  phase TEXT NOT NULL,
+  status TEXT,
+  finishes_at TEXT,
+  status_since TEXT,
+  note TEXT);
+CREATE INDEX IF NOT EXISTS laundry_log_machine_ts
+  ON laundry_log(machine, ts);
 CREATE TABLE IF NOT EXISTS todos(
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL,
@@ -737,6 +749,57 @@ def kv_set(conn, key: str, value: Any) -> None:
     conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
                  (key, json.dumps(value)))
     conn.commit()
+
+
+# --- laundry cycle log ----------------------------------------------------
+#
+# Append-only history of observed washer/dryer phase TRANSITIONS (never
+# per-poll rows — an idle machine writes nothing). The evidence base for
+# tuning the finish-detection heuristics (endgame window, missed-done hold,
+# projection trust) from real cycles instead of guesses, and for diagnosing
+# any finish the wall got wrong. Lives in hub.db, so the standard tiered
+# backups cover it.
+#
+# `note` vocabulary (written by app.tile_laundry): missed_finish /
+# stale_projection / cycle_exit, each optionally carrying a
+# "+offline_bridge" suffix when the transition was resolved across an HA
+# blip — consumers must match by PREFIX, not equality. NULL = an ordinary
+# transition (start, observed end, blip, …).
+
+LAUNDRY_LOG_KEEP_DAYS = 365
+
+
+def laundry_log_add(conn, machine: str, prev_phase: str | None, phase: str,
+                    status: str | None, finishes_at: str | None,
+                    status_since: str | None, note: str | None = None) -> None:
+    """One transition row, stamped with the observation time. Prunes rows
+    older than the keep window on every write — a few rows per laundry day
+    keeps the table tiny, so inline pruning is cheaper than a scheduled job
+    that could silently stop running."""
+    conn.execute(
+        "INSERT INTO laundry_log(ts, machine, prev_phase, phase, status,"
+        " finishes_at, status_since, note) VALUES(?,?,?,?,?,?,?,?)",
+        (_now_iso(), machine, prev_phase, phase, status, finishes_at,
+         status_since, note))
+    conn.execute(
+        "DELETE FROM laundry_log WHERE ts < ?",
+        ((datetime.now(timezone.utc)
+          - timedelta(days=LAUNDRY_LOG_KEEP_DAYS)).isoformat(),))
+    conn.commit()
+
+
+def laundry_log_recent(conn, machine: str | None = None,
+                       limit: int = 200) -> list[dict]:
+    """Newest-first transition rows, optionally for one machine."""
+    q = ("SELECT ts, machine, prev_phase, phase, status, finishes_at,"
+         " status_since, note FROM laundry_log")
+    args: list = []
+    if machine is not None:
+        q += " WHERE machine = ?"
+        args.append(machine)
+    q += " ORDER BY ts DESC, id DESC LIMIT ?"
+    args.append(max(1, min(int(limit), 1000)))
+    return [dict(r) for r in conn.execute(q, args).fetchall()]
 
 
 # --- integrations ---------------------------------------------------------
