@@ -1,5 +1,9 @@
 # family-hub
 
+[![CI](https://github.com/drench44/family-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/drench44/family-hub/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/drench44/family-hub?sort=semver)](https://github.com/drench44/family-hub/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A self-hosted **family wall display** built for a touchscreen on the kitchen
 wall, with the same page mobile-optimized for phones. Google Calendar and
 Apple/ICS calendars front and center, a per-person daily chore tracker with
@@ -49,9 +53,16 @@ at one URL.
   the wall.
 - **Laundry:** washer + dryer as porthole cards fed by Home Assistant — a
   timer-dial ring counts the minutes down, the drum tumbles while a cycle
-  runs, and a finished load shows a check with *when* it finished (remembered
-  even after the machine is opened or powered off). Built for LG ThinQ's
-  sensors, but any HA integration exposing a status enum + a remaining-time
+  runs (wash water and suds in the washer, a heat glow in the dryer), and a
+  finished load shows a check with *when* it finished (remembered even
+  after the machine is opened or powered off). Machines that power
+  themselves off right after the end-of-cycle chime don't slip through:
+  polling tightens near the projected finish, and a finish that still lands
+  between polls is reconstructed and shown as Done. Every observed phase
+  transition is also logged in the database (`GET /api/laundry/log`, a year
+  of cycle history, covered by the standard backups) so the finish
+  heuristics can be tuned from real cycles. Built for LG ThinQ's sensors,
+  but any HA integration exposing a status enum + a remaining-time
   timestamp works. Fails soft like weather/climate.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —
@@ -338,6 +349,35 @@ checklist — registry toggle, fail-soft backend, demo payload, mobile surface,
 tests and guards, visual gates, docs + screenshot, review, and post-deploy
 verification. Every item cites the real bug that created it; the wall ships
 nothing that skipped a gate.
+
+## Versioning & releases
+
+The hub carries a real [SemVer](https://semver.org) in the root `VERSION` file,
+and every change is recorded in [`CHANGELOG.md`](CHANGELOG.md)
+([Keep a Changelog](https://keepachangelog.com) format) — that changelog and the
+git tags / GitHub Releases are the "what's new". The running app exposes only a
+small **debug readout**: `GET /api/version` returns `{version, build}`, and the
+Settings overlay shows a quiet `family-hub v1.2.3` line so you can see what's
+deployed without a shell. Nothing release-notes-y shows on the family wall.
+
+Every code-changing PR adds a line under `## [Unreleased]`. This is enforced: a
+CI check and a local `pre-commit` hook both block a `src/**` change that forgot
+its changelog entry (docs-only and test-only diffs are exempt). Run
+`scripts/install-hooks.sh` once to enable the local hook.
+
+Cut a release with one command — it bumps `VERSION`, dates the changelog
+section, stamps the static-asset cache-busts to the new version, commits, and
+tags:
+
+```bash
+python scripts/release.py {major|minor|patch}   # then: git push --follow-tags
+```
+
+Pushing the `vX.Y.Z` tag triggers the `release` workflow, which publishes a
+GitHub Release whose notes are that version's changelog section — so the
+changelog is the single source for the release notes too. The asset `?v=`
+cache-busts are unified to the app version, so one release busts every asset at
+once (a test guards against any drift).
 
 ## Tests
 

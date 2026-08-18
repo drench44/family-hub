@@ -332,3 +332,23 @@ def demo_laundry() -> dict:
              "last_done": iso(-47)},
         ],
     }
+
+
+def demo_laundry_log() -> dict:
+    """A live-shaped cycle log (matches /api/laundry/log): the dryer's
+    observed finish plus a washer missed-finish — the two row shapes the
+    real endpoint produces. Times relative to now, like demo_laundry."""
+    now = dt.datetime.now(dt.timezone.utc)
+
+    def iso(minutes: float) -> str:
+        return (now + dt.timedelta(minutes=minutes)).isoformat()
+
+    return {"entries": [
+        {"ts": iso(-47), "machine": "dryer", "prev_phase": "running",
+         "phase": "done", "status": "end", "finishes_at": None,
+         "status_since": iso(-47), "note": None},
+        {"ts": iso(-26 * 60), "machine": "washer", "prev_phase": "running",
+         "phase": "idle", "status": "power_off",
+         "finishes_at": iso(-26 * 60 - 2), "status_since": iso(-26 * 60),
+         "note": "missed_finish"},
+    ]}

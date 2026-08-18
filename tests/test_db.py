@@ -701,3 +701,99 @@ def test_close_and_update_away_report_rowcount(conn):
     assert fdb.update_away_period(conn, 9999, start_date="2026-08-13") is False
     assert fdb.get_away_period(conn, pid)["start_date"] == "2026-08-13"
     assert fdb.get_away_period(conn, 9999) is None
+
+def test_migrate_chores_routines_from_old_shape(tmp_path):
+    """A DB already at the 'once'+AUTOINCREMENT chores shape (no routine columns,
+    'interval' not in the CHECK) migrates on ensure_schema: new columns appear
+    with defaults, every row is preserved, and 'interval' is now insertable."""
+    import sqlite3
+    from family_hub import db as fdb
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    c.executescript("""
+      CREATE TABLE chores(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+        icon TEXT NOT NULL DEFAULT '',
+        schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once')),
+        days_mask INTEGER NOT NULL DEFAULT 0,
+        assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+        fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+        rotation_epoch TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+      INSERT INTO chores(title, schedule_kind, assign_kind, rotation_epoch)
+        VALUES('Dishes','daily','fixed','2026-08-01');
+    """)
+    c.commit()
+    c.close()
+
+    conn = fdb.connect(p)
+    fdb.ensure_schema(conn)
+    rows = fdb.list_chores(conn, include_inactive=True)
+    assert [r["title"] for r in rows] == ["Dishes"]          # row preserved
+    assert rows[0]["week_interval"] == 1
+    assert rows[0]["interval_days"] is None
+    assert rows[0]["due_times"] == []
+    # the widened CHECK now accepts 'interval'
+    fdb.add_chore(conn, title="Filter", icon="", schedule_kind="interval",
+                  days_mask=0, assign_kind="fixed", fixed_person_id=None,
+                  rotation_order=[], rotation_epoch="2026-08-01", interval_days=3)
+    assert fdb.list_chores(conn, include_inactive=True)[-1]["interval_days"] == 3
+    conn.close()
+
+
+def test_migrate_people_reminder_list_id(tmp_path):
+    """An old people table (no reminder_list_id) gains the nullable column on
+    ensure_schema via a plain additive ALTER, preserving rows."""
+    import sqlite3
+    from family_hub import db as fdb
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    c.executescript("""
+      CREATE TABLE people(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+        color TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1);
+      INSERT INTO people(name, color) VALUES('Emma', '#5BC9F0');
+    """)
+    c.commit()
+    c.close()
+    conn = fdb.connect(p)
+    fdb.ensure_schema(conn)
+    ppl = fdb.list_people(conn, include_inactive=True)
+    assert ppl[0]["name"] == "Emma" and ppl[0]["reminder_list_id"] is None
+    conn.close()
+def test_laundry_log_add_recent_filter_and_prune(conn):
+    fdb.laundry_log_add(conn, "washer", None, "idle", "power_off",
+                        None, "2026-08-17T21:00:00+00:00")
+    fdb.laundry_log_add(conn, "washer", "idle", "running", "rinsing",
+                        "2026-08-17T22:00:00+00:00", "2026-08-17T21:10:00+00:00")
+    fdb.laundry_log_add(conn, "dryer", "idle", "running", "drying",
+                        None, None, None)
+    fdb.laundry_log_add(conn, "washer", "running", "idle", "power_off",
+                        "2026-08-17T22:00:00+00:00", "2026-08-17T22:02:00+00:00",
+                        "missed_finish")
+    rows = fdb.laundry_log_recent(conn)
+    assert len(rows) == 4
+    # newest first, full row shape
+    assert rows[0]["machine"] == "washer" and rows[0]["note"] == "missed_finish"
+    assert rows[0]["prev_phase"] == "running" and rows[0]["phase"] == "idle"
+    assert rows[-1]["prev_phase"] is None   # first-sight row keeps its NULL
+    # per-machine filter
+    assert {r["machine"] for r in fdb.laundry_log_recent(conn, "dryer")} == {"dryer"}
+    assert len(fdb.laundry_log_recent(conn, "washer")) == 3
+    # limit clamps into [1, 1000] rather than erroring
+    assert len(fdb.laundry_log_recent(conn, limit=1)) == 1
+    assert len(fdb.laundry_log_recent(conn, limit=-5)) == 1
+    assert len(fdb.laundry_log_recent(conn, limit=10 ** 9)) == 4
+    # rows older than the keep window are pruned by the next write
+    import datetime as dt
+    old = (dt.datetime.now(dt.timezone.utc)
+           - dt.timedelta(days=fdb.LAUNDRY_LOG_KEEP_DAYS + 1)).isoformat()
+    conn.execute(
+        "INSERT INTO laundry_log(ts, machine, phase) VALUES(?, 'washer', 'idle')",
+        (old,))
+    conn.commit()
+    assert len(fdb.laundry_log_recent(conn)) == 5
+    fdb.laundry_log_add(conn, "dryer", "running", "done", "end", None, None)
+    rows = fdb.laundry_log_recent(conn)
+    assert len(rows) == 5   # the ancient row is gone, the new one is in
+    assert all(r["ts"] > old for r in rows)
