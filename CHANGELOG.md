@@ -10,6 +10,17 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Native chores: chore routines now mirror into each person's iCloud Reminders
+  list, two-way. New routine types — every-N-days, biweekly, and due-time
+  notifications — in the chore editor; a per-person iCloud-list mapping in the
+  Chores admin. The wall stays the source of truth (rotation, streaks, frozen
+  history) while chores appear natively on each iPhone (Reminders app, Siri,
+  notifications): check one off on the wall or in iOS and both stay in sync, edit
+  a chore and its reminders update, and rotation hands each occurrence to the
+  next person's list automatically. Read-only by default; two-way is opt-in.
+  Requires a one-time per-person list share from the hub's iCloud account.
+
 ### Fixed
 - `scripts/release.py` no longer prints "restored files … nothing committed" when
   the post-commit-failure `git checkout` restore *also* fails — that false
