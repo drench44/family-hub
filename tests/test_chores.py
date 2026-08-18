@@ -15,6 +15,18 @@ def P(pid, name="p", color="#5BC9F0"):
     return {"id": pid, "name": name, "color": color, "sort": 0, "active": 1}
 
 
+def _fixed(cid, pid, title="x"):
+    return {"id": cid, "title": title, "icon": "", "schedule_kind": "daily",
+            "days_mask": 0, "assign_kind": "fixed", "fixed_person_id": pid,
+            "rotation_order": [], "rotation_epoch": "2026-01-01", "active": 1}
+
+
+def _rot(cid, order):
+    return {"id": cid, "title": "trash", "icon": "", "schedule_kind": "daily",
+            "days_mask": 0, "assign_kind": "rotation", "fixed_person_id": None,
+            "rotation_order": order, "rotation_epoch": "2026-01-01", "active": 1}
+
+
 def test_occurs_daily_and_days_mask():
     mon, sun = dt.date(2026, 8, 10), dt.date(2026, 8, 16)
     assert ch.occurs(C(), mon)
@@ -103,9 +115,9 @@ def test_plan_rows_flat_shape_and_omissions():
                         dt.date(2026, 8, 12))
     assert rows == [
         {"chore_id": 10, "person_id": 1, "title": "Dishes", "icon": "🍽️",
-         "rot": 0},
+         "rot": 0, "covering_for": None},
         {"chore_id": 12, "person_id": 1, "title": "Feed cat", "icon": "",
-         "rot": 1},
+         "rot": 1, "covering_for": None},
     ]
 
 
@@ -117,6 +129,64 @@ def test_plan_rows_rotation_skips_inactive_person():
     for d in (dt.date(2026, 8, 12), dt.date(2026, 8, 13)):
         rows = ch.plan_rows([rot], people, d)
         assert [r["person_id"] for r in rows] == [1]
+
+
+def test_plan_rows_rotation_falls_to_whoever_is_home():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    ch_rot = _rot(9, [1, 2])
+    base = ch.plan_rows([ch_rot], people, d)               # normal assignee
+    normal_pid = base[0]["person_id"]
+    away_pid = normal_pid
+    other = 2 if normal_pid == 1 else 1
+    rows = ch.plan_rows([ch_rot], people, d, {"ids": {away_pid}, "backup": {}})
+    assert rows and rows[0]["person_id"] == other          # fell to who's home
+
+
+def test_plan_rows_fixed_reassigns_to_available_backup():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    rows = ch.plan_rows([_fixed(5, 1, "dog")], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert len(rows) == 1
+    assert rows[0]["person_id"] == 2 and rows[0]["covering_for"] == 1
+
+
+def test_plan_rows_fixed_pauses_when_no_available_backup():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    # no backup -> paused
+    assert ch.plan_rows([_fixed(5, 1)], people, d, {"ids": {1}, "backup": {}}) == []
+    # backup who is also away -> paused (not crash)
+    assert ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1, 2}, "backup": {1: 2}}) == []
+
+
+def test_plan_rows_away_person_own_chore_absent():
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"}]
+    assert ch.plan_rows([_fixed(5, 1)], people, d, {"ids": {1}, "backup": {}}) == []
+
+
+def test_covering_for_is_part_of_the_frozen_row_shape():
+    """I9: covering_for travels with the row into the occurrence log (it is a
+    real column now), so a frozen past day keeps the "covering for <name>"
+    explanation even after the away period ends. day_plan reads it straight
+    back out, whether the rows came from the log or from a live resolve."""
+    d = dt.date(2026, 8, 17)
+    people = [{"id": 1, "name": "A", "color": "#f00"},
+              {"id": 2, "name": "B", "color": "#0f0"}]
+    rows = ch.plan_rows([_fixed(5, 1, "dog")], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert set(rows[0]) >= {"chore_id", "person_id", "title", "icon", "rot",
+                            "covering_for"}
+    assert rows[0]["covering_for"] == 1
+    plan = ch.day_plan(rows, people, set())
+    b_entry = next(e for e in plan if e["person"]["id"] == 2)
+    assert b_entry["chores"][0]["covering_for"] == 1
 
 
 def test_day_plan_shape_done_flags_and_rotation():
@@ -182,6 +252,240 @@ def test_week_strip_composition():
     assert ch.week_strip(occ, cbd, today) == \
         ["done", "rest", "partial", "rest", "rest", "none", "done"]
 
+
+def test_streak_treats_away_days_as_rest_and_preserves_across_gap():
+    today = dt.date(2026, 8, 17)                     # Sunday
+    # daily chore id 1; done through 8/12, away 8/13..8/16, back today undone
+    occ = {d: {1} for d in ("2026-08-10", "2026-08-11", "2026-08-12",
+                            "2026-08-13", "2026-08-14", "2026-08-15",
+                            "2026-08-16", "2026-08-17")}
+    done = {d: {1} for d in ("2026-08-10", "2026-08-11", "2026-08-12")}
+    away = {"2026-08-13", "2026-08-14", "2026-08-15", "2026-08-16"}
+    # Without away, 8/13 is an uncompleted day -> streak breaks after today's
+    # forgiveness, counting back only to 8/12 = 3. With away, the gap is rest,
+    # so it still reaches the 8/10-8/12 run = 3, but crucially does not BREAK.
+    assert ch.streak(occ, done, today, away) == 3
+    # Prove non-away would break at 8/16 (0 completed) instead:
+    assert ch.streak(occ, done, today) == 0  # 8/16 occurred, not done -> break
+
+
+def test_streak_backdated_away_repairs_without_touching_history():
+    today = dt.date(2026, 8, 17)
+    occ = {d: {1} for d in ("2026-08-14", "2026-08-15", "2026-08-16",
+                            "2026-08-17")}
+    done = {"2026-08-14": {1}, "2026-08-17": {1}}     # missed 15 & 16 (trip)
+    assert ch.streak(occ, done, today) == 1           # broken by 8/16
+    away = {"2026-08-15", "2026-08-16"}
+    assert ch.streak(occ, done, today, away) == 2     # 8/17 + 8/14 across gap
+
+
+def test_week_strip_emits_away_state():
+    today = dt.date(2026, 8, 13)                       # Thu; window Fri..Thu
+    occ = {d: {1} for d in ("2026-08-07", "2026-08-11", "2026-08-13")}
+    cbd = {"2026-08-07": {1}, "2026-08-13": {1}}
+    away = {"2026-08-11"}
+    assert ch.week_strip(occ, cbd, today, away) == \
+        ["done", "rest", "rest", "rest", "away", "rest", "done"]
+
+
+# --- away coverage the analyzer wants (behavior looks correct; prove it) ------
+
+def test_plan_rows_all_rotation_members_away_returns_empty():
+    """F5: a 2-person rotation with BOTH members away resolves to no rows --
+    present_ids is empty, assignee_id filters the order to nothing and returns
+    None, so the chore is omitted. No ZeroDivision, no crash."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_rot(5, [1, 2])], people, d,
+                        {"ids": {1, 2}, "backup": {}})
+    assert rows == []
+
+
+def test_backup_who_is_also_away_pauses_fixed_chore():
+    """F4: A is away with backup B, but B is also away. The fixed chore has no
+    present cover, so plan_rows pauses it (row omitted) rather than assigning to
+    an away backup or crashing."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1, 2}, "backup": {1: 2}})
+    assert rows == []
+
+
+def test_backup_deleted_pauses_fixed_chore():
+    """F3: the away person's backup was deleted (no longer in the people list),
+    so the backup id isn't present -> the fixed chore pauses, no stale covering
+    row pointing at a deleted person."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A")]                    # backup id 2 deleted
+    rows = ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert rows == []
+
+
+def _once(cid, pid, due, title="Vet appt"):
+    return {"id": cid, "title": title, "icon": "", "schedule_kind": "once",
+            "days_mask": 0, "assign_kind": "fixed", "fixed_person_id": pid,
+            "rotation_order": [], "rotation_epoch": due, "active": 1}
+
+
+def test_once_chore_inside_an_away_span_stays_with_its_owner():
+    """I3/R2: a one-time chore is a DATED COMMITMENT -- it occurs on exactly one
+    day and never again. Pausing it for that day destroys it forever (the wall,
+    the log and the iCloud mirror all lose it). With no available backup it
+    therefore stays on the away owner's card rather than vanishing."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_once(7, 1, d.isoformat())], people, d,
+                        {"ids": {1}, "backup": {}})
+    assert len(rows) == 1
+    assert rows[0]["person_id"] == 1 and rows[0]["covering_for"] is None
+    # ... and a RECURRING chore in the same spot still pauses (it comes back
+    # tomorrow, so nothing is lost)
+    assert ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1}, "backup": {}}) == []
+
+
+def test_once_chore_with_an_available_backup_is_covered_as_usual():
+    """I3/R2 has no effect when someone CAN cover: the one-time chore moves to
+    the backup with the covering_for tag, exactly like a recurring one."""
+    d = dt.date(2026, 8, 17)
+    people = [P(1, "A"), P(2, "B")]
+    rows = ch.plan_rows([_once(7, 1, d.isoformat())], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert len(rows) == 1
+    assert rows[0]["person_id"] == 2 and rows[0]["covering_for"] == 1
+
+
+def test_deactivated_owner_with_an_open_away_period_drops_the_chore():
+    """I5: a person who is deactivated while an away period is still open used
+    to park their chores on the backup forever -- the away branch ran first and
+    covered a chore whose owner had left the household. Inactive wins: the
+    chore drops, exactly as it does for a deactivated owner who isn't away."""
+    d = dt.date(2026, 8, 17)
+    people = [P(2, "B")]                       # owner 1 deactivated -> not listed
+    rows = ch.plan_rows([_fixed(5, 1)], people, d,
+                        {"ids": {1}, "backup": {1: 2}})
+    assert rows == [], "an inactive owner's chore is dropped, not covered"
+    # a once-chore gets no exemption from this either: its owner is gone.
+    assert ch.plan_rows([_once(7, 1, d.isoformat())], people, d,
+                        {"ids": {1}, "backup": {}}) == []
+
+
+# --- away x the newer routine types (biweekly / every-N-days) ---------------
+#
+# The away overlay was only ever proven against DAILY chores. These walk the
+# cycles by hand so a rotation can't silently drift a turn when someone is away
+# (drift is invisible on a daily chore and permanent on a biweekly one).
+
+def _biweekly_rot(cid, order, epoch="2026-08-03"):
+    """Mon+Wed, every OTHER week, rotating through `order`."""
+    return {"id": cid, "title": "Recycling", "icon": "", "schedule_kind": "days",
+            "days_mask": 0b101, "week_interval": 2, "assign_kind": "rotation",
+            "fixed_person_id": None, "rotation_order": order,
+            "rotation_epoch": epoch, "active": 1}
+
+
+def _interval_chore(cid, n, *, order=None, owner=None, epoch="2026-08-03"):
+    return {"id": cid, "title": "Filter", "icon": "", "schedule_kind": "interval",
+            "interval_days": n, "days_mask": 0,
+            "assign_kind": "rotation" if order else "fixed",
+            "fixed_person_id": owner, "rotation_order": order or [],
+            "rotation_epoch": epoch, "active": 1}
+
+
+def test_away_view_on_reshapes_one_day_of_an_away_map():
+    """away_view_on is the ONE place a db.away_map window becomes the overlay
+    plan_rows consumes -- the wall, the iCloud mirror and the demo seed all go
+    through it so they can never resolve a day differently."""
+    amap = {
+        7: {"dates": {"2026-08-16", "2026-08-17"},
+            "backup_on": {"2026-08-16": 8, "2026-08-17": None}},
+        9: {"dates": {"2026-08-18"}, "backup_on": {"2026-08-18": 8}},
+    }
+    assert ch.away_view_on(amap, "2026-08-16") == {"ids": {7}, "backup": {7: 8}}
+    assert ch.away_view_on(amap, "2026-08-17") == {"ids": {7}, "backup": {7: None}}
+    assert ch.away_view_on(amap, "2026-08-18") == {"ids": {9}, "backup": {9: 8}}
+    # a day nobody is away is an empty overlay, not a crash
+    assert ch.away_view_on(amap, "2026-08-20") == {"ids": set(), "backup": {}}
+    assert ch.away_view_on({}, "2026-08-16") == {"ids": set(), "backup": {}}
+
+
+def test_biweekly_rotation_with_a_member_away_keeps_the_cycle():
+    """T1: a biweekly ('days' + week_interval=2) ROTATION, epoch Mon 2026-08-03,
+    Mon+Wed, order [1, 2]. Hand-walked occurrences and their normal assignees:
+      8/03 Mon -> 1   8/05 Wed -> 2      (week 0, on cycle)
+      8/10, 8/12                          (week 1, OFF cycle -> no rows)
+      8/17 Mon -> 1   8/19 Wed -> 2      (week 2, on cycle)
+      8/31 Mon -> 1                       (week 4, on cycle)
+    Person 1 is away on 8/17 only: that turn falls to whoever's home, off-cycle
+    days stay empty, and 8/31 comes back to 1 with no drift."""
+    people = [P(1, "A"), P(2, "B")]
+    chore = _biweekly_rot(9, [1, 2])
+    away = {"ids": {1}, "backup": {}}
+
+    def who(d, overlay=None):
+        rows = ch.plan_rows([chore], people, d, overlay)
+        return rows[0]["person_id"] if rows else None
+
+    assert who(dt.date(2026, 8, 17)) == 1                      # normal turn
+    assert who(dt.date(2026, 8, 17), away) == 2, "the turn falls to whoever's home"
+    # an OFF-cycle day stays empty whether or not anyone is away
+    assert who(dt.date(2026, 8, 10)) is None
+    assert who(dt.date(2026, 8, 10), away) is None
+    # back home: the sequence resumes exactly where it was, no drift
+    assert who(dt.date(2026, 8, 19)) == 2
+    assert who(dt.date(2026, 8, 31)) == 1
+
+
+def test_interval_rotation_with_a_member_away_keeps_the_cycle():
+    """T2: every-3-days rotation from Mon 2026-08-03, order [1, 2]:
+      8/03 -> 1, 8/06 -> 2, 8/09 -> 1, 8/12 -> 2, 8/15 -> 1.
+    Person 1 away on 8/09 hands that one turn to 2; the off-cycle days in
+    between never occur; 8/15 returns to 1 without drift."""
+    people = [P(1, "A"), P(2, "B")]
+    chore = _interval_chore(9, 3, order=[1, 2])
+    away = {"ids": {1}, "backup": {}}
+
+    def who(d, overlay=None):
+        rows = ch.plan_rows([chore], people, d, overlay)
+        return rows[0]["person_id"] if rows else None
+
+    assert who(dt.date(2026, 8, 9)) == 1
+    assert who(dt.date(2026, 8, 9), away) == 2
+    assert who(dt.date(2026, 8, 10), away) is None      # not an occurrence at all
+    assert who(dt.date(2026, 8, 12)) == 2
+    assert who(dt.date(2026, 8, 15)) == 1
+
+
+def test_fixed_interval_chore_is_covered_on_cycle_days_only():
+    """T3: a FIXED every-3-days chore owned by an away person with a backup is
+    covered (covering_for set) on its on-cycle days and simply doesn't occur in
+    between -- cover must never invent an occurrence."""
+    people = [P(1, "A"), P(2, "B")]
+    chore = _interval_chore(9, 3, owner=1)
+    away = {"ids": {1}, "backup": {1: 2}}
+    on_cycle = ch.plan_rows([chore], people, dt.date(2026, 8, 9), away)
+    assert len(on_cycle) == 1
+    assert on_cycle[0]["person_id"] == 2 and on_cycle[0]["covering_for"] == 1
+    assert ch.plan_rows([chore], people, dt.date(2026, 8, 10), away) == []
+    assert ch.plan_rows([chore], people, dt.date(2026, 8, 11), away) == []
+
+
+def test_away_boundary_last_day_away_next_day_normal():
+    """F6: the last inclusive away day reads 'away'; the day immediately after
+    end_date reads its normal state -- proven through week_strip."""
+    today = dt.date(2026, 8, 17)           # Sunday; window 8/11..8/17
+    occ = {d: {1} for d in ("2026-08-14", "2026-08-15", "2026-08-16",
+                            "2026-08-17")}
+    cbd = {"2026-08-14": {1}, "2026-08-17": {1}}
+    away = {"2026-08-15", "2026-08-16"}    # end_date inclusive on 8/16
+    ws = ch.week_strip(occ, cbd, today, away)
+    # window index: [8/11,8/12,8/13,8/14,8/15,8/16,8/17]
+    assert ws[5] == "away", "8/16 is the last inclusive away day"
+    assert ws[6] == "done", "8/17 (day after end_date) is a normal completed day"
+    # and the streak counts the post-away day plus across the gap
+    assert ch.streak(occ, cbd, today, away) == 2
 
 # --- new routine types: every-N-days + biweekly (P1) ----------------------
 

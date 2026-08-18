@@ -124,21 +124,69 @@ def assignee_id(chore: dict, d: dt.date,
     return order[occurrences_before(chore, d) % len(order)]
 
 
-def plan_rows(chores: list[dict], people: list[dict], d: dt.date) -> list[dict]:
+def away_view_on(amap: dict, d_iso: str) -> dict:
+    """Reshape one date out of a db.away_map() window into the ``{"ids",
+    "backup"}`` view ``plan_rows`` consumes. Pure — shared by the wall render
+    (app._away_view) and the iCloud chore mirror so both resolve the SAME
+    assignees for a day; a divergence there would mirror a reminder to a
+    different person than the wall shows (and credit the wrong streak on an
+    iOS check-off)."""
+    ids = {pid for pid, info in amap.items() if d_iso in info["dates"]}
+    return {"ids": ids,
+            "backup": {pid: amap[pid]["backup_on"].get(d_iso) for pid in ids}}
+
+
+def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
+             away: dict | None = None) -> list[dict]:
     """Live-resolve the day's assignments to flat rows — the exact shape the
     occurrence_log stores, so a frozen past day and a live day render the same
-    way. Chores with no resolvable assignee among ``people`` are omitted."""
+    way. Chores with no resolvable assignee among ``people`` are omitted.
+
+    ``away`` (optional) is ``{"ids": set[int], "backup": {pid: backup_pid |
+    None}}``. Away people fall out of rotations (their turns go to whoever's
+    home). A fixed chore assigned to an away person reassigns to their backup
+    if the backup is present (active and not away), tagging the row
+    ``covering_for=<away pid>``; with no available backup the chore pauses
+    for the day (row omitted) rather than crashing -- except a one-time
+    ('once') chore, which stays with its away owner because pausing its single
+    dated occurrence would destroy it. An owner who is no longer active is
+    dropped before any of that: inactive beats away-cover."""
+    away = away or {"ids": set(), "backup": {}}
+    away_ids = away.get("ids", set())
+    backup = away.get("backup", {})
     active_ids = {p["id"] for p in people}
+    present_ids = active_ids - away_ids          # people home & not away
     rows = []
     for chore in chores:
         if not occurs(chore, d):
             continue
-        aid = assignee_id(chore, d, active_ids)
-        if aid is None or aid not in active_ids:
+        # rotations skip away people (fall to whoever's home); fixed returns
+        # its fixed_person_id regardless.
+        aid = assignee_id(chore, d, present_ids)
+        if aid is None:
             continue
+        # An owner who is no longer in the household (deactivated or deleted)
+        # drops out BEFORE the away branch: inactive beats away-cover. With the
+        # order reversed, deactivating someone who still had an open away period
+        # parked their chores on the backup forever.
+        if aid not in active_ids:
+            continue
+        covering_for = None
+        if aid in away_ids:                      # only fixed chores reach here
+            b = backup.get(aid)
+            if b is not None and b in present_ids:
+                covering_for = aid
+                aid = b
+            elif chore["schedule_kind"] != "once":
+                continue                         # no available backup -> pause
+            # A 'once' chore is a DATED COMMITMENT: it occurs on exactly one day
+            # and never again, so pausing it destroys it outright. With nobody
+            # available to cover, it stays on the away owner's card (the wall
+            # renders it alongside their Away badge) instead of vanishing.
         rows.append({"chore_id": chore["id"], "person_id": aid,
                      "title": chore["title"], "icon": chore["icon"],
-                     "rot": 1 if chore["assign_kind"] == "rotation" else 0})
+                     "rot": 1 if chore["assign_kind"] == "rotation" else 0,
+                     "covering_for": covering_for})
     return rows
 
 
@@ -152,7 +200,8 @@ def day_plan(rows: list[dict], people: list[dict], completions) -> list[dict]:
     for person in people:
         pid = person["id"]
         prows = [{"id": r["chore_id"], "title": r["title"], "icon": r["icon"],
-                  "rot": bool(r["rot"]), "done": r["chore_id"] in completed}
+                  "rot": bool(r["rot"]), "done": r["chore_id"] in completed,
+                  "covering_for": r.get("covering_for")}
                  for r in rows if r["person_id"] == pid]
         plan.append({
             "person": {"id": pid, "name": person["name"], "color": person["color"]},
@@ -168,19 +217,28 @@ def _all_done(occ: set, completions_by_date: dict, d: dt.date) -> bool:
     return occ <= done
 
 
-def streak(occ_by_date: dict, completions_by_date: dict, today: dt.date) -> int:
+def streak(occ_by_date: dict, completions_by_date: dict, today: dt.date,
+           away_dates: set | None = None) -> int:
     """Consecutive days (walking back from today) where the person had >=1
     recorded chore and completed all of them. ``occ_by_date`` maps 'YYYY-MM-DD'
     -> set of chore_ids assigned to the person that day. Rest days (no entry)
     are skipped. An unfinished today is forgiven — it doesn't break the streak,
-    but also doesn't count. Capped at 365 calendar days."""
+    but also doesn't count. ``away_dates`` (optional set of 'YYYY-MM-DD') are
+    treated as rest days regardless of what was logged, so an away stretch
+    never breaks the streak. Capped at 365 calendar days."""
+    away = away_dates or set()
     d = today
     todays = occ_by_date.get(today.isoformat())
-    if todays and not _all_done(todays, completions_by_date, today):
+    if today.isoformat() not in away and todays \
+            and not _all_done(todays, completions_by_date, today):
         d = today - dt.timedelta(days=1)
     count = 0
     for _ in range(365):
-        occ = occ_by_date.get(d.isoformat())
+        ds = d.isoformat()
+        if ds in away:                 # away day == rest, regardless of log
+            d -= dt.timedelta(days=1)
+            continue
+        occ = occ_by_date.get(ds)
         if not occ:
             d -= dt.timedelta(days=1)
             continue
@@ -193,16 +251,21 @@ def streak(occ_by_date: dict, completions_by_date: dict, today: dt.date) -> int:
 
 
 def week_strip(occ_by_date: dict, completions_by_date: dict,
-               today: dt.date) -> list[str]:
-    """7 entries oldest->today, each 'done'|'partial'|'none'|'rest'."""
+               today: dt.date, away_dates: set | None = None) -> list[str]:
+    """7 entries oldest->today, each 'done'|'partial'|'none'|'rest'|'away'."""
+    away = away_dates or set()
     out = []
     for i in range(6, -1, -1):
         d = today - dt.timedelta(days=i)
-        occ = occ_by_date.get(d.isoformat())
+        ds = d.isoformat()
+        if ds in away:
+            out.append("away")
+            continue
+        occ = occ_by_date.get(ds)
         if not occ:
             out.append("rest")
             continue
-        done = completions_by_date.get(d.isoformat(), set())
+        done = completions_by_date.get(ds, set())
         n = len(occ & done)
         if n == len(occ):
             out.append("done")

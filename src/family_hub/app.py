@@ -538,10 +538,15 @@ def _reminder_lists(c) -> list:
             if col["comp_type"] == "VTODO" and col["enabled"]]
 
 
-def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
+def _integ_status(iid: str, caldav_status: dict, cal_status: dict,
+                  mirror_status: dict | None = None):
     """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
     or None for one with no sync (cameras/weather/climate/laundry). Drives the settings
-    menu's 'Reconnect iCloud' / warning affordance on auth-failure or error."""
+    menu's 'Reconnect iCloud' / warning affordance on auth-failure or error.
+
+    The chore mirror rides on the iCloud integration, so a failing mirror tick
+    shows as an error on that row — it used to fail forever with the row still
+    reading 'ok'."""
     # calendar_status is shared by Google + ICS and can't tell them apart, and
     # needs_auth is a Google-only concept — so only surface it on google_calendar
     # (ICS gets no status rather than mis-inheriting Google's auth state).
@@ -554,6 +559,8 @@ def _integ_status(iid: str, caldav_status: dict, cal_status: dict):
     err = src.get("error")
     if src.get("ok") is False and err not in (None, "", "not configured", "disabled"):
         return "error"
+    if iid == "icloud_caldav" and (mirror_status or {}).get("ok") is False:
+        return "error"
     return "ok"
 
 
@@ -564,6 +571,7 @@ def _integrations_state(c) -> dict:
     True for a not-yet-seeded one, so gating never hides an un-toggled source)."""
     caldav_status = fdb.kv_get(c, "caldav_status") or {}
     cal_status = fdb.kv_get(c, "calendar_status") or {}
+    mirror_status = fdb.kv_get(c, "chore_mirror_status") or {}
     lst = []
     enabled_ids = set()
     for integ in _available_only():
@@ -573,7 +581,8 @@ def _integrations_state(c) -> dict:
         entry = {"id": integ["id"], "kind": integ["kind"],
                  "name": integ["name"], "enabled": en,
                  "group": integ.get("group", "integration"),
-                 "status": _integ_status(integ["id"], caldav_status, cal_status)}
+                 "status": _integ_status(integ["id"], caldav_status, cal_status,
+                                         mirror_status)}
         if integ["id"] == "icloud_caldav":
             # the connected Apple ID (not a secret) so settings can show it; the
             # password is never included. readonly = 1-way (read-only) vs 2-way.
@@ -652,13 +661,41 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
     history becomes frozen. Skips the write when the frozen rows already match,
     so the wall's constant polling doesn't churn the DB."""
     def key(r):
-        return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"])
+        # covering_for is part of the identity of a frozen row: person_id
+        # already changes whenever the covering does, but including it keeps
+        # the comparison exact (and catches a covering change that somehow
+        # didn't move the assignee).
+        return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"],
+                r.get("covering_for"))
     if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
             sorted(key(r) for r in rows):
         fdb.replace_day_log(c, d_str, rows)
 
 
-def _people_day(c, d: dt.date) -> list[dict]:
+def _away_view(c, d: dt.date):
+    """Build the away overlay for date ``d``: who's away (and their backup for
+    fixed chores) plus the full per-person away-date map used for streak/week
+    rest-day math. Returns ``(amap, away_view, away_ok)`` where ``away_view`` is
+    the ``{"ids", "backup"}`` dict ``plan_rows`` consumes.
+
+    Fails soft, same spirit as the todos block in hub() / _links(): a bad
+    overlay build must not blank the whole wall over one broken row. On failure
+    it returns an empty overlay with ``away_ok=False`` so callers can surface a
+    degraded-state note instead of silently rendering an away person as present.
+    Shared by _people_day (the wall render) AND complete() (so a backup tapping
+    a covering chore resolves to the SAME assignee the wall showed)."""
+    d_str = d.isoformat()
+    window_from = (d - dt.timedelta(days=370)).isoformat()
+    try:
+        amap = fdb.away_map(c, window_from, d_str)
+        return amap, chlogic.away_view_on(amap, d_str), True
+    except Exception:
+        log.error("away overlay failed; serving with no away overlay",
+                  exc_info=True)
+        return {}, {"ids": set(), "backup": {}}, False
+
+
+def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
     """The per-person chore plan for date ``d`` — done flags, rotation tags,
     and streak/week computed AS OF that day. Shared by the hub home feed
     (d=today) and the full-screen chores day browser.
@@ -672,10 +709,15 @@ def _people_day(c, d: dt.date) -> list[dict]:
     today = _today()
     d_str = d.isoformat()
     people = fdb.list_people(c)
+
+    window_from = (d - dt.timedelta(days=370)).isoformat()
+    amap, away_view, away_ok = _away_view(c, d)
+    away_today = away_view["ids"]
+
     if d < today:
         rows = fdb.day_log(c, d_str)
     else:
-        rows = chlogic.plan_rows(fdb.list_chores(c), people, d)
+        rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
         if d == today:
             _freeze_day(c, d_str, rows)
 
@@ -683,9 +725,23 @@ def _people_day(c, d: dt.date) -> list[dict]:
                      for r in fdb.completions_between(c, d_str, d_str)}
     plan = chlogic.day_plan(rows, people, completed_ids)
 
-    window_from = (d - dt.timedelta(days=370)).isoformat()
     logs = fdb.logs_between(c, window_from, d_str)
     history = fdb.completions_between(c, window_from, d_str)
+    # Who OWNED each (day, chore) — straight from the frozen log, which is the
+    # record of what the wall actually asked of whom. The streak input below is
+    # keyed off this, NOT off completions.person_id: a completion means "that
+    # chore got done that day", and today's owner can legitimately change after
+    # it was tapped (the away overlay re-freezes today whenever someone leaves
+    # or comes back mid-day). Keying the streak off the tapper instead broke the
+    # returning person's day — the card drew the tick while the streak counted
+    # the day unfinished — and the mirror-image case broke the backup's. The
+    # completion rows themselves are never rewritten, so the ledger still says
+    # who physically did it, and already-written histories read correctly.
+    owner = {(r["date"], r["chore_id"]): r["person_id"] for r in logs}
+    if d > today:
+        # future days aren't logged; their live plan is the owner of record
+        for r in rows:
+            owner[(d_str, r["chore_id"])] = r["person_id"]
     for entry in plan:
         pid = entry["person"]["id"]
         occ: dict[str, set] = {}
@@ -700,11 +756,15 @@ def _people_day(c, d: dt.date) -> list[dict]:
                 occ[d_str] = live
         cbd: dict[str, set] = {}
         for r in history:
-            if r["person_id"] == pid:
+            # a day with no log row at all (server was down, pre-install) falls
+            # back to the completion's own person_id rather than vanishing
+            if owner.get((r["date"], r["chore_id"]), r["person_id"]) == pid:
                 cbd.setdefault(r["date"], set()).add(r["chore_id"])
-        entry["streak"] = chlogic.streak(occ, cbd, d)
-        entry["week"] = chlogic.week_strip(occ, cbd, d)
-    return plan
+        away_dates = amap.get(pid, {}).get("dates", set())
+        entry["away"] = pid in away_today
+        entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
+        entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
+    return plan, away_ok
 
 
 def _backup_status(last_success, now, stale_s):
@@ -764,6 +824,7 @@ def hub():
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
     reminders_block = (remlogic.group(_visible_reminders(c), today)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
+    people, away_ok = _people_day(c, today)
     # Backup health for the header badge — fails-soft like the todos block above:
     # a read error must not 500 the whole wall over a status indicator.
     try:
@@ -773,7 +834,11 @@ def hub():
         backup_block = _backup_status(None, dt.datetime.now(dt.timezone.utc), BACKUP_STALE_S)
     return {
         "date": today.isoformat(),
-        "people": _people_day(c, today),
+        "people": people,
+        # Mirrors todos_ok: False when the away overlay build threw and the wall
+        # is rendering with nobody marked away, so it can show a small note
+        # instead of silently presenting a genuinely-away person as present.
+        "away_ok": away_ok,
         "todos": todos_block,
         "todos_ok": todos_ok,
         "reminders": reminders_block,
@@ -813,7 +878,11 @@ def chores_day(date: str):
     if abs((d - _today()).days) > 366:
         raise HTTPException(422, "date out of range")
     c = _db()
-    return {"date": d.isoformat(), "people": _people_day(c, d)}
+    people, away_ok = _people_day(c, d)
+    # Same degraded-state flag the hub payload carries: without it the day
+    # browser showed an away person as present, with a full chore list and no
+    # note, whenever the overlay build failed.
+    return {"date": d.isoformat(), "people": people, "away_ok": away_ok}
 
 
 # --- chores completion ----------------------------------------------------
@@ -850,28 +919,74 @@ def complete(chore_id: int, body: CompleteBody | None = None):
         if not chlogic.occurs(chore, d):
             raise HTTPException(422, "chore does not occur on that date")
         if person_id is None:
-            active_ids = {p["id"] for p in fdb.list_people(c)}
-            person_id = chlogic.assignee_id(chore, d, active_ids)
-        if person_id is None:
-            raise HTTPException(422, "no resolvable assignee")
+            # Resolve the assignee the SAME way the wall did (plan_rows +
+            # _people_day), applying the away overlay -- otherwise a backup
+            # tapping a covering FIXED chore (client sends no person_id) would
+            # be credited to the away owner via assignee_id's fixed_person_id,
+            # silently breaking the backup's streak once the day ages. The row
+            # plan_rows produces already carries the backup as person_id.
+            _, away_view, away_ok = _away_view(c, d)
+            if not away_ok:
+                # The overlay build failed, so we cannot tell who owns this
+                # chore today. Reading the wall is allowed to degrade (it shows
+                # a note); WRITING a completion under the wrong person is not --
+                # it would credit the away owner and break the real person's
+                # streak. Refuse and let the tap be retried. A client that
+                # supplies person_id explicitly is unaffected.
+                raise HTTPException(503, "away status unavailable; retry")
+            rows = chlogic.plan_rows(fdb.list_chores(c), fdb.list_people(c),
+                                     d, away_view)
+            row = next((r for r in rows if r["chore_id"] == chore_id), None)
+            if row is None:
+                # No resolvable assignee (e.g. away owner with no available
+                # backup -> the chore paused for the day).
+                raise HTTPException(422, "no resolvable assignee")
+            person_id = row["person_id"]
     # Validate the (possibly client-supplied) person_id against a real person
     # before writing, so a malformed request can't record an invisible orphan
     # completion. _person_row raises 404 for an unknown id. (Fresh DBs also
     # enforce this via a FK; this gives a clean error on any DB.)
     _person_row(c, person_id)
     fdb.set_completion(c, chore_id, date_str, person_id)
-    # Reflect onto the mirrored iCloud reminder (no-op if not mirrored).
-    chore_mirror.push_completion(c, chore_id, date_str, True)
+    # Reflect onto the mirrored iCloud reminder (no-op if not mirrored, or if
+    # the ledger row is stale — see push_completion's expected_person_id).
+    chore_mirror.push_completion(c, chore_id, date_str, True,
+                                 expected_person_id=person_id)
     return {"ok": True}
+
+
+def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
+    """Who the wall currently shows this occurrence for — the frozen log for a
+    past day, else the live plan under the away overlay. None when it can't be
+    resolved (no such occurrence, a broken overlay); callers treat that as "no
+    expectation" rather than failing. Never raises."""
+    try:
+        d = dt.date.fromisoformat(date_str)
+        if d < _today():
+            row = fdb.log_row(c, chore_id, date_str)
+            return row["person_id"] if row else None
+        _, away_view, _ = _away_view(c, d)
+        rows = chlogic.plan_rows(fdb.list_chores(c), fdb.list_people(c), d,
+                                 away_view)
+        row = next((r for r in rows if r["chore_id"] == chore_id), None)
+        return row["person_id"] if row else None
+    except Exception:
+        log.warning("could not resolve the owner of chore %s on %s",
+                    chore_id, date_str, exc_info=True)
+        return None
 
 
 @app.delete("/api/chores/{chore_id}/complete")
 def uncomplete(chore_id: int, date: str | None = None):
     c = _db()
     date_str = date or _today().isoformat()
+    # Resolve the current owner BEFORE clearing, so the reopen can't be pushed
+    # onto a mirror ledger row that still names the other person (M3).
+    owner = _resolved_owner(c, chore_id, date_str)
     fdb.clear_completion(c, chore_id, date_str)
     # Reopen the mirrored iCloud reminder too (no-op if not mirrored).
-    chore_mirror.push_completion(c, chore_id, date_str, False)
+    chore_mirror.push_completion(c, chore_id, date_str, False,
+                                 expected_person_id=owner)
     return {"ok": True}
 
 
@@ -1200,6 +1315,26 @@ class PersonPatch(BaseModel):
     reminder_list_id: str | None = None
 
 
+class AwayIn(BaseModel):
+    person_id: int
+    start_date: str | None = None
+    backup_person_id: int | None = None
+
+
+class AwayPatch(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+    backup_person_id: int | None = None
+
+
+class AwayEveryoneIn(BaseModel):
+    start_date: str | None = None
+
+
+class AwayBackIn(BaseModel):
+    end_date: str | None = None
+
+
 class ChoreIn(BaseModel):
     title: str
     icon: str = ""
@@ -1344,11 +1479,16 @@ def admin_state():
     c = _db()
     return {"people": fdb.list_people(c, include_inactive=True),
             "chores": fdb.list_chores(c, include_inactive=True),
+            "away_periods": fdb.list_away_periods(c),
             # iCloud VTODO lists a person's chores can mirror into (P2 picker);
             # empty until iCloud is connected and its reminder lists are synced.
             "reminder_lists": [{"id": col["id"], "name": col["display_name"]}
                                for col in fdb.list_caldav_collections(c)
-                               if col["comp_type"] == "VTODO"]}
+                               if col["comp_type"] == "VTODO"],
+            # Last chore-mirror tick: {ok, at, created, moved, updated, deleted}
+            # ({} before the first two-way sync). A mirror that dies every tick
+            # used to be completely invisible.
+            "chore_mirror_status": fdb.kv_get(c, "chore_mirror_status") or {}}
 
 
 @app.post("/api/admin/people")
@@ -1462,6 +1602,143 @@ def admin_delete_chore(cid: int):
     c = _db()
     _chore_row(c, cid)  # raises 404 if it doesn't exist (existing helper behavior)
     fdb.delete_chore(c, cid)
+    return {"ok": True}
+
+
+def _valid_date(s: str) -> str:
+    try:
+        return dt.date.fromisoformat(s).isoformat()
+    except ValueError:
+        raise HTTPException(422, "bad date")
+
+
+def _away_rows(c):
+    people = {p["id"]: p["name"]
+              for p in fdb.list_people(c, include_inactive=True)}
+    out = []
+    for r in fdb.list_away_periods(c):
+        row = dict(r)
+        row["person_name"] = people.get(r["person_id"])
+        row["backup_name"] = people.get(r["backup_person_id"])
+        out.append(row)
+    return out
+
+
+# An explicit JSON null for start_date (a NOT NULL column) is a bad request,
+# not a 500 from the DB write — same rule as the person/chore patches.
+# end_date and backup_person_id are legitimately nullable (clearing them).
+_AWAY_NONNULL_PATCH = {"start_date"}
+
+
+def _validate_backup(c, backup_id: int, away_person_id: int,
+                     ignore_period_id: int | None = None) -> None:
+    """A backup must be someone who can actually do the chores: a real person,
+    not the away person, ACTIVE, and not themselves away. Picking someone who
+    is inactive or away is accepted by the DB but then silently pauses every
+    covered chore at resolve time — the family sees the chore vanish with no
+    explanation. Reject it at the source instead. (A backup who goes away
+    LATER is still handled by that resolve-time pause.)"""
+    if backup_id == away_person_id:
+        raise HTTPException(422, "backup cannot be the same person")
+    row = _person_row(c, backup_id)                 # 404 if unknown
+    if not row["active"]:
+        raise HTTPException(422, "backup must be an active person")
+    if any(r["person_id"] == backup_id and r["id"] != ignore_period_id
+           for r in fdb.list_away_periods(c, include_closed=False)):
+        raise HTTPException(422, "backup is away themselves")
+
+
+@app.get("/api/admin/away")
+def admin_away_list():
+    return {"away_periods": _away_rows(_db())}
+
+
+@app.post("/api/admin/away")
+def admin_away_open(a: AwayIn):
+    c = _db()
+    _person_row(c, a.person_id)                     # 404 if unknown
+    if a.backup_person_id is not None:
+        _validate_backup(c, a.backup_person_id, a.person_id)
+    # One open period per person: a second "going away" while the first is still
+    # open would create overlapping rows for the same person (the wall would
+    # resolve them nondeterministically without the away_map ORDER BY, and the
+    # UI has no way to show two). Mirror /everyone's skip behavior with a clear
+    # 409 for the single-person API.
+    if any(r["person_id"] == a.person_id
+           for r in fdb.list_away_periods(c, include_closed=False)):
+        raise HTTPException(409, "person already has an open away period")
+    start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
+    pid = fdb.add_away_period(c, a.person_id, start, None, a.backup_person_id)
+    return next(r for r in _away_rows(c) if r["id"] == pid)
+
+
+@app.post("/api/admin/away/everyone")
+def admin_away_everyone(a: AwayEveryoneIn):
+    c = _db()
+    start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
+    open_pids = {r["person_id"] for r in fdb.list_away_periods(c,
+                 include_closed=False)}
+    created = []
+    for p in fdb.list_people(c):                    # active only
+        if p["id"] in open_pids:
+            continue
+        created.append(fdb.add_away_period(c, p["id"], start, None, None))
+    return {"created": created}
+
+
+@app.patch("/api/admin/away/{pid}")
+def admin_away_patch(pid: int, a: AwayPatch):
+    c = _db()
+    row = fdb.get_away_period(c, pid)
+    if row is None:
+        raise HTTPException(404, "unknown away period")
+    fields = a.model_dump(exclude_unset=True)
+    _reject_null_nonnullable(fields, _AWAY_NONNULL_PATCH)
+    for k in ("start_date", "end_date"):
+        if fields.get(k) is not None:
+            fields[k] = _valid_date(fields[k])
+    # A backup change must pass the same checks as opening: real person, not the
+    # away person themselves, active and not away. (None clears the backup and
+    # is always allowed.) This row's own period is excluded from the away check
+    # — it is the away person's, never the backup's.
+    if fields.get("backup_person_id") is not None:
+        _validate_backup(c, fields["backup_person_id"], row["person_id"],
+                         ignore_period_id=pid)
+    # The effective end_date must not precede the effective start_date, else
+    # away_map silently voids the whole period (its a>b skip). "Effective"
+    # covers both directions: an incoming end_date earlier than the (possibly
+    # also-incoming) start, AND an incoming start_date pushed later than the
+    # row's already-stored end_date when the patch doesn't re-supply end_date.
+    effective_start = fields.get("start_date", row["start_date"])
+    effective_end = fields.get("end_date", row["end_date"])
+    if effective_end is not None and effective_start is not None \
+            and effective_end < effective_start:
+        raise HTTPException(422, "end_date must not be before start_date")
+    fdb.update_away_period(c, pid, **fields)
+    return {"ok": True}
+
+
+@app.post("/api/admin/away/{pid}/back")
+def admin_away_back(pid: int, a: AwayBackIn | None = None):
+    c = _db()
+    row = fdb.get_away_period(c, pid)
+    if row is None:
+        raise HTTPException(404, "unknown away period")
+    end = (_valid_date(a.end_date) if a and a.end_date
+           else (_today() - dt.timedelta(days=1)).isoformat())
+    # Guard the fast "Going away" (start=today) then immediate "I'm back"
+    # (end defaults to yesterday) double-tap: end < start would silently void
+    # the period via away_map's a>b skip.
+    if end < row["start_date"]:
+        raise HTTPException(422, "end_date must not be before start_date")
+    fdb.close_away_period(c, pid, end)
+    return {"ok": True}
+
+
+@app.delete("/api/admin/away/{pid}")
+def admin_away_delete(pid: int):
+    if not fdb.delete_away_period(_db(), pid):
+        raise HTTPException(404, "unknown away period")
     return {"ok": True}
 
 

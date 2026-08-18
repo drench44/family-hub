@@ -8,9 +8,12 @@ decoded on read; `kv` values are JSON-encoded blobs.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+
+log = logging.getLogger("family_hub.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people(
@@ -40,6 +43,7 @@ CREATE TABLE IF NOT EXISTS occurrence_log(
   title TEXT NOT NULL,
   icon TEXT NOT NULL DEFAULT '',
   rot INTEGER NOT NULL DEFAULT 0,
+  covering_for INTEGER,   -- the away person this row is standing in for (P5)
   PRIMARY KEY(date, chore_id));
 CREATE TABLE IF NOT EXISTS events(
   id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
@@ -118,6 +122,17 @@ CREATE TABLE IF NOT EXISTS caldav_collections(
   ctag TEXT,
   sync_token TEXT,
   last_seen_at TEXT);
+-- Away/pause mode: a pure additive overlay on top of the frozen occurrence_log.
+-- One row per away span for a person (open-ended while end_date is NULL, closed
+-- once they're back). Never rewrites/deletes occurrence_log rows -- the plan
+-- builder consults this table at render time via away_map() instead.
+CREATE TABLE IF NOT EXISTS away_periods(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_id INTEGER NOT NULL REFERENCES people(id),
+  start_date TEXT NOT NULL,
+  end_date TEXT,
+  backup_person_id INTEGER,
+  created_at TEXT NOT NULL);
 -- Chore mirror ledger (P3): one row per (chore occurrence) mirrored into a
 -- person's iCloud list, mapping it to the cal_objects row + stable UID so the
 -- reconcile can create/move/prune and two-way completion can map an iCloud
@@ -238,6 +253,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     ppl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(people)")}
     if "reminder_list_id" not in ppl_cols:
         conn.execute("ALTER TABLE people ADD COLUMN reminder_list_id TEXT")
+        conn.commit()
+    # 2026-08-18: occurrence_log gained covering_for — which away person a row
+    # is standing in for. Without it a frozen past day lost the "covering for
+    # <name>" explanation the moment the away period ended. Nullable, so a plain
+    # additive ALTER is enough; existing rows stay exactly as they were frozen
+    # (NULL = "no covering info recorded"), never rewritten.
+    occ_cols = {r["name"]
+                for r in conn.execute("PRAGMA table_info(occurrence_log)")}
+    if "covering_for" not in occ_cols:
+        conn.execute("ALTER TABLE occurrence_log ADD COLUMN covering_for INTEGER")
         conn.commit()
 
 
@@ -494,8 +519,108 @@ def delete_person(conn, pid: int) -> bool:
         conn.execute("UPDATE chores SET fixed_person_id = NULL "
                      "WHERE fixed_person_id = ?", (pid,))
         conn.execute("DELETE FROM completions WHERE person_id = ?", (pid,))
+        conn.execute("DELETE FROM away_periods WHERE person_id = ?", (pid,))
+        conn.execute("UPDATE away_periods SET backup_person_id = NULL "
+                     "WHERE backup_person_id = ?", (pid,))
         conn.execute("DELETE FROM people WHERE id = ?", (pid,))
         return True
+
+
+# --- away periods -----------------------------------------------------------
+# Additive overlay: rows here mark a person away for a date span, with an
+# optional backup assignee. Never touches occurrence_log (frozen history) --
+# consumers fold this in at render/plan time via away_map().
+
+_AWAY_FIELDS = {"start_date", "end_date", "backup_person_id"}
+
+
+def add_away_period(conn, person_id: int, start_date: str,
+                    end_date: str | None = None,
+                    backup_person_id: int | None = None) -> int:
+    cur = conn.execute(
+        "INSERT INTO away_periods(person_id, start_date, end_date, "
+        "backup_person_id, created_at) VALUES(?, ?, ?, ?, ?)",
+        (person_id, start_date, end_date, backup_person_id, _now_iso()))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def get_away_period(conn, period_id: int) -> dict | None:
+    r = conn.execute("SELECT * FROM away_periods WHERE id = ?",
+                     (period_id,)).fetchone()
+    return dict(r) if r is not None else None
+
+
+def close_away_period(conn, period_id: int, end_date: str) -> bool:
+    cur = conn.execute("UPDATE away_periods SET end_date = ? WHERE id = ?",
+                       (end_date, period_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def update_away_period(conn, period_id: int, **fields) -> bool:
+    cols = {k: v for k, v in fields.items() if k in _AWAY_FIELDS}
+    if not cols:
+        return get_away_period(conn, period_id) is not None
+    assignments = ", ".join(f"{k} = ?" for k in cols)
+    cur = conn.execute(f"UPDATE away_periods SET {assignments} WHERE id = ?",
+                       (*cols.values(), period_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_away_period(conn, period_id: int) -> bool:
+    with conn:
+        if conn.execute("SELECT 1 FROM away_periods WHERE id = ?",
+                        (period_id,)).fetchone() is None:
+            return False
+        conn.execute("DELETE FROM away_periods WHERE id = ?", (period_id,))
+        return True
+
+
+def list_away_periods(conn, include_closed: bool = True) -> list[dict]:
+    sql = "SELECT * FROM away_periods"
+    if not include_closed:
+        sql += " WHERE end_date IS NULL"
+    sql += " ORDER BY start_date, id"
+    return [dict(r) for r in conn.execute(sql)]
+
+
+def away_map(conn, from_date: str, to_date: str) -> dict[int, dict]:
+    """Per person within [from_date, to_date]: the set of away date strings and
+    the effective backup person id for each of those dates. Interval expansion
+    is clipped to the window; an open-ended period (end_date NULL) is treated
+    as running through to_date."""
+    lo = date.fromisoformat(from_date)
+    hi = date.fromisoformat(to_date)
+    out: dict[int, dict] = {}
+    # ORDER BY makes overlapping rows resolve deterministically: rows are folded
+    # in start_date/id order, so a later row wins the backup_on assignment for
+    # any date the two share.
+    for r in conn.execute(
+            "SELECT * FROM away_periods ORDER BY start_date, id"):
+        # Fault isolation: one corrupt date string (bad row) must not disable
+        # away for the whole household -- skip only that row, keep the rest.
+        try:
+            start = date.fromisoformat(r["start_date"])
+            end = date.fromisoformat(r["end_date"]) if r["end_date"] else hi
+        except (ValueError, TypeError):
+            log.warning("away_map: skipping period id=%s person_id=%s with "
+                        "unparseable dates (start=%r end=%r)",
+                        r["id"], r["person_id"], r["start_date"], r["end_date"])
+            continue
+        a = max(start, lo)
+        b = min(end, hi)
+        if a > b:
+            continue
+        info = out.setdefault(r["person_id"], {"dates": set(), "backup_on": {}})
+        d = a
+        while d <= b:
+            ds = d.isoformat()
+            info["dates"].add(ds)
+            info["backup_on"][ds] = r["backup_person_id"]
+            d += timedelta(days=1)
+    return out
 
 
 # --- chores ---------------------------------------------------------------
@@ -571,9 +696,9 @@ def replace_day_log(conn, date: str, rows: list[dict]) -> None:
         conn.execute("DELETE FROM occurrence_log WHERE date = ?", (date,))
         conn.executemany(
             "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-            "icon, rot) VALUES(?, ?, ?, ?, ?, ?)",
+            "icon, rot, covering_for) VALUES(?, ?, ?, ?, ?, ?, ?)",
             [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
-              r["rot"]) for r in rows])
+              r["rot"], r.get("covering_for")) for r in rows])
 
 
 def day_log(conn, date: str) -> list[dict]:
@@ -608,9 +733,9 @@ def backfill_occurrence_log(conn, day_rows: list, done_flag_key: str) -> None:
         for date, rows in day_rows:
             conn.executemany(
                 "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-                "icon, rot) VALUES(?, ?, ?, ?, ?, ?)",
+                "icon, rot, covering_for) VALUES(?, ?, ?, ?, ?, ?, ?)",
                 [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
-                  r["rot"]) for r in rows])
+                  r["rot"], r.get("covering_for")) for r in rows])
         conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
                      (done_flag_key, json.dumps(True)))
 
@@ -938,14 +1063,31 @@ def queue_cal_object_update(conn, oid: str, raw_ics: str, summary: str,
 
 def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
     """Insert a wall-created object as PENDING_CREATE (no href/etag yet — the push
-    assigns them)."""
+    assigns them).
+
+    If a row for this id ALREADY exists with a server href, the object exists in
+    iCloud and only its body is being re-desired (the chore mirror re-creating an
+    occurrence whose ledger row was pruned). Keep the identity it earned —
+    href/etag/base_etag/sequence — and queue it as PENDING_UPDATE, which the flush
+    pushes as a conditional PUT to that same resource. Nulling them instead made
+    the push a blind create: a duplicate object in the family's Reminders list,
+    and a later delete that skipped the server because the row had no href."""
+    prior = conn.execute(
+        "SELECT href, etag, base_etag, sequence FROM cal_objects WHERE id = ?",
+        (obj["id"],)).fetchone()
+    href = prior["href"] if prior else None
+    etag = prior["etag"] if prior else None
+    base_etag = prior["base_etag"] if prior else None
+    sequence = int(prior["sequence"] or 0) if prior else 0
+    state = "PENDING_UPDATE" if href else "PENDING_CREATE"
     conn.execute(
         "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "
         "href, etag, base_etag, summary, raw_ics, sequence, sync_state, "
-        "local_modified_at) VALUES(?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 0, "
-        "'PENDING_CREATE', ?)",
+        "local_modified_at, sync_attempts, last_sync_error) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)",
         (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
-         obj.get("summary", ""), obj.get("raw_ics"), now_iso))
+         href, etag, base_etag, obj.get("summary", ""), obj.get("raw_ics"),
+         sequence, state, now_iso))
     conn.commit()
 
 
