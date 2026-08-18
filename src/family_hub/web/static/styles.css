@@ -386,6 +386,12 @@ body {
    each cloud keeps the flatter base real cumulus have. All puffs draw in
    currentColor so heavy weather can grey a whole cloud with one color.
    Negative delays de-sync the drift so the scene never starts aligned. */
+/* container-type makes .sky a query container so the drift keyframe below can
+   size its exit to the ACTUAL sky width (100cqw) — the wall column is 338px but
+   the mobile/full-screen weather sky is far wider, and a fixed-px exit that
+   cleared the narrow column left the cloud mid-sky on the wide one, snapping it
+   back visibly (the "crazy reset"). */
+.sky { container-type: inline-size; }
 .sky-cloud { position: absolute; z-index: 3; height: 38px; color: rgba(255,255,255,.92);
   filter: blur(3px);
   background-image:
@@ -399,7 +405,19 @@ body {
   animation: drift 150s linear infinite; animation-delay: -95s; }
 .sky-cloud.c3 { width: 100px; top: 8px; left: 0; opacity: .85;
   animation: drift 130s linear infinite; animation-delay: -60s; }
-@keyframes drift { from { transform: translateX(-160px); } to { transform: translateX(420px); } }
+/* Drift from fully off the left (-160px clears the widest 120px cloud) to fully
+   off the right (100cqw = the sky's own width, +20px margin) so the wrap-around
+   reset always happens off-screen at ANY sky width — desktop column or wide
+   mobile/full-screen. Do not remove the 100cqw exit: a fixed px re-breaks the
+   wide sky. The first `to` transform is a fallback for engines without
+   container-query units (pre-2022 Chrome/Safari) — they'd otherwise drop the
+   invalid calc() and drift only to translateX(0), leaving the clouds barely
+   on-screen; modern engines use the cqw line that overrides it. Guarded by
+   test_cloud_drift_exit_is_container_relative. */
+@keyframes drift {
+  from { transform: translateX(-160px); }
+  to { transform: translateX(520px); transform: translateX(calc(100cqw + 20px)); }
+}
 /* heavier weather greys the clouds down; night dims them to moonlit blue-grey
    (after the condition colors, so a night rain-cloud is dim too) */
 .cn-rain  .sky-cloud { color: rgba(199,208,222,.9); }
