@@ -153,9 +153,20 @@ def main(argv: list[str] | None = None) -> int:
         # reject it. Skipping the hook here is intentional, not a bypass.
         _git("commit", "--no-verify", "-m", f"release: v{new}")
     except subprocess.CalledProcessError as e:
-        subprocess.run(["git", "checkout", "HEAD", "--", *rel_paths], cwd=REPO_ROOT)
-        print(f"release: commit failed ({e.stderr or e}); restored files to "
-              "HEAD, nothing committed", file=sys.stderr)
+        # Restore the written-but-uncommitted files to HEAD. Check that the
+        # restore actually SUCCEEDED — if it didn't, saying "restored, nothing
+        # committed" is a false clean-tree claim the operator would trust and
+        # re-run release on top of, double-bumping the version.
+        restore = subprocess.run(["git", "checkout", "HEAD", "--", *rel_paths],
+                                 cwd=REPO_ROOT, capture_output=True, text=True)
+        if restore.returncode == 0:
+            print(f"release: commit failed ({e.stderr or e}); restored files to "
+                  "HEAD, nothing committed", file=sys.stderr)
+        else:
+            print(f"release: commit failed ({e.stderr or e}) AND the restore also "
+                  f"failed ({restore.stderr.strip() or restore.returncode}) — the "
+                  "release files may be left staged/modified; check `git status` "
+                  "and reset before re-running", file=sys.stderr)
         return 1
 
     # Phase 2: the commit is REAL now. If tagging fails, do NOT restore (there's

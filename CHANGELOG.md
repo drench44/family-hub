@@ -10,6 +10,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- `scripts/release.py` no longer prints "restored files … nothing committed" when
+  the post-commit-failure `git checkout` restore *also* fails — that false
+  clean-tree claim could lead to re-running release on a partially-written tree.
+  It now reports the double failure and points at `git status`.
+
 ## [1.1.0] — 2026-08-17
 
 ### Added
