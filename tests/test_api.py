@@ -2494,3 +2494,52 @@ def test_tiles_laundry_route_end_to_end_real_tile(client, monkeypatch):
     cached = ftiles._laundry_cache["http://ha:8123"][1]
     assert "last_done" not in cached["machines"][0]
     ftiles.reset_caches()
+
+
+# --- backup-health badge: pure _backup_status + /api/hub `backup` block ---
+
+_BT0 = dt.datetime(2026, 8, 18, 12, 0, tzinfo=dt.timezone.utc)
+
+
+def test_backup_status_unknown(app_mod):
+    assert app_mod._backup_status(None, _BT0, 129600) == {
+        "known": False, "last_success": None, "age_s": None,
+        "stale": False, "threshold_s": 129600}
+
+
+def test_backup_status_fresh(app_mod):
+    s = app_mod._backup_status(_BT0 - dt.timedelta(hours=1), _BT0, 129600)
+    assert s["known"] is True and s["age_s"] == 3600 and s["stale"] is False
+
+
+def test_backup_status_stale(app_mod):
+    s = app_mod._backup_status(_BT0 - dt.timedelta(hours=40), _BT0, 129600)  # 144000 > 129600
+    assert s["stale"] is True and s["age_s"] == 144000
+
+
+def test_backup_status_boundary(app_mod):
+    assert app_mod._backup_status(_BT0 - dt.timedelta(seconds=129600), _BT0, 129600)["stale"] is False
+    assert app_mod._backup_status(_BT0 - dt.timedelta(seconds=129601), _BT0, 129600)["stale"] is True
+
+
+def test_hub_carries_backup_block(client):
+    b = client.get("/api/hub").json()["backup"]
+    assert set(b) >= {"known", "stale", "age_s", "last_success", "threshold_s"}
+    assert b["known"] is False   # no heartbeat yet on a fresh db -> muted, not a false alarm
+
+
+def test_build_backup_reads_kv_heartbeat(app_mod, tmp_path):
+    conn = fdb.connect(str(tmp_path / "hb.db"))
+    fdb.ensure_schema(conn)
+    at = _BT0 - dt.timedelta(hours=2)
+    fdb.kv_set(conn, "backup_status",
+               {"at": at.isoformat(), "snapshot": "hub-x.db", "bytes": 9000})
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is True and s["age_s"] == 7200 and s["stale"] is False
+
+
+def test_build_backup_unknown_on_empty_kv(app_mod, tmp_path):
+    conn = fdb.connect(str(tmp_path / "empty.db"))
+    fdb.ensure_schema(conn)
+    s = app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+    assert s["known"] is False and s["stale"] is False

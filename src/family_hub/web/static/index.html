@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Family Hub</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=81">
+  <link rel="stylesheet" href="styles.css?v=82">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
   <script src="theme.js?v=7"></script>
@@ -16,6 +16,7 @@
       <span class="breath-dot"></span>
       <span class="wordmark">Family Hub</span>
       <span class="conn" id="conn-word">live</span>
+      <span class="backup-badge warn" id="backup-badge" role="status" aria-live="polite" hidden></span>
       <span class="spacer"></span>
       <span class="clock"><span class="clock-date" id="clock-date"></span><span class="num" id="clock-time"></span></span>
       <!-- Refresh: reload the wall from the touchscreen (picks up a new deploy
@@ -170,10 +171,10 @@
     </div>
   </div>
 
-  <script src="common.js?v=43"></script>
+  <script src="common.js?v=44"></script>
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
   <script src="osk.js?v=1"></script>
-  <script src="hub.js?v=81"></script>
+  <script src="hub.js?v=82"></script>
 </body>
 </html>

@@ -2664,6 +2664,7 @@ async function poll() {
     renderPeople(data);
     renderTodoSlot(data);
     renderIntegrations(data);
+    renderBackup(data);
     pruneEvIndex();
     document.body.dataset.conn = 'up';
     document.getElementById('conn-word').textContent = 'live';
@@ -2671,6 +2672,19 @@ async function poll() {
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
   }
+}
+
+// Header backup badge: absent when healthy/unknown, amber when the backup has
+// gone stale. Driven by the `backup` block folded into /api/hub.
+function renderBackup(data) {
+  const el = document.getElementById('backup-badge');
+  if (!el) return;
+  const b = backupBadge(data && data.backup);
+  if (!b.show) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
+  el.hidden = false;
+  el.className = `backup-badge ${b.level}`;
+  el.textContent = b.text;
+  el.title = b.title;
 }
 
 // The 60s interval must not STACK polls: with the fetch timeout above, a poll to

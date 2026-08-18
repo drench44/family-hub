@@ -238,6 +238,18 @@ body {
   color: var(--good);
 }
 [data-conn="down"] .conn { color: var(--crit); }
+/* Backup-health badge: absent (hidden attr) when healthy or still unknown;
+   amber pill once a known backup goes stale. */
+.backup-badge {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+}
+.backup-badge[hidden] { display: none; }
+.backup-badge.warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+}
 .spacer { flex: 1; }
 .clock {
   font-family: var(--mono); font-size: 15px; color: var(--ink);

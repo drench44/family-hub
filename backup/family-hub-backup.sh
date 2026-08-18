@@ -141,6 +141,25 @@ prune "$OUT/monthly" "$MONTHLY_KEEP"
 
 echo "family-hub-backup OK: hub-$HOURLY.db ($BYTES bytes) $(date -u +%FT%TZ)"
 
+# Record a heartbeat in the live hub.db so the dashboard header can show backup
+# health -- a STALE heartbeat also catches "backups stopped running at all"
+# (timer disabled, box asleep), which nothing else surfaces. Best-effort and
+# SILENT: a good, verified snapshot must never fail (or emit noise) because this
+# telemetry write hiccuped, and the source db may legitimately have no kv table.
+# python3 (already required above) keeps it dependency-free (no sqlite3 CLI).
+python3 - "$DB" "hub-$HOURLY.db" "$BYTES" <<'PY' 2>/dev/null || true
+import sqlite3, sys, json, datetime as dt
+try:
+    db, name, nbytes = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    c = sqlite3.connect(db, timeout=5)
+    c.execute("INSERT OR REPLACE INTO kv(key, value) VALUES('backup_status', ?)",
+              (json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                           "snapshot": name, "bytes": nbytes}),))
+    c.commit(); c.close()
+except Exception:
+    pass
+PY
+
 # Off-box mirror of the whole tiered tree, unless suppressed (FH_SKIP_REMOTE=1,
 # used by the pre-deploy snapshot which only needs a local restore point).
 #

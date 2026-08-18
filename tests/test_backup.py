@@ -10,6 +10,7 @@ The script is driven entirely by env so it is deterministic under test:
   FH_DB, FH_OUT, FH_REMOTE, FH_SKIP_REMOTE, FH_NOW (a 'YYYYmmddHHMM' clock),
   and the per-tier keep counts (…_KEEP) are overridable.
 """
+import json
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -285,3 +286,33 @@ def test_offbox_rsync_does_not_preserve_owner_group_perms():
     assert " -a" not in line, "off-box rsync must not use -a on a squashed NAS target"
     assert "--no-owner" in line and "--no-group" in line, \
         "off-box rsync must skip owner/group (NAS squash forbids chown/chgrp)"
+
+
+def test_writes_backup_heartbeat_into_kv(tmp_path):
+    # When hub.db has the app's kv table, a successful backup records a
+    # 'backup_status' heartbeat the dashboard reads. (A db with NO kv table is a
+    # silent no-op — exercised by every other test's todos-only source db.)
+    db = tmp_path / "hub.db"
+    c = sqlite3.connect(db)
+    c.execute("create table todos (id integer primary key, title text)")
+    c.execute("insert into todos (title) values ('t')")
+    c.execute("create table kv (key text primary key, value text not null)")
+    c.commit()
+    c.close()
+    _run(db, tmp_path / "out")
+    c = sqlite3.connect(db)
+    row = c.execute("select value from kv where key='backup_status'").fetchone()
+    c.close()
+    assert row is not None, "a successful backup must record a backup_status heartbeat"
+    rec = json.loads(row[0])
+    assert "at" in rec and rec["bytes"] > 0 and rec["snapshot"].startswith("hub-")
+
+
+def test_heartbeat_absent_kv_table_is_silent_noop(tmp_path):
+    # The common case (source db without a kv table) must still succeed cleanly:
+    # no failure, and nothing on stderr from the heartbeat step.
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    r = _run(db, tmp_path / "out")
+    assert r.returncode == 0
+    assert "backup_status" not in r.stderr and "Traceback" not in r.stderr
