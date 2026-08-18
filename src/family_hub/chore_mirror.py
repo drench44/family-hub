@@ -12,6 +12,8 @@ the window. Never raises — a mirror hiccup must not disrupt the calendar sync.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import logging
 
 from . import chores as chlogic
@@ -32,6 +34,13 @@ def _title(chore: dict) -> str:
     return f"{icon} {chore['title']}".strip() if icon else chore["title"]
 
 
+def _sig(chore: dict) -> str:
+    """A content signature — what an edit would change in the reminder (title,
+    icon, times). reconcile re-pushes when it drifts from the mirrored copy."""
+    payload = [_title(chore), sorted(chore.get("due_times") or [])]
+    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def _queue_create(conn, chore, diso, person_id, list_id, tz, now, now_iso) -> None:
     d = dt.date.fromisoformat(diso)
     uid = f"familyhub-chore-{chore['id']}-{diso}"
@@ -42,7 +51,7 @@ def _queue_create(conn, chore, diso, person_id, list_id, tz, now, now_iso) -> No
     fdb.queue_cal_object_create(conn, {
         "id": oid, "collection_id": list_id, "comp_type": "VTODO",
         "uid": uid, "summary": title, "raw_ics": ics}, now_iso)
-    fdb.upsert_chore_mirror(conn, chore["id"], diso, person_id, oid, uid)
+    fdb.upsert_chore_mirror(conn, chore["id"], diso, person_id, oid, uid, _sig(chore))
 
 
 def push_completion(conn, chore_id: int, date: str, completed: bool) -> bool:
@@ -115,7 +124,7 @@ def reconcile(conn, cfg, now: dt.datetime) -> dict:
 
         existing = {(m["chore_id"], m["date"]): m
                     for m in fdb.list_chore_mirror(conn)}
-        created = moved = deleted = 0
+        created = moved = updated = deleted = 0
 
         for (cid, diso), (pid, lid) in desired.items():
             chore = chores.get(cid)
@@ -130,6 +139,21 @@ def reconcile(conn, cfg, now: dt.datetime) -> dict:
                 fdb.delete_chore_mirror(conn, cid, diso)
                 _queue_create(conn, chore, diso, pid, lid, tz, now, now_iso)
                 moved += 1
+            elif cur.get("sig") != _sig(chore):
+                # the chore's title/icon/times were edited -> refresh the reminder
+                # in place, unless it's already completed (leave history alone; the
+                # stale sig lets a later reopen re-sync).
+                obj = fdb.get_cal_object(conn, cur["cal_object_id"])
+                if obj and "STATUS:COMPLETED" not in (obj.get("raw_ics") or ""):
+                    d = dt.date.fromisoformat(diso)
+                    ics = remlogic.build_chore_vtodo(
+                        cur["uid"], _title(chore), d,
+                        chore.get("due_times") or [], now, tz=tz)
+                    fdb.queue_cal_object_update(
+                        conn, cur["cal_object_id"], ics, _title(chore), now_iso)
+                    fdb.upsert_chore_mirror(conn, cid, diso, pid, cur["cal_object_id"],
+                                            cur["uid"], _sig(chore))
+                    updated += 1
 
         # prune occurrences that fell out of the window (past, or the chore was
         # deleted/deactivated). Never delete a COMPLETED reminder — that's history
@@ -143,7 +167,8 @@ def reconcile(conn, cfg, now: dt.datetime) -> dict:
             fdb.delete_chore_mirror(conn, cid, diso)
             deleted += 1
 
-        return {"created": created, "moved": moved, "deleted": deleted}
+        return {"created": created, "moved": moved, "updated": updated,
+                "deleted": deleted}
     except Exception:
         log.exception("chore mirror reconcile failed (non-fatal)")
-        return {"created": 0, "moved": 0, "deleted": 0, "error": True}
+        return {"created": 0, "moved": 0, "updated": 0, "deleted": 0, "error": True}
