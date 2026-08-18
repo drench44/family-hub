@@ -761,7 +761,7 @@ def kv_set(conn, key: str, value: Any) -> None:
 # standard tiered backups cover it.
 #
 # `note` vocabulary (written by app._laundry_annotate): missed_finish /
-# stale_projection / cycle_exit, each optionally carrying a
+# stale_projection / cycle_exit / auto_off_hold, each optionally carrying a
 # "+offline_bridge" suffix when the transition was resolved across an HA
 # blip — consumers must match by PREFIX, not equality. NULL = an ordinary
 # transition (start, observed end, blip, …).
