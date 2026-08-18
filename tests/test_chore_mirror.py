@@ -264,3 +264,67 @@ def test_reconcile_prunes_orphans_after_mapped_person_deleted(conn):
     fdb.delete_person(conn, pid)                    # nothing mapped now; rows orphaned
     res = chore_mirror.reconcile(conn, _CFG, _NOW, synced_collections={"caldav:emma"})
     assert res["deleted"] == 8 and fdb.list_chore_mirror(conn) == []
+
+
+# --- away/pause overlay: the mirror mirrors what the WALL shows ---------------
+
+def test_reconcile_away_person_paused_chore_not_mirrored(conn):
+    """An away person's fixed chore with NO backup pauses on the wall, so the
+    mirror must not push it to their iCloud list as due either -- otherwise a
+    kid at camp keeps getting daily reminder notifications for chores the wall
+    isn't asking anyone to do."""
+    pid = _person(conn, "Milo", "caldav:milo")
+    _daily(conn, "Fish", pid)
+    fdb.add_away_period(conn, pid, _NOW.date().isoformat())   # open-ended, today
+    res = chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert res["created"] == 0
+    assert fdb.list_chore_mirror(conn) == []
+
+
+def test_reconcile_covering_chore_lands_on_backups_list_and_credits_backup(conn):
+    """Milo away with Ava as backup: the wall shows the fixed chore on Ava's
+    card, so the mirror puts the reminder on AVA's iCloud list with the ledger
+    row under Ava -- and an iOS check-off then credits Ava's streak (the same
+    C1 crediting rule the wall's /complete endpoint enforces)."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    cid = _daily(conn, "Fish", milo)
+    fdb.add_away_period(conn, milo, _NOW.date().isoformat(),
+                        backup_person_id=ava)
+    res = chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert res["created"] == 8                    # today .. today+7, all covered
+    pend = [o for o in fdb.caldav_pending(conn) if o["comp_type"] == "VTODO"]
+    assert pend and all(o["collection_id"] == "caldav:ava" for o in pend)
+    rows = fdb.list_chore_mirror(conn)
+    assert rows and all(m["person_id"] == ava for m in rows)
+
+    # iOS check-off of today's covering reminder credits the BACKUP
+    today_iso = _NOW.date().isoformat()
+    m = next(r for r in rows if r["date"] == today_iso)
+    _complete_in_ios(conn, m, title="Fish")
+    assert chore_mirror.reconcile_completions(
+        conn, _NOW.replace(tzinfo=dt.timezone.utc)) == 1
+    comp = conn.execute("SELECT person_id FROM completions WHERE chore_id=? AND date=?",
+                        (cid, today_iso)).fetchone()
+    assert comp["person_id"] == ava
+
+
+def test_reconcile_return_moves_reminder_back_to_owner(conn):
+    """Closing the away period hands the future occurrences back: the next
+    reconcile's 'moved' branch relocates uncompleted covering reminders from the
+    backup's list back to the owner's list, ledger rows re-keyed to the owner."""
+    milo = _person(conn, "Milo", "caldav:milo")
+    ava = _person(conn, "Ava", "caldav:ava")
+    _daily(conn, "Fish", milo)
+    period = fdb.add_away_period(conn, milo, _NOW.date().isoformat(),
+                                 backup_person_id=ava)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert all(m["person_id"] == ava for m in fdb.list_chore_mirror(conn))
+
+    # back home: close the period as of yesterday; the whole horizon is his again
+    fdb.close_away_period(conn, period,
+                          (_NOW.date() - dt.timedelta(days=1)).isoformat())
+    res = chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert res["moved"] == 8
+    rows = fdb.list_chore_mirror(conn)
+    assert rows and all(m["person_id"] == milo for m in rows)

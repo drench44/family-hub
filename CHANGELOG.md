@@ -10,6 +10,17 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Away / pause mode for chores: mark a family member away (open-ended — set it
+  when they leave, tap "I'm back" when they return, back-date it if you forgot)
+  and their away days read as rest, so a trip never breaks a streak. Rotation
+  turns fall to whoever's home; a fixed chore can pass to an optional backup,
+  who is shown "covering for" it and gets the streak credit — on the wall AND
+  through the iCloud mirror (the reminder moves to the backup's list and an iOS
+  check-off credits them). "Pause everyone" covers whole-family trips. Away is
+  a pure overlay over the frozen history: nothing recorded is ever rewritten,
+  and deleting an away period restores exactly what was there before.
+
 ### Fixed
 - `changelog-guard` no longer fails a release PR: a diff that bumps
   `VERSION` (a `scripts/release.py` release, which rolls `[Unreleased]`

@@ -646,11 +646,7 @@ def _away_view(c, d: dt.date):
     window_from = (d - dt.timedelta(days=370)).isoformat()
     try:
         amap = fdb.away_map(c, window_from, d_str)
-        away_today = {pid for pid, info in amap.items()
-                      if d_str in info["dates"]}
-        backup_today = {pid: amap[pid]["backup_on"].get(d_str)
-                        for pid in away_today}
-        return amap, {"ids": away_today, "backup": backup_today}, True
+        return amap, chlogic.away_view_on(amap, d_str), True
     except Exception:
         log.error("away overlay failed; serving with no away overlay",
                   exc_info=True)
