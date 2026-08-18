@@ -2240,10 +2240,11 @@ def test_tiles_laundry_observed_finish_holds_done_through_auto_power_off(
     monkeypatch.setattr("family_hub.tiles.laundry_tile",
                         tile_with("running", "detecting", iso(0)))
     assert machine()["phase"] == "running"
+    # cancelled cycle: no Done faked — the earlier hold was already retired
+    # by the new cycle above, so nothing is left to present
     monkeypatch.setattr("family_hub.tiles.laundry_tile",
                         tile_with("idle", "power_off", iso(0), finishes=iso(5)))
-    m = machine()   # cancelled cycle: no Done faked (the earlier hold was
-    assert m["phase"] == "idle"   # already retired by the new cycle above)
+    assert machine()["phase"] == "idle"
 
 
 def test_tiles_laundry_power_on_mid_hold_clears_done(client, monkeypatch):
@@ -2272,6 +2273,12 @@ def test_tiles_laundry_power_on_mid_hold_clears_done(client, monkeypatch):
     m = machine()                                # a person powered it on
     assert m["phase"] == "idle", "power-on must clear the hold immediately"
     assert m["last_done"] == t_end               # the quiet line still serves
+    # the collection moment is LOGGED (the one status-keyed row in the
+    # phase-keyed log) — a hold killed at minute 3 and one that ran its
+    # window must be tellable apart when tuning the hold from log data
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["note"] == "hold_cleared_by_power_on"
+    assert rows[0]["prev_phase"] == "idle" and rows[0]["phase"] == "idle"
     # ...and the clear is durable: powering back off must not resurrect it
     monkeypatch.setattr("family_hub.tiles.laundry_tile",
                         tile_with("idle", "power_off", iso(0)))
@@ -2366,6 +2373,23 @@ def test_tiles_laundry_stale_observed_finish_does_not_hold(client, monkeypatch):
     # tune-from-log analysis this log exists for
     rows = client.get("/api/laundry/log").json()["entries"]
     assert rows[0]["phase"] == "idle" and rows[0]["note"] == "auto_off_refused"
+    # ...and a refusal resolved ACROSS an HA blip carries the bridge suffix
+    # like every other outcome (the suffix line serves both arms)
+    t_end2 = iso(-40)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("running", "spinning", iso(-70), finishes=t_end2))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("done", "end", t_end2))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("offline", None, None))
+    machine()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        tile_with("idle", "power_off", iso(0)))
+    assert machine()["phase"] == "idle"
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["note"] == "auto_off_refused+offline_bridge"
 
 
 def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeypatch):

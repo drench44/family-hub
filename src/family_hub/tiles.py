@@ -39,8 +39,9 @@ LAUNDRY_TTL = 4.0
 # How long a finished-but-uncollected load keeps presenting as Done — for a
 # MISSED finish (running -> idle with the projection passed) AND for an
 # observed "end" followed by the machine's own auto power-off (these LG
-# machines turn themselves off 30-90s after the chime, so "Done until the
-# door opens" never gets a door signal); both in app._laundry_annotate. A
+# machines turn themselves off 30-90s after the chime, so waiting for a
+# person-shaped signal before decaying would wait until the NEXT cycle);
+# both in app._laundry_annotate. A
 # person powering the machine on clears the hold; otherwise it decays to
 # idle + the "last load" line after this window — long enough to be seen
 # across the kitchen, not forever.

@@ -754,19 +754,22 @@ def kv_set(conn, key: str, value: Any) -> None:
 # --- laundry cycle log ----------------------------------------------------
 #
 # Append-only history of observed washer/dryer phase TRANSITIONS (never
-# per-poll rows — an idle machine writes nothing). The evidence base for
-# tuning the finish-detection heuristics (watcher cadence, missed-done
-# hold, projection trust) from real cycles instead of guesses, and for
-# diagnosing any finish the wall got wrong. Lives in hub.db, so the
-# standard tiered backups cover it.
+# per-poll rows — an idle machine writes nothing), plus exactly one
+# status-keyed event: a person powering the machine on while a Done hold
+# stands (note hold_cleared_by_power_on, prev_phase == phase == "idle") —
+# the collection moment, which is the number that sizes the hold window.
+# The evidence base for tuning the finish-detection heuristics (watcher
+# cadence, missed-done hold, projection trust) from real cycles instead of
+# guesses, and for diagnosing any finish the wall got wrong. Lives in
+# hub.db, so the standard tiered backups cover it.
 #
 # `note` vocabulary (written by app._laundry_annotate): missed_finish /
 # stale_projection / cycle_exit / auto_off_hold / auto_off_refused (the
 # machine powered itself off after an observed end but the end stamp was
-# too stale/unusable to re-present as Done), each optionally carrying a
-# "+offline_bridge" suffix when the transition was resolved across an HA
-# blip — consumers must match by PREFIX, not equality. NULL = an ordinary
-# transition (start, observed end, blip, …).
+# too stale/unusable to re-present as Done) / hold_cleared_by_power_on,
+# each optionally carrying a "+offline_bridge" suffix when the transition
+# was resolved across an HA blip — consumers must match by PREFIX, not
+# equality. NULL = an ordinary transition (start, observed end, blip, …).
 
 LAUNDRY_LOG_KEEP_DAYS = 365
 
