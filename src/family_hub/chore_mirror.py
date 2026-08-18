@@ -113,7 +113,12 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
     try:
         mapped = {p["id"]: p["reminder_list_id"]
                   for p in fdb.list_people(conn) if p.get("reminder_list_id")}
-        if not mapped:
+        existing_rows = fdb.list_chore_mirror(conn)
+        # Nothing mapped AND nothing already mirrored -> no work. But if rows
+        # exist while nothing is mapped (every mapped person was deleted /
+        # unmapped), we must still fall through to PRUNE them — otherwise their
+        # reminders orphan in iCloud forever.
+        if not mapped and not existing_rows:
             return dict(zero)
         tz = now.tzinfo             # wall zone (None in tests -> all-day fallback)
         now_iso = now.isoformat()
@@ -131,8 +136,7 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
                 if lid:
                     desired[(row["chore_id"], d.isoformat())] = (row["person_id"], lid)
 
-        existing = {(m["chore_id"], m["date"]): m
-                    for m in fdb.list_chore_mirror(conn)}
+        existing = {(m["chore_id"], m["date"]): m for m in existing_rows}
         created = moved = updated = deleted = 0
 
         for (cid, diso), (pid, lid) in desired.items():

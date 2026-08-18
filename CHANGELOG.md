@@ -10,6 +10,14 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- Native chores: deleting (or unmapping) the last person whose chores mirror to
+  iCloud no longer orphans their reminders — the mirror reconcile now still prunes
+  existing rows when nothing is mapped, instead of early-returning. (Caught in the
+  live deploy verification.)
+
+## [1.2.0] — 2026-08-17
+
 ### Added
 - Native chores: chore routines now mirror into each person's iCloud Reminders
   list, two-way. New routine types — every-N-days, biweekly, and due-time
