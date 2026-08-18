@@ -421,6 +421,15 @@ test('choreToModel: missing due_times/interval fields degrade to []/empty, weekl
   assert.equal(m.weekInterval, 1);
 });
 
+// --- person -> iCloud list mapping body (the "— none —" option clears to null).
+
+test('reminderListBody: a list id maps through; "" and null clear to null', () => {
+  assert.deepEqual({ ...sandbox.reminderListBody('caldav:emma') }, { reminder_list_id: 'caldav:emma' });
+  assert.deepEqual({ ...sandbox.reminderListBody('') }, { reminder_list_id: null });
+  assert.deepEqual({ ...sandbox.reminderListBody(null) }, { reminder_list_id: null });
+  assert.deepEqual({ ...sandbox.reminderListBody(undefined) }, { reminder_list_id: null });
+});
+
 // --- chore toggle failure detection (drives the "couldn't save" toast).
 
 test('attemptToggle returns false when the write fails', async () => {

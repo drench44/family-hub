@@ -469,6 +469,7 @@ async function renderChoresFull(prefetched) {
     else ensurePeopleThenRerender();
   } else {
     choreAdminPeople = null;   // drop stale cache when leaving edit
+    choreAdminReminderLists = [];
     choreAdminError = false;
   }
   host.innerHTML = choresNavHtml()
@@ -486,7 +487,12 @@ async function ensurePeopleThenRerender() {
   if (choreAdminLoading) return;   // a fetch from an earlier render pass is in flight
   choreAdminLoading = true;
   try {
-    choreAdminPeople = (await j('/api/admin/state')).people;
+    const st = await j('/api/admin/state');
+    choreAdminPeople = st.people;
+    // The iCloud VTODO lists a person can mirror to (empty until iCloud is
+    // connected + its reminder lists have synced). Cached alongside people so
+    // the person editor's list picker doesn't need a second fetch.
+    choreAdminReminderLists = st.reminder_lists || [];
     choreAdminError = false;
   } catch (e) {
     choreAdminError = true;   // render a visible note instead of vanishing
@@ -505,6 +511,7 @@ async function ensurePeopleThenRerender() {
    failed load so the section shows a visible note instead of vanishing
    silently. */
 let choreAdminPeople = null;
+let choreAdminReminderLists = [];   // iCloud lists to map people to (from /api/admin/state)
 let choreAdminError = false;
 let choreAdminLoading = false;   // in-flight guard: don't stack concurrent fetches
 
@@ -515,6 +522,7 @@ function peopleAdminHtml(people) {
   const rows = (people || []).map((p) =>
     `<div class="padmin-row${p.active ? '' : ' inactive'}" data-padmin="${p.id}">`
     + `<span class="padmin-name" style="color:${safeColor(p.color)}">${escapeHtml(p.name)}</span>`
+    + (p.reminder_list_id ? `<span class="padmin-badge" title="Mirrored to an iCloud list">iCloud ✓</span>` : '')
     + `<button class="padmin-btn" type="button" data-pedit="${p.id}">Edit</button>`
     + `<button class="padmin-btn" type="button" data-ptoggle="${p.id}">${p.active ? 'Deactivate' : 'Activate'}</button>`
     + `<button class="padmin-btn padmin-del" type="button" data-pdel="${p.id}">Delete</button>`
@@ -2770,18 +2778,44 @@ function openPersonEditor(seed) {
   let model;
   let label;
   let onsubmit;
+  let opts;
   if (seed.mode === 'edit') {
     const p = (choreAdminPeople || []).find((x) => x.id === seed.personId);
     if (!p) { showToast('That person is no longer here — refreshing.'); refreshPeopleAdmin(); return; }
     model = { name: p.name, color: p.color };
     label = 'Save';
     onsubmit = (body, errEl) => submitPerson(`/api/admin/people/${p.id}`, 'PATCH', body, errEl);
+    // The iCloud-list picker: mirroring only actually flows when two-way sync is
+    // on (readonly === false); the picker still maps the list otherwise, with a
+    // note. onListChange PATCHes live and resolves false on failure so the form
+    // reverts the selection instead of showing a mapping that didn't save.
+    const integ = caldavIntegration();
+    opts = {
+      edit: true,
+      reminderLists: choreAdminReminderLists,
+      reminderListId: p.reminder_list_id || '',
+      twoWay: !!(integ && integ.readonly === false),
+      onListChange: async (value) => {
+        try {
+          await j(`/api/admin/people/${p.id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(reminderListBody(value)),
+          });
+        } catch (e) {
+          showToast(e.message || 'Couldn’t update the list — check the hub and try again.');
+          return false;
+        }
+        p.reminder_list_id = value || null;   // keep the admin cache in step (badge + re-open)
+        if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
+        return true;
+      },
+    };
   } else {
     model = freshPersonModel();
     label = 'Add person';
     onsubmit = (body, errEl) => submitPerson('/api/admin/people', 'POST', body, errEl);
   }
-  buildPersonForm(host, model, label, onsubmit);
+  buildPersonForm(host, model, label, onsubmit, opts);
   document.getElementById('chore-modal').classList.remove('hidden');
   if (openView) armIdle();
 }
