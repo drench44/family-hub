@@ -45,7 +45,9 @@ def _add_daily_fixed(conn, title, icon, person_id, epoch):
 
 
 # Every table seed_demo writes into; children (FK holders) before parents.
-_SEEDED_TABLES = ("completions", "occurrence_log", "todos", "events", "chores", "people")
+# away_periods holds a NOT NULL FK to people, so it's deleted before people.
+_SEEDED_TABLES = ("completions", "occurrence_log", "todos", "events", "chores",
+                  "away_periods", "people")
 
 
 def is_unseeded(conn) -> bool:
@@ -99,6 +101,11 @@ def seed_demo(conn, today: dt.date) -> None:
     fdb.add_chore(conn, title="Sort recycling", icon="♻️", schedule_kind="days",
                   days_mask=milo_mask, assign_kind="fixed", fixed_person_id=milo,
                   rotation_order=[], rotation_epoch=epoch)
+    # Milo's one DAILY fixed chore -- unlike the two above (scheduled off
+    # today), this one occurs every day, including today and any away day.
+    # That's what makes his away period below always have a chore for Ava to
+    # cover, whatever day of the week the demo happens to be seeded on.
+    _add_daily_fixed(conn, "Feed the fish", "🐟", milo, epoch)
 
     # Ruby: two daily chores. "Water plants" is done today, "Trash out" is not,
     # so her streak counts back through her completed past days -> ~2.
@@ -107,6 +114,27 @@ def seed_demo(conn, today: dt.date) -> None:
 
     people = fdb.list_people(conn)
     chores = fdb.list_chores(conn)
+
+    # Milo is away the last 2 days, still ongoing (open-ended): Ava backs him
+    # up. Seeded here, before the history freeze below, so both the frozen
+    # past days AND the live 'today' render (app.py resolves 'today' itself,
+    # straight from this same away_periods row) agree: Milo's away badge, his
+    # paused-not-broken streak, and Ava's "covering for Milo" tag on Feed the
+    # fish are all visible the moment someone loads the demo wall.
+    away_start = (today - dt.timedelta(days=2)).isoformat()
+    fdb.add_away_period(conn, milo, away_start, None, backup_person_id=ava)
+    amap = fdb.away_map(conn, (today - dt.timedelta(days=6)).isoformat(),
+                        today.isoformat())
+    milo_away = amap.get(milo, {"dates": set(), "backup_on": {}})
+
+    def away_view(d: dt.date) -> dict | None:
+        """The plan_rows() away overlay for day ``d``, or None on a day Milo
+        isn't away -- so history before his away period resolves exactly as
+        it did before this feature existed."""
+        ds = d.isoformat()
+        if ds not in milo_away["dates"]:
+            return None
+        return {"ids": {milo}, "backup": {milo: milo_away["backup_on"].get(ds)}}
 
     # Which chore_ids count as "completed" on a day offset i days before today.
     # Ava fully completes the last 3 days then slips one earlier (capping her
@@ -132,13 +160,25 @@ def seed_demo(conn, today: dt.date) -> None:
     # streaks and the 7-day week strip render from real history.
     for i in range(6, 0, -1):
         d = today - dt.timedelta(days=i)
-        rows = chlogic.plan_rows(chores, people, d)
+        # Pass the away view for any day inside Milo's away window so the
+        # FROZEN log itself already reflects away: his own rows are absent
+        # and his fixed chore's row belongs to Ava, tagged covering_for. If
+        # this were plain plan_rows(chores, people, d), a past day drilled
+        # into from the day browser would show Milo doing chores on a day he
+        # was recorded away -- exactly the contradiction this task exists to
+        # avoid.
+        rows = chlogic.plan_rows(chores, people, d, away_view(d))
         fdb.replace_day_log(conn, d.isoformat(), rows)
         done = completed_for(i)
         for r in rows:
             # Milo has no explicit entry above, so complete his occurring rows
-            # here (he's the reliable one); Ava/Ruby follow the `done` set.
-            if r["person_id"] == milo or r["chore_id"] in done:
+            # here (he's the reliable one); Ava/Ruby follow the `done` set;
+            # and whoever is covering for Milo while he's away completes that
+            # row too, so the covering day still reads fully "done" -- an
+            # uncompleted covering row would otherwise turn one of Ava's
+            # already-scripted "fully done" streak days into "partial".
+            if r["person_id"] == milo or r["chore_id"] in done \
+                    or r["covering_for"] is not None:
                 fdb.set_completion(conn, r["chore_id"], d.isoformat(), r["person_id"])
 
     # Today's completions: three of Ava's four, and Ruby's plants (today's
