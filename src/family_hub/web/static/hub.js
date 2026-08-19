@@ -984,9 +984,22 @@ function renderTodosPaint() {
   const prev = document.getElementById('todo-add-input');
   const draft = prev ? prev.value : '';
   const wasOpen = !!document.querySelector('.todo-recent[open]');
+  // Preserve the add-input's focus + caret across the innerHTML rebuild. Without
+  // this, a background refresh (the /api/todos poll that lands right after the
+  // overlay opens) destroys the focused input, so on the wall the on-screen
+  // keyboard was dismissed the instant it appeared - the "tap twice" bug. The
+  // OSK re-attaches to the restored input through the re-fired focusin.
+  const hadFocus = !!prev && document.activeElement === prev;
+  const selStart = hadFocus ? prev.selectionStart : null;
+  const selEnd = hadFocus ? prev.selectionEnd : null;
   host.innerHTML = todosFullHtml();
   const inp = document.getElementById('todo-add-input');
   if (inp && draft) inp.value = draft;
+  if (inp && hadFocus) {
+    inp.focus();
+    try { inp.setSelectionRange(selStart == null ? inp.value.length : selStart,
+      selEnd == null ? inp.value.length : selEnd); } catch (e) { /* unsupported */ }
+  }
   const recent = host.querySelector('.todo-recent');
   if (recent && wasOpen) recent.open = true;
 }

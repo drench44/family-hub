@@ -401,15 +401,44 @@ function wallZoom(w) {
   return scale >= 1 ? '' : String(scale);
 }
 
+/* How many UTF-16 code units the grapheme ending at index `a` occupies, so a
+   single Backspace removes a whole user-perceived character - critical for
+   emoji, which are 2+ code units (a plain emoji is a surrogate pair; ❤️ carries
+   a variation selector; 👨‍👩‍👧 is a ZWJ sequence; 🇬🇧 is two regional
+   indicators). Deleting one code unit would leave a broken half-character.
+   Intl.Segmenter is the correct path (present in every engine this runs on -
+   Firefox 140 wall, modern Node). The fallback, only reached if Segmenter is
+   ever absent, handles surrogate-pair emoji ONLY: a variation-selector (❤️) or
+   ZWJ (👨‍👩‍👧) sequence would degrade to deleting just its trailing code unit
+   / pair, not the whole grapheme. That degraded case is a documented, tested
+   best-effort - see osk.test.mjs. Returns >= 1 for a > 0. */
+function oskGraphemeBackLen(v, a) {
+  if (a <= 0) return 0;
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    try {
+      const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+      let last = 1;
+      for (const s of seg.segment(v.slice(0, a))) last = s.segment.length;
+      return last;
+    } catch (e) { /* fall through to the surrogate-pair fallback */ }
+  }
+  const lo = v.charCodeAt(a - 1);
+  if (lo >= 0xDC00 && lo <= 0xDFFF && a >= 2) {
+    const hi = v.charCodeAt(a - 2);
+    if (hi >= 0xD800 && hi <= 0xDBFF) return 2;   // a surrogate pair is one char
+  }
+  return 1;
+}
+
 /* The text transform behind the on-screen keyboard (osk.js): apply one key to
    `value` at the [selStart, selEnd] selection and return the new {value, caret}.
    Kept here (no DOM) so the insert / Backspace / Space + maxlength branches are
    unit-testable, exactly like panelFit above; osk.js's key handler is a thin
    wrapper that reads the live input's value + selection, calls this, and writes
-   the result back. `key` is a single character, 'Backspace', or 'Space'.
-   `shift` capitalizes a character key (a no-op on digits/symbols); `maxlength`
-   (when > 0) refuses an insert that would overflow - setRangeText would NOT
-   honor it, so we enforce it here. */
+   the result back. `key` is a single character (letter, digit, symbol, or a
+   whole emoji), 'Backspace', or 'Space'. `shift` capitalizes a character key (a
+   no-op on digits/symbols/emoji); `maxlength` (when > 0) refuses an insert that
+   would overflow - setRangeText would NOT honor it, so we enforce it here. */
 function oskApplyKey(value, selStart, selEnd, key, opts) {
   const v = String(value == null ? '' : value);
   const o = opts || {};
@@ -418,7 +447,10 @@ function oskApplyKey(value, selStart, selEnd, key, opts) {
   const b = Math.max(a, Math.min(selEnd | 0, v.length));
   if (key === 'Backspace') {
     if (b > a) return { value: v.slice(0, a) + v.slice(b), caret: a };       // drop the selection
-    if (a > 0) return { value: v.slice(0, a - 1) + v.slice(a), caret: a - 1 }; // drop the char before the caret
+    if (a > 0) {
+      const n = oskGraphemeBackLen(v, a);   // whole grapheme (emoji-safe), not one code unit
+      return { value: v.slice(0, a - n) + v.slice(a), caret: a - n };
+    }
     return { value: v, caret: a };                                            // at position 0: nothing to delete
   }
   const ch = key === 'Space' ? ' ' : (o.shift ? String(key).toUpperCase() : String(key));
