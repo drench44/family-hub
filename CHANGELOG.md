@@ -10,6 +10,21 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- On-screen keyboard: two-page symbol layer (`?123` / `#+=`) and a curated emoji
+  grid, with a grapheme-aware backspace so one tap deletes a whole emoji.
+
+### Fixed
+- On-screen keyboard now works on a wall whose browser reports itself mouse-only
+  (Firefox under Wayland delivers the touchscreen as a mouse, so the touch gate
+  never fired and the OS keyboard took over). Open the hub once with `?kiosk=1`
+  to turn it on (remembered thereafter; `?kiosk=0` clears it); in kiosk mode the
+  served fields are marked read-only so the OS keyboard stays out of the way.
+  See `docs/on-screen-keyboard.md`.
+- On-screen keyboard no longer needs a second tap to appear: a background to-do
+  refresh was rebuilding the focused input and dismissing the keyboard the
+  instant it opened.
+
 ## [1.3.0] — 2026-08-18
 
 ### Added

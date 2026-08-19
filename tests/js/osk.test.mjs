@@ -85,3 +85,97 @@ test('maxlength never blocks Backspace', () => {
 test('a stale/out-of-range selection is clamped, not sliced past the end', () => {
   assert.deepEqual(apply('hi', 9, 9, 'x', {}), { value: 'hix', caret: 3 });
 });
+
+// ---- symbols + emoji (the ?123 / 😊 layers feed whole strings as `key`) ----
+
+test('a symbol key inserts like any character', () => {
+  assert.deepEqual(apply('a', 1, 1, '@', {}), { value: 'a@', caret: 2 });
+  assert.deepEqual(apply('', 0, 0, '€', {}), { value: '€', caret: 1 });
+});
+
+test('an emoji inserts whole and advances the caret past all its code units', () => {
+  // 😀 is a surrogate pair: length 2, so the caret lands at 2.
+  assert.deepEqual(apply('', 0, 0, '😀', {}), { value: '😀', caret: 2 });
+  // inserted after existing text
+  assert.deepEqual(apply('hi', 2, 2, '🎉', {}), { value: 'hi🎉', caret: 4 });
+});
+
+test('Backspace deletes a whole surrogate-pair emoji, not half of it', () => {
+  // "a😀": caret at end (index 3). One Backspace must remove both code units.
+  assert.deepEqual(apply('a😀', 3, 3, 'Backspace', {}), { value: 'a', caret: 1 });
+});
+
+test('Backspace deletes a variation-selector emoji as one grapheme', () => {
+  // ❤️ is ❤ (U+2764) + VS16 (U+FE0F) = 2 code units; delete both at once.
+  const heart = '❤️';
+  assert.deepEqual(apply(heart, heart.length, heart.length, 'Backspace', {}),
+    { value: '', caret: 0 });
+});
+
+test('Backspace deletes a ZWJ emoji sequence as one grapheme', () => {
+  // 👨‍👩‍👧 (man+ZWJ+woman+ZWJ+girl) is 8 code units but one grapheme.
+  const fam = '👨‍👩‍👧';
+  assert.deepEqual(apply('x' + fam, ('x' + fam).length, ('x' + fam).length, 'Backspace', {}),
+    { value: 'x', caret: 1 });
+});
+
+test('Backspace still removes one plain char (no over-deletion of ASCII)', () => {
+  assert.deepEqual(apply('ab', 2, 2, 'Backspace', {}), { value: 'a', caret: 1 });
+});
+
+// ---- maxlength counts an emoji as its code units (a surrogate pair is 2) ----
+
+test('maxlength refuses an emoji that would overflow by its full width', () => {
+  // 9 chars, cap 10: an emoji needs 2 units but only 1 is free -> refused whole
+  assert.deepEqual(apply('123456789', 9, 9, '😀', { maxlength: 10 }),
+    { value: '123456789', caret: 9 });
+});
+
+test('maxlength admits an emoji that exactly fills the field', () => {
+  // 8 chars, cap 10: the 2-unit emoji fits exactly
+  assert.deepEqual(apply('12345678', 8, 8, '😀', { maxlength: 10 }),
+    { value: '12345678😀', caret: 10 });
+});
+
+// ---- grapheme backspace: flag + mid-string (Intl.Segmenter path) ----
+
+test('Backspace deletes a regional-indicator flag as one grapheme', () => {
+  // 🇬🇧 is two regional indicators = 4 code units, one grapheme.
+  const flag = '🇬🇧';
+  assert.deepEqual(apply(flag, flag.length, flag.length, 'Backspace', {}),
+    { value: '', caret: 0 });
+});
+
+test('Backspace deletes an emoji sitting mid-string, not the char after it', () => {
+  // "a😀b" with the caret right after the emoji (index 3) -> "ab"
+  assert.deepEqual(apply('a😀b', 3, 3, 'Backspace', {}), { value: 'ab', caret: 1 });
+});
+
+// ---- the surrogate-pair FALLBACK (engine without Intl.Segmenter) ----
+// Load common.js into a second context whose Intl has no Segmenter, so the
+// hand-rolled fallback in oskGraphemeBackLen actually runs (the primary path
+// above always has Segmenter under Node, leaving the safety net uncovered).
+const noSeg = { document: undefined };
+vm.createContext(noSeg);
+vm.runInContext(readFileSync(join(staticDir, 'common.js'), 'utf8'), noSeg);
+vm.runInContext('Intl.Segmenter = undefined;', noSeg);   // force the fallback branch
+const applyNoSeg = (...a) => ({ ...noSeg.oskApplyKey(...a) });
+
+test('fallback (no Intl.Segmenter): a surrogate-pair emoji still deletes whole', () => {
+  assert.deepEqual(applyNoSeg('a😀', 3, 3, 'Backspace', {}), { value: 'a', caret: 1 });
+});
+
+test('fallback (no Intl.Segmenter): a plain char still deletes exactly one', () => {
+  assert.deepEqual(applyNoSeg('ab', 2, 2, 'Backspace', {}), { value: 'a', caret: 1 });
+});
+
+test('fallback (no Intl.Segmenter): a ZWJ sequence degrades to one code-unit pair', () => {
+  // Documents the KNOWN degraded behavior: without Segmenter the fallback only
+  // strips the trailing surrogate pair of 👨‍👩‍👧 (the 👧), leaving a dangling
+  // ZWJ. This is why Intl.Segmenter is the primary path; the fallback is a
+  // best-effort net, not grapheme-complete.
+  const fam = '👨‍👩‍👧';                 // 👨 ZWJ 👩 ZWJ 👧 = 8 code units
+  const res = applyNoSeg('x' + fam, ('x' + fam).length, ('x' + fam).length, 'Backspace', {});
+  assert.equal(res.caret, ('x' + fam).length - 2);   // only the last pair removed
+  assert.equal(res.value, 'x' + fam.slice(0, -2));   // trailing ZWJ remains
+});
