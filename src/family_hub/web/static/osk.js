@@ -311,11 +311,20 @@
   }
 
   function hide() {
+    const el = activeInput;
     activeInput = null;
     shiftOn = false;
     oskEl.classList.add('hidden');
     oskEl.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('osk-open');
+    // Blur the field if it is still focused (Done/Cancel hide it while the osk's
+    // keepFocus kept focus on the input). Otherwise the field stays focused with
+    // no keyboard, and tapping it again fires no focusin - so the keyboard could
+    // not be re-summoned by tapping the same box, and a later Done would no-op
+    // on a null activeInput. Blurring makes the next tap re-focus -> re-show.
+    if (el && typeof el.blur === 'function' && document.activeElement === el) {
+      try { el.blur(); } catch (e) { /* detached */ }
+    }
     if (layer !== 'letters') setLayer('letters');   // reopen on the letters layer
     else paintFaces();
   }
