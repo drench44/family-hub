@@ -52,6 +52,10 @@ Backspace is **grapheme-aware** (`oskGraphemeBackLen` in `common.js`, using
 `Intl.Segmenter` with a surrogate-pair fallback), so one tap deletes a whole
 emoji — a plain code-unit delete would leave a broken half-character.
 
+The command row ends with a discard/confirm pair: **✕ Cancel** clears the field
+and closes the keyboard without saving; **Done** submits (adds the to-do / saves
+the chore).
+
 ## Emoji rendering on the wall (fontconfig)
 
 Some ordinary emojis (a phone, cutlery, a soccer ball) are grey/black-and-white
