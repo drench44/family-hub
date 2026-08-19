@@ -42,8 +42,11 @@ straight to the field's `.value`.
 
 - **Letters** — a digit row plus QWERTY, one-shot Shift, and a command row.
 - **?123 / #+=** — two pages of punctuation and symbols.
-- **Emoji** — a curated grid of common + family/chore emojis; tapping one inserts
-  it and keeps the grid open so several can be added.
+- **Emoji** — a category picker: a tab strip (smileys, people, animals, nature,
+  food, activity, travel, objects, symbols) over a scrollable grid, plus a 🕐
+  **Recently used** tab that fills from your taps (persisted in `localStorage`).
+  Tapping an emoji inserts it and keeps the picker open so several can be added.
+  Every emoji is color-verified against the wall's font (see below).
 
 Backspace is **grapheme-aware** (`oskGraphemeBackLen` in `common.js`, using
 `Intl.Segmenter` with a surrogate-pair fallback), so one tap deletes a whole

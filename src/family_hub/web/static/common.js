@@ -463,6 +463,31 @@ function oskApplyKey(value, selStart, selEnd, key, opts) {
   return { value: v.slice(0, a) + ch + v.slice(b), caret: a + ch.length };
 }
 
+/* Recently-used emoji list behind the OSK's 🕐 tab, kept PURE (no DOM, no
+   storage) so the dedup / most-recent-first / cap / corrupt-input rules are
+   unit-testable, like oskApplyKey. osk.js's recentEmojis/pushRecent are thin
+   wrappers that read/write localStorage around these.
+
+   oskRecentRead: coerce a stored raw string into a clean list - tolerate
+   malformed JSON and a non-array value (-> []), and drop anything that isn't a
+   non-empty string so a stale/foreign/partial write can never render as a
+   tappable "emoji". Caps to `max`. */
+function oskRecentRead(raw, max) {
+  let arr;
+  try { arr = JSON.parse(raw == null ? '[]' : String(raw)); } catch (e) { arr = []; }
+  if (!Array.isArray(arr)) return [];
+  const clean = arr.filter((x) => typeof x === 'string' && x.length > 0);
+  return clean.slice(0, Math.max(0, max | 0));
+}
+
+/* oskRecentPush: put `emoji` at the front, de-duplicated (a re-tap moves it up
+   rather than repeating), capped to `max`. Returns a new list. */
+function oskRecentPush(list, emoji, max) {
+  const base = (Array.isArray(list) ? list : []).filter((x) => x !== emoji);
+  base.unshift(emoji);
+  return base.slice(0, Math.max(0, max | 0));
+}
+
 /* Chore form <-> API payload, kept PURE (no DOM) so the admin form's
    serialization is unit-testable. A mis-serialized days_mask or rotation_order
    here would otherwise surface only as a silent 422 or a wrong-schedule chore

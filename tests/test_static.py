@@ -1156,12 +1156,42 @@ def test_osk_suppresses_the_os_keyboard():
 
 
 def test_osk_has_symbol_and_emoji_layers():
-    """The keyboard grew a two-page symbol set (?123 / #+=) and a curated emoji
-    grid. Guard the layer plumbing so a refactor can't silently drop them."""
-    for token in ("SYM1_ROWS", "SYM2_ROWS", "EMOJI", "osk-emoji-grid"):
+    """The keyboard has a two-page symbol set (?123 / #+=) and a categorized
+    emoji picker. Guard the layer plumbing so a refactor can't silently drop
+    them."""
+    for token in ("SYM1_ROWS", "SYM2_ROWS", "EMOJI_CATS", "osk-emoji-grid"):
         assert token in OSK, f"osk.js lost its {token} layer"
     assert "Layer:" in OSK and "setLayer" in OSK, \
         "the command row's mode keys must route through setLayer"
+
+
+def test_osk_emoji_picker_is_categorized_with_recents():
+    """The emoji layer is a category picker (a tab strip over a per-category
+    grid) with a persisted 'recently used' tab. Guard the pieces so none of them
+    silently regress to the old flat grid."""
+    # A recent category + several fixed categories.
+    assert re.search(r"id:\s*'recent'", OSK), "emoji picker needs a 'recent' category"
+    cats = re.findall(r"id:\s*'(\w+)',\s*tab:", OSK)
+    assert len(cats) >= 6, f"expected several emoji categories, found {cats}"
+    # Tabs route through EmojiCat: like the mode keys route through Layer:.
+    assert "EmojiCat:" in OSK, "category tabs must carry an EmojiCat: data-key"
+    # Recents are persisted and recorded on an emoji tap.
+    assert "oskEmojiRecent" in OSK and "pushRecent" in OSK, \
+        "recently-used emojis must persist to localStorage"
+    assert re.search(r"classList\.contains\('osk-emoji'\)\)\s*pushRecent", OSK), \
+        "tapping an emoji must record it in the recents"
+    # The dedup/cap/sanitize logic is PURE + unit-tested in common.js; osk.js must
+    # route through it (not re-inline a slice that could regress uncovered).
+    assert "oskRecentRead" in COMMON and "oskRecentPush" in COMMON, \
+        "recents dedup/cap/sanitize logic must live (tested) in common.js"
+    assert "oskRecentRead" in OSK and "oskRecentPush" in OSK, \
+        "osk.js must use the tested common.js recents helpers, not re-inline them"
+    # A stored value that isn't one of our emoji must never surface/insert.
+    assert "KNOWN_EMOJI" in OSK and re.search(r"KNOWN_EMOJI\.has", OSK), \
+        "recents must be filtered to the known emoji set"
+    # The empty-recents state shows a placeholder, not a blank/broken grid.
+    assert re.search(r"!list\.length", OSK) and "osk-emoji-empty" in OSK, \
+        "an empty recents tab must render the placeholder message"
 
 
 def test_osk_backspace_is_grapheme_aware_for_emoji():
@@ -1179,7 +1209,8 @@ def test_osk_backspace_is_grapheme_aware_for_emoji():
 def test_osk_emoji_grid_and_mode_keys_are_styled():
     """Every JS-added OSK class needs a rule or it renders unstyled."""
     for cls in (".osk-keys", ".osk-mode", ".osk-emoji-toggle",
-                ".osk-emoji-grid", ".osk-emoji"):
+                ".osk-emoji-grid", ".osk-emoji", ".osk-emoji-cats",
+                ".osk-emoji-cat", ".osk-emoji-empty"):
         assert cls in CSS, f"{cls} is used by osk.js but not styled"
 
 
