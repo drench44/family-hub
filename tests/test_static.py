@@ -1116,16 +1116,20 @@ def test_dockerfile_ships_version():
 # a mouse). See docs/on-screen-keyboard.md.
 # ---------------------------------------------------------------------------
 
-def test_osk_activates_in_kiosk_mode_not_just_on_touch():
-    """The wall's Firefox reports maxTouchPoints 0 / pointer:fine, so the touch
-    heuristic can NEVER fire there. osk.js must also latch on an explicit
-    ?kiosk=1 flag persisted to localStorage, and still bail when NEITHER touch
-    nor kiosk is present (a laptop keeps its real keyboard)."""
+def test_osk_activates_only_in_kiosk_mode():
+    """The keyboard is for the keyboard-less WALL only. Phones/laptops already
+    have a native keyboard, and showing ours there just stacks under theirs - so
+    osk.js must NOT gate on touch (a phone is a touch device too). It activates
+    only on the latched ?kiosk=1 flag, and bails otherwise."""
     assert "kiosk=1" in OSK, "osk.js must honor a ?kiosk=1 activation flag"
     assert "localStorage" in OSK and "oskKiosk" in OSK, \
         "the kiosk flag must persist to localStorage so it survives navigation"
-    assert re.search(r"if\s*\(\s*!hasTouch\s*&&\s*!kiosk\s*\)\s*return",
-                     OSK), "osk.js must still no-op when neither touch nor kiosk"
+    # Kiosk-ONLY: the sole activation gate is `if (!kiosk) return`. A touch check
+    # must NOT re-enter the gate, or the board comes back on phones.
+    assert re.search(r"if\s*\(\s*!kiosk\s*\)\s*return", OSK), \
+        "osk.js must gate on kiosk alone (`if (!kiosk) return`)"
+    assert "hasTouch" not in OSK and "maxTouchPoints" not in OSK, \
+        "osk.js must not activate on touch — that re-shows the board on phones"
     # ?kiosk=0 is the escape hatch: a phone/laptop that opened the wall's kiosk
     # bookmark must be able to clear the latch and get its native keyboard back.
     assert "kiosk=0" in OSK and "removeItem" in OSK, \
@@ -1135,23 +1139,20 @@ def test_osk_activates_in_kiosk_mode_not_just_on_touch():
         "a blocked-storage fallback must warn (the wall's only keyboard is this)"
 
 
-def test_osk_kiosk_suppresses_the_os_keyboard():
-    """On the wall the app keyboard is the ONLY one we want; GNOME's touch
-    keyboard otherwise muscles in and mishandles Firefox web inputs (two taps
-    to appear, backspace never reaching the field). Kiosk mode marks the served
-    fields readonly + inputmode=none so the OS never offers a keyboard, while
-    the app keyboard still writes their .value."""
+def test_osk_suppresses_the_os_keyboard():
+    """The app keyboard is the ONLY one the wall wants; GNOME's touch keyboard
+    otherwise muscles in and mishandles Firefox web inputs (two taps to appear,
+    backspace never reaching the field). The served fields are marked readonly +
+    inputmode=none so the OS never offers a keyboard, while the app keyboard
+    still writes their .value. (Safe because the whole module is kiosk-gated.)"""
     assert "readOnly = true" in OSK, \
-        "kiosk mode must set inputs readonly to suppress the OS keyboard"
+        "must set inputs readonly to suppress the OS keyboard"
     assert re.search(r"setAttribute\(\s*['\"]inputmode['\"]\s*,\s*['\"]none['\"]",
-                     OSK), "kiosk mode must set inputmode=none as well"
-    # The stamping MUST be gated behind kiosk mode: un-gated it would mark a
-    # laptop's real text fields readonly and break typing. Pin both call sites
-    # inside an `if (kiosk)` so a refactor can't silently apply it everywhere.
-    assert re.search(r"if \(kiosk\)\s*\{.*?stampTree\(document\)", OSK, re.S), \
-        "the readonly stamping (stampTree) must run inside an `if (kiosk)` block"
-    assert re.search(r"if \(kiosk\)\s*kioskStamp", OSK), \
-        "the focusin readonly backstop must be gated on kiosk mode"
+                     OSK), "must set inputmode=none as well"
+    assert "stampTree(document)" in OSK, \
+        "existing served fields must be stamped at load"
+    assert "MutationObserver" in OSK, \
+        "dynamically-created fields must be stamped too"
 
 
 def test_osk_has_symbol_and_emoji_layers():
