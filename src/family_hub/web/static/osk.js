@@ -270,6 +270,9 @@
     if (layer !== 'emoji') addKey(cmd, 'Layer:emoji', '😊', 'osk-emoji-toggle', false);
     addKey(cmd, 'Space', 'space', 'osk-space', false);
     addKey(cmd, 'Backspace', '⌫', 'osk-back', false);
+    // ✕ Cancel sits beside Done as the discard/confirm pair: it dismisses the
+    // keyboard WITHOUT submitting and clears what you typed (see onKey).
+    addKey(cmd, 'Cancel', '✕', 'osk-cancel', false).setAttribute('aria-label', 'Close and discard');
     addKey(cmd, 'Done', 'Done', 'osk-done', false);
     keysEl.appendChild(cmd);
     paintFaces();
@@ -343,6 +346,19 @@
 
   function onKey(key) {
     if (key === 'Shift') { shiftOn = !shiftOn; paintFaces(); return; }
+    if (key === 'Cancel') {
+      // Close without saving: clear what was typed and dismiss. Nothing is
+      // committed - unlike Done, this never submits. Clearing the DOM value is
+      // safe because no unsaved edit was ever persisted - an existing record's
+      // stored value is untouched and reappears on reopen.
+      const el = activeInput;
+      if (el) {
+        el.value = '';
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) { /* detached */ }
+      }
+      hide();
+      return;
+    }
     if (key === 'Done') {
       const el = activeInput;
       const form = el && el.form;

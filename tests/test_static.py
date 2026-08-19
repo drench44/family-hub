@@ -1210,8 +1210,25 @@ def test_osk_emoji_grid_and_mode_keys_are_styled():
     """Every JS-added OSK class needs a rule or it renders unstyled."""
     for cls in (".osk-keys", ".osk-mode", ".osk-emoji-toggle",
                 ".osk-emoji-grid", ".osk-emoji", ".osk-emoji-cats",
-                ".osk-emoji-cat", ".osk-emoji-empty"):
+                ".osk-emoji-cat", ".osk-emoji-empty", ".osk-cancel"):
         assert cls in CSS, f"{cls} is used by osk.js but not styled"
+
+
+def test_osk_cancel_key_closes_without_saving():
+    """A ✕ Cancel key must let you dismiss the keyboard WITHOUT submitting, and
+    discard what was typed - distinct from Done (which commits). Guard both the
+    key and that its handler clears the field and hides but never submits."""
+    assert re.search(r"addKey\(cmd,\s*'Cancel'", OSK), \
+        "the command row must include a Cancel key"
+    # The Cancel branch clears the active field, hides, and returns BEFORE the
+    # Done branch's requestSubmit / [data-submit] click.
+    m = re.search(r"if \(key === 'Cancel'\) \{(.*?)\n    \}", OSK, re.S)
+    assert m, "onKey must handle the Cancel key"
+    body = m.group(1)
+    assert "el.value = ''" in body and "hide()" in body, \
+        "Cancel must clear the field and hide the keyboard"
+    assert "requestSubmit" not in body and "data-submit" not in body, \
+        "Cancel must NOT submit — that's what Done is for"
 
 
 def test_todos_repaint_preserves_focus_and_caret():

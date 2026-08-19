@@ -11,6 +11,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Added
+- On-screen keyboard: a ✕ Cancel key beside Done that closes the keyboard
+  without saving and clears what you typed — for when you change your mind.
 - On-screen keyboard: two-page symbol layer (`?123` / `#+=`) and a categorized
   emoji picker — a tab strip (smileys, people, animals, nature, food, activity,
   travel, objects, symbols) over a scrollable grid, plus a 🕐 Recently-used tab

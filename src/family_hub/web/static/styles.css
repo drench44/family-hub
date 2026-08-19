@@ -1784,6 +1784,8 @@ body.overlay-open { overflow: hidden; }
    than a single letter. */
 .osk-space { flex: 6 1 0; }
 .osk-shift, .osk-back { flex: 1.7 1 0; font-size: 22px; }
+/* ✕ Cancel: neutral (not the green Done), sits beside it as discard/confirm. */
+.osk-cancel { flex: 1.7 1 0; font-size: 20px; }
 .osk-done {
   flex: 2 1 0; font-weight: 600;
   color: var(--accent-ink); background: var(--accent); border-color: var(--accent);
