@@ -20,6 +20,11 @@ rolls that section to a dated version via `python scripts/release.py`.
   deletes a whole emoji. Every emoji is color-verified against the wall's font.
 
 ### Fixed
+- On-screen keyboard can be re-summoned after Cancel/Done: the keyboard now
+  blurs the field when it hides, so tapping the same box again brings it back
+  (before, the still-focused field fired no focusin and a later Done no-oped).
+  Added `scripts/wall-smoke-test.py` — a Marionette smoke test that drives the
+  real wall Firefox, which is how this was caught.
 - On-screen keyboard is now **wall-only** and works on a wall whose browser
   reports itself mouse-only (Firefox under Wayland delivers the touchscreen as a
   mouse, so the old touch gate never fired there and the OS keyboard took over).

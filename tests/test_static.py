@@ -1214,6 +1214,20 @@ def test_osk_emoji_grid_and_mode_keys_are_styled():
         assert cls in CSS, f"{cls} is used by osk.js but not styled"
 
 
+def test_osk_hide_blurs_a_still_focused_field():
+    """After Done/Cancel hides the keyboard, the field is usually still focused
+    (the osk keeps focus on it while a key is tapped). If left focused, tapping
+    the same box again fires NO focusin, so the keyboard can't be re-summoned by
+    tapping it - and a later Done no-ops on a null activeInput. Found on the real
+    wall (Firefox) - the fake-DOM harness can't see it. hide() must blur a
+    still-focused field so the next tap re-focuses and re-shows."""
+    m = re.search(r"function hide\(\) \{(.*?)\n  \}", OSK, re.S)
+    assert m, "osk.js must define hide()"
+    body = m.group(1)
+    assert "document.activeElement === el" in body and ".blur()" in body, \
+        "hide() must blur the field when it is still the focused element"
+
+
 def test_osk_cancel_key_closes_without_saving():
     """A ✕ Cancel key must let you dismiss the keyboard WITHOUT submitting, and
     discard what was typed - distinct from Done (which commits). Guard both the
