@@ -8,37 +8,35 @@ tested in `tests/js/osk.test.mjs`).
 
 ## When it activates
 
-The keyboard is wasted (and in the way) on a laptop that already has real keys,
-so it stays off unless one of these is true:
+**Kiosk (wall) only.** The keyboard exists solely for the keyboard-less wall.
+Phones and laptops already have a real or native on-screen keyboard, and showing
+this one there just stacks under theirs — so it does **not** activate on touch
+(a phone is a touch device too). It turns on only when the page URL carried
+`?kiosk=1` at least once. The flag is latched into `localStorage` (`oskKiosk=1`)
+so it survives every later navigation on that browser; `?kiosk=0` clears it.
 
-1. **A genuine touch device** — `maxTouchPoints > 0` or `(pointer: coarse)`.
-   This covers phones.
-2. **Kiosk mode** — the page URL carried `?kiosk=1` at least once. The flag is
-   latched into `localStorage` (`oskKiosk=1`) so it survives every later
-   navigation on that browser.
+### Why an explicit flag, not touch detection
 
-### Why the wall needs the flag
-
-The wall turned out **not** to report touch to the browser at all. It's an HP
-all-in-one running Firefox under a GNOME/Wayland session, and in that setup the
-touchscreen is delivered to the browser as the **mouse pointer** — the page sees
+The wall doesn't report touch to the browser at all. It's an HP all-in-one
+running Firefox under a GNOME/Wayland session, and there the touchscreen is
+delivered to the browser as the **mouse pointer** — the page sees
 `maxTouchPoints: 0` and `pointer: fine`, exactly like a desktop with a mouse. So
-the touch heuristic can never fire there, and the wall silently fell back to
-GNOME's own touch keyboard, which mishandles Firefox web inputs (needs two taps
-to appear, and its backspace never reaches the field).
+a touch heuristic can't identify the wall anyway; and even if it could, it would
+wrongly fire on every phone. An explicit flag is the only reliable signal.
+**Point the wall's browser at the hub with `?kiosk=1` once** (e.g. make the
+bookmark / start page `http://<your-hub>/?kiosk=1`). After the first load the
+flag is remembered, so the query string is only needed once per browser profile.
 
-The fix is to turn the app keyboard on explicitly. **Point the wall's browser at
-the hub with `?kiosk=1` once** (e.g. make the bookmark / start page
-`http://<your-hub>/?kiosk=1`). After the first load the flag is remembered, so
-the query string is only needed once per browser profile.
+Before the flag is latched, the wall silently falls back to GNOME's own touch
+keyboard, which mishandles Firefox web inputs (needs two taps to appear, and its
+backspace never reaches the field) — which is the whole reason this exists.
 
 ### Suppressing the OS keyboard
 
-In kiosk mode the app keyboard must be the *only* keyboard. So kiosk mode marks
-the served fields `readonly` and `inputmode="none"`: the operating system never
-offers its own keyboard for a read-only field, while the app keyboard still
-writes straight to the field's `.value`. On genuine touch phones this is left
-off — a phone's native keyboard is the better peer there.
+The app keyboard must be the *only* keyboard on the wall. So the served fields
+are marked `readonly` and `inputmode="none"`: the operating system never offers
+its own keyboard for a read-only field, while the app keyboard still writes
+straight to the field's `.value`.
 
 ## Layers
 
