@@ -11,8 +11,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Added
-- On-screen keyboard: two-page symbol layer (`?123` / `#+=`) and a curated emoji
-  grid, with a grapheme-aware backspace so one tap deletes a whole emoji.
+- On-screen keyboard: two-page symbol layer (`?123` / `#+=`) and a categorized
+  emoji picker — a tab strip (smileys, people, animals, nature, food, activity,
+  travel, objects, symbols) over a scrollable grid, plus a 🕐 Recently-used tab
+  that remembers your go-to emojis. Backspace is grapheme-aware, so one tap
+  deletes a whole emoji. Every emoji is color-verified against the wall's font.
 
 ### Fixed
 - On-screen keyboard is now **wall-only** and works on a wall whose browser
