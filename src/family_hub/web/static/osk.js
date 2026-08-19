@@ -2,57 +2,49 @@
 
 /* Family Hub - on-screen keyboard (OSK) for the touchscreen wall.
 
-   The wall is a Chromium kiosk on a Raspberry Pi touchscreen with NO physical
-   keyboard, so tapping a text field has to summon a keyboard the family can
-   type on. Desktop Chromium shows no native OSK on focus, so we build our own.
+   The wall is an HP all-in-one touchscreen (Firefox under GNOME/Wayland) with NO
+   physical keyboard, so tapping a text field has to summon a keyboard the family
+   can type on. The browser shows no usable native keyboard there, so we build
+   our own.
 
    Loaded as a classic script AFTER common.js (for oskApplyKey, the pure text
    transform) and BEFORE hub.js. It wires itself entirely through delegated
    document listeners, so hub.js stays untouched.
 
-   GATED ON TOUCH: someone viewing the wall on a laptop/desktop has a real
-   keyboard, and a fake one popping over the mouse cursor would just be in the
-   way - so the whole thing no-ops unless the device reports touch points. */
+   KIOSK-ONLY: this exists solely for the keyboard-less wall. Phones and laptops
+   already have their own keyboard, and ours would just stack under it - so the
+   whole thing no-ops unless the wall has latched ?kiosk=1 (see the gate below),
+   NOT on touch detection (a phone is a touch device too). */
 (function () {
-  // No document (the vm test sandbox) or no touch (a laptop): do nothing. The
-  // pure transform lives in common.js (oskApplyKey) and is tested there, so the
-  // gate can bail before building any DOM.
+  // No document (the vm test sandbox): do nothing. The pure transform lives in
+  // common.js (oskApplyKey) and is tested there, so the gate can bail before
+  // building any DOM.
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return;
 
-  // Touch device? maxTouchPoints is the primary signal, but some Linux touch
-  // drivers leave it 0 while still reporting a coarse pointer, so fall back to
-  // the pointer media query. A laptop/desktop (fine pointer, no touch points)
-  // fails both - it has a real keyboard.
-  const hasTouch = navigator.maxTouchPoints > 0
-    || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-
-  // KIOSK WALL: the family-hub wall is an HP touchscreen driven by Firefox under
-  // Wayland, which delivers the panel as a MOUSE - the browser sees no touch at
-  // all (maxTouchPoints 0, pointer:fine), so the heuristic above can never fire
-  // there and the wall was silently falling back to GNOME's own touch keyboard
-  // (which mis-handles Firefox web inputs: two taps to appear, backspace never
-  // reaching the field). So the wall latches the keyboard on explicitly: its
-  // bookmark carries ?kiosk=1 once, which we persist to localStorage so every
-  // later navigation stays in kiosk mode. Genuine touch devices (phones) still
-  // activate through hasTouch, unchanged.
+  // KIOSK-ONLY. This keyboard exists solely for the keyboard-less WALL. Phones
+  // and laptops already have a real (or native on-screen) keyboard, and showing
+  // our board there just stacks under theirs - so we do NOT gate on touch (a
+  // phone is a touch device too). We activate only when the wall has latched
+  // kiosk mode: it opens the hub once with ?kiosk=1, which we persist to
+  // localStorage so every later navigation stays in kiosk mode. ?kiosk=0 clears
+  // it. (The wall itself is an HP touchscreen on Firefox/Wayland that reports NO
+  // touch to the browser anyway - the panel arrives as a mouse - so an explicit
+  // flag, not touch detection, is the only reliable signal there.)
   let kiosk = false;
   try {
     const q = location.search;
-    // ?kiosk=0 is the escape hatch: a phone/laptop that once opened the wall's
-    // kiosk bookmark can clear the latch and get its native keyboard back.
-    if (/[?&]kiosk=0(?:&|$)/.test(q)) localStorage.removeItem('oskKiosk');
+    if (/[?&]kiosk=0(?:&|$)/.test(q)) localStorage.removeItem('oskKiosk');   // escape hatch
     else if (/[?&]kiosk=1(?:&|$)/.test(q)) localStorage.setItem('oskKiosk', '1');
     kiosk = localStorage.getItem('oskKiosk') === '1';
   } catch (e) {
-    // Storage blocked (private mode / locked-down profile). On the wall - which
-    // reports no touch - this leaves NO keyboard, so leave a breadcrumb instead
-    // of failing silently with a dead keyboard and nothing in the console.
+    // Storage blocked (private mode / locked-down profile) leaves the wall with
+    // NO keyboard, so leave a breadcrumb instead of failing silently.
     if (typeof console !== 'undefined' && console.warn) {
       console.warn('[osk] kiosk flag unreadable (storage blocked); on-screen keyboard may be off', e);
     }
   }
 
-  if (!hasTouch && !kiosk) return;
+  if (!kiosk) return;
 
   // The inputs the keyboard serves. A `.txt-input` <select> (the chore person
   // picker) also carries the class, so oskTypeable() below excludes non-text
@@ -273,15 +265,15 @@
 
   oskEl = buildKeyboard();
 
-  // KIOSK OS-KEYBOARD SUPPRESSION: on the wall THIS keyboard is the only one we
-  // want, so stop the browser/compositor from also summoning GNOME's touch
-  // keyboard for these fields. inputmode="none" alone was not enough on
-  // Firefox/Wayland - GNOME's keyboard still muscled in once typing started - so
-  // we mark the field readonly: the OS never offers a keyboard for a read-only
-  // field, yet the app keyboard writes straight to its .value regardless (see
-  // typeKey). The To-Do add input and chore fields are (re)created dynamically,
-  // so stamp existing ones now and watch for new ones. Only in kiosk mode - a
-  // phone still wants its native keyboard as the app OSK's peer.
+  // OS-KEYBOARD SUPPRESSION: THIS keyboard is the only one the wall wants, so
+  // stop the browser/compositor from also summoning GNOME's touch keyboard for
+  // these fields. inputmode="none" alone was not enough on Firefox/Wayland -
+  // GNOME's keyboard still muscled in once typing started - so we mark the field
+  // readonly: the OS never offers a keyboard for a read-only field, yet the app
+  // keyboard writes straight to its .value regardless (see typeKey). The whole
+  // module only runs in kiosk mode (gated above), so this is unconditional here.
+  // The To-Do add input and chore fields are (re)created dynamically, so stamp
+  // existing ones now and watch for new ones.
   //
   // TRAP for future work: a readonly control is "barred from constraint
   // validation", so a native <form> submit (the requestSubmit path in onKey's
@@ -296,24 +288,22 @@
     el.setAttribute('inputmode', 'none');
     el.readOnly = true;             // suppresses the OS keyboard; JS still writes .value
   };
-  if (kiosk) {
-    const stampTree = (root) => {
-      if (!root || !root.querySelectorAll) return;
-      if (root.matches && root.matches(OSK_SEL)) kioskStamp(root);
-      root.querySelectorAll(OSK_SEL).forEach(kioskStamp);
-    };
-    stampTree(document);
-    // The observer stays attached for the life of the (24/7) kiosk on purpose:
-    // the served fields are created and destroyed continuously as overlays open
-    // and lists repaint. It only walks element additions (nodeType 1), and the
-    // synchronous focusin backstop below covers correctness even if a mutation
-    // is missed - so this is a cheap safety net, not a correctness dependency.
-    new MutationObserver((muts) => {
-      muts.forEach((m) => m.addedNodes && m.addedNodes.forEach((n) => {
-        if (n.nodeType === 1) stampTree(n);
-      }));
-    }).observe(document.body, { childList: true, subtree: true });
-  }
+  const stampTree = (root) => {
+    if (!root || !root.querySelectorAll) return;
+    if (root.matches && root.matches(OSK_SEL)) kioskStamp(root);
+    root.querySelectorAll(OSK_SEL).forEach(kioskStamp);
+  };
+  stampTree(document);
+  // The observer stays attached for the life of the (24/7) kiosk on purpose: the
+  // served fields are created and destroyed continuously as overlays open and
+  // lists repaint. It only walks element additions (nodeType 1), and the
+  // synchronous focusin backstop below covers correctness even if a mutation is
+  // missed - so this is a cheap safety net, not a correctness dependency.
+  new MutationObserver((muts) => {
+    muts.forEach((m) => m.addedNodes && m.addedNodes.forEach((n) => {
+      if (n.nodeType === 1) stampTree(n);
+    }));
+  }).observe(document.body, { childList: true, subtree: true });
 
   // FOCUS PRESERVATION: pressing a key must not steal focus from the input (a
   // blur would collapse the caret and, on the wall, dismiss the keyboard). Cancel
@@ -340,7 +330,7 @@
   // keyboard up even if a browser ever did move it there.)
   document.addEventListener('focusin', (e) => {
     if (!oskTypeable(e.target)) return;
-    if (kiosk) kioskStamp(e.target);   // synchronous backstop for a just-created field
+    kioskStamp(e.target);   // synchronous backstop for a just-created field
     show(e.target);
   });
   document.addEventListener('focusout', (e) => {
