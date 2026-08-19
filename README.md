@@ -162,6 +162,13 @@ touchscreen PC** (or a touch monitor on a mini-PC) is a great no-fuss option:
 one device, nothing to wire up, just open the dashboard fullscreen in its
 browser.
 
+**Typing on the wall.** A wall has no keyboard, so tapping a text field pops up
+a built-in on-screen keyboard (letters, symbols, and emoji). Phones get it
+automatically; a wall PC whose browser reports itself as mouse-only (common with
+Firefox on Linux) should open the hub once with **`?kiosk=1`** to turn it on —
+the setting is then remembered. See
+**[docs/on-screen-keyboard.md](docs/on-screen-keyboard.md)**.
+
 ## config.json reference
 
 | Key | What it is |
