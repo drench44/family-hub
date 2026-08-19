@@ -56,36 +56,41 @@ The command row ends with a discard/confirm pair: **✕ Cancel** clears the fiel
 and closes the keyboard without saving; **Done** submits (adds the to-do / saves
 the chore).
 
-## Emoji rendering on the wall (fontconfig)
+## Emoji rendering on the wall
 
-Some ordinary emojis (a phone, cutlery, a soccer ball) are grey/black-and-white
-*by design*, and on a stock Debian/GNOME box a monochrome symbol font (Symbola /
-DejaVu) can win the font fallback for those codepoints and render them as flat
-**text outlines** instead of the real emoji artwork. The installed Noto Color
-Emoji has color glyphs for them; it just needs to win the fallback. A one-time
-per-machine fontconfig rule fixes it — prefer the color emoji font:
+The emoji set is chosen to render in color on the wall's **stock** font (a
+Debian/GNOME box with `fonts-noto-color-emoji`) — every emoji was checked on the
+real display. Some (a phone, cutlery, a soccer ball, a panda) are grey/black-
+and-white *by design*; that's the real Noto Color Emoji artwork, not a broken
+fallback, so it's kept.
 
-```xml
-<!-- ~/.config/fontconfig/fonts.conf on the wall, then: fc-cache -f -->
-<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-<fontconfig>
-  <match target="pattern">
-    <edit name="family" mode="prepend" binding="strong">
-      <string>Noto Color Emoji</string>
-    </edit>
-  </match>
-</fontconfig>
-```
+Do **not** try to "fix" grey emoji with a broad fontconfig rule that prepends
+`Noto Color Emoji` to every font pattern. That was tried and it backfired: Noto
+Color Emoji also contains bare digit glyphs, so prepending it globally rendered
+the wall clock's digits as full-width emoji cells — the whole page went
+scattered. If a specific new emoji ever falls back to a monochrome outline on
+the wall, swap it for a color-verified one in `EMOJI_CATS` (osk.js) rather than
+touching system fonts.
 
-Restart the browser afterwards (fontconfig is read at process start). This is a
-wall-machine setting, not app code — it lives here as an operator note.
-
-## Guards
+## Guards & real-wall smoke test
 
 - `tests/js/osk.test.mjs` — the pure transform, incl. symbol/emoji insert and
   grapheme-aware backspace (surrogate pair, variation selector, ZWJ sequence).
 - `tests/test_static.py` — structural guards for kiosk activation, OS-keyboard
-  suppression, the symbol/emoji layers, the grapheme helper, the CSS, and the
-  `renderTodosPaint` focus/caret preservation that keeps the keyboard from being
-  dropped by a background list refresh.
+  suppression, the symbol/emoji layers, the grapheme helper, the CSS, the
+  `renderTodosPaint` focus/caret preservation, and that `hide()` blurs a
+  still-focused field (so the keyboard re-summons on the next tap).
+
+These don't run a real browser, so some bugs only show up on the actual wall
+(scattered text from a bad emoji fontconfig; the keyboard not re-summoning after
+Cancel). For UI changes, run the real-wall smoke test against the running hub —
+it drives the wall's Firefox with Marionette and asserts the behaviour CI can't
+see:
+
+```bash
+# on a machine with a Firefox that can reach the hub (usually the wall, over SSH)
+python3 scripts/wall-smoke-test.py --hub-url http://<your-hub>:8138
+```
+
+It needs `marionette_driver` (`pip install marionette_driver`, ideally in a
+venv) and exits non-zero on any failure, so it can gate a deploy.
