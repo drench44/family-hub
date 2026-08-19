@@ -74,25 +74,107 @@
     ['_', '\\', '|', '~', '<', '>', '€', '£', '¥', '•'],
     ['.', ',', '?', '!', "'"],
   ];
-  // Curated common + family/chore-relevant emojis; tapping one inserts it and
-  // keeps the grid open so several can be added. Some carry a variation selector
-  // or ZWJ - Backspace is grapheme-aware (oskApplyKey) so each deletes whole.
-  const EMOJI = [
-    '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🙂', '😉', '😊',
-    '😍', '😘', '😎', '🤔', '😴', '😢', '😭', '😡', '🥳', '🤗',
-    '👍', '👎', '👏', '🙏', '💪', '🙌', '👋', '🤞', '✌️', '🤙',
-    '❤️', '🧡', '💛', '💚', '💙', '💜', '🔥', '⭐', '✨', '💯',
-    '✅', '❌', '❗', '❓', '🎉', '🎂', '🎁', '📅', '⏰', '💡',
-    '🏠', '🛒', '🧺', '🧹', '🧼', '🗑️', '🚗', '🛏️', '📚', '📞',
-    '🌱', '🌞', '🌧️', '🍽️', '🍕', '🍎', '☕', '🐶', '🐱', '🐟',
-    '🐰', '🏃', '⚽', '🎵',
+  // The emoji layer is a category picker: a tab strip (each tab a category
+  // glyph) over a scrollable grid. Every emoji here was color-verified on the
+  // wall's Noto Color Emoji (some are grey/black by design - a panda, a soccer
+  // ball, a phone - but they ARE the real emoji art, not text-fallback). Some
+  // carry a variation selector - Backspace is grapheme-aware (oskApplyKey) so
+  // each deletes whole. The 'recent' category is filled from localStorage at
+  // render (see recentEmojis); its `emojis` here is just a placeholder.
+  const EMOJI_CATS = [
+    { id: 'recent', tab: '🕐', emojis: [] },
+    { id: 'smileys', tab: '😀', emojis: [
+      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '🙂', '😉',
+      '😊', '😇', '🥰', '😍', '😘', '😗', '😋', '😜', '🤪', '😝',
+      '🤗', '🤔', '🤨', '😐', '😶', '😏', '😌', '😴', '😷', '🤒',
+      '🤢', '🤮', '🥵', '🥶', '🤯', '🤠', '🥳', '😎', '🤓', '🧐',
+      '😕', '🙁', '😮', '😲', '😳', '🥺', '😢', '😭', '😱', '😤',
+      '😡', '🤬', '😈', '💀', '👻', '👽', '🤖', '💩'] },
+    { id: 'people', tab: '👋', emojis: [
+      '👍', '👎', '👌', '✌️', '🤞', '🤟', '🤙', '👈', '👉', '👆',
+      '👇', '✋', '🖐️', '🖖', '👋', '🤝', '🙏', '✍️', '💪', '👀',
+      '👂', '👃', '👶', '🧒', '👦', '👧', '🧑', '👨', '👩', '👴',
+      '👵', '🎅', '🤶', '🦸', '🦹', '🧙', '🧚', '🧛', '🧜', '🚶',
+      '🏃', '💃', '🕺', '🧘'] },
+    { id: 'animals', tab: '🐶', emojis: [
+      '🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯',
+      '🦁', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🐦', '🐤', '🦆',
+      '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🐛', '🦋',
+      '🐌', '🐞', '🐢', '🐍', '🦖', '🐙', '🦀', '🐠', '🐟', '🐬',
+      '🐳', '🐋', '🦈', '🐊', '🐘', '🐪', '🦒', '🐐', '🦌', '🐕',
+      '🐈', '🐓', '🦃', '🦚', '🦜', '🕊️', '🐇', '🐁', '🐿️', '🐾'] },
+    { id: 'nature', tab: '🌿', emojis: [
+      '🌵', '🎄', '🌲', '🌳', '🌴', '🌱', '🌿', '☘️', '🍀', '🍄',
+      '🌾', '💐', '🌷', '🌹', '🥀', '🌺', '🌸', '🌼', '🌻', '🌙',
+      '⭐', '🌟', '✨', '⚡', '☄️', '💥', '🔥', '🌈', '☀️', '⛅',
+      '☁️', '🌧️', '⛈️', '❄️', '☃️', '⛄', '💨', '💧', '💦', '🌊'] },
+    { id: 'food', tab: '🍎', emojis: [
+      '🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🍒',
+      '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🥑', '🍆', '🥦', '🌽',
+      '🥕', '🧄', '🧅', '🥔', '🍞', '🥐', '🧀', '🥚', '🥓', '🍗',
+      '🌭', '🍔', '🍟', '🍕', '🥪', '🌮', '🌯', '🥗', '🍝', '🍜',
+      '🍲', '🍣', '🍦', '🍰', '🎂', '🍪', '🍫', '🍬', '🍭', '🍿',
+      '☕', '🍵', '🥤', '🍺', '🍻', '🍷', '🥂'] },
+    { id: 'activity', tab: '⚽', emojis: [
+      '⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🎱', '🏓',
+      '🏸', '🥅', '⛳', '🏹', '🎣', '🥊', '🛹', '⛸️', '🎿', '🏂',
+      '🏋️', '🚴', '🏆', '🥇', '🥈', '🥉', '🏅', '🎖️', '🎗️', '🎪',
+      '🤹', '🎨', '🎬', '🎤', '🎧', '🎼', '🎹', '🥁', '🎷', '🎸',
+      '🎻', '🎲', '🎯', '🎳', '🎮', '🧩'] },
+    { id: 'travel', tab: '🚗', emojis: [
+      '🚗', '🚕', '🚙', '🚌', '🚑', '🚒', '🚓', '🚐', '🚚', '🚜',
+      '🚲', '🛵', '🏍️', '🚨', '✈️', '🚀', '🛸', '🚁', '🚢', '⛵',
+      '🚤', '⛽', '🚦', '🗺️', '🗽', '🗼', '🏰', '🎡', '🎢', '🎠',
+      '⛲', '🏖️', '🏝️', '🌋', '⛺', '🏠', '🏡', '🏢', '🏬', '🏥',
+      '🏦', '🏫', '⛪', '🕌', '🏙️', '🌃', '🌉', '🌅', '🌄', '🌇'] },
+    { id: 'objects', tab: '💡', emojis: [
+      '⌚', '📱', '💻', '🖥️', '⌨️', '🖨️', '🖱️', '💽', '💾', '💿',
+      '📷', '📹', '🎥', '📞', '☎️', '📺', '📻', '🎙️', '⏰', '⏳',
+      '🔋', '🔌', '💡', '🔦', '🕯️', '🧯', '💰', '💳', '💎', '⚖️',
+      '🔧', '🔨', '🛠️', '⚙️', '🧲', '💣', '🔪', '🛡️', '🚬', '🔮',
+      '🧿', '🔭', '🔬', '💊', '💉', '🩸', '🌡️', '🧹', '🧺', '🧻',
+      '🚽', '🚿', '🛁', '🧼', '🧴', '🔑', '🚪', '🛏️', '🧸', '🖼️',
+      '🛍️', '🛒', '🎁', '🎈', '🎉', '🎊', '✉️', '📦', '📫', '📮',
+      '📅', '📆', '📋', '📁', '📰', '📓', '📚', '📖', '🔖', '📎',
+      '📏', '📌', '✂️', '🖊️', '✏️', '📝', '🔍', '🔒', '🔓'] },
+    { id: 'symbols', tab: '❤️', emojis: [
+      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔',
+      '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💯', '💢',
+      '💥', '💫', '💬', '💭', '💤', '✅', '❌', '⭕', '🛑', '⛔',
+      '🚫', '❗', '❓', '⚠️', '♻️', '🔔', '🎵', '🎶', '➡️', '⬅️',
+      '⬆️', '⬇️', '▶️', '⏸️', '⏹️', '🔴', '🟠', '🟡', '🟢', '🔵',
+      '🟣', '⚫', '⚪', '🟥', '🟨', '🟩', '🟦', '⬛', '⬜'] },
   ];
 
   let activeInput = null;   // the field currently being typed into
   let shiftOn = false;      // one-shot shift: capitalizes the next character
   let layer = 'letters';    // 'letters' | 'sym1' | 'sym2' | 'emoji'
+  let emojiCat = 'smileys'; // active category within the emoji layer
   let oskEl = null;         // the keyboard container (a fixed sibling of .wrap)
   let keysEl = null;        // the layer-specific rows, re-rendered on a switch
+
+  // Every emoji we ship, so a stored "recent" value that isn't one of ours (a
+  // stale schema, a partial write, tampering on this shared kiosk origin) can
+  // never surface as a tappable key or get inserted.
+  const KNOWN_EMOJI = new Set();
+  EMOJI_CATS.forEach((c) => c.emojis.forEach((e) => KNOWN_EMOJI.add(e)));
+
+  // Recently-used emojis, most-recent-first, capped. Persisted per browser so
+  // the family's go-to emojis are one tap away on the 🕐 tab. The dedup/cap/
+  // sanitize logic is pure and tested in common.js (oskRecentRead/oskRecentPush);
+  // these wrappers just do the localStorage I/O. Storage failures degrade to an
+  // empty list - the picker still works, just without history.
+  const RECENT_MAX = 30;
+  function recentEmojis() {
+    let raw = null;
+    try { raw = localStorage.getItem('oskEmojiRecent'); } catch (e) { return []; }
+    return oskRecentRead(raw, RECENT_MAX).filter((e) => KNOWN_EMOJI.has(e));
+  }
+  function pushRecent(emoji) {
+    const next = oskRecentPush(recentEmojis(), emoji, RECENT_MAX);   // pure; no I/O
+    try { localStorage.setItem('oskEmojiRecent', JSON.stringify(next)); }
+    catch (e) { /* storage blocked/full: skip persisting, insertion still works */ }
+  }
 
   function oskTypeable(el) {
     if (!el || typeof el.matches !== 'function' || !el.matches(OSK_SEL)) return false;
@@ -140,9 +222,27 @@
   function renderLayer() {
     keysEl.textContent = '';
     if (layer === 'emoji') {
+      // Category tab strip: each tab a `EmojiCat:<id>` key the click handler
+      // routes to a re-render on the chosen category.
+      const tabs = document.createElement('div');
+      tabs.className = 'osk-emoji-cats';
+      EMOJI_CATS.forEach((c) => {
+        const t = addKey(tabs, 'EmojiCat:' + c.id, c.tab, 'osk-emoji-cat', false);
+        if (c.id === emojiCat) t.classList.add('active');
+      });
+      keysEl.appendChild(tabs);
       const grid = document.createElement('div');
       grid.className = 'osk-emoji-grid';
-      EMOJI.forEach((e) => addKey(grid, e, e, 'osk-emoji', false));
+      const cat = EMOJI_CATS.find((c) => c.id === emojiCat) || EMOJI_CATS[1];
+      const list = cat.id === 'recent' ? recentEmojis() : cat.emojis;
+      if (!list.length) {
+        const empty = document.createElement('div');
+        empty.className = 'osk-emoji-empty';
+        empty.textContent = 'Emojis you use show up here.';
+        grid.appendChild(empty);
+      } else {
+        list.forEach((e) => addKey(grid, e, e, 'osk-emoji', false));
+      }
       keysEl.appendChild(grid);
     } else if (layer === 'sym1') {
       SYM1_ROWS.forEach((r) => addRow(keysEl, r, false));
@@ -321,6 +421,12 @@
     if (!btn) return;
     const key = btn.dataset.key;
     if (key.indexOf('Layer:') === 0) { setLayer(key.slice(6)); return; }
+    if (key.indexOf('EmojiCat:') === 0) { emojiCat = key.slice(9); renderLayer(); return; }
+    // Record the emoji, then insert. We deliberately do NOT re-render the grid
+    // here even when the recent tab is showing: reshuffling emojis under the
+    // finger would fight rapid multi-emoji entry. The recent order refreshes on
+    // the next open of the tab.
+    if (btn.classList.contains('osk-emoji')) pushRecent(key);
     onKey(key);
   });
 

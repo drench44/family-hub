@@ -179,3 +179,45 @@ test('fallback (no Intl.Segmenter): a ZWJ sequence degrades to one code-unit pai
   assert.equal(res.caret, ('x' + fam).length - 2);   // only the last pair removed
   assert.equal(res.value, 'x' + fam.slice(0, -2));   // trailing ZWJ remains
 });
+
+// ---- recently-used emoji list (pure logic behind the 🕐 tab) ----
+const recentRead = (...a) => [...sandbox.oskRecentRead(...a)];
+const recentPush = (...a) => [...sandbox.oskRecentPush(...a)];
+
+test('oskRecentPush puts a new emoji at the front, most-recent-first', () => {
+  assert.deepEqual(recentPush(['🐶', '🍕'], '🎉', 30), ['🎉', '🐶', '🍕']);
+  assert.deepEqual(recentPush([], '🐶', 30), ['🐶']);
+});
+
+test('oskRecentPush de-dupes: re-tapping moves it to front, length unchanged', () => {
+  assert.deepEqual(recentPush(['🐶', '🍕', '🎉'], '🍕', 30), ['🍕', '🐶', '🎉']);
+});
+
+test('oskRecentPush caps the list, dropping the oldest', () => {
+  const list = ['a', 'b', 'c'];
+  assert.deepEqual(recentPush(list, 'z', 3), ['z', 'a', 'b']);   // 'c' evicted
+  const full = Array.from({ length: 30 }, (_, i) => 'e' + i);
+  const out = recentPush(full, 'NEW', 30);
+  assert.equal(out.length, 30);
+  assert.equal(out[0], 'NEW');
+  assert.equal(out.includes('e29'), false);   // the oldest fell off
+});
+
+test('oskRecentPush tolerates a non-array list', () => {
+  assert.deepEqual(recentPush(null, '🐶', 30), ['🐶']);
+});
+
+test('oskRecentRead returns [] for malformed / non-array / missing storage', () => {
+  assert.deepEqual(recentRead('not json', 30), []);
+  assert.deepEqual(recentRead('{}', 30), []);
+  assert.deepEqual(recentRead('42', 30), []);
+  assert.deepEqual(recentRead(null, 30), []);
+  assert.deepEqual(recentRead('[]', 30), []);
+});
+
+test('oskRecentRead drops non-string / empty entries and caps length', () => {
+  // corrupt/foreign stored value must not surface as tappable keys
+  assert.deepEqual(recentRead('["🐶", "", 42, null, "🍕"]', 30), ['🐶', '🍕']);
+  const stored = JSON.stringify(Array.from({ length: 50 }, (_, i) => 'e' + i));
+  assert.equal(recentRead(stored, 30).length, 30);
+});
