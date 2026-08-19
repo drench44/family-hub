@@ -19,6 +19,9 @@ HTML_FILES = sorted(STATIC.glob("*.html"))
 JS_FILES = sorted(STATIC.glob("*.js"))
 ALL_HTML = "\n".join(p.read_text() for p in HTML_FILES)
 ALL_JS = "\n".join(p.read_text() for p in JS_FILES)
+OSK = (STATIC / "osk.js").read_text()
+HUB = (STATIC / "hub.js").read_text()
+COMMON = (STATIC / "common.js").read_text()
 
 # The NEW load-bearing theme tokens (Task 10 finished the migration off the
 # legacy dark-only names). Every one must be defined so the whole wall chrome
@@ -1104,3 +1107,89 @@ def test_dockerfile_ships_version():
     dockerfile = (ROOT / "web.Dockerfile").read_text()
     assert re.search(r"COPY\s+.*\bVERSION\b", dockerfile), \
         "web.Dockerfile must COPY VERSION into the image"
+
+
+# ---------------------------------------------------------------------------
+# On-screen keyboard (osk.js) — the wall's touch keyboard. These guard the
+# fixes made after the wall turned out to be an HP touchscreen driven by
+# Firefox/Wayland, which reports NO touch to the browser (the panel arrives as
+# a mouse). See docs/on-screen-keyboard.md.
+# ---------------------------------------------------------------------------
+
+def test_osk_activates_in_kiosk_mode_not_just_on_touch():
+    """The wall's Firefox reports maxTouchPoints 0 / pointer:fine, so the touch
+    heuristic can NEVER fire there. osk.js must also latch on an explicit
+    ?kiosk=1 flag persisted to localStorage, and still bail when NEITHER touch
+    nor kiosk is present (a laptop keeps its real keyboard)."""
+    assert "kiosk=1" in OSK, "osk.js must honor a ?kiosk=1 activation flag"
+    assert "localStorage" in OSK and "oskKiosk" in OSK, \
+        "the kiosk flag must persist to localStorage so it survives navigation"
+    assert re.search(r"if\s*\(\s*!hasTouch\s*&&\s*!kiosk\s*\)\s*return",
+                     OSK), "osk.js must still no-op when neither touch nor kiosk"
+    # ?kiosk=0 is the escape hatch: a phone/laptop that opened the wall's kiosk
+    # bookmark must be able to clear the latch and get its native keyboard back.
+    assert "kiosk=0" in OSK and "removeItem" in OSK, \
+        "osk.js must honor ?kiosk=0 to clear the kiosk latch"
+    # A storage-blocked wall would silently have NO keyboard; leave a breadcrumb.
+    assert "console.warn" in OSK, \
+        "a blocked-storage fallback must warn (the wall's only keyboard is this)"
+
+
+def test_osk_kiosk_suppresses_the_os_keyboard():
+    """On the wall the app keyboard is the ONLY one we want; GNOME's touch
+    keyboard otherwise muscles in and mishandles Firefox web inputs (two taps
+    to appear, backspace never reaching the field). Kiosk mode marks the served
+    fields readonly + inputmode=none so the OS never offers a keyboard, while
+    the app keyboard still writes their .value."""
+    assert "readOnly = true" in OSK, \
+        "kiosk mode must set inputs readonly to suppress the OS keyboard"
+    assert re.search(r"setAttribute\(\s*['\"]inputmode['\"]\s*,\s*['\"]none['\"]",
+                     OSK), "kiosk mode must set inputmode=none as well"
+    # The stamping MUST be gated behind kiosk mode: un-gated it would mark a
+    # laptop's real text fields readonly and break typing. Pin both call sites
+    # inside an `if (kiosk)` so a refactor can't silently apply it everywhere.
+    assert re.search(r"if \(kiosk\)\s*\{.*?stampTree\(document\)", OSK, re.S), \
+        "the readonly stamping (stampTree) must run inside an `if (kiosk)` block"
+    assert re.search(r"if \(kiosk\)\s*kioskStamp", OSK), \
+        "the focusin readonly backstop must be gated on kiosk mode"
+
+
+def test_osk_has_symbol_and_emoji_layers():
+    """The keyboard grew a two-page symbol set (?123 / #+=) and a curated emoji
+    grid. Guard the layer plumbing so a refactor can't silently drop them."""
+    for token in ("SYM1_ROWS", "SYM2_ROWS", "EMOJI", "osk-emoji-grid"):
+        assert token in OSK, f"osk.js lost its {token} layer"
+    assert "Layer:" in OSK and "setLayer" in OSK, \
+        "the command row's mode keys must route through setLayer"
+
+
+def test_osk_backspace_is_grapheme_aware_for_emoji():
+    """An emoji is 2+ UTF-16 code units; a code-unit backspace would leave a
+    broken half-character. oskApplyKey must delete a whole grapheme."""
+    assert "oskGraphemeBackLen" in COMMON, \
+        "common.js lost the grapheme-aware backspace helper"
+    assert "Intl.Segmenter" in COMMON, \
+        "grapheme backspace should use Intl.Segmenter (with a surrogate fallback)"
+    # the Backspace branch must call the helper, not slice a single code unit
+    assert re.search(r"oskGraphemeBackLen\(v,\s*a\)", COMMON), \
+        "oskApplyKey Backspace must delete a whole grapheme"
+
+
+def test_osk_emoji_grid_and_mode_keys_are_styled():
+    """Every JS-added OSK class needs a rule or it renders unstyled."""
+    for cls in (".osk-keys", ".osk-mode", ".osk-emoji-toggle",
+                ".osk-emoji-grid", ".osk-emoji"):
+        assert cls in CSS, f"{cls} is used by osk.js but not styled"
+
+
+def test_todos_repaint_preserves_focus_and_caret():
+    """renderTodosPaint rebuilds the list via innerHTML; without restoring focus
+    a background /api/todos refresh destroys the focused add-input and drops the
+    keyboard the instant it appears (the wall's 'tap twice' bug). Guard the
+    focus/caret restore."""
+    para = HUB[HUB.index("function renderTodosPaint"):]
+    para = para[:para.index("\n}")]
+    assert "activeElement" in para and ".focus()" in para, \
+        "renderTodosPaint must re-focus the rebuilt add-input"
+    assert "setSelectionRange" in para, \
+        "renderTodosPaint must restore the caret position after the rebuild"

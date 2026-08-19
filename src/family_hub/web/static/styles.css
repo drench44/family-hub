@@ -1792,6 +1792,18 @@ body.overlay-open { overflow: hidden; }
 .osk-shift.active {
   color: var(--accent-ink); background: var(--accent); border-color: var(--accent);
 }
+/* Layer rows live in their own column so a layer switch can re-render just them
+   (the .osk shell, its listeners, and show/hide state stay put). */
+.osk-keys { display: flex; flex-direction: column; gap: 8px; }
+/* Mode keys (?123 / ABC / #+=) and the emoji toggle sit in the command row. */
+.osk-mode { flex: 1.7 1 0; font-size: 16px; font-weight: 600; }
+.osk-emoji-toggle { flex: 1.3 1 0; font-size: 22px; }
+/* Emoji layer: a scrollable grid that fills the same width the rows use. */
+.osk-emoji-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 8px; max-height: 232px; overflow-y: auto; padding: 2px;
+}
+.osk-emoji { font-size: 24px; }
 /* While the keyboard is docked (osk.js stamps this on <body>), lift the failure
    toast clear of it so a "couldn't save" message isn't hidden behind the keys. */
 .osk-open .hub-toast { bottom: calc(56px + 5 * 54px); }
