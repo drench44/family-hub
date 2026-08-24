@@ -11,6 +11,18 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Added
+- Weather card: a 5-day forecast strip at the foot of the card — each day shows a
+  drawn condition glyph (not emoji, so the wall's Firefox renders it cleanly) with
+  the high over the low, "Today" anchored in the accent color. It draws from a
+  `dailyForecast` array on the weather feed and stays hidden until the feed
+  provides one (fewer than 2 days → nothing shows). The card's height is bought
+  back from a slightly shorter sky plus small trims to the climate/laundry cards,
+  so the panels column stays on the 1080-tall wall. See `docs/weather-feed.md` for
+  the feed contract.
+- `docs/weather-feed.md`: the full `wx.json` feed contract — every field, how to
+  read the live feed, and the fact that it carries no multi-day forecast (only
+  today's high/low, a 24h temp curve, and a 12h AQI curve) — so the daily-forecast
+  data question never has to be rediscovered.
 - On-screen keyboard: a ✕ Cancel key beside Done that closes the keyboard
   without saving and clears what you typed — for when you change your mind.
 - On-screen keyboard: two-page symbol layer (`?123` / `#+=`) and a categorized
@@ -18,6 +30,12 @@ rolls that section to a dated version via `python scripts/release.py`.
   travel, objects, symbols) over a scrollable grid, plus a 🕐 Recently-used tab
   that remembers your go-to emojis. Backspace is grapheme-aware, so one tap
   deletes a whole emoji. Every emoji is color-verified against the wall's font.
+
+### Changed
+- The three list columns — chores, calendar, and to-dos — are a little denser on
+  the wall (mouse-only, so below the phone touch targets): tighter rows, card
+  padding, and inter-card gaps fit another item or two before scrolling. Phones
+  and the mobile layout are unchanged.
 
 ### Fixed
 - On-screen keyboard can be re-summoned after Cancel/Done: the keyboard now

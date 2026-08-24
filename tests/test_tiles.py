@@ -179,6 +179,10 @@ WX_OK = {
     "humidity": 55, "dewPoint": 54.0,
     "weatherStale": False,
     "tempSeries": {"temps": [70.0, 71.5, 73.0, 74.0, 72.0], "nowIndex": 2},
+    "dailyForecast": [
+        {"day": "Mon", "hi": 81, "lo": 58, "cond": "Partly Cloudy"},
+        {"day": "Tue", "hi": 84, "lo": 60, "cond": "Rain"},
+    ],
     "sunrise": "06:15", "sunset": "20:15",
     "moonPhase": "Waxing Crescent", "moonIllum": 29.1,
 }
@@ -197,6 +201,10 @@ def test_weather_maps_wx_json_to_trimmed_shape():
         "low": 58.0, "high": 81.0, "uv": 6, "uv_desc": "High",
         "aqi": 42, "aqi_cat": "Good", "humidity": 55, "dew_point": 54.0,
         "spark": [70.0, 71.5, 73.0, 74.0, 72.0], "spark_now": 2, "stale": False,
+        "forecast": [
+            {"day": "Mon", "hi": 81, "lo": 58, "cond": "Partly Cloudy"},
+            {"day": "Tue", "hi": 84, "lo": 60, "cond": "Rain"},
+        ],
         "sunrise": "06:15", "sunset": "20:15",
         "moon_phase": "Waxing Crescent", "moon_illum": 29.1,
     }
@@ -286,6 +294,95 @@ def test_weather_warns_when_temp_present_but_no_chart_series(caplog):
     assert t["available"] is True and t["spark"] == [] and t["spark_now"] is None
     assert any("no usable tempSeries" in r.getMessage() for r in caplog.records), \
         "a valid-temp-but-empty-chart feed must warn (the original silent bug)"
+
+
+def test_weather_forecast_normalizes_daily_array():
+    # the contract shape (docs/weather-feed.md): today first, {day, hi, lo, cond}
+    assert tiles._weather_forecast({"dailyForecast": [
+        {"day": "Mon", "hi": 81, "lo": 59, "cond": "Clear & Sunny"},
+        {"day": "Tue", "hi": 84.0, "lo": 62, "cond": "Partly Cloudy"},
+    ]}) == [
+        {"day": "Mon", "hi": 81, "lo": 59, "cond": "Clear & Sunny"},
+        {"day": "Tue", "hi": 84.0, "lo": 62, "cond": "Partly Cloudy"},
+    ]
+    # capped at 7 (the card shows 5, the payload keeps a little slack)
+    big = [{"day": str(i), "hi": 70, "lo": 50} for i in range(10)]
+    assert len(tiles._weather_forecast({"dailyForecast": big})) == 7
+    # obvious producer aliases are accepted (high/low, conditions)
+    assert tiles._weather_forecast({"dailyForecast": [
+        {"day": "Mon", "high": 80, "low": 60, "conditions": "Rain"}]}) == [
+        {"day": "Mon", "hi": 80, "lo": 60, "cond": "Rain"}]
+    # one end missing keeps the other (the card dashes the absent end)
+    assert tiles._weather_forecast({"dailyForecast": [{"day": "Mon", "hi": 80}]}) == [
+        {"day": "Mon", "hi": 80, "lo": None, "cond": None}]
+    # a day with NEITHER end is dropped (no dashed-out empty column)
+    assert tiles._weather_forecast({"dailyForecast": [
+        {"day": "Mon", "cond": "Rain"}, {"day": "Tue", "hi": 70, "lo": 50}]}) == [
+        {"day": "Tue", "hi": 70, "lo": 50, "cond": None}]
+    # bool must not read as a temperature (bool is an int subclass)
+    assert tiles._weather_forecast({"dailyForecast": [{"day": "Mon", "hi": True, "lo": 50}]}) == [
+        {"day": "Mon", "hi": None, "lo": 50, "cond": None}]
+    # non-string day/cond are coerced to str (an int day must not leak to the
+    # frontend, which would render it raw)
+    assert tiles._weather_forecast({"dailyForecast": [{"day": 1, "cond": 5, "hi": 70}]}) == [
+        {"day": "1", "hi": 70, "lo": None, "cond": "5"}]
+
+
+def test_weather_forecast_absent_or_malformed_is_empty():
+    # a daily forecast is OPTIONAL — absent/non-list/garbage entries -> [], never
+    # a crash. Absent/non-list is SILENT (no expected key); a present-but-all-
+    # unusable array is the loud case, checked separately below.
+    for wx in ({}, {"dailyForecast": None}, {"dailyForecast": "soon"},
+               {"dailyForecast": {}}):
+        assert tiles._weather_forecast(wx) == []
+
+
+def test_weather_forecast_warns_when_present_but_unusable(caplog):
+    # ABSENT dailyForecast stays quiet (it's optional)...
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        assert tiles._weather_forecast({}) == []
+        assert tiles._weather_forecast({"dailyForecast": None}) == []
+    assert not caplog.records, "an absent daily forecast must not log (it's optional)"
+    # ...but a PRESENT, non-empty array that normalizes to nothing means the
+    # producer wired the wrong shape — that must be LOUD (the hourlyTemps trap),
+    # not a silent blank strip.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        assert tiles._weather_forecast(
+            {"dailyForecast": [{"tempHigh": 80, "tempLow": 60}, "x", None]}) == []
+    assert any("dailyForecast" in r.getMessage() for r in caplog.records), \
+        "a present-but-unusable dailyForecast must warn (shape drift), not blank silently"
+    # a good array stays quiet
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="family_hub.tiles"):
+        tiles._weather_forecast({"dailyForecast": [{"day": "Mon", "hi": 80, "lo": 60}]})
+    assert not caplog.records
+
+
+def test_weather_tile_carries_forecast_through(monkeypatch):
+    tiles.reset_caches()
+
+    def served(req):
+        return httpx.Response(200, json={
+            "temp": 70.0, "tempUnit": "F",
+            "tempSeries": {"temps": [70.0, 71.0, 72.0], "nowIndex": 1},
+            "dailyForecast": [
+                {"day": "Mon", "hi": 81, "lo": 59, "cond": "Clear"},
+                {"day": "Tue", "hi": 84, "lo": 62, "cond": "Rain"},
+            ],
+        })
+    t = run_tile(tiles.weather_tile, served)
+    assert t["available"] is True
+    assert t["forecast"] == [
+        {"day": "Mon", "hi": 81, "lo": 59, "cond": "Clear"},
+        {"day": "Tue", "hi": 84, "lo": 62, "cond": "Rain"},
+    ]
+    # a feed with no dailyForecast still serves a card, forecast just empty
+    tiles.reset_caches()
+    t2 = run_tile(tiles.weather_tile, lambda req: httpx.Response(200, json={
+        "temp": 70.0, "tempUnit": "F",
+        "tempSeries": {"temps": [70.0, 71.0], "nowIndex": 0}}))
+    assert t2["available"] is True and t2["forecast"] == []
 
 
 def test_weather_base_unset_no_fetch():

@@ -35,6 +35,21 @@ Verify tests genuinely RUN (not silently skipped). This is the default gate — 
 should happen without being asked. Docs-only changes (`*.md`, comments) are
 exempt.
 
+## Weather feed (`wx.json`) — read the contract before touching the card
+
+The weather card is fed by ONE external document, `GET {weather_base}/wx.json`,
+produced by a **separate service** (not this app, not this repo — on the deploy
+box it's `:8137`; the app is `:8138`). Before reading a new field off it, or
+adding anything that needs forecast/history data, read
+[`docs/weather-feed.md`](docs/weather-feed.md): it inventories every field the
+feed actually provides, says how to pull the live feed off the deploy box, and
+records the load-
+bearing fact that **the feed carries no multi-day forecast** (only today's
+high/low, a 24h temp curve, and a 12h AQI curve). Guessing a feed key already
+cost this repo weeks of a silently-blank chart (`hourlyTemps`); the doc exists so
+that never repeats. The 5-day forecast strip waits on a `dailyForecast` array the
+feed does not yet emit — it renders only once the feed grows one.
+
 ## Testing the wall layout visually
 
 The wall is a FIXED-WIDTH desktop layout: `.wrap { width: 1920px }`. It does not

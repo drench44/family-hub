@@ -45,12 +45,14 @@ at one URL.
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
   carry over until done, checked items linger struck-through until midnight,
   and a 30-day "recently done" list un-deletes mistakes.
-- **Weather & climate:** a glanceable weather card (temperature, a forecast
-  sparkline, UV index, air quality, humidity, dew point) and a per-room indoor
-  climate card (temp + humidity, with a warn state when a room runs hot or a
-  sensor goes stale). Tap **⛶ Full** on either to open your full weather or
-  climate dashboard. Both fail soft: a dead feed quietly hides its card, never
-  the wall.
+- **Weather & climate:** a glanceable weather card (temperature, a 24h
+  temperature curve, UV index, air quality, humidity, dew point, and a 5-day
+  high/low strip) and a per-room indoor climate card (temp + humidity, with a
+  warn state when a room runs hot or a sensor goes stale). Tap **⛶ Full** on
+  either to open your full weather or climate dashboard. Both fail soft: a dead
+  feed quietly hides its card, never the wall. The weather feed's shape is
+  documented in [`docs/weather-feed.md`](docs/weather-feed.md) (the 5-day strip
+  needs a `dailyForecast` array on the feed and stays hidden without one).
 - **Laundry:** washer + dryer as porthole cards fed by Home Assistant — a
   timer-dial ring counts the minutes down, the drum tumbles while a cycle
   runs (wash water and suds in the washer, a heat glow in the dryer), and a
