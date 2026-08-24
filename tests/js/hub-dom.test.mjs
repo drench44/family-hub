@@ -4010,6 +4010,83 @@ test('weather card sky scene follows the local hour and the conditions text', ()
   assert.ok(unk.includes('sky-sun'), 'the partly fallback keeps a sun by day');
 });
 
+const WX_FC = {
+  ...WX_GOOD,
+  forecast: [
+    { day: 'Mon', hi: 81, lo: 59, cond: 'Clear & sunny' },
+    { day: 'Tue', hi: 84, lo: 62, cond: 'Partly cloudy' },
+    { day: 'Wed', hi: 78, lo: 61, cond: 'Scattered showers' },
+    { day: 'Thu', hi: 73, lo: 57, cond: 'Thunderstorms' },
+    { day: 'Fri', hi: 79, lo: 58, cond: 'Mostly sunny' },
+  ],
+};
+
+test('weather card renders the 5-day forecast strip: today anchor, drawn glyphs, unit-less hi/lo', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.weatherCardHtml(WX_FC, 12);
+  assert.match(html, /class="wx-forecast"/, 'the strip renders when the feed carries days');
+  // the first column is anchored "Today" (not the feed's weekday), the rest use
+  // the feed's day label
+  assert.match(html, /class="wf-day wf-today"><div class="wf-lbl">Today</);
+  assert.match(html, /class="wf-lbl">Tue</);
+  assert.match(html, /class="wf-lbl">Fri</);
+  // hi in ink, lo dimmed — and NO °F suffix (the big temp already carries it)
+  assert.match(html, /class="wf-hi">81°<\/span><span class="wf-lo">59°<\/span>/);
+  assert.ok(!/wf-lo">\d+°F/.test(html), 'no ragged per-column unit in the strip');
+  // capped at five columns even if the feed sends more
+  const six = sandbox.weatherCardHtml(
+    { ...WX_FC, forecast: [...WX_FC.forecast, { day: 'Sat', hi: 80, lo: 60, cond: 'Clear' }] }, 12);
+  assert.equal((six.match(/class="wf-day/g) || []).length, 5, 'strip is capped at 5 days');
+  // a non-today day label is escaped (defense in depth — the feed is server-
+  // normalized, but the label is still an HTML text sink)
+  const evil = sandbox.weatherCardHtml({ ...WX_FC, forecast: [
+    WX_FC.forecast[0], { day: '<b>x', hi: 70, lo: 50, cond: 'Clear' }] }, 12);
+  assert.match(evil, /&lt;b&gt;x/);
+  assert.ok(!evil.includes('<b>x'), 'the day label must be escaped, not injected');
+});
+
+test('forecast glyphs are drawn (not emoji) and map to the conditions text', () => {
+  const { sandbox } = newHub();
+  const g = (cond) => sandbox.wxGlyph(cond);
+  // each key draws its own SVG mark — a sun disc for clear, cloud+drops for rain,
+  // a bolt for storms, flakes for snow, fog lines for fog
+  assert.match(g('Clear & sunny'), /class="wx-glyph g-clear"/);
+  assert.match(g('Clear & sunny'), /class="wg-sun"/);
+  // clear is a bare sun — NOT the sun+cloud of 'partly' (a regression that
+  // clouded a clear day would otherwise pass the wg-sun check above)
+  assert.ok(!g('Clear & sunny').includes('wg-cloud'), 'a clear day has no cloud');
+  assert.match(g('Partly cloudy'), /g-partly"[\s\S]*wg-sun[\s\S]*wg-cloud/);
+  assert.match(g('Scattered showers'), /g-rain"[\s\S]*wg-drop/);
+  assert.match(g('Thunderstorms'), /g-storm"[\s\S]*wg-bolt/);
+  assert.match(g('Snow flurries'), /g-snow"[\s\S]*wg-flake/);
+  assert.match(g('Dense fog'), /g-fog"[\s\S]*wg-fog/);
+  assert.match(g('Overcast'), /g-cloudy"[\s\S]*wg-cloud/);
+  // an unknown condition falls back to the partly mark (same as the sky)
+  assert.match(g('Wintry mix'), /g-partly/);
+  // drawn, never an emoji codepoint that the wall's Firefox may lack
+  assert.ok(!/[☀-➿\u{1F300}-\u{1FAFF}]/u.test(g('Clear & sunny')), 'no emoji in a glyph');
+});
+
+test('forecast strip fail-softs: hidden when absent, too short, or all-blank', () => {
+  const { sandbox } = newHub();
+  // no forecast key at all (an older feed) -> no strip, card still renders
+  assert.ok(!sandbox.weatherCardHtml(WX_GOOD, 12).includes('wx-forecast'));
+  // a lone day is not a forecast -> hidden (matches the temp chart's < 2 rule)
+  assert.ok(!sandbox.weatherCardHtml(
+    { ...WX_GOOD, forecast: [{ day: 'Mon', hi: 81, lo: 59, cond: 'Clear' }] }, 12).includes('wx-forecast'));
+  // days present but every hi AND lo missing -> nothing to show, hidden
+  assert.ok(!sandbox.weatherCardHtml(
+    { ...WX_GOOD, forecast: [{ day: 'Mon', cond: 'Clear' }, { day: 'Tue', cond: 'Rain' }] }, 12)
+    .includes('wx-forecast'));
+  // a malformed (non-array) forecast never throws, just hides
+  assert.ok(!sandbox.weatherCardHtml({ ...WX_GOOD, forecast: 'soon' }, 12).includes('wx-forecast'));
+  // one end missing still shows the other (dash for the absent end)
+  const oneEnd = sandbox.weatherCardHtml(
+    { ...WX_GOOD, forecast: [{ day: 'Mon', hi: 81, cond: 'Clear' }, { day: 'Tue', lo: 60, cond: 'Rain' }] }, 12);
+  assert.match(oneEnd, /class="wf-hi">81°<\/span><span class="wf-lo">–<\/span>/);
+  assert.match(oneEnd, /class="wf-hi">–<\/span><span class="wf-lo">60°<\/span>/);
+});
+
 test('room thermometer clamps at the tube edges; a real cold reading still shows a stub', () => {
   const { sandbox } = newHub();
   // 100°F is past the 90° tube ceiling: mercury pins to the full tube, no

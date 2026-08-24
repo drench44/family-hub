@@ -163,6 +163,60 @@ def _weather_spark(wx: dict) -> dict:
     return {"temps": temps, "now": now}
 
 
+def _weather_forecast(wx: dict) -> list:
+    """Daily forecast for the weather card's 5-day strip, from the feed's
+    ``dailyForecast`` — a list of ``{day, hi, lo, cond}`` dicts, today first (see
+    docs/weather-feed.md for the full contract). Normalizes each entry and keeps
+    at most 7 (the card shows 5); an absent or malformed array yields ``[]`` and
+    the strip hides (the frontend needs >= 2 usable days).
+
+    A daily forecast is OPTIONAL: the single-station feed did not carry one as of
+    2026-08-24, and older feeds won't either, so a missing key is SILENT — unlike
+    the always-expected ``tempSeries`` (``_weather_spark``), whose absence logs
+    loudly. Accepts a couple of obvious aliases (``high``/``low``,
+    ``conditions``) so a slightly different producer shape still works; the names
+    in the contract are what to emit."""
+    raw = wx.get("dailyForecast")
+    if not isinstance(raw, list):
+        return []
+
+    def _num(v):
+        # bool is an int subclass — exclude it so True never reads as 1°
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    out = []
+    for d in raw[:7]:
+        if not isinstance(d, dict):
+            continue
+        hi = _num(d.get("hi", d.get("high")))
+        lo = _num(d.get("lo", d.get("low")))
+        # a day with neither end is nothing to show — drop it (the frontend does
+        # the same), so it can't leave a dashed-out "– –" column
+        if hi is None and lo is None:
+            continue
+        day = d.get("day")
+        cond = d.get("cond", d.get("conditions"))
+        out.append({
+            "day": str(day) if day is not None else None,
+            "hi": hi,
+            "lo": lo,
+            "cond": str(cond) if cond is not None else None,
+        })
+    # ABSENT dailyForecast is silent (handled above — a daily forecast is
+    # optional). But a PRESENT, non-empty array that yields nothing means the
+    # producer wired the wrong shape (temps under an unrecognized key, a list of
+    # scalars, ...): the operator adds forecast data, sees no strip, and has
+    # nothing to debug. Say so LOUDLY — the same discipline _weather_spark uses
+    # for a present-but-malformed tempSeries, and the exact silent-blank-on-
+    # shape-drift trap the hourlyTemps bug set (see docs/weather-feed.md).
+    if raw and not out:
+        log.warning("weather feed dailyForecast has %d entr%s but none were "
+                    "usable (bad keys/shape? expected {day,hi,lo,cond} — see "
+                    "docs/weather-feed.md); 5-day strip stays hidden",
+                    len(raw), "y" if len(raw) == 1 else "ies")
+    return out
+
+
 async def weather_tile(client, cfg) -> dict:
     base = cfg.weather_base
     if not base:
@@ -197,6 +251,10 @@ async def weather_tile(client, cfg) -> dict:
             "dew_point": wx.get("dewPoint"),
             "spark": spark["temps"],
             "spark_now": spark["now"],
+            # 5-day daily forecast strip (weather card foot). Empty until the
+            # feed grows a `dailyForecast` array (see docs/weather-feed.md); the
+            # card hides the strip below 2 days, so [] is a valid steady state.
+            "forecast": _weather_forecast(wx),
             "stale": wx.get("weatherStale"),
             # Sky-scene inputs (verified against the live feed 2026-08-17):
             # sunrise/sunset are "HH:MM" local strings that drive the sky's

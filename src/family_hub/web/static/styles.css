@@ -283,7 +283,7 @@ body {
 .tiles { grid-area: tiles; }
 
 /* ------- always-on dashboard panels (weather almanac + house climate) ------ */
-.panels { grid-area: panels; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.panels { grid-area: panels; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 /* box lives on .card now; .panel keeps only its own padding */
 .panel { padding: 12px 12px 12px; }
 /* Each iframe renders at a fixed virtual viewport (data-vw/vh on the tag) and
@@ -303,7 +303,7 @@ body {
 /* The header + card are one visual unit inside the always-on panels column; the
    small gap keeps the .shead tight above its .card (the column's own gap is
    larger, meant to separate whole sections). */
-.weather-slot { display: flex; flex-direction: column; gap: 12px; }
+.weather-slot { display: flex; flex-direction: column; gap: 8px; }
 /* The card opens with the full-bleed sky scene (clipped to the card radius),
    then the temp chart + instrument row on the normal card surface. */
 .wx { padding: 0; overflow: hidden; }
@@ -317,7 +317,12 @@ body {
    condition class layers the scene. Stacking, bottom-up: gradient, celestial
    bodies (z1), the overcast slate veil (::before, z2), clouds (z3), falling
    precipitation (z4), the text scrim (::after, z5), text (z6). */
-.sky { position: relative; height: 148px; overflow: hidden; }
+/* 116px (was 148): the 5-day strip added a band to the card foot, so height is
+   bought back from the sky (plus small trims to the climate + laundry cards) to
+   keep the panels column net-neutral — weather + climate + laundry still fit
+   the 1080-tall wall (operator, 2026-08-24). Still holds the 52px temp +
+   conditions + today's H/L; the scene art just crops a little tighter. */
+.sky { position: relative; height: 116px; overflow: hidden; }
 .sky.ph-day   { background: linear-gradient(180deg, #2E6BC4, #5D97DC 55%, #A8CBEA); }
 .sky.ph-dawn  { background: linear-gradient(180deg, #37477E, #A96A8D 60%, #E8A76C); }
 .sky.ph-dusk  { background: linear-gradient(180deg, #2E3D6E, #8E5A85 55%, #D97E5A); }
@@ -520,7 +525,7 @@ body {
 
 /* ---------------- instrument row: UV / AQI / Humidity rings + dew ---------- */
 .wx .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
-  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge-soft); }
+  margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--edge-soft); }
 .wx .stat { display: flex; flex-direction: column; align-items: center; gap: 3px;
   text-align: center; min-width: 0; }
 /* ring stats + the dew cell top-align so the four instruments share a row */
@@ -553,6 +558,35 @@ body {
 .wx .wx-band.st-warn { color: var(--warn); }
 .wx .wx-band.st-crit { color: var(--crit); }
 
+/* ---------------- 5-day forecast strip (foot of the weather card) ---------- */
+/* One column per day: DAY / drawn glyph / high° low°. Its top divider mirrors
+   the instrument row above so the card reads as three stacked bands (sky /
+   instruments / week). Quiet on purpose — the sky is the card's one loud
+   surface; the week is reference data, so it stays in the utility type + dim
+   ink. Height was bought back from the sky (shorter) so the panels column
+   (weather + climate + laundry) still fits the 1080p wall without pushing
+   laundry off (operator, 2026-08-24). */
+.wx-forecast { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;
+  margin-top: 8px; padding-top: 9px; border-top: 1px solid var(--edge-soft); }
+.wf-day { display: flex; flex-direction: column; align-items: center; gap: 4px;
+  text-align: center; min-width: 0; }
+.wf-lbl { font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint); }
+.wf-today .wf-lbl { color: var(--accent); font-weight: 700; }
+.wx-glyph { width: 22px; height: 22px; display: block; color: var(--dim); }
+.wg-cloud { fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linejoin: round; stroke-linecap: round; }
+.wg-sun { fill: #F2B23E; }
+.wg-ray { stroke: #F2B23E; stroke-width: 1.5; stroke-linecap: round; }
+.wg-drop { stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; }
+.wg-bolt { fill: var(--warn); }
+.wg-flake { fill: currentColor; }
+.wg-fog { stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; opacity: .7; }
+.wf-temps { display: flex; align-items: baseline; justify-content: center; gap: 5px;
+  font-size: 13px; line-height: 1; }
+.wf-hi { color: var(--ink); font-weight: 650; }
+.wf-lo { color: var(--faint); font-weight: 500; }
+
 /* the "stale reading" mark: a quiet pill pinned to the sky's top-left, so a
    long (ellipsized) conditions line can never swallow it */
 .sky .wx-stale { position: absolute; z-index: 6; top: 10px; left: 12px;
@@ -573,14 +607,14 @@ body {
 /* ------- native house-climate summary card (replaces the climate embed) ----- */
 /* header + card are one visual unit, like .weather-slot (the small gap keeps the
    .shead tight above its .card; the panels column's own gap separates sections) */
-.rooms-slot { display: flex; flex-direction: column; gap: 12px; }
-.rooms { padding: 12px; }
+.rooms-slot { display: flex; flex-direction: column; gap: 8px; }
+.rooms { padding: 10px 12px; }
 /* room sensor tiles, two-up */
 /* minmax(0,1fr), not bare 1fr: a tile's min-content (a long unbroken room
    name) must squeeze and ellipsize, never push the column out of the card
    (same convention as .hub-grid's columns) */
-.roomgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.room { display: flex; align-items: stretch; gap: 9px; padding: 9px 10px;
+.roomgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.room { display: flex; align-items: stretch; gap: 9px; padding: 7px 10px;
   border-radius: 11px; background: var(--surface-2); border: 1px solid transparent; }
 /* the tile wash = roomBand (worst of temp, humidity, stale) — the successor
    to the old status dot; a comfortable room stays calm neutral */
@@ -615,7 +649,7 @@ body {
 /* whole-house indoor aggregate (RH + dew) — a labeled footer under the rooms,
    with the RH marked on a comfort-zone track (the tinted zone = humidityBand's
    ok range, 30–55%) */
-.rfoot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--edge-soft); }
+.rfoot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--edge-soft); }
 .rfoot-line { display: flex; align-items: baseline; gap: 12px; }
 .rfoot .rk { flex: 1; font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
   color: var(--faint); }
@@ -645,18 +679,18 @@ body {
    — washer water-cool, dryer warm — a physical truth, so it reads without a
    legend. Motion: the tumble while running, the halo breath while done; both
    stop under prefers-reduced-motion (the static glow keeps the attention). */
-.laundry-slot { display: flex; flex-direction: column; gap: 12px; }
+.laundry-slot { display: flex; flex-direction: column; gap: 8px; }
 /* the slot div always exists (see laundrySlotHtml); on an unconfigured wall
    it stays empty — collapse it so it can't leave a phantom column gap */
 .laundry-slot:empty { display: none; }
-.ln { padding: 16px 12px 14px; }
+.ln { padding: 12px 12px 12px; }
 .ln-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ln-m { display: flex; flex-direction: column; align-items: center; text-align: center;
-  min-width: 0; border-radius: 12px; padding: 8px 4px 9px; }
+  min-width: 0; border-radius: 12px; padding: 6px 4px 7px; }
 /* the just-finished machine gets the same wash grammar the climate card uses
    for warn states — visible across the kitchen, gone once the door opens */
 .ln-m.ln-ph-done { background: color-mix(in srgb, var(--good) 9%, transparent); }
-.ln-door { width: 104px; height: 104px; }
+.ln-door { width: 100px; height: 100px; }
 /* brushed-steel bezel: light falls from the upper left */
 .ln-bezel { fill: none; stroke-width: 6; }
 .ln-st-bzhi  { stop-color: color-mix(in srgb, var(--ink) 52%, var(--surface-2)); }
@@ -2088,6 +2122,44 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-cols="lines"] .people-col::after { right: -12px; }
 :root[data-cols="lines"] .tiles::before { left: -12px; }
 :root[data-cols="lines"] .panels::before { left: -12px; }
+
+/* ==================== wall-only column density ==================== */
+/* operator, 2026-08-24: "compact a little so more fits on my hp screen". The
+   wall is mouse-only (no touch), so on the desktop layout the three list
+   columns — chores, calendar, to-dos — tighten their rows, card padding, and
+   inter-card gaps to fit another item or two before a scroll. The base rules
+   keep their guarded touch floors for phones (.chore-row 48px /
+   .todo-row(-full) 52px); this override sits below them only on the wall.
+   Scoped to min-width:1001px — the complement of the mobile app-shell's
+   max-width:1000px below — so a phone (or a phone forced narrow) never inherits
+   the sub-touch-target rows. It lives HERE, after every base rule it overrides,
+   so equal-specificity source order lets it win on the wall (an earlier
+   placement let the later base .todo-row rule beat it). The row floors (40px
+   chores, 42px to-dos) are guarded (test_wall_chore_row_stays_a_comfortable_row,
+   test_wall_todo_row_stays_a_comfortable_row) so a tweak can't silently collapse
+   them to a sliver. */
+@media (min-width: 1001px) {
+  /* chores */
+  .people-list { gap: 8px; }
+  .person-card { padding: 7px 16px; }
+  .person-head { margin-bottom: 4px; }
+  .chore-row { min-height: 40px; }
+  .away-badge { padding: 8px 4px; }
+
+  /* calendar */
+  .cal { gap: 10px; }
+  .cal-note { padding: 12px 16px; margin-bottom: 4px; }
+  .cal-day { padding: 7px 14px 6px; }
+  .cal-day.is-today { padding: 9px 14px 8px; }
+  .cal-dayhead { padding-bottom: 5px; }
+  .cal-ev { padding: 6px 0; }
+
+  /* to-dos */
+  .todo-slot { gap: 10px; }
+  .todo { padding: 4px 16px 8px; }
+  .todo-grp-head { padding-top: 8px; }
+  .todo-row, .todo-row-full { min-height: 42px; }
+}
 
 /* ============================ mobile ========================== */
 /* Under 1000px the fixed 1920 canvas would mean endless sideways scrolling,
