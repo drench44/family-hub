@@ -117,9 +117,51 @@ def test_no_literal_http_urls_anywhere():
 def test_chore_row_is_a_big_tap_target():
     # was >= 64; compacted to fit more chores per column (operator,
     # 2026-08-15). 48px stays the floor — the common touch-target minimum.
+    # _css_rule concatenates the base rule and the wall override (below) in file
+    # order, so this first min-height match is the base (phone) rule — the one
+    # that must stay >= 48. The wall override is checked separately.
     rule = _css_rule(".chore-row")
     m = re.search(r"min-height:\s*(\d+)px", rule)
     assert m and int(m.group(1)) >= 48, ".chore-row must be >= 48px (tap target)"
+
+
+def test_wall_chore_row_stays_a_comfortable_row():
+    # The wall is mouse-only, so a min-width:1001px override compacts chore rows
+    # below the 48px phone touch floor to fit more of the family (operator,
+    # 2026-08-24: "compact a little so more fits on my hp screen"). Pin a floor
+    # so a later "make it tighter" can't collapse the rows to an unreadable
+    # sliver, and confirm the compaction is a WALL-scoped override (min-width),
+    # never an edit to the base rule the phone shares.
+    m = re.search(r"@media\s*\(min-width:\s*1001px\)\s*\{(.*?)\n\}", CSS, re.S)
+    assert m, "expected a min-width:1001px wall-density block in styles.css"
+    block = m.group(1)
+    cm = re.search(r"\.chore-row\s*\{[^}]*min-height:\s*(\d+)px", block)
+    assert cm, "the wall block must set a compacted .chore-row min-height"
+    assert 40 <= int(cm.group(1)) < 48, \
+        "wall chore row must compact (< 48px) yet stay comfortable (>= 40px)"
+
+
+def test_wall_todo_row_stays_a_comfortable_row():
+    # Same wall-only density treatment as the chore rows: the to-do rows compact
+    # below their guarded 52px phone touch floor on the mouse-only wall (operator,
+    # 2026-08-24). Pin a comfortable floor and confirm it's the wall-scoped
+    # override, not an edit to the base rule the phone shares.
+    m = re.search(r"@media\s*\(min-width:\s*1001px\)\s*\{(.*?)\n\}", CSS, re.S)
+    assert m, "expected a min-width:1001px wall-density block in styles.css"
+    block = m.group(1)
+    tm = re.search(r"\.todo-row-full\s*\{[^}]*min-height:\s*(\d+)px", block)
+    assert tm, "the wall block must set a compacted .todo-row(-full) min-height"
+    assert 40 <= int(tm.group(1)) < 52, \
+        "wall to-do row must compact (< 52px) yet stay comfortable (>= 40px)"
+
+
+def test_weather_forecast_strip_classes_are_styled():
+    # The 5-day strip's visible classes must all be styled, so a rename in hub.js
+    # (wxForecastHtml / wxGlyph) can't ship an unstyled, misaligned strip — same
+    # guard pattern as the chore-form controls below.
+    for cls in (".wx-forecast", ".wf-day", ".wf-lbl", ".wf-today", ".wf-temps",
+                ".wf-hi", ".wf-lo", ".wx-glyph", ".wg-cloud", ".wg-sun"):
+        assert _css_rule(cls).strip(), f"{cls} (forecast strip) is unstyled"
 
 
 def test_chore_form_schedule_and_reminder_controls_are_styled():

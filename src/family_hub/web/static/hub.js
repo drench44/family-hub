@@ -2018,6 +2018,76 @@ function sparkSvg(spark, nowIndex, hour = new Date().getHours()) {
     + `</svg>`;
 }
 
+/* Tiny drawn condition glyph for the 5-day strip. Same hand-drawn language as
+   the living sky — deliberately NOT emoji: the wall runs Firefox on Debian
+   where emoji fonts are patchy (see the fontconfig fix in the wall notes), and
+   a drawn mark tints with the card's ink and stays crisp at 22px. One mark per
+   condition key (wxCondKey maps the feed's free-text conditions); an
+   unrecognized condition falls back to 'partly', matching the sky. The sun
+   carries a warm class so clear days read at a glance across the room; cloud/
+   precip inherit the strip's dim ink. */
+function wxGlyph(cond) {
+  const k = wxCondKey(cond);
+  const wrap = (inner) => `<svg class="wx-glyph g-${k}" viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
+  const sun = (cx, cy, r) => {
+    const rays = [[cx, cy - r - 3.2, cx, cy - r - 1], [cx, cy + r + 1, cx, cy + r + 3.2],
+      [cx - r - 3.2, cy, cx - r - 1, cy], [cx + r + 1, cy, cx + r + 3.2, cy],
+      [cx - r - 2.3, cy - r - 2.3, cx - r - 0.7, cy - r - 0.7],
+      [cx + r + 0.7, cy - r - 0.7, cx + r + 2.3, cy - r - 2.3],
+      [cx - r - 2.3, cy + r + 2.3, cx - r - 0.7, cy + r + 0.7],
+      [cx + r + 0.7, cy + r + 0.7, cx + r + 2.3, cy + r + 2.3]]
+      .map((a) => `<line class="wg-ray" x1="${a[0]}" y1="${a[1]}" x2="${a[2]}" y2="${a[3]}"/>`).join('');
+    return `<circle class="wg-sun" cx="${cx}" cy="${cy}" r="${r}"/>${rays}`;
+  };
+  const cloud = '<path class="wg-cloud" d="M7.4 18h8.5a3.35 3.35 0 0 0 .4-6.66A4.75 4.75 0 0 0 7.5 10.1 3.55 3.55 0 0 0 7.4 18Z"/>';
+  if (k === 'clear') return wrap(sun(12, 12, 4.4));
+  if (k === 'partly') return wrap(sun(8.5, 8.5, 3.1) + cloud);
+  if (k === 'rain') return wrap(cloud
+    + '<line class="wg-drop" x1="9" y1="19.5" x2="8" y2="22"/>'
+    + '<line class="wg-drop" x1="12.5" y1="19.5" x2="11.5" y2="22"/>'
+    + '<line class="wg-drop" x1="16" y1="19.5" x2="15" y2="22"/>');
+  if (k === 'storm') return wrap(cloud
+    + '<path class="wg-bolt" d="M12.6 18.6 10 22.4h2.1L11 24.6l3.4-4.2h-2.2l1.1-1.8Z"/>');
+  if (k === 'snow') return wrap(cloud
+    + '<circle class="wg-flake" cx="9" cy="21" r="1"/>'
+    + '<circle class="wg-flake" cx="12.5" cy="22" r="1"/>'
+    + '<circle class="wg-flake" cx="16" cy="21" r="1"/>');
+  if (k === 'fog') return wrap(cloud
+    + '<line class="wg-fog" x1="7" y1="20.5" x2="17" y2="20.5"/>'
+    + '<line class="wg-fog" x1="8.5" y1="22.5" x2="15.5" y2="22.5"/>');
+  return wrap(cloud);   // cloudy
+}
+
+/* The 5-day forecast strip at the foot of the weather card: one column per day
+   — DAY / drawn condition glyph / high° over low°. Renders from the feed's
+   daily forecast (weather_tile 'forecast': [{day, hi, lo, cond}, ...], newest
+   first entry = today). Fail-soft like the temp chart: fewer than 2 usable days
+   (an old feed with no daily array, or a malformed one) hides the strip
+   entirely rather than showing a lonely or dashed-out row. Capped at 5 columns.
+   `unit` is the card's temp unit for the degree sign; hi/lo dash independently
+   via wxVal so a feed missing one end still shows the other. */
+function wxForecastHtml(forecast, unit) {
+  const days = (Array.isArray(forecast) ? forecast : [])
+    .filter((d) => d && typeof d === 'object'
+      && (d.hi != null && String(d.hi) !== '' || d.lo != null && String(d.lo) !== ''))
+    .slice(0, 5);
+  if (days.length < 2) return '';
+  // No unit suffix here: the card's big temp already carries °F and the sky's
+  // "H 81° L 59°" is unit-less too, so a per-column "°F" would only make the
+  // five columns ragged. `unit` is accepted for parity with the other card
+  // helpers but deliberately not printed.
+  const cols = days.map((d, i) => {
+    const lbl = i === 0 ? 'Today' : escapeHtml(String(d.day == null ? '' : d.day));
+    return `<div class="wf-day${i === 0 ? ' wf-today' : ''}">`
+      + `<div class="wf-lbl">${lbl}</div>`
+      + wxGlyph(d.cond)
+      + `<div class="wf-temps num"><span class="wf-hi">${wxVal(d.hi, '°')}</span>`
+      + `<span class="wf-lo">${wxVal(d.lo, '°')}</span></div>`
+      + `</div>`;
+  }).join('');
+  return `<div class="wx-forecast">${cols}</div>`;
+}
+
 function weatherCardHtml(wx, hour = fracHour()) {
   // UV + AQI get a colored ring gauge (wxGauge). Color follows the NUMBER
   // (uvBand/aqiBand); the feed's category text is only the label. Ring fill:
@@ -2044,6 +2114,7 @@ function weatherCardHtml(wx, hour = fracHour()) {
     + `<div class="wx-body">`
     + sparkSvg(wx.spark, wx.spark_now, Math.floor(hour))
     + `<div class="stats">${stats}</div>`
+    + wxForecastHtml(wx.forecast, wx.unit)
     + `</div></article>`;
 }
 

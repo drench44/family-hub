@@ -255,6 +255,16 @@ def demo_weather() -> dict:
         "dew_point": 58.5,
         "spark": spark,
         "spark_now": 8,
+        # 5-day daily forecast strip (weather card foot); first entry is today,
+        # so its hi/lo echo the "high"/"low" above. Shapes tiles.weather_tile's
+        # 'forecast' list: [{day, hi, lo, cond}, ...].
+        "forecast": [
+            {"day": "Mon", "hi": 81, "lo": 59, "cond": "Clear & sunny"},
+            {"day": "Tue", "hi": 84, "lo": 62, "cond": "Partly cloudy"},
+            {"day": "Wed", "hi": 78, "lo": 61, "cond": "Scattered showers"},
+            {"day": "Thu", "hi": 73, "lo": 57, "cond": "Thunderstorms"},
+            {"day": "Fri", "hi": 79, "lo": 58, "cond": "Mostly sunny"},
+        ],
         "stale": False,
         "sunrise": "06:15",
         "sunset": "20:15",
