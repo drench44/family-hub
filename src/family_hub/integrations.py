@@ -70,6 +70,7 @@ def available_integrations(cfg, env: dict | None = None,
     add("climate", "climate", "Climate",
         bool(getattr(cfg, "climate_base", "")))
     add("laundry", "laundry", "Laundry", laundry_configured(cfg, env))
+    add("fleet", "fleet", "Fleet status", bool(getattr(cfg, "fleet", None)))
     return out
 
 

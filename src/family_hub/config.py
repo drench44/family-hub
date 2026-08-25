@@ -54,6 +54,10 @@ class Config:
     # never persists this into localStorage — it only stamps it live — so
     # changing it here re-themes every un-overridden device on next poll.
     theme: dict | None = None
+    # Fleet Console tile: proxies a separate fleet-dashboard app's compact
+    # rollup (host + 3D-printer status) via /api/tiles/fleet.
+    # {"base": url, "label"?: str}. None/absent = no fleet integration.
+    fleet: dict | None = None
 
 
 # Allowed values per theme axis; anything else is dropped (never crashes).
@@ -122,6 +126,26 @@ def _clean_laundry(raw: object) -> dict | None:
     return {"ha_base": str(raw["ha_base"]).rstrip("/"), "machines": machines}
 
 
+def _clean_fleet(raw: object) -> dict | None:
+    """Keep only a well-formed fleet block: a dict with a non-empty `base`.
+    `label` is optional. Malformed entries are dropped and logged loudly
+    (never crash on a config typo) — a silently-vanished integration is
+    exactly the trap the config-cleaning gate exists to catch. Returns
+    {"base": str, "label"?: str} or None."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or not raw.get("base"):
+        log.warning("fleet: dropping malformed config block %r (needs a "
+                    "non-empty \"base\" url) — the fleet integration is OFF",
+                    raw)
+        return None
+    result = {"base": str(raw["base"]).rstrip("/")}
+    label = raw.get("label")
+    if label:
+        result["label"] = str(label)
+    return result
+
+
 def load_config(path: str) -> Config:
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
@@ -139,4 +163,5 @@ def load_config(path: str) -> Config:
         laundry=_clean_laundry(raw.get("laundry")),
         panels=list(raw.get("panels", [])),
         theme=_clean_theme(raw.get("theme")),
+        fleet=_clean_fleet(raw.get("fleet")),
     )

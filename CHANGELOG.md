@@ -10,6 +10,13 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Fleet Console: registry descriptor + fail-soft tile proxy for a separate
+  fleet-dashboard app's compact rollup (host status + 3D-printer status),
+  gated behind a `fleet` config block (`{base, label?}`, no config = the
+  integration doesn't appear). Server side only so far — no card, no DEMO
+  payload, no mobile surface yet.
+
 ## [1.3.2] — 2026-08-24
 
 ### Changed
