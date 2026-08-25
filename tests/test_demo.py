@@ -323,3 +323,23 @@ def test_demo_laundry_log_is_canned_and_live_shaped(demo_client):
     assert all(set(e) == real_keys for e in entries)
     notes = {e["note"] for e in entries}
     assert None in notes and "missed_finish" in notes
+
+
+def test_demo_multi_day_events_are_all_day_with_exclusive_ends(demo_client):
+    """The README screenshot's spanning bars come from these; an inclusive
+    end or a time suffix would silently shorten a bar or turn it timed."""
+    hub = demo_client.get("/api/hub").json()
+    today = dt.date.fromisoformat(hub["date"])
+    by = {e["title"]: e for e in hub["calendar"]["events"]}
+    want = {
+        "State fair": (2, 8),
+        "Grandma visiting": (3, 6),
+        "Aunt Jo's birthday": (1, 2),
+    }
+    for title, (s, e) in want.items():
+        ev = by[title]
+        assert ev["all_day"] == 1, title
+        assert ev["start_ts"] == (today + dt.timedelta(days=s)).isoformat(), title
+        assert ev["end_ts"] == (today + dt.timedelta(days=e)).isoformat(), title
+    # the fair and the visit overlap so the month view stacks them in lanes
+    assert by["Grandma visiting"]["start_ts"] < by["State fair"]["end_ts"]

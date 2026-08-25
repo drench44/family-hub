@@ -491,7 +491,8 @@ def _contrast_ratio(hex1, hex2):
 
 
 def test_month_grid_and_event_card_styled():
-    for cls in (".mgrid", ".mg-day", ".mg-today", ".mg-ev",
+    for cls in (".mgrid", ".mg-week", ".mg-day", ".mg-today", ".mg-ev", ".mg-bar",
+                ".mg-bar-contr", ".mg-bar-contl", ".mg-more", ".cal-ev-allday", ".cal-daynum",
                 ".ev-modal", ".ev-card", ".ev-close", ".cal-nav"):
         assert _css_rule(cls).strip(), f"{cls} is unstyled"
 
@@ -1298,3 +1299,19 @@ def test_todos_repaint_preserves_focus_and_caret():
         "renderTodosPaint must re-focus the rebuilt add-input"
     assert "setSelectionRange" in para, \
         "renderTodosPaint must restore the caret position after the rebuild"
+
+
+def test_month_lane_count_matches_css_row_template():
+    """The month renderer stops drawing events past MONTH_MAX_LANES and shows
+    "+N more" in the row after; the CSS week grid reserves exactly that many
+    lane rows. If one side changes without the other, bars either vanish
+    into a row the grid doesn't have or the more-chip lands on a lane."""
+    import re
+    js = (STATIC / "hub.js").read_text()
+    css = (STATIC / "styles.css").read_text()
+    m = re.search(r"const MONTH_MAX_LANES = (\d+)", js)
+    assert m, "MONTH_MAX_LANES missing from hub.js"
+    lanes = int(m.group(1))
+    rows = re.findall(r"grid-template-rows:\s*\d+px repeat\((\d+), var\(--mg-lane\)\)", css)
+    assert rows, ".mg-week row template missing"
+    assert all(int(r) == lanes for r in rows), f"CSS lane rows {rows} != MONTH_MAX_LANES {lanes}"

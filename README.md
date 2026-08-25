@@ -36,7 +36,8 @@ at one URL.
   Chores / To-Dos / Calendar / Cameras / Weather.
 - **Calendar:** next-5-days home feed, full-screen month grid + week agenda +
   day drill-in, tap-any-event detail cards, your own Google sidebar colors,
-  multi-day events painted across their span, ended events struck through.
+  multi-day events drawn as one bar across their span (Google-style), ended
+  events struck through.
 - **Chores:** per-person cards in each person's color, streaks (🔥), a 7-day
   week strip, deterministic rotations, one-time chores due on a single date, a
   browsable day history, an away/pause mode so a trip never breaks a streak,
