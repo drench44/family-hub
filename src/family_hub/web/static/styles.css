@@ -991,19 +991,27 @@ body {
    color — the same bar the month grid draws — so a stay or a fair reads as
    one continuous thing wherever it appears. --evc / --evi (bar color / text
    ink) are set inline per event by eventRow. */
+/* In the agenda (home feed + week / day view) an all-day event is a calm
+   tinted row — a soft wash of its color with a solid colored left edge, title
+   in normal ink — NOT the saturated block a solid fill would make. A top-to-
+   bottom list has no span to draw, and a multi-day event repeats one row per
+   day, so a saturated bar per day reads as noise. The solid spanning bar lives
+   in the month grid (.mg-bar), where it actually spans days. */
 .cal-ev-allday {
   align-items: center; gap: 10px;
-  margin: 5px 0; padding: 5px 12px;
+  margin: 4px 0; padding: 6px 12px;
   border-top: 0; border-radius: 7px;
-  background: var(--evc); color: var(--evi);
+  border-left: 3px solid var(--evc);
+  background: color-mix(in srgb, var(--evc) 15%, transparent);
+  color: var(--ink);
 }
-.cal-ev-allday .cal-title { color: inherit; font-weight: 500; }
+.cal-ev-allday .cal-title { color: var(--ink); font-weight: 500; }
 .cal-ev-allday + .cal-ev-allday { margin-top: 0; }
 .cal-ev-allday + .cal-ev:not(.cal-ev-allday) { border-top: 0; }
 .cal-spantag {
   flex: none; margin-left: auto;
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
-  text-transform: uppercase; opacity: 0.72;
+  text-transform: uppercase; color: var(--dim);
 }
 .cal-title { flex: 1; font-size: 15px; color: var(--ink); }
 .cal-day.is-today .cal-title { font-size: 17px; }
