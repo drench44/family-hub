@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 import time
+
+import httpx
 
 log = logging.getLogger("family_hub.tiles")
 
@@ -49,12 +52,20 @@ LAUNDRY_MISSED_DONE_HOLD_MIN = 30.0
 _laundry_cache: dict[str, tuple[float, dict]] = {}
 
 
+# Fleet Console cache, keyed by fleet.base. A separate app on the LAN (not
+# this repo); its rollup is cheap to poll but still gets the same short-cache
+# discipline as climate/weather so repeated wall polls don't hammer it.
+FLEET_TTL = 30.0
+_fleet_cache: dict[str, tuple[float, dict]] = {}
+
+
 def reset_caches() -> None:
     """Clear the in-process tile caches. Tests call this for deterministic
     behavior when they monkeypatch the HTTP client and poll more than once."""
     _weather_cache.clear()
     _climate_cache.clear()
     _laundry_cache.clear()
+    _fleet_cache.clear()
     _ha_warned.clear()
 
 
@@ -285,6 +296,82 @@ async def weather_tile(client, cfg) -> dict:
         log.warning("weather tile wx.json unavailable: %s", e)
         return {"available": False}   # not cached: retry on the next poll
     _weather_cache[base] = (time.monotonic() + WEATHER_TTL, result)
+    return result
+
+
+async def fleet_tile(client, cfg) -> dict:
+    """Proxy the separate fleet-dashboard app's compact rollup into a
+    trimmed, fail-soft tile: ``{available, label?, fleet: {health, hostsUp,
+    hostsTotal, worstProblem}, printer: {health, state, job,
+    progressPercent, remainingMinutes, nozzleF, bedF, online}}``. ``label``
+    is only present when ``fleet.label`` is set in config — it rides straight
+    through to the card header (``renderFleet``/``fleetCardHtml`` fall back
+    to "Fleet" when it's absent).
+
+    Upstream: ``GET {fleet.base}/api/rollup`` -> ``{generatedAt, fleet:
+    {...}, printer: {...}}``. Both sub-blocks are trimmed to exactly the
+    fields above (extra upstream keys — and ``generatedAt`` itself — are
+    dropped, never passed through); values are passed through as-is with no
+    type coercion, so a flaky upstream serving a wrong-typed field (a number
+    where a string state belongs, and vice versa) degrades the display, not
+    the tile — the laundry lesson: never let a value's TYPE raise out of a
+    fail-soft proxy.
+
+    Returns ``{"available": False}`` when ``fleet`` is unset, the fetch
+    fails, the body isn't a dict, or either ``fleet``/``printer`` sub-block
+    is missing/non-dict — never raises (the route has no global exception
+    handler, so a raise would 500). Errors are never cached, so a transient
+    blip retries on the next poll.
+
+    The ``try`` only wraps the actual fetch/decode and the explicit
+    ``ValueError`` guards below (a flaky LAN app can serve valid-but-non-dict
+    JSON, or a dict missing the fleet/printer sub-blocks). The result dict
+    itself is built AFTER the try, once those guards have already proven
+    ``raw_fleet``/``raw_printer`` are dicts — so a bug in that construction
+    surfaces as a real exception instead of being silently swallowed as
+    "unavailable" by an overly broad catch."""
+    fleet_cfg = getattr(cfg, "fleet", None)
+    if not fleet_cfg:
+        return {"available": False}   # fleet proxy off; no fetch attempted
+    base = fleet_cfg["base"]
+    cached = _fleet_cache.get(base)
+    if cached is not None and cached[0] > time.monotonic():
+        return cached[1]
+    try:
+        r = await client.get(f"{base}/api/rollup", timeout=TIMEOUT)
+        r.raise_for_status()
+        body = r.json()
+        if not isinstance(body, dict):
+            raise ValueError(f"non-dict body {type(body).__name__}")
+        raw_fleet = body.get("fleet")
+        raw_printer = body.get("printer")
+        if not isinstance(raw_fleet, dict) or not isinstance(raw_printer, dict):
+            raise ValueError("rollup missing fleet/printer block")
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as e:
+        log.warning("fleet tile /api/rollup unavailable: %s", e)
+        return {"available": False}   # not cached: retry on the next poll
+    result = {
+        "available": True,
+        "fleet": {
+            "health": raw_fleet.get("health"),
+            "hostsUp": raw_fleet.get("hostsUp"),
+            "hostsTotal": raw_fleet.get("hostsTotal"),
+            "worstProblem": raw_fleet.get("worstProblem"),
+        },
+        "printer": {
+            "health": raw_printer.get("health"),
+            "state": raw_printer.get("state"),
+            "job": raw_printer.get("job"),
+            "progressPercent": raw_printer.get("progressPercent"),
+            "remainingMinutes": raw_printer.get("remainingMinutes"),
+            "nozzleF": raw_printer.get("nozzleF"),
+            "bedF": raw_printer.get("bedF"),
+            "online": raw_printer.get("online"),
+        },
+    }
+    if fleet_cfg.get("label"):
+        result["label"] = fleet_cfg["label"]
+    _fleet_cache[base] = (time.monotonic() + FLEET_TTL, result)
     return result
 
 

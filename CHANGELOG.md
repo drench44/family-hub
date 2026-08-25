@@ -10,6 +10,38 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Fleet Console: registry descriptor + fail-soft tile proxy for a separate
+  fleet-dashboard app's compact rollup (host status + 3D-printer status),
+  gated behind a `fleet` config block (`{base, label?}`, no config = the
+  integration doesn't appear). Server side only so far — no card, no DEMO
+  payload, no mobile surface yet.
+- Fleet Console: DEMO payload (a healthy fleet + a printer mid-print) so the
+  card shows in demo/offline runs, plus the native wall/phone card itself —
+  a system-health line ("N of M hosts up", the worst problem in words when
+  not nominal) over the printer's state, job, progress bar, ETA, and F
+  temps. Rides the panels column under Laundry on the wall and the Weather
+  tab on the phone (no tab of its own). A "Console" button opens the full
+  dashboard full-screen when a `fleet` panels entry is configured; the
+  integration toggle switches the card off with the same registry hook
+  every other tile uses.
+
+### Fixed
+- Fleet Console (three-agent review): a null/missing/unrecognized
+  `fleet.health` or `printer.health` no longer defaults to a healthy green
+  dot — it's now a neutral grey "unknown" tier, since a rollup that failed
+  to report health is not a confirmed-healthy one. `fleet_tile`'s
+  fail-soft `except` is narrowed to the specific fetch/decode/validation
+  errors it actually expects, and the trimmed result dict is now built
+  after that guard, so a real bug there surfaces instead of being read as
+  "unavailable". The `fleet.label` config (already accepted and
+  documented) now actually reaches the card header instead of being
+  dropped. A last-good card riding out a fleet-proxy failure is now
+  visibly dimmed with a "stale" badge from the very first missed poll,
+  not only once the card gives up after three. A missing `online` field
+  and an out-of-range `progressPercent` (e.g. negative or over 100) no
+  longer render as a fabricated "online"/"finished" reading.
+
 ## [1.3.2] — 2026-08-24
 
 ### Changed

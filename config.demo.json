@@ -10,6 +10,8 @@
     { "id": "weather", "label": "Weather", "url": "http://localhost/",
       "vw": 1024, "vh": 600, "full": "fit" },
     { "id": "climate", "label": "House Climate", "url": "http://localhost/",
+      "vw": 1024, "vh": 600, "full": "fit" },
+    { "id": "fleet", "label": "Fleet", "url": "http://localhost/",
       "vw": 1024, "vh": 600, "full": "fit" }
   ],
   "go2rtc_base": "",

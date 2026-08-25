@@ -103,6 +103,44 @@ def test_laundry_config_cleaning():
                            "machines": [{"id": "w"}]}) is None
 
 
+def test_fleet_available_reflects_config():
+    # present iff the `fleet` config block is set — no env/credential gate,
+    # unlike laundry/caldav (availability is config presence alone).
+    cfg = _cfg(fleet=None)
+    avail = {i["id"]: i for i in fi.available_integrations(cfg, {})}
+    assert avail["fleet"]["available"] is False
+    assert avail["fleet"]["group"] == "integration"
+    assert avail["fleet"]["kind"] == "fleet"
+
+    cfg = _cfg(fleet={"base": "http://fleet"})
+    avail = {i["id"]: i for i in fi.available_integrations(cfg, {})}
+    assert avail["fleet"]["available"] is True
+
+
+def test_fleet_config_cleaning():
+    from family_hub.config import _clean_fleet
+    assert _clean_fleet(None) is None
+    assert _clean_fleet("nope") is None
+    assert _clean_fleet({}) is None
+    assert _clean_fleet({"base": ""}) is None
+    cleaned = _clean_fleet({"base": "http://fleet:3000/", "label": "Fleet"})
+    assert cleaned == {"base": "http://fleet:3000", "label": "Fleet"}   # trailing / stripped
+    # label is optional
+    assert _clean_fleet({"base": "http://fleet:3000"}) == {"base": "http://fleet:3000"}
+
+
+def test_fleet_config_cleaning_warns_loudly(caplog):
+    # A malformed fleet block must not silently vanish the integration — the
+    # operator's only debugging path otherwise is re-reading their JSON
+    # character by character while the tile silently never appears.
+    import logging
+    from family_hub.config import _clean_fleet
+    with caplog.at_level(logging.WARNING, logger="family_hub.config"):
+        _clean_fleet({"label": "Fleet"})   # missing base
+    msgs = " ".join(r.message for r in caplog.records)
+    assert "dropping malformed config block" in msgs
+
+
 def test_laundry_config_cleaning_warns_loudly(caplog):
     # Dropped machines and a dropped-whole-integration must say so in the log
     # (the operator's only debugging path otherwise is re-reading their JSON

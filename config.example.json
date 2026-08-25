@@ -40,5 +40,6 @@
         "remaining_entity": "sensor.dryer_remaining_time" }
     ]
   },
-  "theme": { "mode": "grey", "accent": "green", "columns": "none" }
+  "theme": { "mode": "grey", "accent": "green", "columns": "none" },
+  "fleet": { "base": "http://192.168.1.50:3000" }
 }

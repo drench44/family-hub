@@ -1097,6 +1097,45 @@ def test_laundry_card_static_guards():
                      CSS), "weather tab must not duplicate the laundry slot"
 
 
+def test_fleet_card_static_guards():
+    """The fleet card's load-bearing wiring: the off-toggle hides its slot,
+    the slot is built unconditionally (laundry's 2026-08-17 lesson), the poll
+    loop is wired at boot, and the Console full-screen button is config-gated
+    (never a dead button)."""
+    assert re.search(r"body\.integ-off-fleet[^\{]*#fleet-slot[^\{]*\{[^}]*display:\s*none",
+                     CSS), "fleet-off must hide the fleet slot"
+    hub = (STATIC / "hub.js").read_text()
+    assert re.search(r"function fleetSlotHtml\(\) \{\s*\n?\s*return `<div class=\"fleet-slot\"",
+                     hub), "fleetSlotHtml must build the slot unconditionally"
+    assert "fetchFleet" in hub and "renderFleet" in hub and "fleetCardHtml" in hub
+    assert re.search(r"^fetchFleet\(\);", hub, re.M), "bootstrap must call fetchFleet()"
+    assert re.search(r"setInterval\(fetchFleet, POLL_MS\)", hub), \
+        "the poll beat must re-fetch fleet on the hub cadence"
+    # buildPanels must give fleet a native slot, never an always-on iframe
+    # embed, even when a 'fleet' links.panels entry exists (that entry is
+    # full-screen-only — the Console button's URL, nothing more)
+    m = re.search(r"function buildPanels\(\) \{(.*?)\n\}", hub, re.S)
+    assert m and "fleetSlotHtml()" in m.group(1), \
+        "buildPanels must append the fleet slot unconditionally"
+    assert re.search(r"if \(p\.id === 'fleet'\) return '';", m.group(1)), \
+        "a configured fleet panels entry must not get an always-on iframe embed"
+    # renderFleet's Console button is gated on a 'fleet' links.panels entry
+    # existing — an unconfigured full dashboard must never offer a dead link
+    rf = re.search(r"function renderFleet\(", hub)
+    assert rf and re.search(r"links\.panels\.some\(\(p\) => p && p\.id === 'fleet'\)",
+                            hub[rf.start():rf.start() + 1200]), \
+        "renderFleet must gate the Console button on a configured 'fleet' panel"
+    # no animation loop on this card by design (plain width-update progress
+    # bar) — confirm no stray keyframes/transition slipped in unguarded
+    assert "fleet-bar-fill { height: 100%; border-radius: 999px; background:" in CSS
+    # the wall places fleet directly under laundry in the panels column
+    # (owner's placement intent); the phone rides the Weather tab since it
+    # has no tab of its own ("no new tab" per the mobile gate) — the fleet
+    # slot must NOT be excluded from the Weather tab the way laundry is.
+    assert not re.search(r'body\[data-tab="weather"\] \.fleet-slot[^{]*\{[^}]*display:\s*none',
+                         CSS), "the fleet card must stay on the Weather tab"
+
+
 def test_css_braces_balanced():
     """styles.css must have balanced braces with depth never going negative.
     Browser error recovery hides a stray top-level `}`, but the same scar
