@@ -730,6 +730,158 @@ def test_laundry_success_cached():
     assert t2 == t1 and calls["n"] == n   # served from cache, no refetch
 
 
+# --- fleet console ----------------------------------------------------
+
+ROLLUP_OK = {
+    "generatedAt": "2026-08-25T12:00:00Z",
+    "fleet": {"health": "ok", "hostsUp": 5, "hostsTotal": 5,
+              "worstProblem": None},
+    "printer": {"health": "ok", "state": "printing", "job": "benchy.gcode",
+                "progressPercent": 42, "remainingMinutes": 18,
+                "nozzleF": 410.0, "bedF": 140.0, "online": True},
+}
+
+
+def fleet_cfg(base="http://fleet"):
+    return Config(fleet={"base": base})
+
+
+def run_fleet(handler, cfg_obj=None):
+    async def run():
+        async with make_client(handler) as c:
+            return await tiles.fleet_tile(c, cfg_obj or fleet_cfg())
+    return asyncio.run(run())
+
+
+def test_fleet_happy_trims_to_contract_fields():
+    tiles.reset_caches()
+
+    def handler(req):
+        assert req.url.path == "/api/rollup"
+        return httpx.Response(200, json=ROLLUP_OK)
+    t = run_fleet(handler)
+    assert t == {
+        "available": True,
+        "fleet": {"health": "ok", "hostsUp": 5, "hostsTotal": 5,
+                  "worstProblem": None},
+        "printer": {"health": "ok", "state": "printing", "job": "benchy.gcode",
+                    "progressPercent": 42, "remainingMinutes": 18,
+                    "nozzleF": 410.0, "bedF": 140.0, "online": True},
+    }
+    assert "generatedAt" not in t   # not part of the tile contract
+
+
+def test_fleet_extra_upstream_keys_dropped():
+    tiles.reset_caches()
+    body = {
+        "generatedAt": "x",
+        "fleet": dict(ROLLUP_OK["fleet"], extraField="nope"),
+        "printer": dict(ROLLUP_OK["printer"], secretToken="nope"),
+    }
+
+    def handler(req):
+        return httpx.Response(200, json=body)
+    t = run_fleet(handler)
+    assert "extraField" not in t["fleet"]
+    assert "secretToken" not in t["printer"]
+    assert set(t["fleet"]) == {"health", "hostsUp", "hostsTotal", "worstProblem"}
+    assert set(t["printer"]) == {"health", "state", "job", "progressPercent",
+                                 "remainingMinutes", "nozzleF", "bedF", "online"}
+
+
+def test_fleet_not_configured_no_fetch():
+    tiles.reset_caches()
+
+    def fail(req):
+        raise AssertionError("must not fetch when fleet is not configured")
+    assert run_fleet(fail, Config()) == {"available": False}
+
+
+def test_fleet_dead_upstream_unavailable_not_raise():
+    tiles.reset_caches()
+
+    def boom(req):
+        raise httpx.ConnectError("refused")
+    assert run_fleet(boom) == {"available": False}
+
+
+def test_fleet_500_unavailable():
+    tiles.reset_caches()
+    assert run_fleet(lambda req: httpx.Response(500)) == {"available": False}
+
+
+def test_fleet_non_dict_body_unavailable():
+    for body in ([], None, "error", 42):
+        tiles.reset_caches()
+
+        def handler(req, _b=body):
+            return httpx.Response(200, json=_b)
+        assert run_fleet(handler) == {"available": False}
+
+
+def test_fleet_missing_printer_block_unavailable():
+    tiles.reset_caches()
+    body = {"generatedAt": "x", "fleet": ROLLUP_OK["fleet"]}   # no printer
+    assert run_fleet(lambda req: httpx.Response(200, json=body)) \
+        == {"available": False}
+
+
+def test_fleet_missing_fleet_block_unavailable():
+    tiles.reset_caches()
+    body = {"generatedAt": "x", "printer": ROLLUP_OK["printer"]}   # no fleet
+    assert run_fleet(lambda req: httpx.Response(200, json=body)) \
+        == {"available": False}
+
+
+def test_fleet_non_string_state_guarded_not_raise():
+    # A flaky upstream serving a wrong-typed value (a number for `state`, a
+    # string where a number belongs) must degrade the display, never raise
+    # out of the fail-soft tile — the laundry numeric-state lesson.
+    tiles.reset_caches()
+    body = {
+        "generatedAt": "x",
+        "fleet": {"health": "ok", "hostsUp": 5, "hostsTotal": 5,
+                  "worstProblem": None},
+        "printer": {"health": "ok", "state": 12345, "job": None,
+                    "progressPercent": "not-a-number", "remainingMinutes": None,
+                    "nozzleF": None, "bedF": None, "online": False},
+    }
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    assert t["available"] is True
+    assert t["printer"]["state"] == 12345
+    assert t["printer"]["progressPercent"] == "not-a-number"
+
+
+def test_fleet_success_cached_within_ttl_no_refetch():
+    tiles.reset_caches()
+    calls = {"n": 0}
+
+    def ok(req):
+        calls["n"] += 1
+        return httpx.Response(200, json=ROLLUP_OK)
+    first = run_fleet(ok)
+    assert first["available"] is True
+    seen = calls["n"]
+
+    def boom(req):
+        calls["n"] += 1
+        raise AssertionError("must not re-fetch within the TTL")
+    second = run_fleet(boom)
+    assert second == first and calls["n"] == seen
+
+
+def test_fleet_error_not_cached_retries_next_poll():
+    tiles.reset_caches()
+
+    def boom(req):
+        raise httpx.ConnectError("refused")
+    assert run_fleet(boom) == {"available": False}
+
+    def ok(req):
+        return httpx.Response(200, json=ROLLUP_OK)
+    assert run_fleet(ok)["available"] is True
+
+
 def test_laundry_non_string_states_guarded():
     # A flaky upstream serving a NUMBER (or null) as the state must degrade,
     # never raise TypeError/AttributeError out of the fail-soft tile.

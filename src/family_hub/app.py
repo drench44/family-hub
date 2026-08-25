@@ -1768,6 +1768,11 @@ async def tile_weather():
     return await tiles.weather_tile(_http, cfg)
 
 
+@app.get("/api/tiles/fleet")
+async def tile_fleet():
+    return await tiles.fleet_tile(_http, cfg)
+
+
 # --- laundry: annotation, background watcher, live stream ------------------
 #
 # The laundry pipeline is PUSH-shaped end to end: LG ThinQ pushes into Home
