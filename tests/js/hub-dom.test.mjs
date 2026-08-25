@@ -6060,6 +6060,139 @@ test('toggle off hides #fleet-slot via the registry CSS hook and reflows the wal
   assert.equal(byTab('weather').hidden, false);
 });
 
+// --- three-agent review fixes (MUST-FIX 1/4/5/6, FIX 3, gap tests) -------
+
+test('fleetHealthCls: null/missing/unrecognized health is neutral st-unknown, never green', () => {
+  const { sandbox } = newHub();
+  assert.equal(sandbox.fleetHealthCls(null), ' st-unknown');
+  assert.equal(sandbox.fleetHealthCls(undefined), ' st-unknown');
+  assert.equal(sandbox.fleetHealthCls('wat'), ' st-unknown');
+  assert.notEqual(sandbox.fleetHealthCls(null), ' st-good');
+  assert.notEqual(sandbox.fleetHealthCls('wat'), ' st-good');
+  assert.equal(sandbox.fleetHealthCls('ok'), ' st-good');
+  assert.equal(sandbox.fleetHealthCls('warn'), ' st-warn');
+  assert.equal(sandbox.fleetHealthCls('crit'), ' st-crit');
+  assert.equal(sandbox.fleetHealthCls('down'), ' st-crit');
+});
+
+test('fleetCardHtml: a fleet with null health renders the neutral st-unknown dot, not st-good', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: null, hostsUp: 3, hostsTotal: 3, worstProblem: null },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, /class="fleet-dot st-unknown"/);
+  assert.doesNotMatch(html, /class="fleet-dot st-good"/);
+});
+
+test('fleetCardHtml: health "warn" renders the st-warn tier', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'warn', hostsUp: 2, hostsTotal: 3, worstProblem: 'disk 91% full' },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, /class="fleet-dot st-warn"/);
+  assert.match(html, /disk 91% full/);
+});
+
+test('fleetRemainStr: under 60 minutes omits the hour part ("~Xm left")', () => {
+  const { sandbox } = newHub();
+  assert.equal(sandbox.fleetRemainStr(45), '~45m left');
+  assert.equal(sandbox.fleetRemainStr(0), '~0m left');
+  assert.equal(sandbox.fleetRemainStr(59), '~59m left');
+});
+
+test('fleetPrinterHtml: missing `online` (undefined, not false) is treated as unknown, never shown online', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetPrinterHtml({
+    health: 'ok', state: 'printing', job: 'x.gcode', progressPercent: 50,
+    remainingMinutes: 10, nozzleF: 400, bedF: 130,
+    // online deliberately omitted
+  });
+  assert.match(html, /fleet-printer-offline">Printer unavailable/);
+  assert.doesNotMatch(html, /printing/);
+});
+
+test('fleetPrinterHtml: an out-of-range progressPercent is unknown, not clamped to 0/100', () => {
+  const { sandbox } = newHub();
+  const low = sandbox.fleetPrinterHtml({
+    health: 'ok', state: 'printing', job: null, progressPercent: -5,
+    remainingMinutes: null, nozzleF: null, bedF: null, online: true,
+  });
+  assert.doesNotMatch(low, /fleet-bar"/);
+  assert.doesNotMatch(low, /0%/);
+  const high = sandbox.fleetPrinterHtml({
+    health: 'ok', state: 'printing', job: null, progressPercent: 5000,
+    remainingMinutes: null, nozzleF: null, bedF: null, online: true,
+  });
+  assert.doesNotMatch(high, /fleet-bar"/);
+  assert.doesNotMatch(high, /100%/);
+});
+
+test('renderFleet: a custom fleet.label rides the card header, falling back to "Fleet"', () => {
+  const { document, sandbox } = newHub();
+  const slot = document.createElement('div');
+  slot._id = 'fleet-slot';
+  document.body.appendChild(slot);
+  sandbox.renderFleet({ ...FLEET_HEALTHY, label: 'Print Farm' });
+  assert.match(slot.innerHTML, />Print Farm</);
+  sandbox.renderFleet(FLEET_HEALTHY);   // no label configured
+  assert.match(slot.innerHTML, />Fleet</);
+  assert.doesNotMatch(slot.innerHTML, />Print Farm</);
+});
+
+test('fetchFleet: a stale last-good card is visibly marked from the FIRST failure, not just at give-up', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  const slot = document.createElement('div');
+  slot._id = 'fleet-slot';
+  document.body.appendChild(slot);
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => FLEET_HEALTHY });
+  await sandbox.fetchFleet();
+  assert.doesNotMatch(slot.innerHTML, /is-stale|fleet-stale/, 'a fresh good card is never marked stale');
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchFleet();   // fail 1 — still last-good, but now stale
+  assert.match(slot.innerHTML, /printing/, 'still showing the last-good card');
+  assert.match(slot.innerHTML, /class="card fleet is-stale"/, 'stale affordance from the first failure');
+  assert.match(slot.innerHTML, /fleet-stale">stale</, 'a visible stale badge, not just a class');
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => FLEET_HEALTHY });
+  await sandbox.fetchFleet();   // recovers
+  assert.doesNotMatch(slot.innerHTML, /is-stale|fleet-stale/, 'stale affordance clears on the next good poll');
+});
+
+test('fleetCardHtml/fleetPrinterHtml: a wrong-typed/partial proxy payload renders "status unknown" and never throws', () => {
+  const { sandbox } = newHub();
+  // Exactly the shapes the fail-soft proxy can legitimately hand back on a
+  // flaky upstream: numeric state, non-numeric progress, missing hostsUp/health.
+  assert.doesNotThrow(() => {
+    const html = sandbox.fleetCardHtml({
+      available: true,
+      fleet: { worstProblem: null },   // health, hostsUp, hostsTotal all missing
+      printer: { health: 'ok', state: 12345, job: null,
+        progressPercent: 'not-a-number', remainingMinutes: null,
+        nozzleF: null, bedF: null, online: true },
+    });
+    assert.match(html, /status unknown/);
+    assert.match(html, /class="fleet-dot st-unknown"/);
+    assert.doesNotMatch(html, /fleet-bar"/);
+  });
+});
+
+test('fleetPrinterHtml: job and state are HTML-escaped, not just worstProblem', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetPrinterHtml({
+    health: 'ok', state: '<img src=x onerror=alert(1)>', job: '<script>alert(2)</script>.gcode',
+    progressPercent: null, remainingMinutes: null, nozzleF: null, bedF: null, online: true,
+  });
+  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;script&gt;/);
+});
+
 // ---------------------------------------------------------------------------
 // To-Do wall card: the 3-tier digest (Now / Soon / Later). The compact card
 // used to show ONLY the `now` bucket plus three count chips; it now surfaces

@@ -2826,9 +2826,18 @@ document.addEventListener('visibilitychange', () => {
    st-warn/st-crit palette (see roomBand/tempBandF for the same pattern).
    'down' reads as critical too — there's no separate visual tier for it,
    the fleet rollup already folds "any host down" into its own worst-of
-   ladder before it reaches here. */
+   ladder before it reaches here.
+
+   Never-fabricate: only the three recognized values map to a color tier.
+   Anything else — null, missing, an unrecognized string from a flaky or
+   newer upstream — falls to 'st-unknown', a neutral grey. A missing/unknown
+   health must NEVER default to green; that would paint a rollup that failed
+   to report health as if it were confirmed healthy. */
 function fleetHealthCls(h) {
-  return (h === 'crit' || h === 'down') ? ' st-crit' : (h === 'warn' ? ' st-warn' : ' st-good');
+  if (h === 'crit' || h === 'down') return ' st-crit';
+  if (h === 'warn') return ' st-warn';
+  if (h === 'ok') return ' st-good';
+  return ' st-unknown';
 }
 
 /* '~Xh Ym left' (hours omitted under 60 minutes), from a whole-minute count.
@@ -2844,16 +2853,25 @@ function fleetRemainStr(mins) {
 /* The printer half: state word, job name, a width-updated progress bar (no
    animation loop — the plan is explicit that this card doesn't move), and
    the F temps the rollup already carries pre-converted. offline/unreachable
-   (online:false, or no state at all) never fabricates a 0%/0° reading — it
-   renders a quiet muted note instead, same discipline as the fleet half. */
+   (online:false, online missing/unknown, or no state at all) never
+   fabricates a 0%/0° reading — it renders a quiet muted note instead, same
+   discipline as the fleet half. `online` must be the LITERAL boolean
+   `true` to read as "shown online" — a missing/undefined/null `online`
+   (a partial or wrong-shaped upstream payload) is unknown, not online, and
+   must never be shown as an active reading. */
 function fleetPrinterHtml(p) {
-  if (!p || p.online === false || !p.state) {
+  if (!p || p.online !== true || !p.state) {
     return `<div class="fleet-printer fleet-printer-offline">Printer unavailable</div>`;
   }
   const state = escapeHtml(String(p.state).replace(/_/g, ' '));
   const job = p.job ? `<div class="fleet-job">${escapeHtml(String(p.job))}</div>` : '';
-  const pctOk = Number.isFinite(p.progressPercent);
-  const pct = pctOk ? Math.max(0, Math.min(100, p.progressPercent)) : null;
+  // Never-fabricate: a finite-but-out-of-range percent (a flaky upstream
+  // sending -5 or 5000) is treated as unknown, NOT silently clamped to
+  // 0/100 — a clamp-to-100 would read as "finished" for a value that was
+  // never actually a valid reading.
+  const raw = p.progressPercent;
+  const pctOk = Number.isFinite(raw) && raw >= 0 && raw <= 100;
+  const pct = pctOk ? raw : null;
   const bar = pctOk
     ? `<div class="fleet-bar"><div class="fleet-bar-fill" style="width:${pct}%"></div></div>`
       + `<div class="fleet-pct num">${Math.round(pct)}%</div>`
@@ -2872,8 +2890,11 @@ function fleetPrinterHtml(p) {
 }
 
 /* The whole fleet card: a system-health line (dot + "N of M hosts up", the
-   worst problem in words only when not nominal) over the printer half. */
-function fleetCardHtml(fl) {
+   worst problem in words only when not nominal) over the printer half.
+   `stale` (see fetchFleet) paints a quiet "stale" badge next to the hosts
+   line and dims the whole card — this is a health monitor, so a last-good
+   card riding out a failed poll must never look as pristine as a live one. */
+function fleetCardHtml(fl, stale = false) {
   const f = fl.fleet || {};
   const p = fl.printer || {};
   const up = Number.isFinite(f.hostsUp) ? f.hostsUp : null;
@@ -2882,10 +2903,12 @@ function fleetCardHtml(fl) {
     ? `${up} of ${total} hosts up` : 'status unknown';
   const problem = (f.health && f.health !== 'ok' && f.worstProblem)
     ? `<div class="fleet-problem">${escapeHtml(String(f.worstProblem))}</div>` : '';
-  return `<article class="card fleet">`
+  const staleTag = stale ? '<span class="fleet-stale">stale</span>' : '';
+  return `<article class="card fleet${stale ? ' is-stale' : ''}">`
     + `<div class="fleet-sys">`
     + `<i class="fleet-dot${fleetHealthCls(f.health)}" aria-hidden="true"></i>`
     + `<span class="fleet-hosts">${escapeHtml(hostsLine)}</span>`
+    + staleTag
     + `</div>`
     + problem
     + fleetPrinterHtml(p)
@@ -2895,32 +2918,43 @@ function fleetCardHtml(fl) {
 /* Paint the native fleet card into its slot (built by buildPanels, ridden
    under the laundry slot in the panels column — the owner's placement
    intent for the wall). The header sits OUTSIDE the card (sectionHead), like
-   every other section; the "Console" expand button only appears when a
-   'fleet' links.panels entry is configured (the full dashboard has a real
-   URL to open) — per adding-a-feature.md's gate, an unconfigured full-screen
-   target must not offer a dead button. When the tile reports unavailable
-   (integration off / proxy down) the column is never blanked — a slim
-   offline note stands in, header intact. */
+   every other section, and takes ``fl.label`` when the tile carries one
+   (fleet.label config) — falling back to the generic "Fleet" title when it's
+   absent, same as an unnamed panels entry falls back elsewhere. The
+   "Console" expand button only appears when a 'fleet' links.panels entry is
+   configured (the full dashboard has a real URL to open) — per
+   adding-a-feature.md's gate, an unconfigured full-screen target must not
+   offer a dead button. When the tile reports unavailable (integration off /
+   proxy down) the column is never blanked — a slim offline note stands in,
+   header intact. */
 function renderFleet(fl = fleetData) {
   const host = document.getElementById('fleet-slot');
   if (!host) return;   // panels not built yet (boot race, like laundry)
+  // A last-good card riding out >=1 consecutive fetch failure is stale —
+  // see fetchFleet. Only a still-available card can be "stale"; the
+  // give-up-after-the-limit case already swaps to the honest offline note.
+  const stale = fleetFails > 0 && !!(fl && fl.available);
   const hasConsole = Array.isArray(links && links.panels)
     && links.panels.some((p) => p && p.id === 'fleet');
-  const head = sectionHead('Fleet',
+  const head = sectionHead((fl && fl.label) || 'Fleet',
     hasConsole ? { overlay: 'panel:fleet', expandLabel: 'Console' } : {});
   // null = not fetched yet (boot): neutral placeholder, never the offline
   // note, so the card doesn't flash "unavailable" before the first fetch.
   const body = fl == null
     ? `<div class="card wx-loading" aria-hidden="true"></div>`
     : fl.available
-      ? fleetCardHtml(fl)
+      ? fleetCardHtml(fl, stale)
       : `<div class="wx-offline">Fleet unavailable</div>`;
   host.innerHTML = head + body;
 }
 
 /* Poll the fail-soft fleet endpoint on the hub cadence; same last-good-card
    discipline as weather/climate (no push feed here — the rollup changes slow
-   enough that a plain poll is plenty). */
+   enough that a plain poll is plenty). Unlike weather/climate this is a
+   health MONITOR, so the last-good card must not look pristine while it's
+   going stale: renderFleet paints a visible stale affordance from the very
+   FIRST consecutive failure (fleetFails > 0), well before TILE_FAIL_LIMIT
+   gives up on it and swaps to the honest offline note. */
 async function fetchFleet() {
   try {
     fleetData = await j('/api/tiles/fleet');

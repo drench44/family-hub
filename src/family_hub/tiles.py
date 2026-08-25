@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 import time
+
+import httpx
 
 log = logging.getLogger("family_hub.tiles")
 
@@ -298,9 +301,12 @@ async def weather_tile(client, cfg) -> dict:
 
 async def fleet_tile(client, cfg) -> dict:
     """Proxy the separate fleet-dashboard app's compact rollup into a
-    trimmed, fail-soft tile: ``{available, fleet: {health, hostsUp,
+    trimmed, fail-soft tile: ``{available, label?, fleet: {health, hostsUp,
     hostsTotal, worstProblem}, printer: {health, state, job,
-    progressPercent, remainingMinutes, nozzleF, bedF, online}}``.
+    progressPercent, remainingMinutes, nozzleF, bedF, online}}``. ``label``
+    is only present when ``fleet.label`` is set in config — it rides straight
+    through to the card header (``renderFleet``/``fleetCardHtml`` fall back
+    to "Fleet" when it's absent).
 
     Upstream: ``GET {fleet.base}/api/rollup`` -> ``{generatedAt, fleet:
     {...}, printer: {...}}``. Both sub-blocks are trimmed to exactly the
@@ -315,7 +321,15 @@ async def fleet_tile(client, cfg) -> dict:
     fails, the body isn't a dict, or either ``fleet``/``printer`` sub-block
     is missing/non-dict — never raises (the route has no global exception
     handler, so a raise would 500). Errors are never cached, so a transient
-    blip retries on the next poll."""
+    blip retries on the next poll.
+
+    The ``try`` only wraps the actual fetch/decode and the explicit
+    ``ValueError`` guards below (a flaky LAN app can serve valid-but-non-dict
+    JSON, or a dict missing the fleet/printer sub-blocks). The result dict
+    itself is built AFTER the try, once those guards have already proven
+    ``raw_fleet``/``raw_printer`` are dicts — so a bug in that construction
+    surfaces as a real exception instead of being silently swallowed as
+    "unavailable" by an overly broad catch."""
     fleet_cfg = getattr(cfg, "fleet", None)
     if not fleet_cfg:
         return {"available": False}   # fleet proxy off; no fetch attempted
@@ -327,39 +341,36 @@ async def fleet_tile(client, cfg) -> dict:
         r = await client.get(f"{base}/api/rollup", timeout=TIMEOUT)
         r.raise_for_status()
         body = r.json()
-        # Build the trimmed shape INSIDE the try: a flaky LAN app can serve
-        # valid-but-non-dict JSON (``[]``, ``null``, a scalar, an error
-        # string), or a dict missing the fleet/printer sub-blocks entirely.
-        # Both would raise (AttributeError/KeyError) if trimmed outside the
-        # try — catching here keeps the fail-soft contract.
         if not isinstance(body, dict):
             raise ValueError(f"non-dict body {type(body).__name__}")
         raw_fleet = body.get("fleet")
         raw_printer = body.get("printer")
         if not isinstance(raw_fleet, dict) or not isinstance(raw_printer, dict):
             raise ValueError("rollup missing fleet/printer block")
-        result = {
-            "available": True,
-            "fleet": {
-                "health": raw_fleet.get("health"),
-                "hostsUp": raw_fleet.get("hostsUp"),
-                "hostsTotal": raw_fleet.get("hostsTotal"),
-                "worstProblem": raw_fleet.get("worstProblem"),
-            },
-            "printer": {
-                "health": raw_printer.get("health"),
-                "state": raw_printer.get("state"),
-                "job": raw_printer.get("job"),
-                "progressPercent": raw_printer.get("progressPercent"),
-                "remainingMinutes": raw_printer.get("remainingMinutes"),
-                "nozzleF": raw_printer.get("nozzleF"),
-                "bedF": raw_printer.get("bedF"),
-                "online": raw_printer.get("online"),
-            },
-        }
-    except Exception as e:
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as e:
         log.warning("fleet tile /api/rollup unavailable: %s", e)
         return {"available": False}   # not cached: retry on the next poll
+    result = {
+        "available": True,
+        "fleet": {
+            "health": raw_fleet.get("health"),
+            "hostsUp": raw_fleet.get("hostsUp"),
+            "hostsTotal": raw_fleet.get("hostsTotal"),
+            "worstProblem": raw_fleet.get("worstProblem"),
+        },
+        "printer": {
+            "health": raw_printer.get("health"),
+            "state": raw_printer.get("state"),
+            "job": raw_printer.get("job"),
+            "progressPercent": raw_printer.get("progressPercent"),
+            "remainingMinutes": raw_printer.get("remainingMinutes"),
+            "nozzleF": raw_printer.get("nozzleF"),
+            "bedF": raw_printer.get("bedF"),
+            "online": raw_printer.get("online"),
+        },
+    }
+    if fleet_cfg.get("label"):
+        result["label"] = fleet_cfg["label"]
     _fleet_cache[base] = (time.monotonic() + FLEET_TTL, result)
     return result
 

@@ -934,12 +934,25 @@ body {
   background: var(--good); }
 .fleet-dot.st-warn { background: var(--warn); }
 .fleet-dot.st-crit { background: var(--crit); }
+/* Never-fabricate: a null/missing/unrecognized health is neutral grey, NEVER
+   green — a rollup that failed to report health must not read as healthy. */
+.fleet-dot.st-unknown { background: var(--faint); }
 .fleet-hosts { font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .fleet-problem { font-size: 12.5px; color: var(--warn); }
+/* the stale-card badge (fetchFleet/renderFleet): a quiet pill next to the
+   hosts line, same visual family as .wx-stale/.rstale elsewhere on the wall */
+.fleet-stale { margin-left: auto; font-size: 9px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  border-radius: 4px; padding: 1px 4px; flex: none; }
+/* a stale last-good card is visibly dimmed (this is a health monitor — a
+   riding-out-a-failure card must never look as pristine as a live one) */
+.fleet.is-stale { opacity: .62; }
 .fleet-printer { border-top: 1px solid var(--edge-soft); padding-top: 9px;
   display: flex; flex-direction: column; gap: 6px; }
 .fleet-printer.st-crit .fleet-pr-state { color: var(--crit); }
 .fleet-printer.st-warn .fleet-pr-state { color: var(--warn); }
+.fleet-printer.st-unknown .fleet-pr-state { color: var(--faint); }
 .fleet-printer-offline { border-top: 1px solid var(--edge-soft); padding-top: 9px;
   color: var(--faint); font-size: 13px; font-style: italic; }
 .fleet-pr-head { display: flex; align-items: baseline; justify-content: space-between;

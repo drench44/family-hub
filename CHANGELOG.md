@@ -26,6 +26,22 @@ rolls that section to a dated version via `python scripts/release.py`.
   integration toggle switches the card off with the same registry hook
   every other tile uses.
 
+### Fixed
+- Fleet Console (three-agent review): a null/missing/unrecognized
+  `fleet.health` or `printer.health` no longer defaults to a healthy green
+  dot — it's now a neutral grey "unknown" tier, since a rollup that failed
+  to report health is not a confirmed-healthy one. `fleet_tile`'s
+  fail-soft `except` is narrowed to the specific fetch/decode/validation
+  errors it actually expects, and the trimmed result dict is now built
+  after that guard, so a real bug there surfaces instead of being read as
+  "unavailable". The `fleet.label` config (already accepted and
+  documented) now actually reaches the card header instead of being
+  dropped. A last-good card riding out a fleet-proxy failure is now
+  visibly dimmed with a "stale" badge from the very first missed poll,
+  not only once the card gives up after three. A missing `online` field
+  and an out-of-range `progressPercent` (e.g. negative or over 100) no
+  longer render as a fabricated "online"/"finished" reading.
+
 ## [1.3.2] — 2026-08-24
 
 ### Changed

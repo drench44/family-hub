@@ -882,6 +882,28 @@ def test_fleet_error_not_cached_retries_next_poll():
     assert run_fleet(ok)["available"] is True
 
 
+def test_fleet_label_passthrough_when_configured():
+    # fleet.label is accepted+validated by config._clean_fleet and documented
+    # in the README, but was dropped on the floor before reaching the tile
+    # payload/card header. It must now ride straight through.
+    tiles.reset_caches()
+    cfg = Config(fleet={"base": "http://fleet", "label": "Print Farm"})
+
+    def handler(req):
+        return httpx.Response(200, json=ROLLUP_OK)
+    t = run_fleet(handler, cfg)
+    assert t["label"] == "Print Farm"
+
+
+def test_fleet_no_label_key_when_not_configured():
+    tiles.reset_caches()
+
+    def handler(req):
+        return httpx.Response(200, json=ROLLUP_OK)
+    t = run_fleet(handler)   # fleet_cfg() has no "label"
+    assert "label" not in t
+
+
 def test_laundry_non_string_states_guarded():
     # A flaky upstream serving a NUMBER (or null) as the state must degrade,
     # never raise TypeError/AttributeError out of the fail-soft tile.
