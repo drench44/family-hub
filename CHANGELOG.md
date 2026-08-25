@@ -41,6 +41,13 @@ rolls that section to a dated version via `python scripts/release.py`.
   not only once the card gives up after three. A missing `online` field
   and an out-of-range `progressPercent` (e.g. negative or over 100) no
   longer render as a fabricated "online"/"finished" reading.
+- Calendar agenda: on the wall's desktop width, a later media-query rule
+  (`.cal-ev { padding: 6px 0; }`) was overriding `.cal-ev-allday`'s own
+  horizontal padding, so the all-day/multi-day event bar's title and
+  "day X of Y" tag sat flush against both edges of the bar. Scoped the
+  media-query rule to `.cal-ev:not(.cal-ev-allday)` and widened the
+  all-day bar's own inset (6px 12px -> 6px 14px) so both sides read with
+  a comfortable gap again.
 
 ## [1.3.2] — 2026-08-24
 
