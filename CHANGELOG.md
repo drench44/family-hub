@@ -18,8 +18,11 @@ rolls that section to a dated version via `python scripts/release.py`.
   day. Today is a filled accent circle on the date. The week view and the home
   card lead each day with a date badge (today's header band tints with the
   accent), all-day events render as the same colored bar tagged "day 2 of 4"
-  when they're one day of a run, and the outlined ALL DAY chip is gone. Demo
+  when they're one day of a run, the outlined ALL DAY chip is gone, and the
+  overlay's day cards sit with air between them instead of stacked flush. Demo
   data gains three multi-day events so the README screenshot shows the bars.
+- Full-screen week / day view: each day card now has a 16px gap below it so
+  the days read as separate cards, not one endless list.
 
 ### Added
 - Weather card: a 5-day forecast strip at the foot of the card — each day shows a
