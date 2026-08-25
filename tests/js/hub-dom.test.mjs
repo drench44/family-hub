@@ -5873,7 +5873,10 @@ test('fetchLaundry: an unchanged payload does not repaint (tumble never restarts
 
 const FLEET_HEALTHY = {
   available: true,
-  fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null },
+  fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null,
+    alerts: 0, cpuPercent: 17, memPercent: 44,
+    storageUsedBytes: 3.8e12, storageTotalBytes: 8e12, hottestTempF: 121 },
+  internet: { up: true, downMbps: 2358, upMbps: 2086 },
   printer: { health: 'ok', state: 'printing', job: 'Bracket_v3.gcode',
     progressPercent: 42, remainingMinutes: 96,
     nozzleF: 410, bedF: 140, online: true },
@@ -5900,6 +5903,105 @@ test('fleetCardHtml: RUNNING printer — bar width matches percent, remaining li
   assert.match(html, /140°F bed/);
   assert.match(html, />printing</);
   assert.match(html, /Bracket_v3\.gcode/);
+  // the enriched vitals grid + internet line
+  assert.match(html, /fleet-vitals/);
+  assert.match(html, /CPU<\/span><span class="fleet-vit-v num">17%/);
+  assert.match(html, /RAM<\/span><span class="fleet-vit-v num">44%/);
+  assert.match(html, /Storage<\/span><span class="fleet-vit-v num">3\.8 TB \/ 8 TB/);
+  assert.match(html, /Hottest<\/span><span class="fleet-vit-v num">121°F/);
+  assert.match(html, /Internet up/);
+  assert.match(html, /2358 \/ 2086 Mbps link/);
+  assert.doesNotMatch(html, /n\/a/, 'a fully-reported fleet shows no n/a');
+});
+
+test('fleetCardHtml: null vitals render "n/a", never a fabricated 0', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null,
+      alerts: null, cpuPercent: null, memPercent: null,
+      storageUsedBytes: null, storageTotalBytes: null, hottestTempF: null },
+    internet: { up: null, downMbps: null, upMbps: null },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  // every vital is "n/a", NOT 0
+  assert.match(html, /CPU<\/span><span class="fleet-vit-v num">n\/a/);
+  assert.match(html, /RAM<\/span><span class="fleet-vit-v num">n\/a/);
+  assert.match(html, /Storage<\/span><span class="fleet-vit-v num">n\/a/);
+  assert.match(html, /Hottest<\/span><span class="fleet-vit-v num">n\/a/);
+  assert.doesNotMatch(html, /0%/, 'a null CPU/RAM is n/a, never 0%');
+  assert.doesNotMatch(html, /0°F/, 'a null hottest temp is n/a, never 0°F');
+  // internet up unknown (null) -> the line is omitted, never fabricated as up
+  assert.doesNotMatch(html, /fleet-net/);
+  assert.doesNotMatch(html, /Internet/);
+  // no alerts badge when alerts is null/0
+  assert.doesNotMatch(html, /fleet-alerts/);
+});
+
+test('fleetCardHtml: a degraded fleet shows the worst problem prominently, severity-coloured, with an alerts badge', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'crit', hostsUp: 4, hostsTotal: 5,
+      worstProblem: 'OMEN Server /mnt/bulk full 100%',
+      alerts: 3, cpuPercent: 62, memPercent: 88,
+      storageUsedBytes: 8e12, storageTotalBytes: 8e12, hottestTempF: 189 },
+    internet: { up: true, downMbps: 2358, upMbps: 2086 },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, /fleet-problem st-crit">OMEN Server \/mnt\/bulk full 100%/);
+  assert.match(html, /class="fleet-dot st-crit"/);
+  assert.match(html, /fleet-alerts">3 alerts</);
+  // vitals still render alongside the problem
+  assert.match(html, /Hottest<\/span><span class="fleet-vit-v num">189°F/);
+});
+
+test('fleetCardHtml: internet down renders a red "Internet DOWN", no capacity numbers', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'warn', hostsUp: 3, hostsTotal: 3,
+      worstProblem: 'ISP link down', alerts: 1, cpuPercent: 12, memPercent: 30,
+      storageUsedBytes: 1e12, storageTotalBytes: 8e12, hottestTempF: 110 },
+    internet: { up: false, downMbps: null, upMbps: null },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, /fleet-net st-crit">.*Internet DOWN/s);
+  assert.doesNotMatch(html, /Mbps/);
+  assert.doesNotMatch(html, /Internet up/);
+});
+
+test('fleetCardHtml: one storage end missing -> Storage is n/a (never a half-ratio)', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null,
+      alerts: 0, cpuPercent: 17, memPercent: 44,
+      storageUsedBytes: 3.8e12, storageTotalBytes: null, hottestTempF: 121 },
+    internet: { up: true, downMbps: 900, upMbps: null },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, /Storage<\/span><span class="fleet-vit-v num">n\/a/);
+  // a lone downMbps still labels as link capacity
+  assert.match(html, /900 Mbps link/);
+});
+
+test('fleetBytesStr/fleetPctStr: unit thresholds and n/a for non-finite', () => {
+  const { sandbox } = newHub();
+  assert.equal(sandbox.fleetBytesStr(8e12), '8 TB');
+  assert.equal(sandbox.fleetBytesStr(3.8e12), '3.8 TB');
+  assert.equal(sandbox.fleetBytesStr(500e9), '500 GB');
+  assert.equal(sandbox.fleetBytesStr(2.5e9), '2.5 GB');
+  assert.equal(sandbox.fleetBytesStr(null), null);
+  assert.equal(sandbox.fleetBytesStr(-5), null);
+  assert.equal(sandbox.fleetPctStr(0), '0%');   // a real 0 IS shown
+  assert.equal(sandbox.fleetPctStr(17), '17%');
+  assert.equal(sandbox.fleetPctStr(null), 'n/a');
+  assert.equal(sandbox.fleetPctStr('nope'), 'n/a');
 });
 
 test('fleetCardHtml: idle printer never fabricates a 0% bar or a 0° temp', () => {

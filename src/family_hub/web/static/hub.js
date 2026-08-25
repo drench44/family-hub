@@ -2850,6 +2850,75 @@ function fleetRemainStr(mins) {
   return (h > 0 ? `~${h}h ${r}m left` : `~${r}m left`);
 }
 
+/* A percent vital -> "NN%", or "n/a" when it isn't a finite number. Never
+   fabricated: a null/missing/wrong-typed cpuPercent/memPercent reads as
+   "n/a", NEVER 0, a rollup that didn't report a vital is unknown, not idle. */
+function fleetPctStr(v) {
+  return Number.isFinite(v) ? `${Math.round(v)}%` : 'n/a';
+}
+
+/* Bytes -> a compact "N.N TB" / "N.N GB" string, or null when it isn't a
+   finite non-negative number (the caller renders null as "n/a"). Decimal
+   (SI) units to match how storage is sold/labelled; one decimal below 10,
+   whole numbers at/above 10 to stay narrow on the wall tile. */
+function fleetBytesStr(v) {
+  if (!Number.isFinite(v) || v < 0) return null;
+  // one decimal below 10, whole numbers at/above 10, and a trailing ".0" is
+  // dropped (8.0 TB -> 8 TB) to stay narrow and clean on the wall tile.
+  const fmt = (n) => n.toFixed(n >= 10 ? 0 : 1).replace(/\.0$/, '');
+  const tb = v / 1e12;
+  if (tb >= 1) return `${fmt(tb)} TB`;
+  const gb = v / 1e9;
+  if (gb >= 1) return `${fmt(gb)} GB`;
+  const mb = v / 1e6;
+  return `${fmt(mb)} MB`;
+}
+
+/* The vitals grid: CPU %, RAM %, storage used/total, hottest temp F. Each
+   value is independent and nullable; a missing one shows "n/a", never a
+   fabricated 0. Storage needs BOTH ends to read as a ratio; either missing
+   -> "n/a" (a lone "3.8 TB / n/a" would be more confusing than honest). */
+function fleetVitalsHtml(f) {
+  const cpu = fleetPctStr(f.cpuPercent);
+  const ram = fleetPctStr(f.memPercent);
+  const used = fleetBytesStr(f.storageUsedBytes);
+  const total = fleetBytesStr(f.storageTotalBytes);
+  const storage = (used && total) ? `${used} / ${total}` : 'n/a';
+  const hottest = Number.isFinite(f.hottestTempF)
+    ? `${Math.round(f.hottestTempF)}°F` : 'n/a';
+  const cell = (k, v) =>
+    `<div class="fleet-vit"><span class="fleet-vit-k">${k}</span>`
+    + `<span class="fleet-vit-v num">${escapeHtml(v)}</span></div>`;
+  return `<div class="fleet-vitals">`
+    + cell('CPU', cpu) + cell('RAM', ram)
+    + cell('Storage', storage) + cell('Hottest', hottest)
+    + `</div>`;
+}
+
+/* The internet line. `internet.up` must be the LITERAL boolean true/false to
+   read as up/down; anything else (null/undefined/missing block) is unknown
+   and the line is OMITTED, never fabricated as up. downMbps/upMbps are the
+   ISP link CAPACITY (a speedtest ceiling), not live throughput, so the value
+   is labelled "link" to read as capacity, and a null one is simply dropped. */
+function fleetInternetHtml(inet) {
+  const i = inet || {};
+  if (i.up === false) {
+    return `<div class="fleet-net st-crit">`
+      + `<span class="fleet-net-k">Internet DOWN</span></div>`;
+  }
+  if (i.up !== true) return '';   // unknown -> omit, never fabricate "up"
+  const down = Number.isFinite(i.downMbps) ? Math.round(i.downMbps) : null;
+  const up = Number.isFinite(i.upMbps) ? Math.round(i.upMbps) : null;
+  let speed = '';
+  if (down !== null && up !== null) speed = `${down} / ${up} Mbps link`;
+  else if (down !== null) speed = `${down} Mbps link`;
+  else if (up !== null) speed = `${up} Mbps up link`;
+  return `<div class="fleet-net st-good">`
+    + `<span class="fleet-net-k">Internet up</span>`
+    + (speed ? `<span class="fleet-net-v num">${speed}</span>` : '')
+    + `</div>`;
+}
+
 /* The printer half: state word, job name, a width-updated progress bar (no
    animation loop — the plan is explicit that this card doesn't move), and
    the F temps the rollup already carries pre-converted. offline/unreachable
@@ -2889,8 +2958,16 @@ function fleetPrinterHtml(p) {
     + `</div>`;
 }
 
-/* The whole fleet card: a system-health line (dot + "N of M hosts up", the
-   worst problem in words only when not nominal) over the printer half.
+/* The whole fleet card, for a fleet admin at a glance:
+     - a system-health line: dot + "N of M hosts up", plus a small "N alerts"
+       badge when the rollup reports open alerts;
+     - the worst problem in words (severity-coloured) when NOT nominal; this
+       is what the admin actually needs to read, so it's prominent, not a
+       footnote;
+     - a compact vitals grid (CPU / RAM / storage / hottest temp), each null
+       vital shown as "n/a", never a fabricated 0;
+     - an internet line (up + link capacity, or a red "Internet DOWN");
+     - the printer half unchanged.
    `stale` (see fetchFleet) paints a quiet "stale" badge next to the hosts
    line and dims the whole card — this is a health monitor, so a last-good
    card riding out a failed poll must never look as pristine as a live one. */
@@ -2901,16 +2978,25 @@ function fleetCardHtml(fl, stale = false) {
   const total = Number.isFinite(f.hostsTotal) ? f.hostsTotal : null;
   const hostsLine = (up !== null && total !== null)
     ? `${up} of ${total} hosts up` : 'status unknown';
+  // The worst problem carries the fleet's own severity colour (crit/warn/
+  // unknown), never a flat warn; a critical problem must read as critical.
   const problem = (f.health && f.health !== 'ok' && f.worstProblem)
-    ? `<div class="fleet-problem">${escapeHtml(String(f.worstProblem))}</div>` : '';
+    ? `<div class="fleet-problem${fleetHealthCls(f.health)}">`
+      + `${escapeHtml(String(f.worstProblem))}</div>` : '';
+  const alerts = (Number.isFinite(f.alerts) && f.alerts > 0)
+    ? `<span class="fleet-alerts">${f.alerts} alert${f.alerts === 1 ? '' : 's'}</span>`
+    : '';
   const staleTag = stale ? '<span class="fleet-stale">stale</span>' : '';
   return `<article class="card fleet${stale ? ' is-stale' : ''}">`
     + `<div class="fleet-sys">`
     + `<i class="fleet-dot${fleetHealthCls(f.health)}" aria-hidden="true"></i>`
     + `<span class="fleet-hosts">${escapeHtml(hostsLine)}</span>`
+    + alerts
     + staleTag
     + `</div>`
     + problem
+    + fleetVitalsHtml(f)
+    + fleetInternetHtml(fl.internet)
     + fleetPrinterHtml(p)
     + `</article>`;
 }

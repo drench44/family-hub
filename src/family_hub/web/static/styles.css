@@ -938,7 +938,33 @@ body {
    green — a rollup that failed to report health must not read as healthy. */
 .fleet-dot.st-unknown { background: var(--faint); }
 .fleet-hosts { font-size: 13.5px; font-weight: 600; color: var(--ink); }
-.fleet-problem { font-size: 12.5px; color: var(--warn); }
+/* small open-alerts badge next to the hosts line */
+.fleet-alerts { font-size: 10px; font-weight: 700; letter-spacing: .03em;
+  color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 4px; padding: 1px 5px; flex: none; }
+/* the worst-problem line: prominent (this is what a fleet admin reads first),
+   coloured by the fleet's own severity tier; crit reads red, not a flat warn.
+   Never-fabricate: an unknown tier is muted, not green. */
+.fleet-problem { font-size: 13px; font-weight: 600; line-height: 1.3;
+  color: var(--warn); }
+.fleet-problem.st-warn { color: var(--warn); }
+.fleet-problem.st-crit { color: var(--crit); }
+.fleet-problem.st-unknown { color: var(--dim); }
+/* compact vitals grid: CPU / RAM / storage / hottest temp */
+.fleet-vitals { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+.fleet-vit { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 6px; }
+.fleet-vit-k { font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--faint); }
+.fleet-vit-v { font-size: 12.5px; font-weight: 600; color: var(--ink);
+  white-space: nowrap; }
+/* the internet line: up (with link capacity) or a red DOWN */
+.fleet-net { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; }
+.fleet-net-k { font-size: 12.5px; font-weight: 600; color: var(--dim); }
+.fleet-net.st-good .fleet-net-k { color: var(--good); }
+.fleet-net.st-crit .fleet-net-k { color: var(--crit); font-weight: 700; }
+.fleet-net-v { font-size: 12px; color: var(--dim); white-space: nowrap; }
 /* the stale-card badge (fetchFleet/renderFleet): a quiet pill next to the
    hosts line, same visual family as .wx-stale/.rstale elsewhere on the wall */
 .fleet-stale { margin-left: auto; font-size: 9px; font-weight: 700;
