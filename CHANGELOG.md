@@ -10,6 +10,14 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- Calendar agenda (home feed + week / day view): all-day events are now a calm
+  tinted row — a soft wash of the event color with a solid colored left edge
+  and normal-weight text — instead of a saturated solid bar. A top-to-bottom
+  list has no span to draw and a multi-day event repeats one row per day, so
+  the solid fill read as noise; the solid spanning bar stays in the month grid,
+  where it actually spans days.
+
 ## [1.3.1] — 2026-08-24
 
 ### Changed
