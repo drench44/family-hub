@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-08-24
+
 ### Changed
 - Calendar agenda (home feed + week / day view): all-day events are now a calm
   tinted row — a soft wash of the event color with a solid colored left edge
