@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-08-24
+
 ### Changed
 - Calendar redesign. The full-screen month is one hairline-ruled sheet: all-day
   and multi-day events draw as ONE bar spanning the days they cover (clipped to
