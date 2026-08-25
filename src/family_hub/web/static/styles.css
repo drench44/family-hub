@@ -1048,7 +1048,7 @@ body {
    in the month grid (.mg-bar), where it actually spans days. */
 .cal-ev-allday {
   align-items: center; gap: 10px;
-  margin: 4px 0; padding: 6px 12px;
+  margin: 4px 0; padding: 6px 14px;
   border-top: 0; border-radius: 7px;
   border-left: 3px solid var(--evc);
   background: color-mix(in srgb, var(--evc) 15%, transparent);
@@ -2285,7 +2285,10 @@ body.integ-off-todos .todo-slot { display: none; }
   .cal-day { padding: 7px 14px 6px; }
   .cal-day.is-today { padding: 9px 14px 8px; }
   .cal-dayhead { padding-bottom: 5px; }
-  .cal-ev { padding: 6px 0; }
+  /* timed rows only — the all-day/multi-day bar keeps its own horizontal
+     inset (.cal-ev-allday below) so its title and span tag don't end up
+     flush against the bar's edges on the wall's desktop width */
+  .cal-ev:not(.cal-ev-allday) { padding: 6px 0; }
 
   /* to-dos */
   .todo-slot { gap: 10px; }
