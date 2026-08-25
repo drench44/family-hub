@@ -306,6 +306,27 @@ def test_demo_laundry_tile_is_canned_and_live_shaped(demo_client):
     assert "laundry" in ids and ids["laundry"]["enabled"] is True
 
 
+def test_demo_fleet_tile_is_canned_and_live_shaped(demo_client):
+    """DEMO serves a canned fleet rollup with no fleet-dashboard hit: a fully
+    healthy fleet plus a printer mid-print (42%%), both signature card states
+    for a screenshot. The integration is also forced available so the wall
+    card and settings row show even though no ``fleet`` config block exists."""
+    t = demo_client.get("/api/tiles/fleet").json()
+    assert t["available"] is True
+    assert set(t["fleet"]) == {"health", "hostsUp", "hostsTotal", "worstProblem"}
+    assert set(t["printer"]) == {"health", "state", "job", "progressPercent",
+                                  "remainingMinutes", "nozzleF", "bedF", "online"}
+    assert t["fleet"]["health"] == "ok"
+    assert t["fleet"]["hostsUp"] == t["fleet"]["hostsTotal"] == 3
+    assert t["fleet"]["worstProblem"] is None
+    assert t["printer"]["state"] == "printing"
+    assert 0 < t["printer"]["progressPercent"] < 100
+    assert t["printer"]["online"] is True
+    ids = {i["id"]: i for i in
+           demo_client.get("/api/hub").json()["integrations"]}
+    assert "fleet" in ids and ids["fleet"]["enabled"] is True
+
+
 def test_demo_laundry_log_is_canned_and_live_shaped(demo_client):
     """DEMO serves a canned cycle log matching the live endpoint's row shape
     (both signature rows: an observed finish and a missed_finish), no DB.

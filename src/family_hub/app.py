@@ -489,7 +489,7 @@ def _available_only():
     tab bar hide the demo's columns."""
     items = fintegrations.available_integrations(
         cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
-    demo_ids = {"cameras", "weather", "climate", "laundry"} if DEMO else set()
+    demo_ids = {"cameras", "weather", "climate", "laundry", "fleet"} if DEMO else set()
     return [dict(i, available=True) if (i["id"] in demo_ids and not i["available"])
             else i
             for i in items
@@ -1770,6 +1770,8 @@ async def tile_weather():
 
 @app.get("/api/tiles/fleet")
 async def tile_fleet():
+    if DEMO:
+        return fdemo.demo_fleet()   # canned rollup; no fleet-dashboard hit
     return await tiles.fleet_tile(_http, cfg)
 
 

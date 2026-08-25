@@ -5865,6 +5865,202 @@ test('fetchLaundry: an unchanged payload does not repaint (tumble never restarts
 });
 
 // ---------------------------------------------------------------------------
+// Fleet card: system health + 3D printer status (gauntlet Task 4). Rides the
+// panels column under the laundry slot; no tab of its own — it shares the
+// Weather tab (customPanelExists()-style rescue) since fleet has nowhere
+// else to live on a phone.
+// ---------------------------------------------------------------------------
+
+const FLEET_HEALTHY = {
+  available: true,
+  fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null },
+  printer: { health: 'ok', state: 'printing', job: 'Bracket_v3.gcode',
+    progressPercent: 42, remainingMinutes: 96,
+    nozzleF: 410, bedF: 140, online: true },
+};
+
+function renderFleetHtml(payload) {
+  const { document, sandbox } = newHub();
+  const slot = document.createElement('div');
+  slot._id = 'fleet-slot';
+  document.body.appendChild(slot);
+  sandbox.renderFleet(payload);
+  return { slot, html: slot.innerHTML, document, sandbox };
+}
+
+test('fleetCardHtml: RUNNING printer — bar width matches percent, remaining line renders', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml(FLEET_HEALTHY);
+  assert.match(html, /3 of 3 hosts up/);
+  assert.doesNotMatch(html, /fleet-problem/, 'no problem line on a healthy fleet');
+  assert.match(html, /class="fleet-bar-fill" style="width:42%"/);
+  assert.match(html, /42%/);
+  assert.match(html, /~1h 36m left/);
+  assert.match(html, /410°F nozzle/);
+  assert.match(html, /140°F bed/);
+  assert.match(html, />printing</);
+  assert.match(html, /Bracket_v3\.gcode/);
+});
+
+test('fleetCardHtml: idle printer never fabricates a 0% bar or a 0° temp', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, />idle</);
+  assert.doesNotMatch(html, /fleet-bar"/);
+  assert.doesNotMatch(html, /0%/);
+  assert.doesNotMatch(html, /fleet-temps/);
+  assert.doesNotMatch(html, /fleet-job/);
+});
+
+test('fleetCardHtml: offline printer (online:false) renders a muted note, never a zeroed reading', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null },
+    printer: { health: 'down', state: 'offline', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: false },
+  });
+  assert.match(html, /fleet-printer-offline">Printer unavailable/);
+  assert.doesNotMatch(html, /fleet-bar"/);
+  assert.doesNotMatch(html, /0°F/);
+});
+
+test('fleetCardHtml: unhealthy fleet shows the worst problem, escaped', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'crit', hostsUp: 2, hostsTotal: 3,
+      worstProblem: '<script>alert(1)</script> nas offline' },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, /2 of 3 hosts up/);
+  assert.match(html, /class="fleet-dot st-crit"/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /nas offline/);
+});
+
+test('fleetCardHtml: a down host maps to the crit tier (no separate visual tier for "down")', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.fleetCardHtml({
+    available: true,
+    fleet: { health: 'down', hostsUp: 2, hostsTotal: 3, worstProblem: 'omen down' },
+    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
+      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
+  });
+  assert.match(html, /class="fleet-dot st-crit"/);
+});
+
+test('renderFleet: loading placeholder, offline note, and Console-button gating', () => {
+  // boot (null): neutral placeholder, never a flash of "unavailable"
+  let r = renderFleetHtml(null);
+  assert.match(r.html, /wx-loading/);
+  assert.doesNotMatch(r.html, /unavailable/i);
+
+  // unavailable (integration off / proxy down): honest note, header intact
+  r = renderFleetHtml({ available: false });
+  assert.match(r.html, /Fleet unavailable/);
+  assert.doesNotMatch(r.html, /data-overlay="panel:fleet"/);
+  assert.match(r.html, />Fleet</, 'the header stands even when unavailable');
+
+  // Console button appears ONLY when a 'fleet' links.panels entry exists
+  const { document, sandbox } = newHub();
+  const slot = document.createElement('div');
+  slot._id = 'fleet-slot';
+  document.body.appendChild(slot);
+  sandbox.renderFleet(FLEET_HEALTHY);
+  assert.doesNotMatch(slot.innerHTML, /data-overlay="panel:fleet"/,
+    'no panel configured -> no Console button');
+  vm.runInContext(
+    "links = { panels: [{ id: 'fleet', label: 'Fleet Console', "
+    + "url: 'http://fleet.invalid/', vw: 1920, vh: 1080, full: 'fit' }] };",
+    sandbox);
+  sandbox.renderFleet(FLEET_HEALTHY);
+  assert.match(slot.innerHTML, /data-overlay="panel:fleet"/);
+  assert.match(slot.innerHTML, /Console/);
+});
+
+test('buildPanels: a configured fleet panels entry is full-screen-only (no always-on iframe embed)', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext(
+    "links = { panels: [ { id: 'fleet', label: 'Fleet Console', "
+    + "url: 'http://fleet.invalid/', vw: 1920, vh: 1080, full: 'fit' } ] };",
+    sandbox);
+  sandbox.buildPanels();
+  const html = document.getElementById('panels').innerHTML;
+  assert.match(html, /id="fleet-slot"/, 'the native card slot exists');
+  assert.ok(!html.includes('id="frame-fleet"'), 'no iframe embed for fleet');
+  // the fleet slot is built UNCONDITIONALLY, same as laundry, even with no
+  // links.panels entry at all
+  const { document: d2, sandbox: s2 } = newHub();
+  vm.runInContext("links = { panels: [] };", s2);
+  s2.buildPanels();
+  assert.match(d2.getElementById('panels').innerHTML, /id="fleet-slot"/);
+});
+
+test('fetchFleet: keeps the last good card through a transient failure, gives up after the limit', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  const slot = document.createElement('div');
+  slot._id = 'fleet-slot';
+  document.body.appendChild(slot);
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => FLEET_HEALTHY });
+  await sandbox.fetchFleet();
+  assert.match(slot.innerHTML, /printing/, 'good card first');
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchFleet();   // fail 1
+  assert.match(slot.innerHTML, /printing/, 'last-good retained after 1 fail');
+  await sandbox.fetchFleet();   // fail 2
+  assert.match(slot.innerHTML, /printing/, 'last-good retained after 2 fails');
+  await sandbox.fetchFleet();   // fail 3 -> gives up
+  assert.match(slot.innerHTML, /Fleet unavailable/, 'gives up after the failure limit');
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => FLEET_HEALTHY });
+  await sandbox.fetchFleet();
+  assert.match(slot.innerHTML, /printing/, 'recovers on the next good poll');
+});
+
+test('toggle off hides #fleet-slot via the registry CSS hook and reflows the wall/tab', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  seedWallGrid(document);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'fleet', enabled: true, group: 'integration' },
+  ] });
+  assert.equal(document.body.classList.contains('integ-off-fleet'), false);
+  const byTab = (t) => document.querySelectorAll('.tab-btn')
+    .find((b) => b.dataset.tab === t);
+  assert.equal(byTab('weather').hidden, false,
+    'fleet alone (no weather/climate) keeps the Weather tab reachable');
+  const grid = document.querySelector('.hub-grid');
+  assert.match(grid.style.gridTemplateAreas || '', /panels/,
+    'the wall panels column survives on fleet alone');
+  // toggle off: the CSS hook is stamped, and with nothing else backing the
+  // panels column or the weather tab, both reflow away
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'fleet', enabled: false, group: 'integration' },
+  ] });
+  assert.equal(document.body.classList.contains('integ-off-fleet'), true,
+    'the CSS hook that hides #fleet-slot is stamped');
+  assert.equal(byTab('weather').hidden, true, 'weather tab reflows away with fleet off');
+  assert.doesNotMatch(grid.style.gridTemplateAreas || '', /panels/,
+    'the panels column reflows away with nothing left to show');
+  // toggle back on: instant return, no refetch gap
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'fleet', enabled: true, group: 'integration' },
+  ] });
+  assert.equal(document.body.classList.contains('integ-off-fleet'), false);
+  assert.equal(byTab('weather').hidden, false);
+});
+
+// ---------------------------------------------------------------------------
 // To-Do wall card: the 3-tier digest (Now / Soon / Later). The compact card
 // used to show ONLY the `now` bucket plus three count chips; it now surfaces
 // all three tiers, bounded by a fixed row budget, with a "+N more" control per

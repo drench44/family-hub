@@ -354,6 +354,33 @@ def demo_laundry() -> dict:
     }
 
 
+def demo_fleet() -> dict:
+    """A live-shaped fleet tile (matches tiles.fleet_tile's trimmed contract):
+    a fully healthy fleet and a printer mid-print, so a demo screenshot shows
+    the card's best state. ``remainingMinutes`` is a fixed count (not relative
+    to ``now`` the way laundry's timestamps are — the printer contract carries
+    a duration, not an ISO instant, so there is nothing to re-anchor)."""
+    return {
+        "available": True,
+        "fleet": {
+            "health": "ok",
+            "hostsUp": 3,
+            "hostsTotal": 3,
+            "worstProblem": None,
+        },
+        "printer": {
+            "health": "ok",
+            "state": "printing",
+            "job": "Bracket_v3.gcode",
+            "progressPercent": 42,
+            "remainingMinutes": 96,
+            "nozzleF": 410.0,
+            "bedF": 140.0,
+            "online": True,
+        },
+    }
+
+
 def demo_laundry_log() -> dict:
     """A live-shaped cycle log (matches /api/laundry/log): the dryer's
     observed finish plus a washer missed-finish — the two row shapes the
