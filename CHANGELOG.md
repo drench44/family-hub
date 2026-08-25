@@ -10,6 +10,18 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Fleet Console: the card now surfaces the fleet-admin vitals the rollup
+  grew: a CPU / RAM / storage / hottest-temp grid, an internet line (link
+  capacity when up, a red "Internet DOWN" when not), an open-alerts badge,
+  and the worst problem promoted to a prominent severity-coloured line when
+  the fleet is not nominal. The tile proxy passes the new nullable fields
+  through (`fleet.alerts/cpuPercent/memPercent/storageUsedBytes/
+  storageTotalBytes/hottestTempF`, `internet.up/downMbps/upMbps`); a
+  missing/wrong-typed `internet` block is muted, not fatal. Every null vital
+  renders as "n/a", never a fabricated 0, and the DEMO payload gained
+  representative vitals so the richer card shows in demo/offline runs.
+
 ## [1.3.3] — 2026-08-25
 
 ### Added

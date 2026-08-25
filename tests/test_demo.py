@@ -313,12 +313,23 @@ def test_demo_fleet_tile_is_canned_and_live_shaped(demo_client):
     card and settings row show even though no ``fleet`` config block exists."""
     t = demo_client.get("/api/tiles/fleet").json()
     assert t["available"] is True
-    assert set(t["fleet"]) == {"health", "hostsUp", "hostsTotal", "worstProblem"}
+    assert set(t["fleet"]) == {"health", "hostsUp", "hostsTotal", "worstProblem",
+                               "alerts", "cpuPercent", "memPercent",
+                               "storageUsedBytes", "storageTotalBytes",
+                               "hottestTempF"}
+    assert set(t["internet"]) == {"up", "downMbps", "upMbps"}
     assert set(t["printer"]) == {"health", "state", "job", "progressPercent",
                                   "remainingMinutes", "nozzleF", "bedF", "online"}
     assert t["fleet"]["health"] == "ok"
     assert t["fleet"]["hostsUp"] == t["fleet"]["hostsTotal"] == 3
     assert t["fleet"]["worstProblem"] is None
+    # the enriched vitals are present and live-shaped (finite, not fabricated)
+    assert 0 <= t["fleet"]["cpuPercent"] <= 100
+    assert 0 <= t["fleet"]["memPercent"] <= 100
+    assert t["fleet"]["storageUsedBytes"] < t["fleet"]["storageTotalBytes"]
+    assert t["fleet"]["hottestTempF"] > 0
+    assert t["internet"]["up"] is True
+    assert t["internet"]["downMbps"] > 0 and t["internet"]["upMbps"] > 0
     assert t["printer"]["state"] == "printing"
     assert 0 < t["printer"]["progressPercent"] < 100
     assert t["printer"]["online"] is True

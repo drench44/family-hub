@@ -735,11 +735,21 @@ def test_laundry_success_cached():
 ROLLUP_OK = {
     "generatedAt": "2026-08-25T12:00:00Z",
     "fleet": {"health": "ok", "hostsUp": 5, "hostsTotal": 5,
-              "worstProblem": None},
+              "worstProblem": None, "alerts": 0, "cpuPercent": 17,
+              "memPercent": 44, "storageUsedBytes": 3_800_000_000_000,
+              "storageTotalBytes": 8_000_000_000_000, "hottestTempF": 121.0},
+    "internet": {"up": True, "downMbps": 2358.0, "upMbps": 2086.0},
     "printer": {"health": "ok", "state": "printing", "job": "benchy.gcode",
                 "progressPercent": 42, "remainingMinutes": 18,
                 "nozzleF": 410.0, "bedF": 140.0, "online": True},
 }
+
+FLEET_KEYS = {"health", "hostsUp", "hostsTotal", "worstProblem", "alerts",
+              "cpuPercent", "memPercent", "storageUsedBytes",
+              "storageTotalBytes", "hottestTempF"}
+PRINTER_KEYS = {"health", "state", "job", "progressPercent",
+                "remainingMinutes", "nozzleF", "bedF", "online"}
+INTERNET_KEYS = {"up", "downMbps", "upMbps"}
 
 
 def fleet_cfg(base="http://fleet"):
@@ -763,7 +773,10 @@ def test_fleet_happy_trims_to_contract_fields():
     assert t == {
         "available": True,
         "fleet": {"health": "ok", "hostsUp": 5, "hostsTotal": 5,
-                  "worstProblem": None},
+                  "worstProblem": None, "alerts": 0, "cpuPercent": 17,
+                  "memPercent": 44, "storageUsedBytes": 3_800_000_000_000,
+                  "storageTotalBytes": 8_000_000_000_000, "hottestTempF": 121.0},
+        "internet": {"up": True, "downMbps": 2358.0, "upMbps": 2086.0},
         "printer": {"health": "ok", "state": "printing", "job": "benchy.gcode",
                     "progressPercent": 42, "remainingMinutes": 18,
                     "nozzleF": 410.0, "bedF": 140.0, "online": True},
@@ -776,6 +789,7 @@ def test_fleet_extra_upstream_keys_dropped():
     body = {
         "generatedAt": "x",
         "fleet": dict(ROLLUP_OK["fleet"], extraField="nope"),
+        "internet": dict(ROLLUP_OK["internet"], extraNet="nope"),
         "printer": dict(ROLLUP_OK["printer"], secretToken="nope"),
     }
 
@@ -783,10 +797,11 @@ def test_fleet_extra_upstream_keys_dropped():
         return httpx.Response(200, json=body)
     t = run_fleet(handler)
     assert "extraField" not in t["fleet"]
+    assert "extraNet" not in t["internet"]
     assert "secretToken" not in t["printer"]
-    assert set(t["fleet"]) == {"health", "hostsUp", "hostsTotal", "worstProblem"}
-    assert set(t["printer"]) == {"health", "state", "job", "progressPercent",
-                                 "remainingMinutes", "nozzleF", "bedF", "online"}
+    assert set(t["fleet"]) == FLEET_KEYS
+    assert set(t["internet"]) == INTERNET_KEYS
+    assert set(t["printer"]) == PRINTER_KEYS
 
 
 def test_fleet_not_configured_no_fetch():
@@ -831,6 +846,56 @@ def test_fleet_missing_fleet_block_unavailable():
     body = {"generatedAt": "x", "printer": ROLLUP_OK["printer"]}   # no fleet
     assert run_fleet(lambda req: httpx.Response(200, json=body)) \
         == {"available": False}
+
+
+def test_fleet_internet_passthrough():
+    # The internet sub-block is trimmed to exactly {up, downMbps, upMbps} and
+    # rides through as-is (downMbps/upMbps are the ISP link capacity, not live
+    # throughput; the tile doesn't interpret them, only passes them).
+    tiles.reset_caches()
+
+    def handler(req):
+        return httpx.Response(200, json=ROLLUP_OK)
+    t = run_fleet(handler)
+    assert t["internet"] == {"up": True, "downMbps": 2358.0, "upMbps": 2086.0}
+
+
+def test_fleet_missing_internet_block_soft_muted_not_unavailable():
+    # A missing/non-dict internet block must NOT make the tile unavailable
+    # (unlike fleet/printer): the block is normalized to all-null and the
+    # card just omits the internet line. Tile stays available.
+    tiles.reset_caches()
+    body = {"generatedAt": "x", "fleet": ROLLUP_OK["fleet"],
+            "printer": ROLLUP_OK["printer"]}   # no internet at all
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    assert t["available"] is True
+    assert t["internet"] == {"up": None, "downMbps": None, "upMbps": None}
+
+    tiles.reset_caches()
+    body2 = dict(body, internet="not-a-dict")   # wrong-typed internet block
+    t2 = run_fleet(lambda req: httpx.Response(200, json=body2))
+    assert t2["available"] is True
+    assert t2["internet"] == {"up": None, "downMbps": None, "upMbps": None}
+
+
+def test_fleet_null_vitals_pass_through_as_none_not_zero():
+    # Every new numeric vital is nullable; a rollup omitting them yields None
+    # (the card renders "n/a"), never a fabricated 0.
+    tiles.reset_caches()
+    body = {
+        "generatedAt": "x",
+        "fleet": {"health": "warn", "hostsUp": 4, "hostsTotal": 5,
+                  "worstProblem": "OMEN Server /mnt/bulk full 100%"},
+        "internet": {"up": False, "downMbps": None, "upMbps": None},
+        "printer": ROLLUP_OK["printer"],
+    }
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    assert t["available"] is True
+    for k in ("alerts", "cpuPercent", "memPercent", "storageUsedBytes",
+              "storageTotalBytes", "hottestTempF"):
+        assert t["fleet"][k] is None
+    assert t["fleet"]["worstProblem"] == "OMEN Server /mnt/bulk full 100%"
+    assert t["internet"]["up"] is False
 
 
 def test_fleet_non_string_state_guarded_not_raise():

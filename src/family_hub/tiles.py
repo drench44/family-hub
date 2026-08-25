@@ -302,20 +302,27 @@ async def weather_tile(client, cfg) -> dict:
 async def fleet_tile(client, cfg) -> dict:
     """Proxy the separate fleet-dashboard app's compact rollup into a
     trimmed, fail-soft tile: ``{available, label?, fleet: {health, hostsUp,
-    hostsTotal, worstProblem}, printer: {health, state, job,
-    progressPercent, remainingMinutes, nozzleF, bedF, online}}``. ``label``
-    is only present when ``fleet.label`` is set in config — it rides straight
-    through to the card header (``renderFleet``/``fleetCardHtml`` fall back
-    to "Fleet" when it's absent).
+    hostsTotal, worstProblem, alerts, cpuPercent, memPercent,
+    storageUsedBytes, storageTotalBytes, hottestTempF}, internet: {up,
+    downMbps, upMbps}, printer: {health, state, job, progressPercent,
+    remainingMinutes, nozzleF, bedF, online}}``. ``label`` is only present
+    when ``fleet.label`` is set in config - it rides straight through to the
+    card header (``renderFleet``/``fleetCardHtml`` fall back to "Fleet" when
+    it's absent).
 
     Upstream: ``GET {fleet.base}/api/rollup`` -> ``{generatedAt, fleet:
-    {...}, printer: {...}}``. Both sub-blocks are trimmed to exactly the
-    fields above (extra upstream keys — and ``generatedAt`` itself — are
-    dropped, never passed through); values are passed through as-is with no
-    type coercion, so a flaky upstream serving a wrong-typed field (a number
-    where a string state belongs, and vice versa) degrades the display, not
-    the tile — the laundry lesson: never let a value's TYPE raise out of a
-    fail-soft proxy.
+    {...}, internet: {...}, printer: {...}}``. Each sub-block is trimmed to
+    exactly the fields above (extra upstream keys, and ``generatedAt``
+    itself, are dropped, never passed through); values are passed through
+    as-is with no type coercion, so a flaky upstream serving a wrong-typed
+    field (a number where a string state belongs, and vice versa) degrades
+    the display, not the tile; the laundry lesson: never let a value's TYPE
+    raise out of a fail-soft proxy. Every new numeric vital is nullable: the
+    card renders a missing one as "n/a", never as 0.
+
+    The ``internet`` sub-block is soft: a missing/non-dict ``internet`` is
+    normalized to all-null (the card just omits the internet line), it does
+    NOT make the tile unavailable. Only ``fleet``/``printer`` are required.
 
     Returns ``{"available": False}`` when ``fleet`` is unset, the fetch
     fails, the body isn't a dict, or either ``fleet``/``printer`` sub-block
@@ -350,6 +357,12 @@ async def fleet_tile(client, cfg) -> dict:
     except (httpx.HTTPError, ValueError, json.JSONDecodeError) as e:
         log.warning("fleet tile /api/rollup unavailable: %s", e)
         return {"available": False}   # not cached: retry on the next poll
+    # internet is a SOFT sub-block: a missing/non-dict one is muted (all-null),
+    # never a reason to mark the whole tile unavailable; the card just omits
+    # the internet line. Only fleet/printer are hard-required (guarded above).
+    raw_internet = body.get("internet")
+    if not isinstance(raw_internet, dict):
+        raw_internet = {}
     result = {
         "available": True,
         "fleet": {
@@ -357,6 +370,17 @@ async def fleet_tile(client, cfg) -> dict:
             "hostsUp": raw_fleet.get("hostsUp"),
             "hostsTotal": raw_fleet.get("hostsTotal"),
             "worstProblem": raw_fleet.get("worstProblem"),
+            "alerts": raw_fleet.get("alerts"),
+            "cpuPercent": raw_fleet.get("cpuPercent"),
+            "memPercent": raw_fleet.get("memPercent"),
+            "storageUsedBytes": raw_fleet.get("storageUsedBytes"),
+            "storageTotalBytes": raw_fleet.get("storageTotalBytes"),
+            "hottestTempF": raw_fleet.get("hottestTempF"),
+        },
+        "internet": {
+            "up": raw_internet.get("up"),
+            "downMbps": raw_internet.get("downMbps"),
+            "upMbps": raw_internet.get("upMbps"),
         },
         "printer": {
             "health": raw_printer.get("health"),

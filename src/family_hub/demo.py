@@ -356,10 +356,12 @@ def demo_laundry() -> dict:
 
 def demo_fleet() -> dict:
     """A live-shaped fleet tile (matches tiles.fleet_tile's trimmed contract):
-    a fully healthy fleet and a printer mid-print, so a demo screenshot shows
-    the card's best state. ``remainingMinutes`` is a fixed count (not relative
-    to ``now`` the way laundry's timestamps are — the printer contract carries
-    a duration, not an ISO instant, so there is nothing to re-anchor)."""
+    a fully healthy fleet with real-looking vitals (CPU/RAM/storage/hottest
+    temp), the ISP link up at its measured capacity, and a printer mid-print,
+    so a demo screenshot shows the enriched card's best state.
+    ``remainingMinutes`` is a fixed count (not relative to ``now`` the way
+    laundry's timestamps are; the printer contract carries a duration, not
+    an ISO instant, so there is nothing to re-anchor)."""
     return {
         "available": True,
         "fleet": {
@@ -367,6 +369,17 @@ def demo_fleet() -> dict:
             "hostsUp": 3,
             "hostsTotal": 3,
             "worstProblem": None,
+            "alerts": 0,
+            "cpuPercent": 17,
+            "memPercent": 44,
+            "storageUsedBytes": 3_800_000_000_000,
+            "storageTotalBytes": 8_000_000_000_000,
+            "hottestTempF": 121.0,
+        },
+        "internet": {
+            "up": True,
+            "downMbps": 2358.0,
+            "upMbps": 2086.0,
         },
         "printer": {
             "health": "ok",
