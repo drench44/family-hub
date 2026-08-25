@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-08-25
+
 ### Added
 - Fleet Console: registry descriptor + fail-soft tile proxy for a separate
   fleet-dashboard app's compact rollup (host status + 3D-printer status),
