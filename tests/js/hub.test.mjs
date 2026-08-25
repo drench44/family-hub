@@ -1008,3 +1008,66 @@ test('backupBadge: amber with age when a known backup is stale', () => {
   assert.match(b.text, /Backup stale/);
   assert.match(b.text, /40h/);   // 144000s
 });
+
+/* ---- month lanes (the Google-style spanning bars) ---- */
+const WEEK = ['2026-08-23', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-29'];
+
+test('assignLanes: a multi-day all-day event spans its columns as one bar, clipped to the week', () => {
+  const fair = { id: 'fair', title: 'Fair', all_day: 1, start_ts: '2026-08-26', end_ts: '2026-09-01' };
+  const [it] = sandbox.assignLanes([fair], WEEK);
+  assert.equal(it.c0, 3, 'starts on Wed');
+  assert.equal(it.c1, 6, 'runs through Sat (clipped)');
+  assert.equal(it.contR, true, 'continues into next week');
+  assert.equal(it.contL, false);
+  assert.equal(it.bar, true);
+  assert.equal(it.lane, 0);
+  // next week: the same event starts clipped on the left, ends Mon (end exclusive)
+  const next = WEEK.map((d) => sandbox.addDays(d, 7));
+  const [n] = sandbox.assignLanes([fair], next);
+  assert.deepEqual([n.c0, n.c1, n.contL, n.contR], [0, 1, true, false]);
+});
+
+test('assignLanes: bars stack above timed events; overlapping bars take separate lanes; a free lane is reused', () => {
+  const evs = [
+    { id: 't', title: 'Dentist', all_day: 0, start_ts: '2026-08-26T08:00:00', end_ts: '2026-08-26T09:00:00' },
+    { id: 'a', title: 'A', all_day: 1, start_ts: '2026-08-26', end_ts: '2026-08-29' },
+    { id: 'b', title: 'B', all_day: 1, start_ts: '2026-08-27', end_ts: '2026-08-28' },
+    { id: 'c', title: 'C', all_day: 1, start_ts: '2026-08-23', end_ts: '2026-08-24' },
+  ];
+  const by = Object.fromEntries(sandbox.assignLanes(evs, WEEK).map((it) => [it.ev.id, it]));
+  assert.equal(by.a.lane, 0, 'longest bar first');
+  assert.equal(by.c.lane, 0, 'Sun-only bar reuses lane 0 (no overlap with A)');
+  assert.equal(by.b.lane, 1, 'B overlaps A, next lane');
+  assert.equal(by.t.bar, false, 'single timed event is not a bar');
+  assert.equal(by.t.lane, 1, 'timed event takes the first free lane under the bars on its day');
+});
+
+test('assignLanes: events outside the week are dropped; a timed overnighter is a 2-day bar', () => {
+  const far = { id: 'f', title: 'Far', all_day: 1, start_ts: '2026-09-10', end_ts: '2026-09-11' };
+  const night = { id: 'n', title: 'Night', all_day: 0, start_ts: '2026-08-28T22:00:00', end_ts: '2026-08-29T06:00:00' };
+  const out = sandbox.assignLanes([far, night], WEEK);
+  assert.equal(out.length, 1);
+  assert.deepEqual([out[0].ev.id, out[0].c0, out[0].c1, out[0].bar], ['n', 5, 6, true]);
+});
+
+test('inkFor: dark text on mid/light bar colors, light text on dark ones, dark fallback for non-hex', () => {
+  assert.equal(sandbox.inkFor('#F6BF26'), '#0B1020');   // Google "banana"
+  assert.equal(sandbox.inkFor('#7BC8EE'), '#0B1020');
+  assert.equal(sandbox.inkFor('#1F3A93'), '#F4F6FB');   // navy
+  assert.equal(sandbox.inkFor('#333'), '#F4F6FB');      // 3-digit form
+  assert.equal(sandbox.inkFor('transparent'), 'var(--ink)');   // unmeasurable → page ink, never invisible
+});
+
+test('assignLanes: an all-day event with end == start (server allows it) is a one-day bar, never dropped or negative', () => {
+  // Sunday start: the old negative span fell before the week and vanished.
+  const sun = { id: 's', title: 'S', all_day: 1, start_ts: '2026-08-23', end_ts: '2026-08-23' };
+  // Midweek: it kept c1 < c0 and painted over whatever held lane 0.
+  const tue = { id: 't', title: 'T', all_day: 1, start_ts: '2026-08-25', end_ts: '2026-08-25' };
+  const other = { id: 'o', title: 'O', all_day: 1, start_ts: '2026-08-25', end_ts: '2026-08-26' };
+  const back = { id: 'b', title: 'B', all_day: 0, start_ts: '2026-08-27T10:00:00', end_ts: '2026-08-26T09:00:00' };
+  const by = Object.fromEntries(sandbox.assignLanes([sun, tue, other, back], WEEK).map((it) => [it.ev.id, it]));
+  assert.deepEqual([by.s.c0, by.s.c1], [0, 0]);
+  assert.deepEqual([by.t.c0, by.t.c1], [2, 2]);
+  assert.notEqual(by.t.lane, by.o.lane, 'two events on the same day never share a lane');
+  assert.deepEqual([by.b.c0, by.b.c1], [4, 4], 'end-before-start clamps to the start day');
+});

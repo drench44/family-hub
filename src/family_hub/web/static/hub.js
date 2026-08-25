@@ -110,24 +110,34 @@ function bucketByDay(evs) {
   return byDay;
 }
 
+/* One event row in the agenda (home card, week view, day drill-in).
+   Timed event on its start day:  [rail] 9:30am  Title
+   All-day event, or a timed span mid-run: a filled bar in the calendar
+   color carrying the title (the same bar the month grid draws), with a
+   quiet "day 2 of 4" tag when it is one day of a longer run — so a stay or
+   a fair reads as ONE thing across the week, not a stack of identical rows.
+   Last day of a timed span: [rail] → 6am  Title (when it ends). */
 function eventRow(ev, day) {
   const color = safeColor(eventColor(ev));
   const ended = eventEnded(ev, Date.now());
-  // On a day after the event's start the start time is stale: show the end
-  // time on the final day (marked "→"), and treat a full middle day of a
-  // multi-day timed span as all-day — never a "→ <final end>" that reads as
-  // if it ended that day.
   const continuation = !ev.all_day && day && (ev.start_ts || '').slice(0, 10) < day;
   const endDay = continuation && day === lastVisibleDay(ev);
-  const allDayCell = `<span class="cal-allday" style="border-color:${escapeHtml(color)};color:${escapeHtml(color)}">all day</span>`;
-  let timeCell;
-  if (ev.all_day || (continuation && !endDay)) {
-    timeCell = allDayCell;
-  } else if (continuation) {
-    timeCell = `<span class="cal-time num">→ ${escapeHtml(fmtTime(ev.end_ts))}</span>`;
-  } else {
-    timeCell = `<span class="cal-time num">${escapeHtml(fmtTime(ev.start_ts))}</span>`;
+  const barDay = ev.all_day || (continuation && !endDay);
+  if (barDay) {
+    const days = expandDays(ev);
+    const total = days.length;
+    let tag = '';
+    if (total > 1 && day) {
+      const n = days.indexOf(day) + 1;
+      if (n > 0) tag = `<span class="cal-spantag">day ${n} of ${total}</span>`;
+    }
+    return `<div class="cal-ev cal-ev-allday" data-eid="${escapeHtml(ev.id)}" tabindex="0"`
+      + ` style="--evc:${escapeHtml(color)};--evi:${inkFor(color)}">`
+      + `<span class="cal-title">${escapeHtml(ev.title)}</span>${tag}</div>`;
   }
+  const timeCell = continuation
+    ? `<span class="cal-time num">→ ${escapeHtml(fmtTime(ev.end_ts))}</span>`
+    : `<span class="cal-time num">${escapeHtml(fmtTime(ev.start_ts))}</span>`;
   return `<div class="cal-ev${ended ? ' ended' : ''}" data-eid="${escapeHtml(ev.id)}" tabindex="0">`
     + `<span class="cal-rail" style="background:${escapeHtml(color)}"></span>`
     + timeCell
@@ -230,33 +240,74 @@ async function fetchCalWindow() {
    the mark is never rendered at .mg-out's low opacity, which would make the
    hatch and caption nearly illegible right where they're least needed (the
    grid's own filler cells, not the page the family is actually reading). */
-function monthCellHtml(cell, byDay, todayStr, win) {
-  const evs = byDay[cell.date] || [];
-  const shown = evs.slice(0, 3);
-  const more = evs.length - shown.length;
-  const unsynced = cell.inMonth && evs.length === 0 && isDayOutsideWindow(cell.date, win);
+const MONTH_MAX_LANES = 4;   // event rows per week before "+N more" (matches the CSS row template)
+
+function monthCellHtml(cell, col, hasEvents, todayStr, win) {
+  const unsynced = cell.inMonth && !hasEvents && isDayOutsideWindow(cell.date, win);
   const cls = ['mg-day'];
   if (!cell.inMonth) cls.push('mg-out');
   if (cell.date === todayStr) cls.push('mg-today');
+  if (col === 0 || col === 6) cls.push('mg-weekend');
   if (unsynced) cls.push('mg-unsynced');
   const dayNum = Number(cell.date.slice(8, 10));
-  return `<div class="${cls.join(' ')}" data-date="${cell.date}" tabindex="0">`
-    + `<span class="mg-num num">${dayNum}</span>`
-    + shown.map((ev) =>
-      `<span class="mg-ev" data-eid="${escapeHtml(ev.id)}">`
-      + `<span class="mg-dot" style="background:${safeColor(eventColor(ev))}"></span>`
-      + `<span class="mg-ev-title">${escapeHtml(ev.title)}</span></span>`).join('')
-    + (more > 0 ? `<span class="mg-more">+${more} more</span>` : '')
+  const label = dayNum === 1 ? `${MONTH_NAMES[Number(cell.date.slice(5, 7)) - 1].slice(0, 3)} 1` : String(dayNum);
+  return `<div class="${cls.join(' ')}" style="grid-column:${col + 1}" data-date="${cell.date}" tabindex="0">`
+    + `<span class="mg-num num">${label}</span>`
     + (unsynced ? `<span class="mg-unsynced-mark">not synced</span>` : '')
     + `</div>`;
 }
 
+/* One week row: 7 day cells span every grid row as the backdrop; events sit
+   on top in lanes — all-day / multi-day runs as one bar across the columns
+   they cover (clipped to an arrow where they carry into the next week), timed
+   events as dot + time + title. Past MONTH_MAX_LANES a per-day "+N more" chip
+   opens the day. */
+function monthWeekHtml(cells, events, todayStr, win) {
+  const days = cells.map((c) => c.date);
+  const items = assignLanes(events, days);
+  const covered = new Set();
+  const overflow = new Array(7).fill(0);
+  items.forEach((it) => {
+    for (let c = it.c0; c <= it.c1; c++) {
+      covered.add(days[c]);
+      if (it.lane >= MONTH_MAX_LANES) overflow[c]++;
+    }
+  });
+  const cellHtml = cells.map((c, i) => monthCellHtml(c, i, covered.has(c.date), todayStr, win)).join('');
+  const evHtml = items.filter((it) => it.lane < MONTH_MAX_LANES).map((it) => {
+    const color = safeColor(eventColor(it.ev));
+    const place = `grid-column:${it.c0 + 1} / ${it.c1 + 2};grid-row:${it.lane + 2}`;
+    const eid = escapeHtml(it.ev.id);
+    const title = escapeHtml(it.ev.title);
+    if (it.bar) {
+      const cls = ['mg-bar'];
+      if (it.contL) cls.push('mg-bar-contl');
+      if (it.contR) cls.push('mg-bar-contr');
+      return `<span class="${cls.join(' ')}" data-eid="${eid}" tabindex="0"`
+        + ` style="${place};--evc:${escapeHtml(color)};--evi:${inkFor(color)}">`
+        + `<span class="mg-bar-title">${title}</span></span>`;
+    }
+    const ended = eventEnded(it.ev, Date.now());
+    return `<span class="mg-ev${ended ? ' ended' : ''}" data-eid="${eid}" tabindex="0" style="${place}">`
+      + `<span class="mg-dot" style="background:${escapeHtml(color)}"></span>`
+      + `<span class="mg-ev-time num">${escapeHtml(fmtTime(it.ev.start_ts))}</span>`
+      + `<span class="mg-ev-title">${title}</span></span>`;
+  }).join('');
+  const moreHtml = overflow.map((n, i) => n > 0
+    ? `<span class="mg-more" data-date="${days[i]}" tabindex="0" style="grid-column:${i + 1};grid-row:${MONTH_MAX_LANES + 2}">+${n} more</span>`
+    : '').join('');
+  return `<div class="mg-week">${cellHtml}${evHtml}${moreHtml}</div>`;
+}
+
 function monthHtml(y, m, events, todayStr, win) {
-  const byDay = bucketByDay(events);
   const heads = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     .map((d) => `<span class="mg-head">${d}</span>`).join('');
-  const cells = monthGrid(y, m).map((c) => monthCellHtml(c, byDay, todayStr, win)).join('');
-  return `<div class="mgrid">${heads}${cells}</div>`;
+  const grid = monthGrid(y, m);
+  let weeks = '';
+  for (let w = 0; w < grid.length / 7; w++) {
+    weeks += monthWeekHtml(grid.slice(w * 7, w * 7 + 7), events, todayStr, win);
+  }
+  return `<div class="mgrid"><div class="mg-heads">${heads}</div>${weeks}</div>`;
 }
 
 function calNavHtml(title) {
@@ -3306,7 +3357,7 @@ document.addEventListener('click', (e) => {
   const viewBtn = e.target.closest('[data-calview]');
   if (viewBtn) { calState.mode = viewBtn.dataset.calview; renderCalFull(); return; }
   if (e.target.closest('[data-calback]')) { calState.mode = 'month'; renderCalFull(); return; }
-  const mgDay = e.target.closest('.mg-day');
+  const mgDay = e.target.closest('.mg-day') || e.target.closest('.mg-more');   // the "+N more" chip opens its day too
   if (mgDay) {
     calState.mode = 'day'; calState.day = mgDay.dataset.date;
     renderCalFull(); return;

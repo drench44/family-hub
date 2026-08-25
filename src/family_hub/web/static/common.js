@@ -138,6 +138,7 @@ function dayHeadHtml(dateStr, todayStr) {
   else if (diff === -1) rel = 'yesterday';
   else rel = `${-diff} days ago`;
   return `<div class="cal-dayhead">`
+    + `<span class="cal-daynum num">${dd}</span>`
     + `<span class="cal-dayname">${escapeHtml(name)}</span>`
     + (sub ? `<span class="cal-daydate">${escapeHtml(sub)}</span>` : '')
     + (rel ? `<span class="cal-dayrel">${escapeHtml(rel)}</span>` : '')
@@ -338,6 +339,83 @@ function shiftMonth(y, m, delta) {
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'];
 function monthName(y, m) { return `${MONTH_NAMES[m - 1]} ${y}`; }
+
+/* Text color that reads on a filled event bar of `color`. Google-style solid
+   bars carry dark text on the mid-tone calendar palette; a dark custom color
+   (navy, maroon) flips to light so the title never disappears. A non-hex
+   color (a named color, or the `transparent` safeColor hands back for a
+   malformed one) can't be measured, so the text falls back to the page ink —
+   readable on whatever surface shows through. */
+function inkFor(color) {
+  const m = /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.exec(String(color || '').trim());
+  if (!m) return 'var(--ink)';
+  let h = m[1];
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum < 0.45 ? '#F4F6FB' : '#0B1020';
+}
+
+/* Which days of a span an event covers: {first, last} 'YYYY-MM-DD'. Clamped
+   so last is never before first: the sync layer lets an all-day event arrive
+   with end == start (Google omits the end on some birthdays), which the
+   exclusive-end rule would otherwise turn into a negative span — the same
+   one-day fallback expandDays makes. */
+function eventSpan(ev) {
+  const first = (ev.start_ts || '').slice(0, 10);
+  let last = lastVisibleDay(ev);
+  if (last < first) last = first;
+  return { first, last };
+}
+
+/* Lay a week's events out in lanes, Google-Calendar style. `days` is the
+   week's 7 'YYYY-MM-DD' strings in order. Returns one item per event that
+   touches the week: {ev, c0, c1, lane, contL, contR, bar} where c0..c1 are the
+   0-based columns it covers inside this week, contL/contR say it continues
+   into the previous/next week (drawn as a clipped edge), and `bar` is true
+   for an all-day or multi-day event (drawn as a spanning bar) vs. a single
+   timed event (drawn as dot + time + title).
+   Lane assignment is first-fit over column occupancy, bars first (longest,
+   then earliest), then timed events by start time — so a run of days reads
+   as one unbroken bar at the top and the day's appointments sit under it in
+   time order, exactly the way Google stacks them. Pure; no DOM. */
+function assignLanes(events, days) {
+  const idx = {};
+  days.forEach((d, i) => { idx[d] = i; });
+  const first = days[0], last = days[days.length - 1];
+  const items = [];
+  (events || []).forEach((ev) => {
+    const sp = eventSpan(ev);
+    if (sp.last < first || sp.first > last) return;
+    const c0 = sp.first < first ? 0 : idx[sp.first];
+    const c1 = sp.last > last ? days.length - 1 : idx[sp.last];
+    if (c0 == null || c1 == null) return;
+    items.push({
+      ev, c0, c1, lane: -1,
+      contL: sp.first < first, contR: sp.last > last,
+      bar: !!ev.all_day || sp.last > sp.first,
+      len: c1 - c0, start: ev.start_ts || '',
+    });
+  });
+  items.sort((a, b) => (b.bar - a.bar)
+    || (b.len - a.len)
+    || a.start.localeCompare(b.start)
+    || String(a.ev.title || '').localeCompare(String(b.ev.title || '')));
+  const occ = [];   // occ[lane][col] = true
+  items.forEach((it) => {
+    let lane = 0;
+    for (;;) {
+      occ[lane] = occ[lane] || [];
+      let free = true;
+      for (let c = it.c0; c <= it.c1; c++) if (occ[lane][c]) { free = false; break; }
+      if (free) break;
+      lane++;
+    }
+    for (let c = it.c0; c <= it.c1; c++) occ[lane][c] = true;
+    it.lane = lane;
+  });
+  return items.map(({ len, start, ...rest }) => rest);
+}
 
 /* Effective color for an event: an explicitly colored Google event wins,
    else its calendar's configured color, else quiet gray. */
