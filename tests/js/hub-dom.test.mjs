@@ -1106,8 +1106,10 @@ test('renderCalendar maps event title/time/all-day into the calendar DOM', () =>
   assert.match(html, /class="cal-time num">9:30am</);
   // The tap target carries the event id, so a tapped row can be re-found.
   assert.match(html, /data-eid="e1"/);
-  // An all-day event renders the "all day" chip, not a clock time.
-  assert.match(html, /class="cal-allday[^>]*>all day</);
+  // An all-day event renders as a filled bar (no clock time), carrying the
+  // event color / matching ink as CSS vars the bar reads.
+  assert.match(html, /class="cal-ev cal-ev-allday" data-eid="e2"/);
+  assert.doesNotMatch(html.match(/data-eid="e2"[^>]*>/)[0], /cal-time/);
   // A title containing markup is escaped — not rendered as live HTML.
   assert.match(html, /Camp &lt;b&gt;all week&lt;\/b&gt;/);
   assert.ok(!html.includes('<b>all week</b>'), 'event title markup is inert');
@@ -1141,10 +1143,12 @@ test('eventRow: a multi-day TIMED event shows start / all-day / end across its s
     start_ts: '2026-08-10T22:00:00-07:00', end_ts: '2026-08-12T06:00:00-07:00' };
   // start day: its start time
   assert.match(sandbox.eventRow(ev, '2026-08-10'), /class="cal-time num">10pm</);
-  // middle day: the event owns the whole day — the all-day chip, NOT a stale
-  // "→ <final end time>" that reads as if it ended that day
+  // middle day: the event owns the whole day — the all-day bar tagged with its
+  // place in the run, NOT a stale "→ <final end time>" that reads as if it
+  // ended that day
   const mid = sandbox.eventRow(ev, '2026-08-11');
-  assert.match(mid, /class="cal-allday[^>]*>all day</);
+  assert.match(mid, /class="cal-ev cal-ev-allday"/);
+  assert.match(mid, /class="cal-spantag">day 2 of 3</);
   assert.doesNotMatch(mid, /6am/, 'a middle day must not show the final end time');
   // end day: the end time, marked as a continuation
   assert.match(sandbox.eventRow(ev, '2026-08-12'), /class="cal-time num">→ 6am</);
@@ -1164,7 +1168,7 @@ test('safeColor is applied at the color sinks: a hostile color can NOT inject ex
   });
   const cal = document.getElementById('cal').innerHTML;
   assert.doesNotMatch(cal, /background:url/, 'no injected declaration at the event color sink');
-  assert.match(cal, /background:transparent/, 'malformed color falls back to transparent');
+  assert.match(cal, /--evc:transparent/, 'malformed color falls back to transparent');
   // person --pc / name color sink
   const card = sandbox.personCardHtml(
     { person: { id: 1, name: 'Bo', color: hostile }, chores: [], week: [], streak: 0, total: 0, done_count: 0 },
@@ -1247,7 +1251,7 @@ test('monthHtml marks a day past the sync window as not-synced, not falsely-empt
   const html = sandbox.monthHtml(2026, 8, [], '2026-08-14', win);
 
   const cellHtml = (date) => {
-    const m = html.match(new RegExp(`<div class="[^"]*" data-date="${date}"[\\s\\S]*?<\\/div>`));
+    const m = html.match(new RegExp(`<div class="[^"]*"[^>]*data-date="${date}"[\\s\\S]*?<\\/div>`));
     assert.ok(m, `cell for ${date} rendered`);
     return m[0];
   };
@@ -1273,9 +1277,12 @@ test('monthHtml: an event on the day wins over the unsynced marking (defensive, 
   const ev = { id: 'e1', title: 'Somehow cached', all_day: 1,
     start_ts: '2026-08-29', end_ts: '2026-08-30' };
   const html = sandbox.monthHtml(2026, 8, [ev], '2026-08-14', win);
-  const cellHtml = html.match(/<div class="[^"]*" data-date="2026-08-29"[\s\S]*?<\/div>/)[0];
+  const cellHtml = html.match(/<div class="[^"]*"[^>]*data-date="2026-08-29"[\s\S]*?<\/div>/)[0];
   assert.doesNotMatch(cellHtml, /mg-unsynced/, 'a cell with an event to show is never marked unsynced');
-  assert.match(cellHtml, /Somehow cached/);
+  // the event itself is drawn as a bar in that cell's week row (a sibling of the cell, not a child)
+  const weeks = html.split('<div class="mg-week">');
+  const week = weeks.find((w) => w.includes('data-date="2026-08-29"'));
+  assert.match(week, /class="mg-bar"[^>]*>[\s\S]*?Somehow cached/);
 });
 
 test('monthHtml never marks an out-of-month padding cell (.mg-out) as unsynced, even when it falls outside the window', () => {
@@ -1287,7 +1294,7 @@ test('monthHtml never marks an out-of-month padding cell (.mg-out) as unsynced, 
   const html = sandbox.monthHtml(2026, 8, [], '2026-08-14', win);
 
   const cellHtml = (date) => {
-    const m = html.match(new RegExp(`<div class="[^"]*" data-date="${date}"[\\s\\S]*?<\\/div>`));
+    const m = html.match(new RegExp(`<div class="[^"]*"[^>]*data-date="${date}"[\\s\\S]*?<\\/div>`));
     assert.ok(m, `cell for ${date} rendered`);
     return m[0];
   };
@@ -6088,4 +6095,94 @@ test('skySceneHtml nests the drift clouds INSIDE .sky, so the drift keyframe 100
   assert.equal(anywhere.length, insideSky.length,
     'every .sky-cloud must live inside .sky (the container-type query container) — '
     + 'a cloud outside .sky would make its drift 100cqw resolve against the wrong ancestor');
+});
+
+/* ---- month grid: overflow, placement, clicks ---- */
+const allday = (id, s, e) => ({ id, title: id, all_day: 1, start_ts: s, end_ts: e });
+
+test('monthHtml: past MONTH_MAX_LANES events are not drawn and each day shows its own "+N more"', () => {
+  const { sandbox } = newHub();
+  const evs = [];
+  for (let i = 0; i < 6; i++) evs.push(allday(`one${i}`, '2026-08-26', '2026-08-27'));
+  evs.push(allday('two', '2026-08-26', '2026-08-28'));   // 2-day, sorts first (longest)
+  const html = sandbox.monthHtml(2026, 8, evs, '2026-08-14', undefined);
+  const week = html.split('<div class="mg-week">').find((w) => w.includes('data-date="2026-08-26"'));
+  assert.equal((week.match(/data-eid=/g) || []).length, 4, 'exactly MONTH_MAX_LANES events drawn');
+  assert.match(week, /data-eid="two"/, 'the longest bar always makes the cut');
+  assert.match(week, /class="mg-more" data-date="2026-08-26" tabindex="0" style="grid-column:4;grid-row:6">\+3 more</);
+  assert.doesNotMatch(week, /data-date="2026-08-27" tabindex="0" style="grid-column:5;grid-row:6"/, 'the 2-day bar is drawn, so the 27th has nothing hidden');
+  assert.doesNotMatch(week, /class="mg-more" data-date="2026-08-25"/);
+  const hidden = evs.filter((e) => !week.includes(`data-eid="${e.id}"`));
+  assert.equal(hidden.length, 3);
+  hidden.forEach((e) => assert.doesNotMatch(html, new RegExp(`data-eid="${e.id}"`), 'a hidden event is not drawn anywhere'));
+});
+
+test('monthHtml: bars land on the right columns/lanes and carry continuation classes across the week edge', () => {
+  const { sandbox } = newHub();
+  const fair = allday('fair', '2026-08-26', '2026-09-01');
+  const dentist = { id: 'd', title: 'Dentist', all_day: 0, start_ts: '2026-08-26T08:00:00', end_ts: '2026-08-26T09:00:00' };
+  const html = sandbox.monthHtml(2026, 8, [fair, dentist], '2026-08-14', undefined);
+  const weeks = html.split('<div class="mg-week">');
+  const w1 = weeks.find((w) => w.includes('data-date="2026-08-26"'));
+  const w2 = weeks.find((w) => w.includes('data-date="2026-08-30"'));
+  assert.match(w1, /class="mg-bar mg-bar-contr" data-eid="fair" tabindex="0" style="grid-column:4 \/ 8;grid-row:2;/);
+  assert.match(w2, /class="mg-bar mg-bar-contl" data-eid="fair" tabindex="0" style="grid-column:1 \/ 3;grid-row:2;/);
+  assert.match(w1, /class="mg-ev" data-eid="d" tabindex="0" style="grid-column:4 \/ 5;grid-row:3"/, 'timed event sits in the lane under the bar');
+  assert.match(w1, /class="mg-ev-time num">8am</);
+  assert.equal((html.match(/data-eid="fair"/g) || []).length, 2, 'once per week it touches');
+});
+
+test('month grid clicks: "+N more" and the day cell open that day; a bar opens the event card', () => {
+  const { document, sandbox, fire } = newHub();
+  const evs = [];
+  for (let i = 0; i < 5; i++) evs.push(allday(`e${i}`, '2026-08-26', '2026-08-27'));
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  document.body.appendChild(host);
+  ['ev-modal', 'ev-card'].forEach((id) => {   // the detail card's mounts
+    const el = document.createElement('div'); el._id = id; el.classList.add('hidden'); document.body.appendChild(el);
+  });
+  vm.runInContext(
+    "data_date = '2026-08-14'; calState.mode = 'month'; calState.y = 2026; calState.m = 8;"
+    + `calWin = { status: { ok: true }, events: ${JSON.stringify(evs)} }; indexEvents(calWin.events);`,
+    sandbox);
+  sandbox.renderCalFull();
+  // the delegated document click handler reads e.target.closest(sel); shim
+  // closest() on the tapped node the way a real tap resolves it
+  const tap = (sel) => {
+    const node = host.querySelector(sel);
+    assert.ok(node, `${sel} rendered`);
+    node.closest = (s) => (selectorMatches(node, s) ? node : null);
+    fire('click', { target: node, preventDefault() {} });
+  };
+  tap('.mg-more');
+  assert.equal(vm.runInContext('calState.mode', sandbox), 'day');
+  assert.equal(vm.runInContext('calState.day', sandbox), '2026-08-26');
+  vm.runInContext("calState.mode = 'month'", sandbox); sandbox.renderCalFull();
+  tap('.mg-day[data-date="2026-08-27"]');
+  assert.equal(vm.runInContext('calState.day', sandbox), '2026-08-27');
+  vm.runInContext("calState.mode = 'month'", sandbox); sandbox.renderCalFull();
+  tap('.mg-bar[data-eid="e0"]');
+  assert.equal(vm.runInContext('calState.mode', sandbox), 'month', 'a bar tap does not change the view');
+  assert.equal(document.getElementById('ev-modal').classList.contains('hidden'), false, 'the event detail card opened');
+  assert.match(document.getElementById('ev-card').innerHTML, /e0/);
+});
+
+test('eventRow: all-day run tags "day N of M" on each day; a one-day all-day event and the no-day call carry no tag', () => {
+  const { sandbox } = newHub();
+  const fair = allday('fair', '2026-08-26', '2026-09-01');
+  assert.match(sandbox.eventRow(fair, '2026-08-26'), /class="cal-spantag">day 1 of 6</);
+  assert.match(sandbox.eventRow(fair, '2026-08-31'), /class="cal-spantag">day 6 of 6</);
+  assert.doesNotMatch(sandbox.eventRow(allday('b', '2026-08-26', '2026-08-27'), '2026-08-26'), /cal-spantag/);
+  assert.doesNotMatch(sandbox.eventRow(fair), /cal-spantag/);
+});
+
+test('month bars: a hostile color fails closed and a dark calendar color gets light ink', () => {
+  const { sandbox } = newHub();
+  const hostile = { ...allday('h', '2026-08-26', '2026-08-28'), color: 'red;background:url(https://evil/x)' };
+  const navy = { ...allday('n', '2026-08-26', '2026-08-28'), color: '#1F3A93' };
+  const html = sandbox.monthHtml(2026, 8, [hostile, navy], '2026-08-14', undefined);
+  assert.doesNotMatch(html, /background:url/);
+  assert.match(html, /data-eid="h"[^>]*--evc:transparent;--evi:var\(--ink\)/, 'unmeasurable color → page ink, so the title stays readable');
+  assert.match(html, /data-eid="n"[^>]*--evc:#1F3A93;--evi:#F4F6FB/);
 });

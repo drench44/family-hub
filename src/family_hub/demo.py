@@ -215,7 +215,20 @@ def _seed_calendar(conn, today: dt.date) -> None:
                 "start_ts": f"{day}T{start}:00", "end_ts": f"{day}T{end}:00",
                 "all_day": 0}
 
+    def allday(eid, day, ndays, title):
+        # All-day ends are exclusive (Google's convention).
+        end = (day + dt.timedelta(days=ndays)).isoformat()
+        return {"id": eid, "calendar_id": DEMO_CALENDAR_ID, "title": title,
+                "start_ts": day.isoformat(), "end_ts": end, "all_day": 1}
+
     events = [
+        # All-day events: the month grid draws each as a bar spanning the
+        # days it covers, and the agenda tags a multi-day run "day N of M".
+        # The 6-day fair usually crosses a week boundary (the clipped-arrow
+        # bar); the birthday is a plain one-day all-day event.
+        allday("demo-fair", today + dt.timedelta(days=2), 6, "State fair"),
+        allday("demo-grandma", today + dt.timedelta(days=3), 3, "Grandma visiting"),
+        allday("demo-bday", today + dt.timedelta(days=1), 1, "Aunt Jo's birthday"),
         # Ended earlier today -> renders struck through on the wall.
         ev("demo-eye", today_str, "11:30", "12:15", "Eye appointment"),
         ev("demo-pest", today_str, "15:00", "15:45",
