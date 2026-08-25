@@ -10,6 +10,17 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- Calendar redesign. The full-screen month is one hairline-ruled sheet: all-day
+  and multi-day events draw as ONE bar spanning the days they cover (clipped to
+  an arrow tip where they carry into the next week), timed events sit under
+  them as dot + time + title, and past four rows a per-day "+N more" opens the
+  day. Today is a filled accent circle on the date. The week view and the home
+  card lead each day with a date badge (today's header band tints with the
+  accent), all-day events render as the same colored bar tagged "day 2 of 4"
+  when they're one day of a run, and the outlined ALL DAY chip is gone. Demo
+  data gains three multi-day events so the README screenshot shows the bars.
+
 ### Added
 - Weather card: a 5-day forecast strip at the foot of the card — each day shows a
   drawn condition glyph (not emoji, so the wall's Firefox renders it cleanly) with

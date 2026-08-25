@@ -939,7 +939,7 @@ body {
    its larger title + name color (below), not a divergent surface — one card
    system (Task 2). */
 .cal-day { padding: 10px 14px 8px; }
-.cal-day.is-today { padding: 12px 14px 10px; }
+.cal-day.is-today { padding: 10px 14px 10px; }
 .cal-dayhead {
   display: flex; align-items: baseline; gap: 9px;
   font-family: var(--mono);
@@ -951,6 +951,22 @@ body {
 }
 .cal-daydate, .cal-dayrel { color: var(--faint); letter-spacing: 0.12em; }
 .cal-dayrel { margin-left: auto; text-align: right; }
+/* The date number leads each day as a small badge; today's fills with the
+   accent, and its header band tints the whole card top so "today" is a place
+   on the page, not just a word. */
+.cal-daynum {
+  flex: none; align-self: center;
+  min-width: 26px; height: 26px; padding: 0 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 0;
+  color: var(--ink); background: var(--edge); border-radius: 8px;
+}
+.cal-day.is-today .cal-dayhead {
+  margin: -10px -14px 6px; padding: 10px 14px 8px;
+  border-radius: 14px 14px 0 0;
+  background: var(--accent-soft); border-bottom-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.cal-day.is-today .cal-daynum { color: var(--accent-ink); background: var(--accent); }
 .cal-day.is-today .cal-dayname { color: var(--accent); }
 .cal-empty {
   font-size: 14px; font-style: italic; color: var(--faint);
@@ -971,14 +987,23 @@ body {
   flex: none; width: 64px; text-align: right;
   font-family: var(--mono); font-size: 12px; color: var(--dim);
 }
-.cal-allday {
-  flex: none;
-  font-family: var(--mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--dim);
-  border: 1px solid var(--edge);
-  border-radius: 999px;
-  padding: 2px 8px;
+/* All-day (and mid-run multi-day) events are a filled bar in the calendar
+   color — the same bar the month grid draws — so a stay or a fair reads as
+   one continuous thing wherever it appears. --evc / --evi (bar color / text
+   ink) are set inline per event by eventRow. */
+.cal-ev-allday {
+  align-items: center; gap: 10px;
+  margin: 5px 0; padding: 5px 12px;
+  border-top: 0; border-radius: 7px;
+  background: var(--evc); color: var(--evi);
+}
+.cal-ev-allday .cal-title { color: inherit; font-weight: 500; }
+.cal-ev-allday + .cal-ev-allday { margin-top: 0; }
+.cal-ev-allday + .cal-ev:not(.cal-ev-allday) { border-top: 0; }
+.cal-spantag {
+  flex: none; margin-left: auto;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; opacity: 0.72;
 }
 .cal-title { flex: 1; font-size: 15px; color: var(--ink); }
 .cal-day.is-today .cal-title { font-size: 17px; }
@@ -1610,37 +1635,83 @@ body.overlay-open { overflow: hidden; }
 .cal-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cal-body { min-height: 0; }
 
+/* One sheet, hairline-ruled, corners rounded on the outside only — the days
+   are places on a page, not seven floating cards. Each .mg-week is its own
+   grid: 7 day cells span every row as the backdrop; events sit in lanes
+   above them (row 2..5), the "+N more" chip in the last row. Row heights are
+   fixed so every week is the same height and an all-day bar lands on the same
+   baseline from week to week. */
 .mgrid {
+  --mg-lane: 24px;
+  border: 1px solid var(--edge); border-radius: 12px;
+  background: var(--surface); overflow: hidden;
+}
+.mg-heads {
   display: grid; grid-template-columns: repeat(7, 1fr);
-  gap: 6px;
+  border-bottom: 1px solid var(--edge);
 }
 .mg-head {
   font-family: var(--mono); font-size: 11px; font-weight: 600;
   letter-spacing: 0.16em; text-transform: uppercase;
-  color: var(--faint); text-align: center; padding: 4px 0 8px;
+  color: var(--faint); text-align: center; padding: 10px 0 8px;
 }
+.mg-week {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: 30px repeat(4, var(--mg-lane)) minmax(18px, auto);
+  row-gap: 2px; column-gap: 0;
+  border-bottom: 1px solid var(--edge);
+}
+.mg-week:last-child { border-bottom: 0; }
 .mg-day {
-  min-height: 118px;
-  background: var(--surface);
-  border: 1px solid var(--edge);
-  border-radius: 10px;
-  padding: 8px;
-  display: flex; flex-direction: column; gap: 4px;
+  grid-row: 1 / -1;
+  min-height: 132px;
+  border-right: 1px solid var(--edge);
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.mg-day:last-of-type { border-right: 0; }
+.mg-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mg-weekend { background: color-mix(in srgb, var(--edge) 28%, transparent); }
+.mg-out { opacity: 0.38; }
+.mg-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; height: 24px; padding: 0 5px; border-radius: 12px;
+  font-family: var(--mono); font-size: 13px; color: var(--dim);
+}
+.mg-today .mg-num { color: var(--accent-ink); background: var(--accent); font-weight: 700; }
+/* events float in the lane rows, over the day cells */
+.mg-bar, .mg-ev, .mg-more { position: relative; z-index: 1; min-width: 0; margin: 0 3px; }
+.mg-bar {
+  display: flex; align-items: center;
+  padding: 0 9px; border-radius: 6px;
+  background: var(--evc); color: var(--evi);
+  font-size: 12.5px; font-weight: 500; line-height: var(--mg-lane);
   cursor: pointer; overflow: hidden;
 }
-.mg-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.mg-out { opacity: 0.38; }
-.mg-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.mg-num { font-family: var(--mono); font-size: 13px; color: var(--dim); }
-.mg-today .mg-num { color: var(--accent); font-weight: 700; }
+.mg-bar-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a bar that carries into the previous / next week loses that end's radius
+   and gets a clipped arrow tip — the "this keeps going" cue */
+.mg-bar-contr { margin-right: 0; border-radius: 6px 0 0 6px;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%); padding-right: 14px; }
+.mg-bar-contl { margin-left: 0; border-radius: 0 6px 6px 0;
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 8px 100%, 0 50%); padding-left: 14px; }
+.mg-bar-contl.mg-bar-contr { border-radius: 0;
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%); }
 .mg-ev {
   display: flex; align-items: center; gap: 6px;
-  font-size: 12.5px; color: var(--ink);
-  min-width: 0;
+  padding: 0 5px; border-radius: 6px;
+  font-size: 12.5px; color: var(--ink); line-height: var(--mg-lane);
+  cursor: pointer;
 }
-.mg-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.mg-ev-time { flex: none; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.mg-ev.ended .mg-ev-title { color: var(--faint); text-decoration: line-through; }
+.mg-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .mg-ev-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mg-more { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.mg-more {
+  align-self: start; padding: 0 5px; cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; line-height: 18px; color: var(--dim);
+}
+.mg-bar:focus-visible, .mg-ev:focus-visible, .mg-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* A day past the calendar sync window (issue #37): the month view can page
    further than the backend actually caches, so mark those cells "not synced"
    rather than let them read as confident-empty. A faint hatch (not a flat
@@ -1651,7 +1722,7 @@ body.overlay-open { overflow: hidden; }
     var(--edge) 0, var(--edge) 1px, transparent 1px, transparent 8px);
 }
 .mg-unsynced-mark {
-  margin-top: auto;
+  display: block; margin-top: 4px;
   font-family: var(--mono); font-size: 9.5px; font-weight: 600;
   letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--faint);
@@ -2272,9 +2343,20 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) .overlay-panel { padding: 64px 12px 20px; }
   :root:not([data-layout="desktop"]) .cal-nav { flex-wrap: wrap; row-gap: 8px; }
   :root:not([data-layout="desktop"]) .cal-nav-title { font-size: 17px; }
-  :root:not([data-layout="desktop"]) .mgrid { gap: 3px; }
-  :root:not([data-layout="desktop"]) .mg-day { min-height: 52px; padding: 4px 5px; border-radius: 7px; }
-  :root:not([data-layout="desktop"]) .mg-ev-title { display: none; }   /* dots only — titles are one tap away */
+  /* phone month: bars shrink to colored strips, timed events to dots —
+     titles are one tap away in the day view. Lanes stay 14px so a strip is
+     still a tappable target (a mis-tap falls to the day cell, which opens
+     the same day, so the worst case is one extra tap). */
+  :root:not([data-layout="desktop"]) .mgrid { --mg-lane: 14px; }
+  :root:not([data-layout="desktop"]) .mg-week { grid-template-rows: 24px repeat(4, var(--mg-lane)) minmax(12px, auto); }
+  :root:not([data-layout="desktop"]) .mg-day { min-height: 88px; padding: 2px 3px; }
+  :root:not([data-layout="desktop"]) .mg-num { min-width: 20px; height: 20px; font-size: 11px; }
+  :root:not([data-layout="desktop"]) .mg-bar { padding: 0 4px; margin: 0 1px; border-radius: 4px; }
+  :root:not([data-layout="desktop"]) .mg-dot { width: 7px; height: 7px; }
+  :root:not([data-layout="desktop"]) .mg-bar-title, :root:not([data-layout="desktop"]) .mg-ev-time,
+  :root:not([data-layout="desktop"]) .mg-ev-title { display: none; }
+  :root:not([data-layout="desktop"]) .mg-ev { padding: 0 2px; margin: 0 1px; }
+  :root:not([data-layout="desktop"]) .mg-more { font-size: 8px; line-height: 12px; padding: 0 2px; }
   :root:not([data-layout="desktop"]) .mg-unsynced-mark { display: none; }   /* hatch alone at this size; tap the day for the note */
   :root:not([data-layout="desktop"]) .ev-card { padding: 20px 18px 22px 24px; }
   :root:not([data-layout="desktop"]) .ev-title { font-size: 21px; }
