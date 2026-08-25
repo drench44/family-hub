@@ -921,6 +921,42 @@ body {
 .ln-sub { margin-top: 1px; font-size: 13.5px; min-height: 17px;
   color: color-mix(in srgb, var(--ink) 30%, var(--dim)); }
 
+/* ------- native fleet card (system health + 3D printer status) ------- */
+/* Rides the panels column directly under the laundry slot (buildPanels
+   appends it last). No motion here by design — the progress bar is a plain
+   width update, never an animation loop, so there's nothing for
+   prefers-reduced-motion to guard. */
+.fleet-slot { display: flex; flex-direction: column; gap: 8px; }
+.fleet-slot:empty { display: none; }
+.fleet { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.fleet-sys { display: flex; align-items: center; gap: 8px; }
+.fleet-dot { width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--good); }
+.fleet-dot.st-warn { background: var(--warn); }
+.fleet-dot.st-crit { background: var(--crit); }
+.fleet-hosts { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.fleet-problem { font-size: 12.5px; color: var(--warn); }
+.fleet-printer { border-top: 1px solid var(--edge-soft); padding-top: 9px;
+  display: flex; flex-direction: column; gap: 6px; }
+.fleet-printer.st-crit .fleet-pr-state { color: var(--crit); }
+.fleet-printer.st-warn .fleet-pr-state { color: var(--warn); }
+.fleet-printer-offline { border-top: 1px solid var(--edge-soft); padding-top: 9px;
+  color: var(--faint); font-size: 13px; font-style: italic; }
+.fleet-pr-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; }
+.fleet-pr-state { font-size: 15px; font-weight: 650; color: var(--ink);
+  text-transform: capitalize; }
+.fleet-remain { font-size: 12px; color: var(--dim); white-space: nowrap; }
+.fleet-job { font-size: 12.5px; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-bar { height: 6px; border-radius: 999px; background: var(--edge-soft);
+  overflow: hidden; }
+.fleet-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.fleet-printer.st-warn .fleet-bar-fill { background: var(--warn); }
+.fleet-printer.st-crit .fleet-bar-fill { background: var(--crit); }
+.fleet-pct { font-size: 11.5px; color: var(--dim); }
+.fleet-temps { font-size: 12px; color: var(--dim); }
+
 
 /* ========================== calendar ========================= */
 .cal { grid-area: cal; display: flex; flex-direction: column; gap: 12px; }
@@ -2160,6 +2196,7 @@ body.overlay-open { overflow: hidden; }
 body.integ-off-weather #weather-slot { display: none; }
 body.integ-off-climate #climate-slot { display: none; }
 body.integ-off-laundry #laundry-slot { display: none; }
+body.integ-off-fleet #fleet-slot { display: none; }
 body.integ-off-cameras .tile-camera,
 body.integ-off-cameras #camgrid { display: none; }
 body.integ-off-chores .people-col { display: none; }

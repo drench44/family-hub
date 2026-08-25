@@ -16,6 +16,15 @@ rolls that section to a dated version via `python scripts/release.py`.
   gated behind a `fleet` config block (`{base, label?}`, no config = the
   integration doesn't appear). Server side only so far — no card, no DEMO
   payload, no mobile surface yet.
+- Fleet Console: DEMO payload (a healthy fleet + a printer mid-print) so the
+  card shows in demo/offline runs, plus the native wall/phone card itself —
+  a system-health line ("N of M hosts up", the worst problem in words when
+  not nominal) over the printer's state, job, progress bar, ETA, and F
+  temps. Rides the panels column under Laundry on the wall and the Weather
+  tab on the phone (no tab of its own). A "Console" button opens the full
+  dashboard full-screen when a `fleet` panels entry is configured; the
+  integration toggle switches the card off with the same registry hook
+  every other tile uses.
 
 ## [1.3.2] — 2026-08-24
 
