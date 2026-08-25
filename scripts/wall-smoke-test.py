@@ -119,8 +119,17 @@ def main():
         # B. keyboard flow with ?kiosk=1
         c.navigate(hub + "/?kiosk=1")
         check("keyboard builds in kiosk mode", wait("!!document.querySelector('.osk')"))
-        js("var b=document.querySelector('[data-overlay=\"todos\"]'); if(b) b.click();")
-        check("todo add-input appears", wait("!!document.getElementById('todo-add-input')"))
+        # Wait for the To-Do card's expand control to render before clicking it -
+        # hub.js paints it from /api/hub, so clicking too early is a no-op and the
+        # overlay never opens (a flake, not an app bug).
+        if not wait("!!document.querySelector('[data-overlay=\"todos\"]')"):
+            check("To-Do overlay control renders", False)
+            raise SystemExit(1)
+        tapsel('[data-overlay="todos"]')
+        if not wait("!!document.getElementById('todo-add-input')"):
+            check("todo add-input appears", False)
+            raise SystemExit(1)
+        check("todo add-input appears", True)
         time.sleep(1.2)
         js("document.getElementById('todo-add-input').focus();")
         check("keyboard shows on focus", wait(OSK_VIS))
