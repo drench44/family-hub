@@ -15,7 +15,7 @@ light or dark theme with an accent color you pick.
 
 ![family-hub](docs/hub.png)
 
-*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, at-a-glance weather + per-room climate, and the laundry portholes. Shown in the default grey theme with a green accent and sample data.*
+*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, at-a-glance weather + per-room climate, the laundry portholes, and the Fleet Console status card. Shown in the default grey theme with a green accent and sample data.*
 
 ![family-hub on a phone](docs/phone.png)
 
@@ -28,7 +28,7 @@ at one URL.
 ## What it looks like
 
 - **Wall (1920×1080):** chores | calendar + to-dos | cameras | weather +
-  climate + laundry, all in one card system. **Five display modes** (light, soft, blue,
+  climate + laundry + fleet, all in one card system. **Five display modes** (light, soft, blue,
   grey, black) **with a pick-your-accent color** (cyan, violet, amber, or green)
   and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
@@ -73,6 +73,13 @@ at one URL.
   the observing, the log fills even with no wall open. Built for LG
   ThinQ's sensors, but any HA integration exposing a status enum + a
   remaining-time timestamp works. Fails soft like weather/climate.
+- **Fleet Console:** an optional card proxying a separate home-lab dashboard's
+  compact status rollup — a system-health line ("N of M hosts up", the worst
+  problem in words when something's down) over a 3D printer's state, job,
+  progress bar, ETA, and nozzle/bed temps. Rides the panels column under
+  Laundry on the wall and the Weather tab on the phone (no tab of its own).
+  Tap **⛶ Console** to open the full dashboard full-screen, when configured.
+  Fails soft like weather/climate; off entirely with no `fleet` config block.
 - **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
   people (rename, recolor, deactivate, or delete) right on the touchscreen —
   no phone needed. Mark someone **away** here too, with an optional backup to
@@ -186,6 +193,7 @@ once with **`?kiosk=1`** to turn it on (the setting is then remembered;
 | `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
 | `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
 | `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
+| `fleet` | Fleet Console card: `{"base": "http://192.168.1.50:3000"}` — the base URL of a separate home-lab dashboard app exposing a compact `/api/rollup` status endpoint (host + 3D-printer status). Optional `"label"`. Omit to skip the card. Pair with a `"fleet"` entry in `panels` (below) to get the **⛶ Console** full-screen button. |
 | `theme` | House default display theme — `{"mode","accent","columns"}` (`mode`: light/dark, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines). Applied on a fresh device with no saved override |
 
 ### Calendars: Google
