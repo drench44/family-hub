@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-08-25
+
 ### Added
 - Fleet Console: the card now surfaces the fleet-admin vitals the rollup
   grew: a CPU / RAM / storage / hottest-temp grid, an internet line (link
