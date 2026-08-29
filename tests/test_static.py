@@ -376,7 +376,7 @@ def _shell_rule(selector):
     `selector` (whitespace-insensitive), or None. Exact match avoids picking the
     combined `html, body` fallback rule when asked for the single `body` rule."""
     target = _ns(selector)
-    for m in re.finditer(r"([^{}]+)\{([^}]*)\}", _phone_shell_css()):
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", _phone_shell_css()):
         if _ns(m.group(1)) == target:
             return _ns(m.group(2))
     return None
@@ -397,17 +397,17 @@ def test_mobile_app_shell_scrolls_content_not_the_body():
         "phone body must not scroll — the .wrap content region does"
     assert "display:flex" in body and "flex-direction:column" in body, \
         "phone body must be a flex column app shell"
-    # the body must size to the DYNAMIC viewport, driven by a measured CSS var
-    # (--app-h, from innerHeight + visualViewport) with a 100dvh fallback — see
-    # the tab-bar-gap fix. On iOS a stale 100dvh after a bfcache restore left
-    # the in-flow tab bar floating above a gap until a reload; the var is
-    # refreshed on pageshow/visibility/vv-resize plus settle re-measures.
-    # It must ALSO clear the base rule's min-height:100vh floor (100vh > 100dvh
-    # on iOS pushes the bar below the fold).
-    assert "100dvh" in body, "phone body must fall back to the dynamic viewport (100dvh)"
-    assert "var(--app-h" in body, \
-        "phone body height must use the measured --app-h var (gap fix)"
-    assert "min-height:0" in body or "min-height:100dvh" in body, \
+    # The body must be a FIXED box pinned to every viewport edge: the browser
+    # sizes position:fixed + inset:0 to the layout viewport on every layout with
+    # no script involved. Both earlier approaches went stale on iOS (100dvh
+    # after a bfcache restore, then a JS-measured --app-h var after a discarded
+    # -tab reload in iOS Chrome) and left the tab bar floating over a black gap
+    # until a manual reload. No height var, no dvh, no measurement to go stale.
+    assert "position:fixed" in body and "inset:0" in body, \
+        "phone body must be a position:fixed inset:0 box (viewport-pinned shell)"
+    assert "var(--app-h" not in CSS and "dvh" not in body, \
+        "the phone shell must not depend on a measured height var or dvh (both went stale on iOS)"
+    assert "min-height:0" in body, \
         "phone body must clear the base min-height:100vh floor (min-height:0), " \
         "or the tab bar drops below the fold on iOS"
     wrap = _shell_rule(f'{SHELL_GUARD} .wrap')

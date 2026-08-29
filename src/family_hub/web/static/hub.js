@@ -2805,7 +2805,7 @@ function lnConnect() {
 }
 
 /* iOS suspends an EventSource when the tab backgrounds and does NOT always
-   resume it on return (same family of wake bugs as the app-height stamps,
+   resume it on return (same family of iOS wake bugs as the phone tab-bar gap,
    2026-08-17): every wake re-checks the stream AND refetches once — the
    reconnect covers the future, the fetch covers whatever changed while
    suspended (a finished load must not wait for the next 60s poll). The
@@ -3067,83 +3067,7 @@ function fitWall() {
 }
 fitWall();
 
-/* Phone-shell height. The shell body is `height: var(--app-h, 100dvh)`; we drive
-   --app-h from the measured viewport because iOS leaves a STALE 100dvh after a
-   bfcache / app-switch restore (returning to an already-open tab): the in-flow
-   tab bar then floats above a black gap until a full reload (operator report,
-   2026-08-17). Re-measured on the lifecycle events iOS doesn't reliably relayout
-   for — pageshow (incl. bfcache `persisted`), visibilitychange back to visible,
-   resize, orientationchange, visualViewport resize — plus a short settle
-   re-measure after each wake (below). Only the mobile-mode body consumes the
-   var, so setting it on the wall/desktop is a harmless no-op. */
-function editableFocused() {
-  // The iOS on-screen keyboard exists only while an editable element is
-  // focused — that focus is the signal telling a keyboard-shrunk visual
-  // viewport apart from a genuinely shorter one.
-  const el = document.activeElement;
-  if (!el) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
-    el.tagName === 'SELECT' || !!el.isContentEditable;
-}
-function measureAppHeight() {
-  // Second operator report (iOS Chrome, same day): when iOS discards the
-  // backgrounded tab and reloads it on return, window.innerHeight can read
-  // stale during the restore — and stay wrong, in either direction. At 1:1
-  // scale window.visualViewport keeps tracking the real visible height, so it
-  // wins — EXCEPT a shorter reading while an editable is focused (the
-  // keyboard shrinks only the visual viewport; resizing the shell to it would
-  // bounce the layout on every input focus). Pinch-zoomed (scale off 1) a
-  // vv.height is not a layout height; taller than the physical screen it is
-  // junk — stamped, either would strand the tab bar off the visible page.
-  const h = window.innerHeight;
-  const vv = window.visualViewport;
-  if (!vv || Math.abs(vv.scale - 1) > 0.005) return h;
-  const vvH = Math.round(vv.height);
-  const s = window.screen;
-  const cap = Math.max((s && s.height) || 0, (s && s.width) || 0) || Infinity;
-  if (vvH <= 0 || vvH > cap) return h;
-  if (vvH < h && editableFocused()) return h;
-  return vvH;
-}
-function syncAppHeight() {
-  // Never measure a hidden tab: it can report a collapsed-but-POSITIVE
-  // viewport, and iOS flushes suspended timers around exactly the transitions
-  // that hide us — one guard here covers every channel (settle timers,
-  // vv-resize, window resize). The return to visible re-measures anyway.
-  if (document.visibilityState === 'hidden') return;
-  // iOS can also transiently report a 0-height viewport on these lifecycle
-  // events; a literal --app-h:0px would collapse the shell to a black screen
-  // (0px is a "valid" value, so the 100dvh fallback would NOT save it). Ignore a
-  // non-positive reading and leave the last good height standing.
-  const h = measureAppHeight();
-  if (h > 0) document.documentElement.style.setProperty('--app-h', `${h}px`);
-}
-/* iOS can also settle the viewport after a restore reload without firing ANY
-   event at all (the manual-refresh-required report). After every wake — load,
-   pageshow, return to visible, orientationchange — re-measure a couple of
-   times on a short clock to catch a silent settle. Idempotent: re-arming
-   clears the previous chain, and a no-change re-measure is a no-op. */
-const APP_H_SETTLE_MS = [250, 1000];
-let appHSettleTimers = [];
-function wakeAppHeight() {
-  syncAppHeight();
-  appHSettleTimers.forEach(clearTimeout);
-  appHSettleTimers = APP_H_SETTLE_MS.map((ms) => setTimeout(syncAppHeight, ms));
-}
-wakeAppHeight();
-window.addEventListener('pageshow', wakeAppHeight);
-window.addEventListener('orientationchange', wakeAppHeight);
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') wakeAppHeight();
-});
-// window-level resize can stay silent on iOS when only the visual viewport
-// settles/changes; listen to the channel that does fire.
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', syncAppHeight);
-}
-
 window.addEventListener('resize', () => {
-  syncAppHeight();
   fitWall();
   clearTimeout(fitDebounce);
   // wirePanels too: growing past the mobile breakpoint reveals panels that
