@@ -288,11 +288,8 @@ function newHub(opts = {}) {
   // Captured lifecycle listeners so a test can fire pageshow/visibilitychange/
   // resize/orientationchange and observe the effect (iOS wake paths). A
   // plain object of type -> [fn]; fire() below dispatches to both maps.
-  // visualViewport listeners are captured separately (fireVV) — real code
-  // registers them on window.visualViewport, not on window.
   const winListeners = {};
   const docListeners = {};
-  const vvListeners = {};
   // document.querySelector(All) searches every registered element's parsed
   // innerHTML — enough for hub.js's document-wide lookups (probeCamera's
   // '.tile-camera[data-cam="..."]', renderPeople's '.person-card[...]').
@@ -323,8 +320,8 @@ function newHub(opts = {}) {
   // Scroll targets scrollPageToTop() zeroes on iOS (besides window.scrollTo);
   // seeded non-zero so a test can prove each one gets reset to the top.
   document.scrollingElement = { scrollTop: 0 };
-  // documentElement carries a style recorder so CSS-var stamps
-  // (documentElement.style.setProperty(...)) are observable, and a
+  // documentElement carries a style recorder so the
+  // documentElement style writes are observable, and a
   // tiny attribute bag so reflectThemeControls() can read the live data-theme/
   // data-accent/data-cols/data-layout the way it does off the real <html>.
   document.documentElement = {
@@ -365,13 +362,6 @@ function newHub(opts = {}) {
       innerWidth: 1280,
       innerHeight,
       screen: { width: 1280, height: 800 },
-      // The fake visual viewport: same height as the window unless a test
-      // diverges them (iOS restore-reload staleness / keyboard / pinch zoom).
-      visualViewport: {
-        height: opts.vvHeight ?? innerHeight,
-        scale: 1,
-        addEventListener: (type, fn) => { (vvListeners[type] || (vvListeners[type] = [])).push(fn); },
-      },
     },
     innerWidth: 1280,
     innerHeight,
@@ -391,9 +381,6 @@ function newHub(opts = {}) {
     // the offline branch deterministically instead of hitting a real server.
     fetch: async () => { throw new Error('offline in test'); },
   };
-  // Model a browser with no visualViewport at all (older engines): hub.js must
-  // guard every touch of it, or the whole classic script dies at load.
-  if (opts.withoutVisualViewport) delete sandbox.window.visualViewport;
   vm.createContext(sandbox);
   vm.runInContext(commonSrc, sandbox);
   vm.runInContext(hubSrc, sandbox);
@@ -403,17 +390,12 @@ function newHub(opts = {}) {
   const fire = (type, ev = {}) => {
     [...(winListeners[type] || []), ...(docListeners[type] || [])].forEach((fn) => fn(ev));
   };
-  // Dispatch an event captured off window.visualViewport (its resize fires on
-  // iOS in cases where the window-level resize stays silent).
-  const fireVV = (type, ev = {}) => {
-    (vvListeners[type] || []).forEach((fn) => fn(ev));
-  };
-  // Hand-fire pending timeouts. Fired timers
-  // are marked done (consumed), so a second call never re-fires them.
+  // Hand-fire pending timeouts. Fired timers are marked done (consumed), so a
+  // second call never re-fires them.
   const runTimers = (predicate = () => true) => {
     timers.filter((t) => !t.done && predicate(t)).forEach((t) => { t.done = true; t.fn(); });
   };
-  return { document, sandbox, fire, fireVV, runTimers, timers, winListeners, docListeners, vvListeners };
+  return { document, sandbox, fire, runTimers, timers, winListeners, docListeners };
 }
 
 test('showToast builds the .hub-toast element with textContent (no innerHTML/XSS)', () => {
@@ -6334,6 +6316,11 @@ test('monthHtml: bars land on the right columns/lanes and carry continuation cla
   assert.match(w1, /class="mg-ev" data-eid="d" tabindex="0" style="grid-column:4 \/ 5;grid-row:3"/, 'timed event sits in the lane under the bar');
   assert.match(w1, /class="mg-ev-time num">8am</);
   assert.equal((html.match(/data-eid="fair"/g) || []).length, 2, 'once per week it touches');
+  // A timed event whose end is in the past carries the `ended` class (it dims);
+  // the 2099 fixtures above are deliberately future so they must NOT carry it.
+  const past = { id: 'p', title: 'Old', all_day: 0, start_ts: '2000-08-23T08:00:00', end_ts: '2000-08-23T09:00:00' };
+  const old = sandbox.monthHtml(2000, 8, [past], '2000-08-14', undefined);
+  assert.match(old, /class="mg-ev ended" data-eid="p"/, 'a past timed event is marked ended');
 });
 
 test('month grid clicks: "+N more" and the day cell open that day; a bar opens the event card', () => {
