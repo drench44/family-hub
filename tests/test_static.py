@@ -376,7 +376,7 @@ def _shell_rule(selector):
     `selector` (whitespace-insensitive), or None. Exact match avoids picking the
     combined `html, body` fallback rule when asked for the single `body` rule."""
     target = _ns(selector)
-    for m in re.finditer(r"([^{}]+)\{([^}]*)\}", _phone_shell_css()):
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", _phone_shell_css()):
         if _ns(m.group(1)) == target:
             return _ns(m.group(2))
     return None
@@ -397,19 +397,49 @@ def test_mobile_app_shell_scrolls_content_not_the_body():
         "phone body must not scroll — the .wrap content region does"
     assert "display:flex" in body and "flex-direction:column" in body, \
         "phone body must be a flex column app shell"
-    # the body must size to the DYNAMIC viewport, driven by a measured CSS var
-    # (--app-h, from innerHeight + visualViewport) with a 100dvh fallback — see
-    # the tab-bar-gap fix. On iOS a stale 100dvh after a bfcache restore left
-    # the in-flow tab bar floating above a gap until a reload; the var is
-    # refreshed on pageshow/visibility/vv-resize plus settle re-measures.
-    # It must ALSO clear the base rule's min-height:100vh floor (100vh > 100dvh
-    # on iOS pushes the bar below the fold).
-    assert "100dvh" in body, "phone body must fall back to the dynamic viewport (100dvh)"
-    assert "var(--app-h" in body, \
-        "phone body height must use the measured --app-h var (gap fix)"
-    assert "min-height:0" in body or "min-height:100dvh" in body, \
+    # The body must be a FIXED box pinned to every viewport edge: the browser
+    # sizes position:fixed + inset:0 to the layout viewport on every layout with
+    # no script involved. Both earlier approaches went stale on iOS (100dvh
+    # after a bfcache restore, then a JS-measured --app-h var after a discarded
+    # -tab reload in iOS Chrome) and left the tab bar floating over a black gap
+    # until a manual reload. No height var, no dvh, no measurement to go stale.
+    assert "position:fixed" in body and "inset:0" in body, \
+        "phone body must be a position:fixed inset:0 box (viewport-pinned shell)"
+    assert "height:auto" in body, \
+        "phone body height must be auto (sized by the fixed insets), never a length or viewport unit"
+    assert "min-height:0" in body, \
         "phone body must clear the base min-height:100vh floor (min-height:0), " \
         "or the tab bar drops below the fold on iOS"
+    # The measurement must not creep back through ANY door: no --app-h var in
+    # the CSS or hub.js (comments stripped), and no vh/dvh/svh/lvh body height.
+    css_code = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
+    hub_code = re.sub(r"/\*.*?\*/|//[^\n]*", "", HUB, flags=re.S)
+    assert "--app-h" not in css_code and "--app-h" not in hub_code, \
+        "the phone shell must not depend on a measured height var (it went stale on iOS)"
+    # Every body-matching rule in the shell block, not just the exact one above:
+    # a later, more specific rule (a data-tab variant, the narrow inner media
+    # block) could override height/position/inset and re-open the gap. And a
+    # transform/filter/etc. on <body> would make it the containing block for the
+    # fixed overlays and toast, re-anchoring them (why night dim filters the
+    # CHILDREN of body).
+    body_rules = [(_ns(m.group(1)), _ns(m.group(2)))
+                  for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", _phone_shell_css())
+                  if re.search(r"(^|[\s>+~,)])body(?![\w-])", m.group(1))]
+    assert body_rules, "no body rules found in the phone-shell block"
+    for sel, decl in body_rules:
+        for m in re.finditer(r"(?<![\w-])height:([^;]*)", decl):
+            assert m.group(1) in ("auto", "0"), \
+                f"{sel}: body height must stay auto (found {m.group(1)!r}); " \
+                "a fixed/viewport-unit height is the stale-gap bug returning"
+        for m in re.finditer(r"(?<![\w-])position:([^;]*)", decl):
+            assert m.group(1) == "fixed", f"{sel}: body position must stay fixed"
+        for bad in ("transform:", "filter:", "zoom:", "perspective:", "contain:", "will-change:"):
+            assert bad not in decl, \
+                f"{sel}: {bad} on <body> makes it the containing block for the fixed overlays"
+    # The base (wall) body rule applies on the phone too.
+    base_body = _ns(re.search(r"\nbody\s*\{([^{}]*)\}", css_code).group(1))
+    for bad in ("transform:", "filter:", "zoom:", "perspective:", "contain:", "will-change:"):
+        assert bad not in base_body, f"base body rule: {bad} would re-anchor the fixed overlays"
     wrap = _shell_rule(f'{SHELL_GUARD} .wrap')
     assert wrap, f'no phone .wrap rule keyed on {SHELL_GUARD} .wrap'
     assert "overflow-y:auto" in wrap, ".wrap must be the scrolling content region"

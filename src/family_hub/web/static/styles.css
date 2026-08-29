@@ -2340,24 +2340,28 @@ body.integ-off-todos .todo-slot { display: none; }
    to support it). Keep these between the >>> / <<< markers; test_static.py bounds
    the phone-shell guards to this block by them. */
 @media (max-width: 1000px) {
-  /* Phone app shell. The body is a fixed-height flex column: the content
+  /* Phone app shell. The body is a viewport-pinned flex column: the content
      (.wrap) scrolls in its OWN region and the tab bar sits BELOW it in normal
      flow, never overlapping. A fixed bar floating over the scrolling body kept
      going untappable on iOS Safari when scrolled to the bottom (its hit area
      misaligns / taps fall through); an in-flow bar is reliably tappable at any
      scroll position, and "scroll to top" is just resetting .wrap. */
-  :root:not([data-layout="desktop"]),
-  :root:not([data-layout="desktop"]) body { height: 100%; }
-  /* Body height: the measured --app-h var (set by hub.js from innerHeight +
-     visualViewport, refreshed on pageshow/visibilitychange/resize/vv-resize/
-     orientation plus short settle re-measures) with a 100dvh fallback. iOS
-     left a stale 100dvh after a bfcache/app-switch restore, so the in-flow tab
-     bar floated above a gap until a full reload — the var is re-measured on
-     those events and closes the gap. min-height:0 REQUIRED: the base body
+  /* Shell height: the body is a FIXED box pinned to all four viewport edges
+     (position:fixed; inset:0). The browser sizes a fixed inset:0 box to the
+     layout viewport on every layout, with no script in the loop — that is
+     what keeps it correct after the transitions iOS gets wrong. History (see
+     CHANGELOG 1.3.5): 100dvh went stale after a bfcache / app-switch restore
+     (#45), and a JS-measured --app-h var (innerHeight + visualViewport +
+     settle timers, #53) still froze the wrong height on iOS Chrome when a
+     discarded tab reloaded and the viewport settled with no event at all —
+     the tab bar sat 80px up a black gap until a manual reload. A fixed
+     inset:0 box has no measurement to go stale. Never give <body> a transform
+     or filter (it would re-anchor the overlays; night dim filters its
+     children for the same reason). min-height:0 REQUIRED: the base body
      carries min-height:100vh, and on iOS 100vh (address bar hidden) is TALLER
      than the visible area; left in, that floor pushes the tab bar below the
      fold. */
-  :root:not([data-layout="desktop"]) body { height: var(--app-h, 100dvh); min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  :root:not([data-layout="desktop"]) body { position: fixed; inset: 0; width: auto; height: auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   :root:not([data-layout="desktop"]) .wrap {
     flex: 1; min-height: 0;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
