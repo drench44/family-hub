@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.3.5] — 2026-08-29
+
 ### Fixed
 - Phone tab bar no longer sticks partway up the screen over a black gap when
   a stale iOS Chrome / Safari tab comes back (third and structural fix). The
