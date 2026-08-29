@@ -70,7 +70,8 @@ Test all of: full desktop width, the mobile breakpoint, and night mode.
 ## Mobile & iOS Safari — required checks for anything phone-facing
 
 The phone reflow (`@media (max-width: 1000px)`: an app-shell — the body is a
-fixed-height flex column, the content `.wrap` scrolls inside it, and the tab bar
+viewport-pinned `position: fixed; inset: 0` flex column, the content `.wrap`
+scrolls inside it, and the tab bar
 is the in-flow bottom row) and the full-screen overlays are used on a real
 iPhone. Static and fake-DOM tests can't see mobile layout OR iOS Safari
 behavior, so a batch of spacing and tap bugs shipped unnoticed (2026-08-15). For
@@ -96,6 +97,15 @@ don't reintroduce them):
   bar is an in-flow row below it, so it's always tappable at any scroll
   position. Guards: `test_mobile_tabbar_stays_tappable`,
   `test_mobile_app_shell_scrolls_content_not_the_body`.
+- **Never size the phone shell from a measured or `dvh` height.** Three
+  reports of the tab bar stuck up the screen over a black gap after a stale
+  tab came back: `100dvh` went stale after a bfcache restore (#45), and a JS
+  `--app-h` var measured from innerHeight + visualViewport with settle timers
+  (#53) still froze the wrong height on iOS Chrome, because iOS settles the
+  viewport with no event at all. The body is `position: fixed; inset: 0` so
+  the browser sizes it on every layout with nothing to go stale (#80). Never
+  put a transform/filter on `<body>` either (it re-anchors the fixed overlays).
+  Guard: `test_mobile_app_shell_scrolls_content_not_the_body`.
 - **No `backdrop-filter` on a `position: fixed`/`sticky` element.** Taps fall
   through it intermittently. Use a solid background (put any blur on a
   non-interactive `::before`). Guard: `test_no_backdrop_filter_on_fixed_elements`.

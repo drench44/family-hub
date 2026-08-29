@@ -286,13 +286,10 @@ class FakeEl {
 function newHub(opts = {}) {
   const registry = {};
   // Captured lifecycle listeners so a test can fire pageshow/visibilitychange/
-  // resize/orientationchange and observe the effect (the --app-h gap fix). A
+  // resize/orientationchange and observe the effect (iOS wake paths). A
   // plain object of type -> [fn]; fire() below dispatches to both maps.
-  // visualViewport listeners are captured separately (fireVV) — real code
-  // registers them on window.visualViewport, not on window.
   const winListeners = {};
   const docListeners = {};
-  const vvListeners = {};
   // document.querySelector(All) searches every registered element's parsed
   // innerHTML — enough for hub.js's document-wide lookups (probeCamera's
   // '.tile-camera[data-cam="..."]', renderPeople's '.person-card[...]').
@@ -323,8 +320,8 @@ function newHub(opts = {}) {
   // Scroll targets scrollPageToTop() zeroes on iOS (besides window.scrollTo);
   // seeded non-zero so a test can prove each one gets reset to the top.
   document.scrollingElement = { scrollTop: 0 };
-  // documentElement carries a style recorder so the --app-h gap fix
-  // (documentElement.style.setProperty('--app-h', ...)) is observable, and a
+  // documentElement carries a style recorder so the
+  // documentElement style writes are observable, and a
   // tiny attribute bag so reflectThemeControls() can read the live data-theme/
   // data-accent/data-cols/data-layout the way it does off the real <html>.
   document.documentElement = {
@@ -348,7 +345,7 @@ function newHub(opts = {}) {
   // Timers are inert: no callback ever fires on its own, so the poll loop and
   // the toast auto-hide don't run — the toast stays put for us to assert on.
   // Each scheduled timeout IS recorded ({fn, ms, done}) so a test can hand-fire
-  // the --app-h settle re-measures (the iOS restore-reload fix). `done` means
+  // timer-driven paths (camera HD probes, settles). `done` means
   // consumed — cancelled by clearTimeout OR already fired by runTimers — the
   // same field captureTimers() (camera HD tests) has always used. timerTaps:
   // captureTimers() pushes a view array here; every later-armed timer object is
@@ -364,15 +361,7 @@ function newHub(opts = {}) {
       addEventListener: (type, fn) => { (winListeners[type] || (winListeners[type] = [])).push(fn); },
       innerWidth: 1280,
       innerHeight,
-      // measureAppHeight's sanity cap: readings taller than the screen are junk.
       screen: { width: 1280, height: 800 },
-      // The fake visual viewport: same height as the window unless a test
-      // diverges them (iOS restore-reload staleness / keyboard / pinch zoom).
-      visualViewport: {
-        height: opts.vvHeight ?? innerHeight,
-        scale: 1,
-        addEventListener: (type, fn) => { (vvListeners[type] || (vvListeners[type] = [])).push(fn); },
-      },
     },
     innerWidth: 1280,
     innerHeight,
@@ -392,9 +381,6 @@ function newHub(opts = {}) {
     // the offline branch deterministically instead of hitting a real server.
     fetch: async () => { throw new Error('offline in test'); },
   };
-  // Model a browser with no visualViewport at all (older engines): hub.js must
-  // guard every touch of it, or the whole classic script dies at load.
-  if (opts.withoutVisualViewport) delete sandbox.window.visualViewport;
   vm.createContext(sandbox);
   vm.runInContext(commonSrc, sandbox);
   vm.runInContext(hubSrc, sandbox);
@@ -404,17 +390,12 @@ function newHub(opts = {}) {
   const fire = (type, ev = {}) => {
     [...(winListeners[type] || []), ...(docListeners[type] || [])].forEach((fn) => fn(ev));
   };
-  // Dispatch an event captured off window.visualViewport (its resize fires on
-  // iOS in cases where the window-level resize stays silent).
-  const fireVV = (type, ev = {}) => {
-    (vvListeners[type] || []).forEach((fn) => fn(ev));
-  };
-  // Hand-fire pending timeouts — the --app-h settle re-measures. Fired timers
-  // are marked done (consumed), so a second call never re-fires them.
+  // Hand-fire pending timeouts. Fired timers are marked done (consumed), so a
+  // second call never re-fires them.
   const runTimers = (predicate = () => true) => {
     timers.filter((t) => !t.done && predicate(t)).forEach((t) => { t.done = true; t.fn(); });
   };
-  return { document, sandbox, fire, fireVV, runTimers, timers, winListeners, docListeners, vvListeners };
+  return { document, sandbox, fire, runTimers, timers, winListeners, docListeners };
 }
 
 test('showToast builds the .hub-toast element with textContent (no innerHTML/XSS)', () => {
@@ -775,229 +756,6 @@ test('applyWallLayout + updateTabVisibility: empty list is a no-op (fail-open)',
     'empty payload must not trip hub-empty');
   assert.ok(document.querySelectorAll('.tab-btn').every((b) => !b.hidden),
     'empty payload must not hide tabs');
-});
-
-// ---- --app-h: the phone-shell height var (tab-bar gap fix) ----
-// The phone shell body is height: var(--app-h, 100dvh). On iOS a stale 100dvh
-// after a bfcache/app-switch restore left the in-flow tab bar floating above a
-// gap until a full reload. hub.js measures window.innerHeight into --app-h and
-// re-measures it on the lifecycle events iOS doesn't reliably relayout for.
-
-const appH = (document) => document.documentElement.style.getPropertyValue('--app-h');
-
-// A REAL viewport change moves the layout and visual viewports together; keep
-// the fakes honest by moving both (tests that deliberately diverge them — the
-// iOS staleness/keyboard/pinch cases — set the fields directly instead).
-const setViewport = (sandbox, h) => {
-  sandbox.window.innerHeight = h;
-  sandbox.window.visualViewport.height = h;
-};
-
-test('--app-h is set from window.innerHeight at load', () => {
-  const { document } = newHub();   // sandbox.window.innerHeight = 800
-  assert.equal(appH(document), '800px',
-    'the phone shell height var must be measured from innerHeight up front');
-});
-
-test('a pageshow (bfcache restore) re-measures --app-h', () => {
-  // The reported bug: returning to an already-open iOS tab restores a stale
-  // height and the tab bar floats above a gap until reload. pageshow must fix it.
-  const { document, sandbox, fire } = newHub();
-  setViewport(sandbox, 640);   // Safari restored a different viewport
-  fire('pageshow', { persisted: true });
-  assert.equal(appH(document), '640px', 'pageshow must resync the shell height');
-});
-
-test('a visibilitychange back to visible re-measures --app-h', () => {
-  const { document, sandbox, fire } = newHub();
-  setViewport(sandbox, 712);
-  document.visibilityState = 'visible';
-  fire('visibilitychange');
-  assert.equal(appH(document), '712px');
-});
-
-test('an orientationchange re-measures --app-h', () => {
-  const { document, sandbox, fire } = newHub();
-  setViewport(sandbox, 500);   // rotated to landscape
-  fire('orientationchange');
-  assert.equal(appH(document), '500px');
-});
-
-test('a resize re-measures --app-h', () => {
-  const { document, sandbox, fire } = newHub();
-  setViewport(sandbox, 900);
-  fire('resize');
-  assert.equal(appH(document), '900px');
-});
-
-test('a zero viewport reading is ignored, not stamped (would black-screen the shell)', () => {
-  // iOS Safari can transiently report a 0-height viewport on exactly these
-  // lifecycle events. --app-h drives the whole shell height; a literal 0px
-  // collapses it to an empty screen (and the 100dvh fallback does NOT kick in —
-  // 0px is "valid").
-  const { document, sandbox, fire } = newHub();
-  assert.equal(appH(document), '800px');   // measured at load
-  setViewport(sandbox, 0);
-  fire('pageshow', { persisted: true });
-  assert.equal(appH(document), '800px', 'a 0px reading must not overwrite the good height');
-});
-
-// ---- The iOS Chrome restore-reload staleness (operator report, 2026-08-17,
-// second report after the innerHeight-only fix). When iOS discards a
-// backgrounded tab and reloads it on return, window.innerHeight can read a
-// stale, too-SHORT (but positive — the zero guard can't catch it) value during
-// the restore, and iOS then settles the viewport without firing ANY
-// window-level event. window.visualViewport keeps tracking the real visible
-// height and fires its own resize. --app-h must use both channels, plus a
-// short settle re-measure for the fires-nothing-at-all case.
-
-test('--app-h prefers a TALLER visualViewport over a stale innerHeight at load (iOS restore reload)', () => {
-  const { document } = newHub({ innerHeight: 640, vvHeight: 719 });
-  assert.equal(appH(document), '719px',
-    'a restore-reload measures a stale short innerHeight; visualViewport has the real height');
-});
-
-test('a visualViewport resize re-measures --app-h (window resize can stay silent on iOS)', () => {
-  const { document, sandbox, fireVV } = newHub({ innerHeight: 640, vvHeight: 640 });
-  sandbox.window.visualViewport.height = 719;   // viewport settles; only vv fires
-  fireVV('resize');
-  assert.equal(appH(document), '719px');
-});
-
-test('a SHORTER visualViewport with the keyboard up (editable focused) must NOT shrink the shell', () => {
-  // The keyboard shrinks only the visual viewport, not the layout viewport;
-  // resizing the shell to it would bounce the whole layout on every focus. The
-  // keyboard only exists while an editable element is focused — that focus is
-  // the signal that a shorter vv is fake.
-  const { document, sandbox, fireVV } = newHub();
-  sandbox.document.activeElement = { tagName: 'INPUT' };   // typing a to-do
-  sandbox.window.visualViewport.height = 420;              // keyboard up
-  fireVV('resize');
-  assert.equal(appH(document), '800px', 'keyboard: keep the layout-viewport height');
-});
-
-test('a stale-TALL innerHeight is corrected DOWN by visualViewport when NO keyboard is up', () => {
-  // The restore staleness has no guaranteed direction. Left too tall, the tab
-  // bar sits below the fold on an overflow:hidden body — as unreachable as the
-  // black-gap case. With no editable focused there is no keyboard, so a shorter
-  // vv at 1:1 scale IS the real layout height and must win.
-  const { document } = newHub({ innerHeight: 900, vvHeight: 719 });
-  assert.equal(appH(document), '719px',
-    'no-keyboard shrink must be allowed, or a stale-tall innerHeight sticks forever');
-});
-
-test('an implausibly tall visualViewport (beyond the screen) is rejected', () => {
-  // A junk reading taller than the physical screen would push the in-flow tab
-  // bar below the fold on a body that cannot scroll — the original untappable
-  // tab-bar bug through a new door. The fake screen is 1280x800.
-  const { document, sandbox, fireVV } = newHub();
-  sandbox.window.visualViewport.height = 5000;   // garbage at scale 1
-  fireVV('resize');
-  assert.equal(appH(document), '800px', 'must not size the shell past the screen');
-});
-
-test('a pinch-zoomed visualViewport (scale away from 1) is ignored for --app-h', () => {
-  // Zoomed out, vv.height exceeds the layout viewport but is NOT a layout
-  // height — trusting it would oversize the shell and push the tab bar below
-  // the fold.
-  const { document, sandbox, fireVV } = newHub();
-  sandbox.window.visualViewport.scale = 0.5;
-  sandbox.window.visualViewport.height = 1600;
-  fireVV('resize');
-  assert.equal(appH(document), '800px');
-});
-
-test('settle re-measures catch a stale LOAD measurement corrected with no event at all', () => {
-  // The reported failure: the restore reload measures short at load and iOS
-  // never fires resize/pageshow/visibilitychange afterwards. hub.js schedules
-  // a couple of delayed re-measures (APP_H_SETTLE_MS) after load to catch it.
-  const { document, sandbox, timers, runTimers } = newHub({ innerHeight: 640, vvHeight: 640 });
-  assert.equal(appH(document), '640px');   // stale at load, nothing better known
-  setViewport(sandbox, 719);               // viewport settles silently
-  // Pins hub.js's APP_H_SETTLE_MS schedule — change both together, consciously.
-  // every(): the 1000ms backstop (slow settles) must not silently disappear.
-  const settleMs = [250, 1000];
-  assert.ok(settleMs.every((ms) => timers.some((t) => !t.done && t.ms === ms)),
-    'load must arm the FULL settle schedule, both delays');
-  runTimers((t) => settleMs.includes(t.ms));
-  assert.equal(appH(document), '719px', 'the delayed re-measure must pick up the settled height');
-});
-
-test('a pageshow re-arms the settle re-measures (bfcache restore that settles late)', () => {
-  const { document, sandbox, fire, timers, runTimers } = newHub();
-  const start = timers.length;             // scope to the timers pageshow arms
-  fire('pageshow', { persisted: true });   // measures the (still-stale) 800
-  setViewport(sandbox, 719);               // settles after the event, silently
-  assert.deepEqual(
-    timers.slice(start).filter((t) => !t.done).map((t) => t.ms).sort((a, b) => a - b),
-    [250, 1000], 'pageshow must arm exactly the settle schedule');
-  // Re-arming must consume the PREVIOUS chain (the load-time one), not stack.
-  assert.ok(timers.slice(0, start).every((t) => t.done || ![250, 1000].includes(t.ms)),
-    're-arm must clear the previous settle chain');
-  runTimers((t) => timers.indexOf(t) >= start);
-  assert.equal(appH(document), '719px');
-});
-
-test('innerHeight 0 with a live visualViewport still recovers a real height at load', () => {
-  // Stronger than the old hold-last-good guard: a broken 0 innerHeight during
-  // a restore is RECOVERED from the vv channel, not just tolerated.
-  const { document } = newHub({ innerHeight: 0, vvHeight: 719 });
-  assert.equal(appH(document), '719px');
-});
-
-test('a return to VISIBLE re-arms the settle re-measures (the app-switch-back path)', () => {
-  // The reported scenario: switch back to the tab, iOS settles the viewport
-  // late with no further event. The visibilitychange handler must arm the
-  // settle chain, not just re-measure once.
-  const { document, sandbox, fire, timers, runTimers } = newHub();
-  const start = timers.length;
-  document.visibilityState = 'visible';
-  fire('visibilitychange');                // re-measures the (still-stale) 800
-  setViewport(sandbox, 719);               // settles silently afterwards
-  runTimers((t) => timers.indexOf(t) >= start);
-  assert.equal(appH(document), '719px');
-});
-
-test('an orientationchange re-arms the settle re-measures (iOS resizes late on rotate)', () => {
-  const { document, sandbox, fire, timers, runTimers } = newHub();
-  const start = timers.length;
-  fire('orientationchange');               // iOS fires this BEFORE the new size lands
-  setViewport(sandbox, 500);               // landscape size arrives late, silently
-  runTimers((t) => timers.indexOf(t) >= start);
-  assert.equal(appH(document), '500px');
-});
-
-test('a settle timer firing while HIDDEN must not stamp the collapsed viewport', () => {
-  // iOS flushes suspended timers around exactly the lifecycle transitions this
-  // fix targets. A hidden tab can report a collapsed-but-POSITIVE height the
-  // zero guard cannot catch; stamping it recreates the black-gap bug on the
-  // next return. (Same invariant the visibilitychange-to-hidden test pins.)
-  const { document, sandbox, fire, timers, runTimers } = newHub();
-  const start = timers.length;
-  fire('pageshow', {});                    // arms the settle chain
-  document.visibilityState = 'hidden';     // user switches away inside the window
-  setViewport(sandbox, 300);               // collapsed, but positive
-  runTimers((t) => timers.indexOf(t) >= start);
-  assert.equal(appH(document), '800px', 'a hidden re-measure must not restamp');
-});
-
-test('a browser with NO visualViewport still measures --app-h from innerHeight', () => {
-  // hub.js is one classic script: an unguarded window.visualViewport touch
-  // would kill the ENTIRE dashboard at load on engines that lack it.
-  const { document, vvListeners } = newHub({ withoutVisualViewport: true });
-  assert.equal(appH(document), '800px', 'innerHeight fallback must still stamp');
-  assert.deepEqual(Object.keys(vvListeners), [], 'no vv listener registered');
-});
-
-test('a visibilitychange to HIDDEN does not re-measure --app-h', () => {
-  // Only a return to visible should re-measure; a hidden tab can report a
-  // collapsed viewport, so re-measuring then would stamp a bad height.
-  const { document, sandbox, fire } = newHub();
-  assert.equal(appH(document), '800px');
-  sandbox.window.innerHeight = 640;
-  document.visibilityState = 'hidden';
-  fire('visibilitychange');
-  assert.equal(appH(document), '800px', 'a hidden tab must be left at its prior height');
 });
 
 // ---- Layout control reflection in the display popover ----
@@ -1699,9 +1457,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
     registry[id] = el;
   });
   document.body = new FakeEl(registry, 'body');
-  // hub.js's load-time syncAppHeight() sets --app-h on documentElement.style;
-  // give it a documentElement so the module loads (these tests don't assert on
-  // the height var — newHub() covers that).
+  // hub.js touches documentElement at load (scrollTop, data-* reads); give it one.
   document.documentElement = { scrollTop: 0, style: { setProperty() {} }, getAttribute() { return null; } };
   // openOverlay('chores') writes #chores-full via innerHTML; our fake parser
   // doesn't register parsed nodes by id, so pre-register a real host FakeEl.
@@ -3050,8 +2806,7 @@ function mountReminders({ surface = 'full', writable = true, lists = [],
   };
   SEEDED_IDS.forEach((id) => { const el = new FakeEl(registry); el._id = id; registry[id] = el; });
   document.body = new FakeEl(registry, 'body');
-  // hub.js's load-time syncAppHeight() sets --app-h on documentElement.style;
-  // give it a documentElement so the module loads.
+  // hub.js touches documentElement at load (scrollTop, data-* reads); give it one.
   document.documentElement = { scrollTop: 0, style: { setProperty() {} }, getAttribute() { return null; } };
   // The full view paints into #todos-page (not in SEEDED_IDS); the add flow reads
   // #todo-add-input by id (parsed innerHTML nodes aren't id-registered, so seed a
@@ -6550,17 +6305,22 @@ test('monthHtml: past MONTH_MAX_LANES events are not drawn and each day shows it
 
 test('monthHtml: bars land on the right columns/lanes and carry continuation classes across the week edge', () => {
   const { sandbox } = newHub();
-  const fair = allday('fair', '2026-08-26', '2026-09-01');
-  const dentist = { id: 'd', title: 'Dentist', all_day: 0, start_ts: '2026-08-26T08:00:00', end_ts: '2026-08-26T09:00:00' };
-  const html = sandbox.monthHtml(2026, 8, [fair, dentist], '2026-08-14', undefined);
+  const fair = allday('fair', '2099-08-26', '2099-09-01');
+  const dentist = { id: 'd', title: 'Dentist', all_day: 0, start_ts: '2099-08-26T08:00:00', end_ts: '2099-08-26T09:00:00' };
+  const html = sandbox.monthHtml(2099, 8, [fair, dentist], '2099-08-14', undefined);
   const weeks = html.split('<div class="mg-week">');
-  const w1 = weeks.find((w) => w.includes('data-date="2026-08-26"'));
-  const w2 = weeks.find((w) => w.includes('data-date="2026-08-30"'));
+  const w1 = weeks.find((w) => w.includes('data-date="2099-08-26"'));
+  const w2 = weeks.find((w) => w.includes('data-date="2099-08-30"'));
   assert.match(w1, /class="mg-bar mg-bar-contr" data-eid="fair" tabindex="0" style="grid-column:4 \/ 8;grid-row:2;/);
   assert.match(w2, /class="mg-bar mg-bar-contl" data-eid="fair" tabindex="0" style="grid-column:1 \/ 3;grid-row:2;/);
   assert.match(w1, /class="mg-ev" data-eid="d" tabindex="0" style="grid-column:4 \/ 5;grid-row:3"/, 'timed event sits in the lane under the bar');
   assert.match(w1, /class="mg-ev-time num">8am</);
   assert.equal((html.match(/data-eid="fair"/g) || []).length, 2, 'once per week it touches');
+  // A timed event whose end is in the past carries the `ended` class (it dims);
+  // the 2099 fixtures above are deliberately future so they must NOT carry it.
+  const past = { id: 'p', title: 'Old', all_day: 0, start_ts: '2000-08-23T08:00:00', end_ts: '2000-08-23T09:00:00' };
+  const old = sandbox.monthHtml(2000, 8, [past], '2000-08-14', undefined);
+  assert.match(old, /class="mg-ev ended" data-eid="p"/, 'a past timed event is marked ended');
 });
 
 test('month grid clicks: "+N more" and the day cell open that day; a bar opens the event card', () => {
