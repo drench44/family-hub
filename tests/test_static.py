@@ -303,6 +303,27 @@ def test_wall_surfaces_away_overlay_failure():
     assert "away status unavailable" in ALL_JS, "the degraded-state note text"
 
 
+def test_no_utc_today_fallback_in_hub():
+    """The 'today' fallback must use local-midnight math (todayISO()), never
+    `new Date().toISOString().slice(0, 10)` — toISOString() is UTC and rolls to
+    tomorrow on a US evening, opening the calendar on the wrong month and marking
+    the wrong 'today'. Every other date routine in the file is deliberately
+    tz-local; keep the fallbacks in line."""
+    assert "toISOString().slice(0, 10)" not in HUB and "toISOString().slice(0,10)" not in HUB, \
+        "hub.js must not derive a local 'today' from UTC toISOString()"
+
+
+def test_calendar_overlay_opens_on_the_layout_default_view():
+    """The calendar overlay picks its opening view from calDefaultMode() (Week
+    agenda on a phone, month grid on the wall) rather than hard-coding 'month' —
+    a phone-width month grid hides every event title. Pin the wiring so a future
+    edit can't silently revert to the always-month default."""
+    assert "calState.mode = calDefaultMode();" in HUB, \
+        "the calendar overlay must open on calDefaultMode(), not a fixed 'month'"
+    assert "matchMedia('(max-width: 1000px)')" in HUB, \
+        "calDefaultMode must mirror the CSS phone breakpoint exactly"
+
+
 def test_overlay_and_home_pill_styled():
     for cls in (".overlay", ".overlay-home"):
         assert _css_rule(cls).strip(), f"{cls} is unstyled"
