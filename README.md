@@ -32,8 +32,11 @@ at one URL.
   grey, black) **with a pick-your-accent color** (cyan, violet, amber, or green)
   and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
-- **Phone / tablet (≤1000px):** the same page reflows to five bottom tabs —
-  Chores / To-Dos / Calendar / Cameras / Weather.
+- **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
+  Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
+  hub in **Safari** and use Share → **Add to Home Screen** for a full-screen
+  app with no browser toolbar (and no browser quirks); a normal browser tab
+  also self-heals the occasional stuck-height reload on its own.
 - **Calendar:** next-5-days home feed, full-screen month grid + week agenda +
   day drill-in, tap-any-event detail cards, your own Google sidebar colors,
   multi-day events drawn as one bar across their span (Google-style), ended

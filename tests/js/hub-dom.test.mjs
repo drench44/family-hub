@@ -42,6 +42,19 @@ const SEEDED_IDS = [
   'settings-version',
 ];
 
+// A Map-backed Web Storage stub (localStorage / sessionStorage) — just the
+// getItem/setItem/removeItem the self-heal uses, with string coercion like the
+// real thing. Seeded from an optional {key: value} object.
+function makeWebStore(init) {
+  const m = new Map(Object.entries(init || {}).map(([k, v]) => [k, String(v)]));
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => { m.set(k, String(v)); },
+    removeItem: (k) => { m.delete(k); },
+    _map: m,
+  };
+}
+
 function makeClassList() {
   const s = new Set();
   return {
@@ -355,18 +368,58 @@ function newHub(opts = {}) {
   const timers = [];
   const timerTaps = [];
   const innerHeight = opts.innerHeight ?? 800;
+  const innerWidth = opts.innerWidth ?? 1280;
+  // The tab-bar-gap self-heal reads a set of browser globals (matchMedia,
+  // localStorage, sessionStorage, navigator, visualViewport, location.reload).
+  // They are seeded ONLY when a test opts in by passing `mobile` — off by
+  // default, so the base sandbox is byte-for-byte what it was (the
+  // calDefaultMode "no matchMedia" test still sees a bare window). The other
+  // capture arrays (reloadCalls/beacons) are always returned; they simply stay
+  // empty for tests that never wire the globals.
+  const wantBrowser = 'mobile' in opts;
+  const localStore = makeWebStore(opts.store);
+  const sessionStore = makeWebStore(opts.session);
+  const reloadCalls = [];
+  const beacons = [];
+  const navigator = {
+    standalone: !!opts.standalone,
+    sendBeacon: (url, blob) => { beacons.push({ url, blob }); return true; },
+  };
+  const location = { reload: () => { reloadCalls.push(Date.now()); } };
+  const visualViewport = { height: opts.vvHeight ?? innerHeight };
+  const matchMedia = (q) => ({
+    matches: /max-width:\s*1000px/.test(q) ? !!opts.mobile
+      : /display-mode:\s*standalone/.test(q) ? !!opts.standalone
+      : false,
+    media: q,
+    addEventListener() {}, removeEventListener() {},
+  });
+  // sendBeacon wraps the body in a Blob; a real-enough stub so the beacon path
+  // runs (and captures the JSON) instead of throwing into the diagnostics catch.
+  const BlobStub = class { constructor(parts, opt) { this.parts = parts; this.type = opt && opt.type; } };
+  const browserWin = wantBrowser ? { matchMedia, navigator, visualViewport, location } : {};
+  const browserBare = wantBrowser ? {
+    localStorage: localStore, sessionStorage: sessionStore, Blob: BlobStub,
+    navigator, location, visualViewport, matchMedia,
+  } : {};
   const sandbox = {
     document,
     window: {
       addEventListener: (type, fn) => { (winListeners[type] || (winListeners[type] = [])).push(fn); },
-      innerWidth: 1280,
+      innerWidth,
       innerHeight,
-      screen: { width: 1280, height: 800 },
+      screen: { width: innerWidth, height: opts.screenHeight ?? 800 },
+      ...browserWin,
     },
-    innerWidth: 1280,
+    innerWidth,
     innerHeight,
+    ...browserBare,
     scrollTo: (x, y) => { scrollCalls.push([x, y]); },
     scrollCalls,
+    reloadCalls,
+    beacons,
+    localStore,
+    sessionStore,
     __timerTaps: timerTaps,
     setTimeout: (fn, ms) => {
       const t = { fn, ms, done: false };
@@ -395,7 +448,8 @@ function newHub(opts = {}) {
   const runTimers = (predicate = () => true) => {
     timers.filter((t) => !t.done && predicate(t)).forEach((t) => { t.done = true; t.fn(); });
   };
-  return { document, sandbox, fire, runTimers, timers, winListeners, docListeners };
+  return { document, sandbox, fire, runTimers, timers, winListeners, docListeners,
+    reloadCalls, beacons, localStore, sessionStore };
 }
 
 test('showToast builds the .hub-toast element with textContent (no innerHTML/XSS)', () => {
@@ -6503,4 +6557,250 @@ test('month bars: a hostile color fails closed and a dark calendar color gets li
   assert.doesNotMatch(html, /background:url/);
   assert.match(html, /data-eid="h"[^>]*--evc:transparent;--evi:var\(--ink\)/, 'unmeasurable color → page ink, so the title stays readable');
   assert.match(html, /data-eid="n"[^>]*--evc:#1F3A93;--evi:#F4F6FB/);
+});
+
+// ---- iOS Chrome tab-bar gap: self-heal reload + diagnostics -------------
+//
+// The bug lives in Chrome's per-tab toolbar-inset bookkeeping, not the page —
+// so the ONLY safe lever is a bounded reload when the wake comes back short,
+// plus telemetry to the box. These tests pin the decision table: it heals the
+// real stuck state exactly once, never loops, never yanks the page from under
+// a typing user, and (critically) never reloads for the ~44px a normal Chrome
+// toolbar adds/removes on scroll. A phone portrait shell is innerWidth 390,
+// a healthy tall innerHeight ~780, screen.height ~852; the stuck state is
+// ~700 (≈80px short).
+function phone(opts = {}) {
+  return newHub({ mobile: true, innerWidth: 390, innerHeight: 780,
+    screenHeight: 852, ...opts });
+}
+
+test('self-heal: healthy phone learns the tall baseline and does NOT reload', () => {
+  const { sandbox, reloadCalls } = phone({ innerHeight: 780 });
+  sandbox.selfhealLearnMax('portrait', 780);
+  assert.equal(sandbox.selfhealEvaluate(), 'ok:height-normal');
+  assert.equal(reloadCalls.length, 0);
+  assert.equal(sandbox.localStorage.getItem('fh-vh-max:portrait'), '780');
+});
+
+test('self-heal: a stuck-short wake (≈80px gap) reloads exactly once', () => {
+  const { sandbox, reloadCalls, beacons } = phone({
+    innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(sandbox.selfhealEvaluate(), 'reload');
+  assert.equal(reloadCalls.length, 1);
+  assert.equal(sandbox.sessionStorage.getItem('fh-selfheal-tried'), '700');
+  // The interesting event is reported to the box.
+  const last = JSON.parse(beacons.at(-1).blob.parts[0]);
+  assert.equal(last.reason, 'reload');
+  assert.equal(last.shortfall, 80);
+});
+
+test('self-heal: one-shot — a second short wake at the same height does NOT reload again', () => {
+  const { sandbox, reloadCalls } = phone({
+    innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(sandbox.selfhealEvaluate(), 'reload');
+  assert.equal(sandbox.selfhealEvaluate(), 'hold:already-tried');
+  assert.equal(reloadCalls.length, 1, 'no reload loop: at most one reload per stuck height');
+});
+
+test('self-heal: a normal ~40px toolbar show/hide never triggers a reload', () => {
+  const { sandbox, reloadCalls } = phone({
+    innerHeight: 740, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(sandbox.selfhealEvaluate(), 'ok:height-normal');
+  assert.equal(reloadCalls.length, 0);
+});
+
+test('self-heal: never reloads while a field is focused', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  h.document.activeElement = { tagName: 'INPUT', isContentEditable: false };
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:input-active');
+  assert.equal(h.reloadCalls.length, 0);
+});
+
+test('self-heal: standalone (home-screen app) is left alone — no toolbar to go stale', () => {
+  const { sandbox, reloadCalls } = phone({
+    innerHeight: 700, standalone: true, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(sandbox.selfhealEvaluate(), 'skip:standalone');
+  assert.equal(reloadCalls.length, 0);
+});
+
+test('self-heal: the wall / desktop layout never reloads', () => {
+  const { sandbox, reloadCalls } = newHub({ mobile: false, innerWidth: 1280,
+    innerHeight: 700, store: { 'fh-vh-max:landscape': '900' } });
+  assert.equal(sandbox.selfhealEvaluate(), 'skip:not-mobile');
+  assert.equal(reloadCalls.length, 0);
+});
+
+test('self-heal: the kill switch disables the reload without a deploy', () => {
+  const { sandbox, reloadCalls } = phone({
+    innerHeight: 700,
+    store: { 'fh-vh-max:portrait': '780', 'fh-selfheal-off': '1' } });
+  assert.equal(sandbox.selfhealEvaluate(), 'hold:disabled');
+  assert.equal(reloadCalls.length, 0);
+});
+
+test('self-heal: learnMax only grows and is capped at screen.height', () => {
+  const { sandbox } = phone({ innerHeight: 780 });
+  sandbox.selfhealLearnMax('portrait', 780);
+  sandbox.selfhealLearnMax('portrait', 700);   // a stuck reading must not lower it
+  assert.equal(sandbox.localStorage.getItem('fh-vh-max:portrait'), '780');
+  sandbox.selfhealLearnMax('portrait', 99999);  // absurd reading capped at screen
+  assert.equal(sandbox.localStorage.getItem('fh-vh-max:portrait'), '852');
+});
+
+test('self-heal: notable outcomes report to the box, steady healthy ones stay quiet', () => {
+  // A notable hold (kill switch) IS reported so the box can see it.
+  const held = phone({ innerHeight: 700,
+    store: { 'fh-vh-max:portrait': '780', 'fh-selfheal-off': '1' } });
+  const beforeHeld = held.beacons.length;
+  held.sandbox.selfhealEvaluate();
+  assert.equal(held.beacons.length, beforeHeld + 1);
+  assert.equal(JSON.parse(held.beacons.at(-1).blob.parts[0]).reason, 'hold:disabled');
+
+  // A steady healthy settle is NOT reported — it would flood the bounded buffer
+  // and bury the real events (every scroll fires one of these).
+  const ok = phone({ innerHeight: 780, store: { 'fh-vh-max:portrait': '780' } });
+  const beforeOk = ok.beacons.length;
+  assert.equal(ok.sandbox.selfhealEvaluate(), 'ok:height-normal');
+  assert.equal(ok.beacons.length, beforeOk, 'ok:height-normal must not report');
+});
+
+test('self-heal: two reloads cannot fire within the minimum gap (kills a tight loop)', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');   // count 1, timestamp set
+  // a DIFFERENT stuck height (jitter across a 5px bucket) must still not loop
+  h.sandbox.window.innerHeight = 690;
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:too-soon');
+  assert.equal(h.reloadCalls.length, 1);
+});
+
+test('self-heal: a hard per-session cap stops even a slow flap', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  // simulate many spaced-out stuck episodes (reset the time gap + one-shot each)
+  let reason;
+  for (let i = 0; i < 12; i++) {
+    h.sessionStore.setItem('fh-selfheal-last', '0');       // enough time has passed
+    h.sessionStore.removeItem('fh-selfheal-tried');         // a fresh stuck height
+    h.sandbox.window.innerHeight = 700 - i;                 // vary it so one-shot never matches
+    h.sandbox.localStorage.setItem('fh-vh-max:portrait', '820');
+    reason = h.sandbox.selfhealEvaluate();
+  }
+  assert.equal(reason, 'hold:reload-cap');
+  assert.equal(h.reloadCalls.length, 8, 'reloads are capped at SELFHEAL_MAX_RELOADS');
+});
+
+test('self-heal: when a reload does not cure the height, it adopts the new normal', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');            // still 780 baseline
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:already-tried'); // same height, reload didn't help
+  // the baseline is lowered to the real glass, so a FRESH session reads it as normal
+  assert.equal(h.sandbox.localStorage.getItem('fh-vh-max:portrait'), '700');
+  const fresh = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '700' } });
+  assert.equal(fresh.sandbox.selfhealEvaluate(), 'ok:height-normal');
+  assert.equal(fresh.reloadCalls.length, 0);
+});
+
+test('self-heal: a report falls back to fetch when sendBeacon refuses (returns false)', () => {
+  const h = phone({ innerHeight: 700,
+    store: { 'fh-vh-max:portrait': '780', 'fh-selfheal-off': '1' } });
+  h.sandbox.navigator.sendBeacon = () => false;   // queue full
+  const fetches = [];
+  h.sandbox.fetch = (url, opts) => { fetches.push({ url, opts }); return Promise.resolve(); };
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:disabled');
+  assert.equal(fetches.length, 1, 'refused beacon must fall back to fetch');
+  assert.equal(fetches[0].url, '/api/diag/viewport');
+});
+
+test('self-heal: with no baseline yet, it holds (never reloads on first-ever load)', () => {
+  const { sandbox, reloadCalls } = phone({ innerHeight: 700 });
+  assert.equal(sandbox.selfhealEvaluate(), 'skip:no-baseline');
+  assert.equal(reloadCalls.length, 0);
+});
+
+test('self-heal: viewportDiag reports the numbers the readout and box need', () => {
+  const { sandbox } = phone({ innerHeight: 700, vvHeight: 700,
+    store: { 'fh-vh-max:portrait': '780' } });
+  const d = sandbox.viewportDiag();
+  assert.equal(d.inner, 700);
+  assert.equal(d.learnedMax, 780);
+  assert.equal(d.shortfall, 80);
+  assert.equal(d.orient, 'portrait');
+  assert.equal(d.mobile, true);
+  assert.equal(d.standalone, false);
+});
+
+test('self-heal: a pre-filled date/checkbox does NOT block the reload (only text does)', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  // the away admin's date picker defaults to today — a non-text value that must
+  // not wedge the self-heal permanently off
+  h.document.querySelectorAll = () => [
+    { tagName: 'INPUT', type: 'date', value: '2026-08-31' },
+    { tagName: 'INPUT', type: 'checkbox', value: 'on' },
+  ];
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  assert.equal(h.reloadCalls.length, 1);
+});
+
+test('self-heal: unsaved text in a real text field DOES block the reload', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  h.document.querySelectorAll = () => [{ tagName: 'INPUT', type: 'text', value: 'buy milk' }];
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:input-active');
+  assert.equal(h.reloadCalls.length, 0);
+});
+
+test('self-heal: shortfall exactly at the threshold reloads; one px below holds', () => {
+  const at = phone({ innerHeight: 720, store: { 'fh-vh-max:portrait': '780' } });   // 60 short
+  assert.equal(at.sandbox.selfhealEvaluate(), 'reload');
+  const below = phone({ innerHeight: 721, store: { 'fh-vh-max:portrait': '780' } }); // 59 short
+  assert.equal(below.sandbox.selfhealEvaluate(), 'ok:height-normal');
+});
+
+test('self-heal: a landscape wake never reloads off a portrait baseline (per-orientation)', () => {
+  const h = newHub({ mobile: true, innerWidth: 780, innerHeight: 390,
+    screenHeight: 852, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'skip:no-baseline');
+  assert.equal(h.reloadCalls.length, 0);
+});
+
+test('self-heal: data-layout=desktop is treated as the wall even at phone width', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  h.document.documentElement.setAttribute('data-layout', 'desktop');
+  assert.equal(h.sandbox.selfhealEvaluate(), 'skip:not-mobile');
+  assert.equal(h.reloadCalls.length, 0);
+});
+
+test('self-heal: heals once per EPISODE — a later healthy wake re-arms the one-shot', () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  h.timers.forEach((t) => { t.done = true; });   // drop the load-time settle timer
+  // episode 1: stuck short -> reload once, one-shot marker set
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  assert.equal(h.reloadCalls.length, 1);
+  assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), '700');
+  // a healthy tall wake settles (after the 1.5s timer) and clears the one-shot
+  h.sandbox.window.innerHeight = 780;
+  h.sandbox.selfhealOnWake();
+  h.runTimers();
+  assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), null,
+    'a tall wake must clear the one-shot so a new episode can heal');
+  assert.equal(h.reloadCalls.length, 1, 'the tall settle must not itself reload');
+  // episode 2 happens later (the reload time-gap has elapsed): stuck again ->
+  // heals again (not wedged once-per-tab-lifetime)
+  h.sessionStore.setItem('fh-selfheal-last', '0');
+  h.sandbox.window.innerHeight = 700;
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  assert.equal(h.reloadCalls.length, 2);
+});
+
+test('self-heal: the settle timer, not the wake instant, drives the decision', () => {
+  // kill switch on + stuck, so the settle produces a REPORTED hold (a healthy
+  // ok would be steady and stay quiet)
+  const h = phone({ innerHeight: 700,
+    store: { 'fh-vh-max:portrait': '780', 'fh-selfheal-off': '1' } });
+  h.timers.forEach((t) => { t.done = true; });
+  h.sandbox.selfhealOnWake();
+  // nothing decided yet — the 1.5s settle timer is still pending
+  assert.equal(h.beacons.length, 0);
+  h.runTimers();
+  // now it has evaluated (and reported) exactly once
+  assert.equal(h.beacons.length, 1);
+  assert.equal(JSON.parse(h.beacons.at(-1).blob.parts[0]).reason, 'hold:disabled');
 });
