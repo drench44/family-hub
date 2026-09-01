@@ -332,13 +332,16 @@ function calNavHtml(title) {
 function renderCalFull() {
   const host = document.getElementById('cal-full');
   if (!host) return;
-  const todayStr = data_date || new Date().toISOString().slice(0, 10);
+  const todayStr = data_date || todayISO();
   const events = (calWin && calWin.events) || [];
   const win = calWin && calWin.window;   // the backend's actual sync range (issue #37)
   let title = '';
   let body = '';
   if (calState.mode === 'day') {
-    title = monthName(calState.y, calState.m);
+    // Title from the drilled-in DAY, not calState.y/m: tapping a leading/trailing
+    // padding cell (an adjacent month's day) opens that day while y/m still hold
+    // the grid's month, which would mislabel the header.
+    title = monthName(Number(calState.day.slice(0, 4)), Number(calState.day.slice(5, 7)));
     body = `<button class="cal-back" type="button" data-calback="1">‹ back to month</button>`
       + agendaHtml(events, calState.day, todayStr, 1, null, win);
   } else if (calState.mode === 'agenda') {
@@ -352,8 +355,24 @@ function renderCalFull() {
     + calNavHtml(title) + `<div class="cal-body">${body}</div>`;
 }
 
+/* Which view the calendar overlay opens on. The wall opens on the month grid;
+   a phone opens on the text-rich Week (agenda) list instead, because the grid's
+   7 columns are too narrow for event titles there (the phone CSS hides them —
+   styles.css) and a month of unlabeled color strips is useless on a phone.
+   Mirrors the CSS phone split EXACTLY: data-layout="desktop" forces the wall at
+   any width, otherwise the max-width:1000px query decides — read once at open
+   time. Unlike theme.js's layout stamp (which must survive hub.js not running),
+   the calendar overlay is JS-built and never exists without hub.js, so reading
+   matchMedia here breaks no "works without JS" invariant. Fails safe to the
+   month grid where matchMedia is unavailable (e.g. the test DOM). */
+function calDefaultMode() {
+  if (document.documentElement.getAttribute('data-layout') === 'desktop') return 'month';
+  const mq = window.matchMedia && window.matchMedia('(max-width: 1000px)');
+  return mq && mq.matches ? 'agenda' : 'month';
+}
+
 function calGoToday() {
-  const todayStr = data_date || new Date().toISOString().slice(0, 10);
+  const todayStr = data_date || todayISO();
   calState.y = Number(todayStr.slice(0, 4));
   calState.m = Number(todayStr.slice(5, 7));
   calState.weekStart = todayStr;
@@ -626,7 +645,7 @@ function peopleAdminHtml(people, awayPeriods) {
     const p = (people || []).find((x) => x.id === pid);
     return p ? p.name : `#${pid}`;
   };
-  const todayStr = data_date || new Date().toISOString().slice(0, 10);
+  const todayStr = data_date || todayISO();
 
   const rows = (people || []).map((p) => {
     const open = openByPerson.get(p.id);
@@ -1598,7 +1617,7 @@ function openOverlay(view) {
       : `<div class="camera-page camera-page-empty">No cameras configured.</div>`;
   } else if (view === 'calendar') {
     content.innerHTML = `<div class="overlay-panel"><div id="cal-full"></div></div>`;
-    calState.mode = 'month';
+    calState.mode = calDefaultMode();
     calGoToday();
     renderCalFull();                       // instant paint from cache
     fetchCalWindow().then(renderCalFull);  // then refresh from the API

@@ -1112,6 +1112,74 @@ test('renderCalFull passes calWin.window through to the month grid', () => {
   assert.match(html, /mg-unsynced/, 'a day beyond the fixture window is marked, via the real render path');
 });
 
+// calDefaultMode picks the opening view: the wall gets the month grid, a phone
+// gets the text-rich Week (agenda) list (the phone grid hides titles). It reads
+// the SAME split the CSS uses — data-layout="desktop" forces the wall, else the
+// max-width:1000px media query. Fails safe to 'month' where matchMedia is absent.
+test('calDefaultMode: a phone (matchMedia matches, layout not desktop) opens on the Week agenda', () => {
+  const { document, sandbox } = newHub();
+  document.documentElement.setAttribute('data-layout', 'auto');
+  sandbox.window.matchMedia = (q) => ({ matches: q === '(max-width: 1000px)' });
+  assert.equal(sandbox.calDefaultMode(), 'agenda');
+});
+
+test('calDefaultMode: a wall (wide viewport) opens on the month grid', () => {
+  const { document, sandbox } = newHub();
+  document.documentElement.setAttribute('data-layout', 'auto');
+  sandbox.window.matchMedia = () => ({ matches: false });
+  assert.equal(sandbox.calDefaultMode(), 'month');
+});
+
+test('calDefaultMode: data-layout=desktop forces the month grid even at phone width (Firestick escape hatch)', () => {
+  const { document, sandbox } = newHub();
+  document.documentElement.setAttribute('data-layout', 'desktop');
+  sandbox.window.matchMedia = () => ({ matches: true });   // narrow, but forced desktop wins
+  assert.equal(sandbox.calDefaultMode(), 'month');
+});
+
+test('calDefaultMode: no matchMedia (e.g. a bare environment) fails safe to the month grid', () => {
+  const { document, sandbox } = newHub();
+  document.documentElement.setAttribute('data-layout', 'auto');
+  assert.equal(sandbox.window.matchMedia, undefined);   // harness seeds none
+  assert.equal(sandbox.calDefaultMode(), 'month');
+});
+
+test('calGoToday falls back to LOCAL today (todayISO), never UTC toISOString', () => {
+  const { sandbox } = newHub();
+  // With no server date, the fallback must use local-midnight math like the rest
+  // of the calendar — a UTC toISOString().slice(0,10) rolls to tomorrow on a
+  // US evening and would open the wrong month / mark the wrong "today".
+  // calState is a const (reachable by name in the context, not as a sandbox
+  // property), so drive and read it through the context.
+  vm.runInContext("data_date = ''; calGoToday();", sandbox);
+  const day = vm.runInContext('calState.day', sandbox);
+  const month = vm.runInContext('calState.m', sandbox);
+  assert.equal(day, sandbox.todayISO(),
+    'calGoToday seeds today from the local-zone helper');
+  assert.equal(month, Number(sandbox.todayISO().slice(5, 7)),
+    'the opened month is the local month');
+});
+
+test('day view titles from the drilled-in day, not the grid month (adjacent-month cell tap)', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  document.body.appendChild(host);
+  // Grid is on September; the user tapped the trailing "Oct 1" padding cell, so
+  // day = October while y/m still hold September. The header must say October.
+  vm.runInContext(
+    "data_date = '2026-09-15';"
+    + "calState.mode = 'day'; calState.y = 2026; calState.m = 9; calState.day = '2026-10-01';"
+    + "calWin = { status: { ok: true }, events: [] };",
+    sandbox);
+
+  sandbox.renderCalFull();
+
+  const html = document.getElementById('cal-full').innerHTML;
+  assert.match(html, /October 2026/, 'title reflects the tapped day\'s month');
+  assert.doesNotMatch(html, /September 2026/, 'not the stale grid month');
+});
+
 test('buildChoreForm is shared via common.js (usable from the hub context)', () => {
   const { document, sandbox } = newHub();
   assert.equal(typeof sandbox.buildChoreForm, 'function');
