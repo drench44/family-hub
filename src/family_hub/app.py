@@ -11,11 +11,13 @@ on this box.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import dataclasses
 import datetime as dt
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -25,7 +27,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -654,6 +656,77 @@ def api_version():
     """The deployed version + build hash — a debug/ops readout ("what's actually
     running?"). The changelog itself lives on GitHub, not here."""
     return {"version": APP_VERSION, "build": BUILD}
+
+
+# Recent client viewport reports for the iOS Chrome tab-bar-gap self-heal
+# (hub.js). Bounded ring buffers — pure diagnostics, never persisted. Actual
+# reload events are kept in their OWN deque so a burst of routine wake reports
+# can never evict the one occurrence this readout exists to show.
+_VIEWPORT_DIAG: "collections.deque[dict]" = collections.deque(maxlen=50)
+_VIEWPORT_RELOADS: "collections.deque[dict]" = collections.deque(maxlen=20)
+
+
+# A viewport report is small (a dozen scalar fields); anything larger is junk
+# and is dropped before it is buffered into memory.
+_MAX_DIAG_BODY = 8192
+
+
+@app.post("/api/diag/viewport")
+async def diag_viewport(request: Request):
+    """Client viewport telemetry for the iOS Chrome tab-bar gap (#45/#53/#80).
+    hub.js fire-and-forgets the raw innerHeight / visualViewport / learned-max
+    numbers on every wake so a real stuck-short occurrence is READ off the box
+    instead of guessed a fifth time. Deliberately never raises and never
+    hard-validates — a diagnostic that 422s or 500s is worse than useless. Only
+    finite scalar fields are kept, strings truncated, oversized bodies dropped,
+    and the buffers are capped, so a malformed or oversized body can't grow
+    memory OR wedge the read side."""
+    # Drop a declared-oversized body before buffering it into RAM.
+    clen = request.headers.get("content-length")
+    if clen and clen.isdigit() and int(clen) > _MAX_DIAG_BODY:
+        return {"ok": True}
+    try:
+        raw = (await request.body())[:_MAX_DIAG_BODY]
+        # parse_constant neutralizes NaN / Infinity / -Infinity — json.loads
+        # accepts those non-standard tokens, but Starlette's JSONResponse
+        # serializes with allow_nan=False, so a stored NaN would 500 the GET.
+        data = json.loads(raw or b"{}", parse_constant=lambda _c: None)
+    except Exception:
+        data = {"_unparseable": True}
+    if not isinstance(data, dict):
+        data = {"_raw": str(data)[:80]}
+    entry = {"at": dt.datetime.now(TZ).isoformat(timespec="seconds")}
+    for k in list(data)[:20]:
+        kk = str(k)[:40]
+        if kk == "at":
+            continue   # the server owns the timestamp; a client "at" can't clobber it
+        v = data[k]
+        if isinstance(v, float) and not math.isfinite(v):
+            v = None   # belt-and-suspenders past parse_constant, so GET never 500s
+        elif isinstance(v, str):
+            v = v[:80]
+        elif not isinstance(v, (int, float, bool, type(None))):
+            v = str(v)[:80]
+        entry[kk] = v
+    _VIEWPORT_DIAG.append(entry)
+    if data.get("reason") == "reload":
+        # The load-bearing event: a self-heal reload actually fired. Kept in its
+        # own buffer so routine wake reports can't evict it, and logged loudly.
+        _VIEWPORT_RELOADS.append(entry)
+        log.info("viewport self-heal RELOAD fired: %s", entry)
+    else:
+        log.debug("viewport diag (%s): inner=%s max=%s short=%s",
+                  data.get("reason"), data.get("inner"),
+                  data.get("learnedMax"), data.get("shortfall"))
+    return {"ok": True}
+
+
+@app.get("/api/diag/viewport")
+def diag_viewport_recent():
+    """The recent viewport reports plus the protected list of actual reload
+    events (both newest last) — reads the tab-bar-gap state off the box without
+    needing the container logs."""
+    return {"recent": list(_VIEWPORT_DIAG), "reloads": list(_VIEWPORT_RELOADS)}
 
 
 def _freeze_day(c, d_str: str, rows: list[dict]) -> None:

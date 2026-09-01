@@ -10,6 +10,28 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Family Hub can be installed to the iPhone home screen (web-app manifest +
+  Apple standalone meta + app icons). Added from Safari's Share → Add to Home
+  Screen it launches with no browser toolbar at all — the surest cure for the
+  tab-bar gap below, because there is no toolbar whose stale inset could strand
+  the tab bar.
+
+### Fixed
+- Phone tab bar stuck partway up the screen over a black gap when a backgrounded
+  iOS Chrome tab comes back (the recurring case #45/#53/#80 kept missing): the
+  hub now detects the stuck-short viewport on wake and reloads once to clear it.
+  The wrong height lives in Chrome's per-tab toolbar-inset bookkeeping, not the
+  page, so every measurement agrees on the wrong number and no CSS/height fix
+  could reach it — only a reload resets that state. The reload can never loop:
+  three independent guards bound it (per-height one-shot, a 20s minimum gap, and
+  a hard per-session cap), it never fires while a text field holds unsaved text,
+  and if a reload does not cure the height it accepts that height as the new
+  normal instead of fighting it. Kill switch `localStorage['fh-selfheal-off']=
+  '1'`. Every notable wake posts its viewport numbers to `/api/diag/viewport`
+  (with a live readout in Settings), so the next occurrence is read off the box
+  instead of guessed.
+
 ### Changed
 - The full-screen calendar now opens on the text-rich Week (agenda) list on a
   phone, and on the month grid on the wall. The phone month grid hides event
