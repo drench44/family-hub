@@ -7,6 +7,7 @@ and — because the three full-screen iframe URLs come from the API at runtime �
 no literal http(s) URL appears anywhere in the committed frontend (a LAN wall
 display reaches nothing on the internet).
 """
+import json
 import re
 from pathlib import Path
 
@@ -616,6 +617,52 @@ def test_favicon_is_local_svg():
         assert 'rel="icon" href="favicon.svg"' in p.read_text(), \
             f"{p.name} lost the local favicon"
     assert (STATIC / "favicon.svg").exists()
+
+
+def test_home_screen_manifest_and_apple_meta():
+    """iOS Chrome tab-bar gap (#45/#53/#80): the reliable chrome-less launch is
+    Safari's Add to Home Screen, which needs a standalone web-app manifest plus
+    the apple-mobile-web-app meta tags and a touch icon. Guard the whole set —
+    losing any one silently drops back to a browser-chrome launch, re-opening
+    the very toolbar-inset bug this change closes."""
+    index = (STATIC / "index.html").read_text()
+    assert 'rel="manifest" href="manifest.webmanifest' in index, \
+        "index.html lost the web-app manifest link"
+    assert 'name="apple-mobile-web-app-capable" content="yes"' in index, \
+        "index.html lost apple-mobile-web-app-capable (no standalone launch)"
+    assert 'name="apple-mobile-web-app-title"' in index
+    assert 'rel="apple-touch-icon"' in index, "index.html lost the apple-touch-icon"
+    # black, NOT black-translucent: translucent pulls content under the status
+    # bar and re-opens the top-inset ambiguity this change is ending.
+    assert 'content="black-translucent"' not in index, \
+        "status-bar-style must not be black-translucent (top-inset regression)"
+
+    mani = STATIC / "manifest.webmanifest"
+    assert mani.exists(), "manifest.webmanifest is missing"
+    data = json.loads(mani.read_text())
+    assert data.get("display") == "standalone", \
+        "manifest must be display:standalone (that is the chrome-less launch)"
+    # every icon the manifest names, plus the apple-touch-icon, must exist on disk
+    named = {ic["src"] for ic in data.get("icons", [])}
+    named.add("apple-touch-icon.png")
+    for src in named:
+        assert (STATIC / src).exists(), f"manifest/apple icon missing on disk: {src}"
+
+
+def test_tabbar_gap_self_heal_is_wired():
+    """The self-heal reload (hub.js) is the load-bearing fix for the hub opened
+    in a normal Chrome tab. Guard that it is actually booted and that its two
+    safety rails — the one-shot reload guard and the input-active hold — are
+    present, so a refactor can't silently disarm it into a reload loop or a
+    yank-while-typing."""
+    hub = (STATIC / "hub.js").read_text()
+    assert "initTabbarGapSelfHeal()" in hub, "self-heal is defined but never booted"
+    assert "location.reload()" in hub, "self-heal lost its reload — it can't heal"
+    assert "fh-selfheal-tried" in hub, "lost the one-shot guard — risks a reload loop"
+    assert "hold:input-active" in hub, "lost the never-reload-while-typing guard"
+    assert "SELFHEAL_MIN_SHORTFALL_PX" in hub, "lost the shortfall threshold constant"
+    # the diagnostics endpoint the wake telemetry posts to
+    assert "/api/diag/viewport" in hub, "self-heal lost its diagnostics report"
 
 
 def test_admin_has_away_controls():

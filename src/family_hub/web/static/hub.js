@@ -3877,9 +3877,13 @@ function renderSettingsFull() {
     + `</div>`
     // A quiet deployed-version line for debugging ("what's actually running?").
     // Filled from /api/version by paintVersion(); blank until it resolves.
-    + `<div class="settings-version" id="settings-version"></div>`;
+    + `<div class="settings-version" id="settings-version"></div>`
+    // Live viewport numbers (iOS Chrome tab-bar gap diagnostics) — read the
+    // stuck-short state on the phone itself. Filled by paintViewportDiag().
+    + `<div class="settings-version" id="settings-viewport"></div>`;
   reflectThemeControls();
   paintVersion();
+  paintViewportDiag();
   renderIntegrations(hubData || { integrations: lastIntegrations });
   renderTodoSourcePicker();
   renderCaldavPanel();
@@ -4177,10 +4181,266 @@ function initVersion() {
     .catch(() => { /* offline / error page / pre-deploy — line stays blank */ });
 }
 
+/* ---- iOS Chrome tab-bar gap: self-heal reload + diagnostics -------------
+
+   The bug (#45/#53/#80 saga): on iPhone Chrome, a backgrounded hub tab comes
+   back with the phone tab bar stuck ~80px up the screen over a black gap. Only
+   a manual reload fixes it; rotation does not. Root cause (high confidence, see
+   docs/plans/2026-08-30-ios-chrome-tabbar-gap-plan.md): the wrong height lives
+   in Chrome's PER-TAB toolbar-inset bookkeeping (≈78pt = 44pt toolbar + 34pt
+   home indicator), which survives tab restore. Every layout Chrome hands the
+   page is consistently short, so innerHeight / visualViewport / clientHeight
+   all agree on the wrong number and NO measurement the page makes can reveal
+   the true glass — which is why three CSS/JS height fixes failed. A reload
+   resets Chrome's tab state; that is the only thing that clears it.
+
+   So this does NOT size the shell from a measurement (the shell stays
+   position:fixed; inset:0 per the CLAUDE.md rule — nothing here touches its
+   height). It only decides, conservatively, whether to reload ONCE when it
+   detects the stuck-short state on wake, and it logs the raw numbers to the box
+   so the next occurrence is read, not guessed.
+
+   Safety: at most ONE reload per distinct short height per tab session
+   (bucketed, in sessionStorage) — if a reload does not cure the height we
+   accept it and never reload for that value again, so there is no loop. Never
+   reloads while a field is focused or holds unsaved text. A kill switch
+   (localStorage 'fh-selfheal-off' = '1') disables the reload entirely without a
+   deploy. */
+
+// Shortfall (learned-tall-height minus current innerHeight, px) that counts as
+// "the bug". Chosen ABOVE the ~44px a normal Chrome top toolbar adds/removes on
+// scroll (so ordinary bar show/hide never triggers a reload) and at/under the
+// ~78px the stuck inset removes. If the live diag shows a different real gap on
+// iOS 26, tune this one constant.
+const SELFHEAL_MIN_SHORTFALL_PX = 60;
+// The viewport must still be short this long after a wake before we act — iOS
+// often settles the viewport with NO event, so we re-measure after a delay
+// rather than trusting the wake-instant height (the #53 lesson).
+const SELFHEAL_SETTLE_MS = 1500;
+// localStorage keys for the largest steady innerHeight this device has shown,
+// per orientation. The healthy (toolbar-collapsed) height is the tallest we
+// ever see; the stuck state is shorter, so it can never raise these.
+const SELFHEAL_MAX_KEY = 'fh-vh-max';   // + ':portrait' / ':landscape'
+// Loop guards (belt AND suspenders, both in sessionStorage so they survive the
+// reload but reset on a new tab session): never two reloads closer than this,
+// and never more than this many in one tab session. Between them, no amount of
+// viewport jitter or flapping can produce a reload loop — the worst case is a
+// few spaced-out reloads, then it holds. The per-height one-shot below stops
+// the common same-height case even sooner.
+const SELFHEAL_MIN_RELOAD_GAP_MS = 20000;
+const SELFHEAL_MAX_RELOADS = 8;
+// Reasons that are the steady, healthy, high-frequency outcome — not worth a
+// network report on every scroll-driven wake, and reporting them would flush
+// the real events out of the box's bounded buffer. Every OTHER reason
+// (reload, every hold:*, skip:no-baseline) IS reported.
+const SELFHEAL_STEADY = new Set(['ok:height-normal', 'skip:not-mobile', 'skip:standalone']);
+
+function selfhealOrientation() {
+  return window.innerHeight >= window.innerWidth ? 'portrait' : 'landscape';
+}
+
+// Only relevant in the phone app-shell (the fixed-inset flex column). The wall
+// / desktop-forced layout has an in-flow tab bar with no browser toolbar
+// interplay, so it never sees this bug — leave it alone.
+function selfhealMobileActive() {
+  try {
+    if (document.documentElement.getAttribute('data-layout') === 'desktop') return false;
+    return window.matchMedia('(max-width: 1000px)').matches;
+  } catch (e) { return false; }
+}
+
+function selfhealStoredMax(orient) {
+  try {
+    const v = parseInt(localStorage.getItem(`${SELFHEAL_MAX_KEY}:${orient}`), 10);
+    return Number.isFinite(v) ? v : 0;
+  } catch (e) { return 0; }
+}
+
+// Grow the learned max toward the current height, capped at screen.height so a
+// bogus tall reading can never poison the baseline. Only grows — a short (stuck)
+// height is ignored. Runs at steady moments, never mid-transition.
+function selfhealLearnMax(orient, h) {
+  try {
+    const cap = (window.screen && window.screen.height) || h;
+    const next = Math.min(Math.max(selfhealStoredMax(orient), h), cap);
+    if (next > 0) localStorage.setItem(`${SELFHEAL_MAX_KEY}:${orient}`, String(next));
+    return next;
+  } catch (e) { return h; }
+}
+
+// Accept the current height as the NEW normal (lower the learned max to it).
+// Called only when a reload did NOT cure the shortfall — i.e. this shorter
+// height is really the glass now (a permanent iOS/Chrome UI change), not the
+// transient tab-bar bug. This is the plan's "accept it and stop fighting"
+// step: it stops this session reloading, and future sessions read shortfall 0
+// off it. A later genuinely-tall healthy load re-grows the max via
+// selfhealLearnMax, which re-arms detection if the tall glass ever returns.
+function selfhealAdoptBaseline(orient, h) {
+  try {
+    if (h > 0) localStorage.setItem(`${SELFHEAL_MAX_KEY}:${orient}`, String(h));
+  } catch (e) { /* storage unavailable — nothing to adopt */ }
+}
+
+// The raw numbers, for the diag POST, the Settings readout, and tests.
+function viewportDiag() {
+  const orient = selfhealOrientation();
+  const vv = window.visualViewport;
+  const max = selfhealStoredMax(orient);
+  const inner = window.innerHeight;
+  return {
+    inner,
+    vw: window.innerWidth,
+    vv: vv ? Math.round(vv.height) : null,
+    client: document.documentElement.clientHeight,
+    screen: (window.screen && window.screen.height) || null,
+    orient,
+    learnedMax: max,
+    shortfall: max ? max - inner : 0,
+    mobile: selfhealMobileActive(),
+    standalone: !!(window.navigator.standalone
+      || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)),
+    ver: appVersion || null,
+  };
+}
+
+// Text-bearing input types — the only ones whose non-empty value is "unsaved
+// text" a reload would drop. A pre-filled date/checkbox/etc. (e.g. the away
+// admin's date picker defaulting to today) must NOT count, or it would wedge
+// the self-heal permanently off.
+const SELFHEAL_TEXT_TYPES = new Set(
+  ['text', 'search', 'email', 'url', 'tel', 'password', 'number', '']);
+
+// A field is focused, or a text field holds text the reload would drop. Belt
+// AND suspenders: never yank the page out from under someone typing.
+function selfhealHasUnsavedInput() {
+  const a = document.activeElement;
+  if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return true;
+  const fields = document.querySelectorAll('input, textarea');
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    const isText = f.tagName === 'TEXTAREA'
+      || SELFHEAL_TEXT_TYPES.has((f.type || '').toLowerCase());
+    if (isText && f.value && f.value.trim()) return true;
+  }
+  return false;
+}
+
+// Fire-and-forget the numbers to the box so a real occurrence is readable off
+// the server instead of guessed. Never throws, never blocks the reload. Falls
+// back to a keepalive fetch when sendBeacon is missing OR refuses (it returns
+// false on a full queue) OR throws — so the report that matters most (the one
+// sent immediately before location.reload) is not silently dropped.
+function selfhealReport(diag, reason) {
+  const body = JSON.stringify(Object.assign({ reason }, diag));
+  try {
+    if (navigator.sendBeacon
+        && navigator.sendBeacon('/api/diag/viewport', new Blob([body], { type: 'application/json' }))) {
+      return;
+    }
+  } catch (e) { /* fall through to fetch */ }
+  try {
+    fetch('/api/diag/viewport', { method: 'POST', body, keepalive: true,
+      headers: { 'Content-Type': 'application/json' } }).catch(() => {});
+  } catch (e) { /* diagnostics must never break the page */ }
+}
+
+// The decision. Returns the reason string (also what we log). Only 'reload'
+// actually reloads; every other path is a no-op that still gets reported so the
+// box sees why we held off.
+function selfhealEvaluate() {
+  const diag = viewportDiag();
+  let reason;
+  if (!diag.mobile) reason = 'skip:not-mobile';
+  else if (diag.standalone) reason = 'skip:standalone';   // no toolbar exists to go stale
+  else if (!diag.learnedMax) reason = 'skip:no-baseline';
+  else if (diag.shortfall < SELFHEAL_MIN_SHORTFALL_PX) reason = 'ok:height-normal';
+  else {
+    // Genuinely short. Would we reload? Read the guards (all fail-open toward
+    // NOT reloading if storage is unavailable).
+    let off = false, tried = null, count = 0, last = 0;
+    try { off = localStorage.getItem('fh-selfheal-off') === '1'; } catch (e) {}
+    const bucket = Math.round(diag.inner / 5) * 5;
+    try { tried = sessionStorage.getItem('fh-selfheal-tried'); } catch (e) {}
+    try { count = parseInt(sessionStorage.getItem('fh-selfheal-count'), 10) || 0; } catch (e) {}
+    try { last = parseInt(sessionStorage.getItem('fh-selfheal-last'), 10) || 0; } catch (e) {}
+    const now = Date.now();
+    if (off) reason = 'hold:disabled';
+    else if (selfhealHasUnsavedInput()) reason = 'hold:input-active';
+    else if (tried === String(bucket)) {
+      // We already reloaded at this height and it is STILL short — the reload
+      // did not cure it, so this shorter height is the real glass now. Accept
+      // it as the new normal so we stop fighting it (this session and the
+      // next), instead of looping. This is the loop's true off-ramp.
+      reason = 'hold:already-tried';
+      selfhealAdoptBaseline(diag.orient, diag.inner);
+    }
+    else if (count >= SELFHEAL_MAX_RELOADS) reason = 'hold:reload-cap';   // hard session backstop
+    else if (now - last < SELFHEAL_MIN_RELOAD_GAP_MS) reason = 'hold:too-soon';  // kills any tight loop
+    else {
+      reason = 'reload';
+      try {
+        sessionStorage.setItem('fh-selfheal-tried', String(bucket));
+        sessionStorage.setItem('fh-selfheal-count', String(count + 1));
+        sessionStorage.setItem('fh-selfheal-last', String(now));
+      } catch (e) { /* no session storage — the reload still fires once */ }
+    }
+  }
+  // Steady healthy outcomes are the common case on every scroll-driven wake;
+  // reporting them would flood the box's bounded buffer and bury the real
+  // events. Report everything else (reload + every hold + no-baseline).
+  if (!SELFHEAL_STEADY.has(reason)) selfhealReport(diag, reason);
+  if (reason === 'reload') location.reload();
+  return reason;
+}
+
+let selfhealTimer = null;
+// A wake (or first load) schedules a settled re-check. Debounced so a burst of
+// pageshow/visibility/resize events collapses into one evaluation.
+function selfhealOnWake() {
+  if (selfhealTimer) clearTimeout(selfhealTimer);
+  selfhealTimer = setTimeout(() => {
+    selfhealTimer = null;
+    // A healthy, settled moment is also when we learn the tall baseline.
+    if (selfhealMobileActive() && !selfhealHasUnsavedInput()) {
+      const orient = selfhealOrientation();
+      selfhealLearnMax(orient, window.innerHeight);
+      // If we came back tall, clear the one-shot so a future stuck state can heal.
+      if (selfhealStoredMax(orient) - window.innerHeight < SELFHEAL_MIN_SHORTFALL_PX) {
+        try { sessionStorage.removeItem('fh-selfheal-tried'); } catch (e) {}
+      }
+    }
+    selfhealEvaluate();
+  }, SELFHEAL_SETTLE_MS);
+}
+
+function initTabbarGapSelfHeal() {
+  // Learn the baseline from this first healthy load, then watch every wake.
+  selfhealOnWake();
+  window.addEventListener('pageshow', selfhealOnWake);
+  window.addEventListener('load', selfhealOnWake);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') selfhealOnWake();
+  });
+  window.addEventListener('orientationchange', selfhealOnWake);
+  window.addEventListener('resize', selfhealOnWake);
+}
+
+// Quiet diagnostic line in the Settings overlay: the live viewport numbers, so
+// the state can be read on the phone itself. Sits beside the version line.
+function paintViewportDiag() {
+  const el = document.getElementById('settings-viewport');
+  if (!el) return;
+  const d = viewportDiag();
+  const mode = d.standalone ? 'home-screen app' : 'browser tab';
+  el.textContent = `viewport ${d.inner}×${d.vw} · vv ${d.vv == null ? '?' : d.vv}`
+    + ` · best ${d.learnedMax || '?'} · gap ${d.shortfall} · ${d.orient} · ${mode}`;
+}
+
 tickClock();
 setInterval(tickClock, 1000);
 poll().then(probeCamera);
 initVersion();
+initTabbarGapSelfHeal();   // iOS Chrome tab-bar gap: learn baseline + self-heal on wake
 fetchWeather();
 fetchClimate();
 fetchLaundry();
