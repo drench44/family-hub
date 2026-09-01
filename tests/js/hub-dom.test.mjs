@@ -1144,20 +1144,24 @@ test('calDefaultMode: no matchMedia (e.g. a bare environment) fails safe to the 
   assert.equal(sandbox.calDefaultMode(), 'month');
 });
 
-test('calGoToday falls back to LOCAL today (todayISO), never UTC toISOString', () => {
+test('calGoToday falls back to LOCAL today, never the UTC toISOString date', () => {
   const { sandbox } = newHub();
-  // With no server date, the fallback must use local-midnight math like the rest
-  // of the calendar — a UTC toISOString().slice(0,10) rolls to tomorrow on a
-  // US evening and would open the wrong month / mark the wrong "today".
-  // calState is a const (reachable by name in the context, not as a sandbox
-  // property), so drive and read it through the context.
-  vm.runInContext("data_date = ''; calGoToday();", sandbox);
+  // With no server date the fallback must use local-midnight math like the rest
+  // of the calendar. Stub Date to a US-evening instant where the LOCAL date
+  // (Aug 31) and the UTC date (Sep 1) genuinely differ, so this assertion catches
+  // the toISOString bug regardless of the CI runner's own timezone — a plain
+  // `=== todayISO()` check would pass with the bug still in place on a UTC box.
+  vm.runInContext(
+    "data_date = '';"
+    + "const _fake = { getFullYear: () => 2026, getMonth: () => 7, getDate: () => 31,"
+    + "  toISOString: () => '2026-09-01T01:00:00.000Z' };"
+    + "globalThis.__RealDate = Date; Date = function () { return _fake; };"
+    + "try { calGoToday(); } finally { Date = globalThis.__RealDate; }",
+    sandbox);
   const day = vm.runInContext('calState.day', sandbox);
   const month = vm.runInContext('calState.m', sandbox);
-  assert.equal(day, sandbox.todayISO(),
-    'calGoToday seeds today from the local-zone helper');
-  assert.equal(month, Number(sandbox.todayISO().slice(5, 7)),
-    'the opened month is the local month');
+  assert.equal(day, '2026-08-31', 'seeds the LOCAL date, not the 2026-09-01 UTC slice');
+  assert.equal(month, 8, 'opens the local month (August), not September');
 });
 
 test('day view titles from the drilled-in day, not the grid month (adjacent-month cell tap)', () => {
@@ -1178,6 +1182,61 @@ test('day view titles from the drilled-in day, not the grid month (adjacent-mont
   const html = document.getElementById('cal-full').innerHTML;
   assert.match(html, /October 2026/, 'title reflects the tapped day\'s month');
   assert.doesNotMatch(html, /September 2026/, 'not the stale grid month');
+});
+
+test('day view title: a LEADING padding cell (previous month) titles from the tapped day too', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  document.body.appendChild(host);
+  // Grid on October; user tapped the leading "Sep 30" padding cell — the other
+  // slice direction from the trailing-cell test above.
+  vm.runInContext(
+    "data_date = '2026-10-15';"
+    + "calState.mode = 'day'; calState.y = 2026; calState.m = 10; calState.day = '2026-09-30';"
+    + "calWin = { status: { ok: true }, events: [] };",
+    sandbox);
+  sandbox.renderCalFull();
+  const html = document.getElementById('cal-full').innerHTML;
+  assert.match(html, /September 2026/, 'title reflects the tapped leading day\'s month');
+  assert.doesNotMatch(html, /October 2026/, 'not the stale grid month');
+});
+
+test('openOverlay("calendar") opens on the agenda on a phone, through the real entry point', () => {
+  const { document, sandbox } = newHub();
+  // Pre-register #cal-full so the overlay's internal renderCalFull() renders into
+  // an observable host (getElementById is registry-backed; the innerHTML the
+  // overlay assigns isn't registered, so the existing tests use this same trick).
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  document.body.appendChild(host);
+  document.documentElement.setAttribute('data-layout', 'auto');
+  sandbox.window.matchMedia = (q) => ({ matches: q === '(max-width: 1000px)' });
+  vm.runInContext("data_date = '2026-08-14';", sandbox);
+
+  sandbox.openOverlay('calendar');
+
+  assert.equal(vm.runInContext('calState.mode', sandbox), 'agenda',
+    'the phone entry point selects the Week agenda, not the month grid');
+  const html = document.getElementById('cal-full').innerHTML;
+  assert.match(html, /cal-dayhead/, 'the agenda day list rendered');
+  assert.doesNotMatch(html, /mg-week/, 'not the month grid');
+});
+
+test('openOverlay("calendar") opens on the month grid on the wall (wide viewport)', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  document.body.appendChild(host);
+  document.documentElement.setAttribute('data-layout', 'auto');
+  sandbox.window.matchMedia = () => ({ matches: false });
+  vm.runInContext("data_date = '2026-08-14';", sandbox);
+
+  sandbox.openOverlay('calendar');
+
+  assert.equal(vm.runInContext('calState.mode', sandbox), 'month',
+    'the wall entry point selects the month grid');
+  assert.match(document.getElementById('cal-full').innerHTML, /mg-week/, 'the month grid rendered');
 });
 
 test('buildChoreForm is shared via common.js (usable from the hub context)', () => {
