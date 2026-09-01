@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.3.6] — 2026-08-31
+
 ### Added
 - Family Hub can be installed to the iPhone home screen (web-app manifest +
   Apple standalone meta + app icons). Added from Safari's Share → Add to Home
