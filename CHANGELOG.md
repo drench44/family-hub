@@ -10,6 +10,22 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- The full-screen calendar now opens on the text-rich Week (agenda) list on a
+  phone, and on the month grid on the wall. The phone month grid hides event
+  titles (7 columns are too narrow), so it opened to a screen of unlabeled
+  color strips; the agenda list shows every event's time and title. The wall is
+  unchanged. The choice mirrors the CSS phone split exactly (`data-layout=
+  "desktop"` forces the wall, else the `max-width:1000px` query decides).
+
+### Fixed
+- The calendar's "today" fallback no longer used UTC (`toISOString`) when the
+  server date was unavailable — on a US evening that rolled to tomorrow and
+  could open the wrong month / mark the wrong day. It now uses local-midnight
+  math like the rest of the calendar.
+- Drilling into an adjacent-month day cell (a leading/trailing padding day) now
+  titles the day view with that day's own month instead of the grid's month.
+
 ## [1.3.5] — 2026-08-29
 
 ### Fixed
