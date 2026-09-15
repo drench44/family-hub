@@ -10,6 +10,13 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- Weather-card clouds now drift smoothly and continuously. The card redraws
+  every minute, and each redraw restarted the clouds from a fixed spot, so they
+  jumped back once a minute. Every sky animation (clouds, sun glow, stars,
+  rain, snow, fog) now picks up from the wall clock, so a redraw lands exactly
+  where it already was.
+
 ## [1.3.6] — 2026-08-31
 
 ### Added

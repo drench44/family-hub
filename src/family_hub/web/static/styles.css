@@ -390,7 +390,11 @@ body {
    blur, so the edges are vapor, not outlines; the widest puff rides low so
    each cloud keeps the flatter base real cumulus have. All puffs draw in
    currentColor so heavy weather can grey a whole cloud with one color.
-   Negative delays de-sync the drift so the scene never starts aligned. */
+   Every sky loop's animation-delay is stamped inline by skySceneHtml from the
+   wall clock (SKY_LOOPS in hub.js), NOT set here: the card re-renders every
+   60s, and a fixed CSS delay restarted each cloud at the same spot on every
+   rebuild, so they visibly jumped back once a minute. Durations below must stay
+   in step with SKY_LOOPS (a test checks). */
 /* container-type makes .sky a query container so the drift keyframe below can
    size its exit to the ACTUAL sky width (100cqw) — the wall column is 338px but
    the mobile/full-screen weather sky is far wider, and a fixed-px exit that
@@ -405,11 +409,11 @@ body {
     radial-gradient(38% 80% at 74% 56%, currentColor 28%, transparent 68%),
     radial-gradient(72% 52% at 50% 78%, currentColor 38%, transparent 74%); }
 .sky-cloud.c1 { width: 120px; top: 30px; left: 0;
-  animation: drift 110s linear infinite; animation-delay: -30s; }
+  animation: drift 110s linear infinite; }
 .sky-cloud.c2 { width: 96px; top: 66px; left: 0; opacity: .7;
-  animation: drift 150s linear infinite; animation-delay: -95s; }
+  animation: drift 150s linear infinite; }
 .sky-cloud.c3 { width: 100px; top: 8px; left: 0; opacity: .85;
-  animation: drift 130s linear infinite; animation-delay: -60s; }
+  animation: drift 130s linear infinite; }
 /* Drift from fully off the left (-160px clears the widest 120px cloud) to fully
    off the right (100cqw = the sky's own width, +20px margin) so the wrap-around
    reset always happens off-screen at ANY sky width — desktop column or wide
@@ -442,11 +446,11 @@ body {
 .sky-rain::before {
   background-image: radial-gradient(1.1px 10px at 50% 50%, rgba(255,255,255,.55), transparent 65%);
   background-size: 19px 30px;
-  animation: rain-fall-a .5s linear infinite; }
+  animation: rain-fall-a .5s linear infinite; animation-delay: var(--ph-a, 0s); }
 .sky-rain::after {
   background-image: radial-gradient(.9px 8px at 50% 50%, rgba(255,255,255,.34), transparent 65%);
   background-size: 27px 42px;
-  animation: rain-fall-b .75s linear infinite; }
+  animation: rain-fall-b .75s linear infinite; animation-delay: var(--ph-b, 0s); }
 @keyframes rain-fall-a { from { transform: rotate(11deg) translateY(0); }
                          to { transform: rotate(11deg) translateY(30px); } }
 @keyframes rain-fall-b { from { transform: rotate(11deg) translateY(0); }
@@ -463,11 +467,11 @@ body {
 .sky-snow::before {
   background-image: radial-gradient(2.4px 2.4px at 50% 50%, rgba(255,255,255,.95), transparent 60%);
   background-size: 26px 30px;
-  animation: snow-fall-a 2.6s linear infinite; }
+  animation: snow-fall-a 2.6s linear infinite; animation-delay: var(--ph-a, 0s); }
 .sky-snow::after {
   background-image: radial-gradient(1.7px 1.7px at 50% 50%, rgba(255,255,255,.7), transparent 60%);
   background-size: 38px 44px;
-  animation: snow-fall-b 3.9s linear infinite; }
+  animation: snow-fall-b 3.9s linear infinite; animation-delay: var(--ph-b, 0s); }
 @keyframes snow-fall-a { to { transform: translateY(30px); } }
 @keyframes snow-fall-b { to { transform: translateY(44px); } }
 @keyframes snow-sway { from { transform: translateX(-6px); } to { transform: translateX(6px); } }
