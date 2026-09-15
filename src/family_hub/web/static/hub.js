@@ -1919,6 +1919,39 @@ function moonHtml(wx) {
   return `<span class="sky-moon ${cls}" style="--m-term:${term}px"></span>`;
 }
 
+/* Every looping sky animation, keyed to its CSS loop: `period` is the seconds
+   until the element is back where it started (the CSS duration, doubled for
+   `alternate` loops, which travel out AND back), `offset` de-syncs siblings so
+   the clouds never line up. The weather card is rebuilt with innerHTML on every
+   60s poll, and a rebuilt element restarts its CSS animation from its delay, so
+   a fixed delay snapped every cloud back to the same spot each minute (drift
+   for a minute, jump, drift again). Phasing each loop off the wall clock
+   instead means a rebuilt element resumes exactly where the old one was, so
+   the motion stays continuous across any number of re-renders. Keep periods in
+   step with styles.css; the "SKY_LOOPS periods match" test checks them. */
+const SKY_LOOPS = {
+  c1: { period: 110, offset: 30 },
+  c2: { period: 150, offset: 95 },
+  c3: { period: 130, offset: 60 },
+  sun: { period: 7, offset: 0 },
+  stars: { period: 5.5, offset: 0 },
+  rainA: { period: 0.5, offset: 0 },
+  rainB: { period: 0.75, offset: 0 },
+  snowSway: { period: 14, offset: 0 },   // 7s alternate
+  snowA: { period: 2.6, offset: 0 },
+  snowB: { period: 3.9, offset: 0 },
+  fog: { period: 52, offset: 0 },        // 26s alternate
+};
+
+/* The negative animation-delay that puts loop `key` at its wall-clock phase:
+   "this loop has already been running for (now + offset) mod period seconds". */
+function skyLoopDelay(key, nowMs) {
+  const { period, offset } = SKY_LOOPS[key];
+  const into = ((nowMs / 1000 + offset) % period + period) % period;
+  // wrap again after rounding, so a hair under `period` stamps 0, not `period`
+  return `-${((Math.round(into * 1000) / 1000) % period).toFixed(3)}s`;
+}
+
 /* The living sky: a full-bleed drawn scene at the top of the weather card.
    The phase class picks the gradient; the condition key layers the scene on
    top — a sun with a breathing glow (clear/partly by day), a moon + stars
@@ -1927,8 +1960,10 @@ function moonHtml(wx) {
    conditions + today's high/low live IN the sky over a legibility scrim.
    Sky colors are deliberately absolute (a sky is a picture of the outdoors,
    identical in every theme); the overlay text is white-on-scrim in all of
-   them. `hour` is the local hour at render (injectable for tests). */
-function skySceneHtml(wx, hour) {
+   them. `hour` is the local hour at render (injectable for tests), `nowMs` the
+   wall clock that phases the loops (see SKY_LOOPS). */
+function skySceneHtml(wx, hour, nowMs = Date.now()) {
+  const ph = (key) => skyLoopDelay(key, nowMs);
   const cond = wxCondKey(wx.conditions);
   const phase = skyPhase(hour, parseHmm(wx.sunrise), parseHmm(wx.sunset));
   const night = phase === 'night';
@@ -1949,14 +1984,21 @@ function skySceneHtml(wx, hour) {
       + ` <span class="hl-k">L</span> ${wxVal(wx.low, '°')}</div>`;
   // celestial body only when the sky is clear enough to see it
   const celestial = (cond === 'clear' || cond === 'partly')
-    ? (night ? moonHtml(wx) : '<span class="sky-sun"></span>') : '';
-  const stars = night ? '<span class="sky-stars"></span>' : '';
+    ? (night ? moonHtml(wx) : `<span class="sky-sun" style="animation-delay:${ph('sun')}"></span>`) : '';
+  const stars = night ? `<span class="sky-stars" style="animation-delay:${ph('stars')}"></span>` : '';
   const nClouds = { partly: 2, cloudy: 3, storm: 3, rain: 2, snow: 2 }[cond] || 0;
   let clouds = '';
-  for (let i = 1; i <= nClouds; i++) clouds += `<span class="sky-cloud c${i}"></span>`;
-  const precip = (cond === 'rain' || cond === 'storm') ? '<span class="sky-rain"></span>'
-    : cond === 'snow' ? '<span class="sky-snow"></span>'
-      : cond === 'fog' ? '<span class="sky-fog"></span>' : '';
+  for (let i = 1; i <= nClouds; i++) {
+    clouds += `<span class="sky-cloud c${i}" style="animation-delay:${ph(`c${i}`)}"></span>`;
+  }
+  // rain/snow streaks live on ::before/::after, which inline style can't reach,
+  // so their phases ride in as custom properties the CSS reads back
+  const precip = (cond === 'rain' || cond === 'storm')
+    ? `<span class="sky-rain" style="--ph-a:${ph('rainA')};--ph-b:${ph('rainB')}"></span>`
+    : cond === 'snow'
+      ? `<span class="sky-snow" style="animation-delay:${ph('snowSway')};`
+        + `--ph-a:${ph('snowA')};--ph-b:${ph('snowB')}"></span>`
+      : cond === 'fog' ? `<span class="sky-fog" style="animation-delay:${ph('fog')}"></span>` : '';
   return `<div class="sky ph-${phase} cn-${cond}">`
     + stars + celestial + clouds + precip + staleTag
     + `<div class="sky-txt">`
