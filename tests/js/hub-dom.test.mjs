@@ -6464,6 +6464,143 @@ test('skySceneHtml nests the drift clouds INSIDE .sky, so the drift keyframe 100
     + 'a cloud outside .sky would make its drift 100cqw resolve against the wrong ancestor');
 });
 
+// Every looping sky element with the phase it was stamped with, keyed by the
+// SKY_LOOPS key it uses. Pseudo-element loops come from their --ph-a/--ph-b vars.
+function skyPhases(html) {
+  const roots = parseFragment(html);
+  const out = {};
+  const style = (sel) => { const n = queryFirst(roots, sel); return n ? (n.attrs.style || '') : null; };
+  const num = (s, re) => { const m = re.exec(s || ''); return m ? Number(m[1]) : null; };
+  const delay = /animation-delay:-([\d.]+)s/;
+  for (const c of ['c1', 'c2', 'c3']) {
+    const s = style(`.${c}`);
+    if (s != null) out[c] = num(s, delay);
+  }
+  for (const [key, sel] of [['sun', '.sky-sun'], ['stars', '.sky-stars'], ['fog', '.sky-fog'],
+    ['snowSway', '.sky-snow']]) {
+    const s = style(sel);
+    if (s != null) out[key] = num(s, delay);
+  }
+  for (const [pre, sel] of [['rain', '.sky-rain'], ['snow', '.sky-snow']]) {
+    const s = style(sel);
+    if (s != null) {
+      out[`${pre}A`] = num(s, /--ph-a:-([\d.]+)s/);
+      out[`${pre}B`] = num(s, /--ph-b:-([\d.]+)s/);
+    }
+  }
+  return out;
+}
+
+const SKY_WX = (conditions) => ({ conditions, temp: 60, unit: 'F', sunrise: '06:00',
+  sunset: '20:00', high: 70, low: 50 });
+
+// Parses SKY_LOOPS straight out of hub.js (a top-level const isn't on the vm
+// sandbox), so the tests below use the real table, not a copy.
+function skyLoopsFromSource() {
+  const block = /const SKY_LOOPS = \{([\s\S]*?)\n\};/.exec(hubSrc);
+  assert.ok(block, 'hub.js must define const SKY_LOOPS');
+  const loops = {};
+  for (const m of block[1].matchAll(/(\w+):\s*\{\s*period:\s*([\d.]+),\s*offset:\s*([\d.]+)\s*\}/g)) {
+    loops[m[1]] = { period: Number(m[2]), offset: Number(m[3]) };
+  }
+  // the pattern only reads `key: { period: N, offset: N }`; an entry written any
+  // other way would be dropped silently, so every period: line must have parsed
+  const entries = (block[1].match(/period:/g) || []).length;
+  assert.equal(Object.keys(loops).length, entries,
+    'every SKY_LOOPS entry must read as `key: { period: N, offset: N }` (one failed to parse)');
+  return loops;
+}
+
+test('sky loops keep their phase across a re-render, so clouds drift continuously instead of snapping back each poll', () => {
+  // The bug: renderWeather rebuilds the card with innerHTML every 60s poll, and
+  // a fixed CSS animation-delay restarted every cloud at the same spot on each
+  // rebuild, so the clouds drifted for a minute, jumped back, and drifted again.
+  // The stamped delay must advance with the clock: a render dt seconds later
+  // shows each loop exactly dt further along (mod its period).
+  const { sandbox } = newHub();
+  const loops = skyLoopsFromSource();
+  const t0 = 1757950000123;
+  const seen = new Set();
+  // day: clouds + sun + rain/snow/fog; night: stars
+  const scenes = [['cloudy', 12], ['partly', 12], ['rain', 12], ['snow', 12], ['fog', 12], ['partly', 23]];
+  for (const [cond, hour] of scenes) {
+    for (const dt of [0.25, 60, 60 * 7 + 13]) {
+      const a = skyPhases(sandbox.skySceneHtml(SKY_WX(cond), hour, t0));
+      const b = skyPhases(sandbox.skySceneHtml(SKY_WX(cond), hour, t0 + dt * 1000));
+      for (const key of Object.keys(a)) {
+        seen.add(key);
+        const { period } = loops[key];
+        assert.ok(a[key] != null && a[key] >= 0 && a[key] < period,
+          `${cond}/${key}: stamped phase ${a[key]} must fall inside its ${period}s loop`);
+        const advanced = ((b[key] - a[key]) % period + period) % period;
+        const want = dt % period;
+        const gap = Math.min(Math.abs(advanced - want), period - Math.abs(advanced - want));
+        assert.ok(gap < 0.002,
+          `${cond}/${key}: ${dt}s later the loop must be ${want.toFixed(3)}s further on, got ${advanced.toFixed(3)}s`);
+      }
+    }
+  }
+  assert.deepEqual([...seen].sort(), Object.keys(loops).sort(),
+    'every SKY_LOOPS entry must be stamped onto some rendered sky element');
+  // the de-sync offsets must survive, so the clouds don't all enter together
+  // (their unequal periods still line two up by chance now and then; that's fine)
+  assert.equal(new Set([loops.c1.offset, loops.c2.offset, loops.c3.offset]).size, 3,
+    'the three clouds must keep distinct phase offsets');
+});
+
+test('renderWeather re-renders a minute apart land the clouds a minute further on (the real poll path)', () => {
+  // The other sky tests hand skySceneHtml a clock; this drives the actual
+  // caller, so a render path that pinned or dropped the clock (bringing back
+  // the once-a-minute snap) fails here. Stubs the sandbox's Date.now only;
+  // `new Date()` stays real, and a cloudy sky draws clouds by day or night.
+  const { document, sandbox } = newHub();
+  const slot = document.createElement('div');
+  slot._id = 'weather-slot';
+  document.body.appendChild(slot);
+  const loops = skyLoopsFromSource();
+  const wx = { ...WX_GOOD, conditions: 'Mostly cloudy' };
+  const renderAt = (ms) => {
+    vm.runInContext(`globalThis.__realNow = Date.now; Date.now = () => ${ms};`, sandbox);
+    try { sandbox.renderWeather(wx); } finally { vm.runInContext('Date.now = globalThis.__realNow;', sandbox); }
+    return skyPhases(slot.innerHTML);
+  };
+  const t0 = 1757950000123;
+  const a = renderAt(t0);
+  const b = renderAt(t0 + 60000);
+  assert.deepEqual(Object.keys(a).sort(), ['c1', 'c2', 'c3'], 'a cloudy card must stamp all three clouds');
+  for (const key of Object.keys(a)) {
+    const { period } = loops[key];
+    const advanced = ((b[key] - a[key]) % period + period) % period;
+    assert.ok(Math.abs(advanced - 60 % period) < 0.002,
+      `${key}: a render 60s later must be 60s further along its loop, got ${advanced.toFixed(3)}s`);
+  }
+});
+
+test('SKY_LOOPS periods match the CSS animation durations they phase', () => {
+  // A period out of step with its CSS duration would make every re-render land
+  // on the wrong frame, bringing the once-a-minute jump back.
+  const css = readFileSync(join(staticDir, 'styles.css'), 'utf8');
+  const loops = skyLoopsFromSource();
+  const dur = (sel, name) => {
+    const esc = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rule = new RegExp(`${esc}\\s*\\{[^{}]*animation:\\s*${name}\\s+([\\d.]+)s([^;]*);`).exec(css);
+    assert.ok(rule, `styles.css must animate ${sel} with ${name}`);
+    return Number(rule[1]) * (/\balternate\b/.test(rule[2]) ? 2 : 1);
+  };
+  const want = {
+    c1: dur('.sky-cloud.c1', 'drift'), c2: dur('.sky-cloud.c2', 'drift'), c3: dur('.sky-cloud.c3', 'drift'),
+    sun: dur('.sky-sun', 'sun-breathe'), stars: dur('.sky-stars', 'twinkle'),
+    rainA: dur('.sky-rain::before', 'rain-fall-a'), rainB: dur('.sky-rain::after', 'rain-fall-b'),
+    snowSway: dur('.sky-snow', 'snow-sway'),
+    snowA: dur('.sky-snow::before', 'snow-fall-a'), snowB: dur('.sky-snow::after', 'snow-fall-b'),
+    fog: dur('.sky-fog', 'fog-drift'),
+  };
+  for (const [key, period] of Object.entries(want)) {
+    assert.ok(loops[key], `SKY_LOOPS is missing ${key}`);
+    assert.equal(loops[key].period, period, `SKY_LOOPS.${key}.period must equal the CSS loop (${period}s)`);
+  }
+});
+
 /* ---- month grid: overflow, placement, clicks ---- */
 const allday = (id, s, e) => ({ id, title: id, all_day: 1, start_ts: s, end_ts: e });
 

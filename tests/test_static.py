@@ -281,6 +281,32 @@ def test_cloud_drift_exit_is_container_relative():
         ".sky must keep overflow:hidden so the off-screen drift exit stays clipped"
 
 
+def test_sky_loops_are_not_phased_by_fixed_css_delays():
+    # The weather card re-renders every 60s, restarting each sky animation from
+    # its delay. A fixed CSS animation-delay on a sky loop snapped the clouds
+    # back to the same spot every minute; skySceneHtml stamps a wall-clock phase
+    # inline instead (SKY_LOOPS in hub.js). A CSS delay on an element rule would
+    # only be overridden by that inline style, but on the rain/snow
+    # pseudo-elements the CSS rule IS the delay, so it must read the --ph vars.
+    for rule in re.finditer(r"\.sky-(?:cloud|sun|stars|fog|snow|rain)[^{}]*\{([^{}]*)\}", CSS):
+        body = rule.group(1)
+        for d in re.findall(r"animation-delay\s*:\s*([^;}]+)", body):
+            assert d.strip().startswith("var(--ph-"), \
+                f"sky loop has a fixed animation-delay ({d.strip()}); phase it from SKY_LOOPS instead"
+        # a delay can also hide in the shorthand as a SECOND time value
+        for a in re.findall(r"animation\s*:\s*([^;}]+)", body):
+            times = re.findall(r"-?[\d.]+m?s\b", a)
+            assert len(times) <= 1, \
+                f"sky loop shorthand carries a fixed delay ({a.strip()}); phase it from SKY_LOOPS instead"
+    for sel, var in ((r"\.sky-rain::before", "--ph-a"), (r"\.sky-rain::after", "--ph-b"),
+                     (r"\.sky-snow::before", "--ph-a"), (r"\.sky-snow::after", "--ph-b")):
+        # anchor on the rule's own selector (after a `}` or line start), so the
+        # shared `.sky-rain::before, .sky-rain::after {` rule can't match
+        m = re.search(r"(?:^|\})\s*" + sel + r"\s*\{([^{}]*)\}", CSS, re.M)
+        assert m and re.search(r"animation-delay\s*:\s*var\(" + var, m.group(1)), \
+            f"{sel} must take its phase from var({var})"
+
+
 def test_week_strip_state_classes_are_styled():
     for cls in (".ws-done", ".ws-partial", ".ws-none", ".ws-rest", ".ws-away"):
         assert _css_rule(cls).strip(), f"{cls} week-strip state is unstyled"
