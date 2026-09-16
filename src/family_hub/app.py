@@ -199,40 +199,38 @@ def _ensure_demo_seed(conn) -> None:
     so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on EVERY
     seeded table being empty (not just people), so it never re-seeds or touches a
     real db (issue #36) — and a plain unset-DEMO run never reaches here at all."""
-    # DEMO never runs a sync (_sync_enabled() is false), so nothing would ever
-    # record calendar coverage and /api/calendar would report an EMPTY window —
-    # hatching every empty day "not synced" on the demo wall, the README
-    # screenshot and every visual gate, with status.ok still true so no banner
-    # explains it. Vouch for the demo's own configured window instead. Written on
-    # EVERY open, not just a fresh seed, so an already-seeded demo db gets it too.
-    if not fdemo.is_unseeded(conn):
-        return
-    try:
-        fdemo.seed_demo(conn, _today())
-    except Exception:
-        # The fdb helpers self-commit, so a seed that raises partway has already
-        # written some rows (people first). Wipe them so the empty-db guard fires
-        # again next open and re-seeds cleanly, instead of seeing the half-written
-        # people and serving a permanently half-populated demo.
-        fdemo.clear_demo(conn)
-        raise
+    if fdemo.is_unseeded(conn):
+        try:
+            fdemo.seed_demo(conn, _today())
+        except Exception:
+            # The fdb helpers self-commit, so a seed that raises partway has
+            # already written some rows (people first). Wipe them so the empty-db
+            # guard fires again next open and re-seeds cleanly, instead of seeing
+            # the half-written people and serving a permanently half-populated
+            # demo.
+            fdemo.clear_demo(conn)
+            raise
+        log.info("DEMO mode: seeded the sample family wall")
     # DEMO never runs a sync (_sync_enabled() is false), so nothing would ever
     # record calendar coverage and /api/calendar would report an EMPTY window —
     # hatching every empty day on the demo wall, the README screenshot and every
     # visual gate, with status.ok still true so no banner explains it. Vouch for
     # the demo's own configured window.
     #
-    # BELOW the is_unseeded guard on purpose: DEMO=1 can be set on a compose
-    # service pointed at a REAL db (README says to do exactly that), and stamping
-    # a config-derived record there would claim coverage nothing ever fetched —
-    # this work's own central bug, walked back in through the one door the
-    # issue #36 guard exists to close. Only a freshly seeded demo db gets it.
-    demo_today = _today()
-    fdb.kv_set(conn, "calendar_covered", {
-        "from": (demo_today - dt.timedelta(days=cfg.calendar_past_days)).isoformat(),
-        "to": (demo_today + dt.timedelta(days=cfg.calendar_window_days)).isoformat(),
-    })
-    log.info("DEMO mode: seeded the sample family wall")
+    # Gated on the db being DEMO-SEEDED, which is NOT is_unseeded's "is this db
+    # empty" — getting that distinction wrong bites both ways. Keyed on
+    # emptiness, DEMO=1 against a REAL db (the README tells compose users to set
+    # it on a service using the real volume) stamps coverage nothing ever
+    # fetched. Keyed on the fresh-seed path alone, a persisted demo volume seeded
+    # before this record existed never gets one, and its whole wall hatches.
+    # Re-stamped on EVERY open so the span tracks today instead of freezing at
+    # first-seed date and rotting a day per day of volume life.
+    if fdemo.is_demo_seeded(conn):
+        demo_today = _today()
+        fdb.kv_set(conn, "calendar_covered", {
+            "from": (demo_today - dt.timedelta(days=cfg.calendar_past_days)).isoformat(),
+            "to": (demo_today + dt.timedelta(days=cfg.calendar_window_days)).isoformat(),
+        })
 
 
 def _init_db_once(conn) -> None:
@@ -497,7 +495,7 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
         except (KeyError, TypeError, ValueError) as e:
             # This block is inlined into the /api/hub payload, so raising here
             # would blank the ENTIRE wall — chores, to-dos and all — over one bad
-            # kv row. Claim nothing instead: never over-claim, never 500. A
+            # kv row. Claim nothing instead: never over-claim, never 500.
             # All three are reachable from a hand-edited, partially-written or
             # restored kv row: a non-string date raises TypeError, a truncated
             # row KeyError, an unparseable date ValueError.

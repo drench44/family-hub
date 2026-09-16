@@ -1256,6 +1256,41 @@ test('day view title: a LEADING padding cell (previous month) titles from the ta
   assert.doesNotMatch(html, /October 2026/, 'not the stale grid month');
 });
 
+// Counts the "not synced" marks the month grid renders on the overlay's FIRST
+// paint, driven through the real entry point with no fetch. Comparing two
+// renders (rather than pinning a count) survives grid markup changes.
+function _firstPaintHatchedDays(hub) {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  document.body.appendChild(host);
+  document.documentElement.setAttribute('data-layout', 'auto');
+  sandbox.window.matchMedia = () => ({ matches: false });   // the wall: month grid
+  vm.runInContext("data_date = '2026-08-14'; calWin = null; hubData = "
+    + JSON.stringify(hub) + ';', sandbox);
+  sandbox.openOverlay('calendar');
+  const html = document.getElementById('cal-full').innerHTML;
+  return (html.match(/mg-unsynced/g) || []).length;
+}
+
+test('openOverlay("calendar"): the first paint never renders an unknown month as free', () => {
+  // A source-string guard cannot see this: moving the seed BELOW the paint, or
+  // renaming the fallback variable, keeps every string intact while restoring
+  // the confident-lie behavior. Drive the real entry point and count instead.
+  const noWindow = _firstPaintHatchedDays({ calendar: { status: { ok: true }, events: [] } });
+  assert.ok(noWindow > 0,
+    'with no window known, an empty month must hatch, not read as free');
+
+  const withWindow = _firstPaintHatchedDays({
+    calendar: { status: { ok: true }, events: [],
+      window: { from: '2026-08-14', to: '2026-08-28' } },
+  });
+  assert.ok(withWindow < noWindow,
+    'a real window from the hub payload must narrow what gets marked');
+  assert.ok(withWindow > 0,
+    'the home feed window is narrower than the month, so some days still hatch');
+});
+
 test('openOverlay("calendar") opens on the agenda on a phone, through the real entry point', () => {
   const { document, sandbox } = newHub();
   // Pre-register #cal-full so the overlay's internal renderCalFull() renders into

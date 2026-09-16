@@ -1130,6 +1130,14 @@ function calStatusMessage(status) {
     // even when st.ok is true (another source is still healthy and rendering).
     return 'A calendar is having trouble syncing — showing the last events we saw.';
   }
+  if (st.loading_full) {
+    // The calendar overlay's first paint runs on the home feed's narrow window
+    // (14 days forward, none back), so days outside it are marked "not synced"
+    // that the full fetch is about to fill in. Say it's still loading rather
+    // than letting that partial reading look like the final answer. Checked
+    // BEFORE the ok-status early return: this payload is ok, just incomplete.
+    return 'Loading the full calendar…';
+  }
   if (st.ok !== false) return '';
   if (String(st.error || '').includes('not configured')) {
     return 'No calendar is connected yet — add one in settings and the family’s events show up here.';

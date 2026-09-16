@@ -63,6 +63,21 @@ def is_unseeded(conn) -> bool:
     return True
 
 
+def is_demo_seeded(conn) -> bool:
+    """True if THIS db was seeded by seed_demo.
+
+    is_unseeded() answers a different question — "is this db empty" — and using
+    that as a demo marker is wrong in both directions: it calls a real family's
+    fresh db a demo, and it calls an already-populated demo db not-a-demo. Keyed
+    instead on the demo calendar id every seeded event carries, so it stays true
+    across reopens of a persisted demo volume (including one seeded by a build
+    that predates this check) and false for any real db. clear_demo empties
+    `events`, so a wiped demo db correctly reads false again."""
+    return conn.execute(
+        "SELECT 1 FROM events WHERE calendar_id = ? LIMIT 1",
+        (DEMO_CALENDAR_ID,)).fetchone() is not None
+
+
 def clear_demo(conn) -> None:
     """Undo everything seed_demo writes, back to an empty db. app.py calls this
     when a seed raises partway: the fdb helpers each self-commit, so a failed
