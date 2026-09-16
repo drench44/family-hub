@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 from types import SimpleNamespace
 
 from family_hub import caldav_service, caldav_sync
@@ -118,6 +119,42 @@ def test_caldav_empty_discover_records_no_coverage(conn):
     st = caldav_sync.sync_once(FakeCalDav([]), conn, _CFG, _NOW)
     assert fdb.kv_get(conn, "caldav_covered") is None
     assert st is not None
+
+
+def _one_event_client():
+    return FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT",
+                        "ics": [_ics("u1", "Dentist", "20260820", "20260821")]}])
+
+
+def test_caldav_suspicious_empty_does_not_advance_coverage(conn):
+    """A collection that returns nothing while holding cached rows is kept back
+    (suspicious), so its rows still cover only the OLD span. Gating coverage on
+    `failed` alone would march the window forward over days nobody re-fetched."""
+    caldav_sync.sync_once(_one_event_client(), conn, _CFG, _NOW)
+    first = fdb.kv_get(conn, "caldav_covered")
+    assert first is not None
+
+    later = _NOW + dt.timedelta(days=10)
+    empty = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    st = caldav_sync.sync_once(empty, conn, _CFG, later)
+    assert st["ok"] is False, "a suspicious empty is reported"
+    assert fdb.kv_get(conn, "caldav_covered") == first, \
+        "coverage must not advance over a collection that was kept back"
+
+
+def test_caldav_logs_when_it_accepts_an_empty_wipe(conn, caplog):
+    """The twin of the Google-side guard: this wipe appends no error, so status
+    stays ok and no banner fires. The log line is the only signal the collection's
+    cached events were just dropped."""
+    caldav_sync.sync_once(_one_event_client(), conn, _CFG, _NOW)
+    assert fdb.list_events(conn), "seeded rows to be wiped"
+    # it first went empty 25h ago, past the keep window
+    fdb.kv_set(conn, "caldav_empty_since",
+               {"caldav:abc": (_NOW - dt.timedelta(hours=25)).isoformat()})
+    empty = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    with caplog.at_level(logging.WARNING):
+        caldav_sync.sync_once(empty, conn, _CFG, _NOW)
+    assert "accepting the wipe" in "\n".join(r.getMessage() for r in caplog.records)
 
 
 def test_caldav_client_sends_a_request_timeout(monkeypatch):

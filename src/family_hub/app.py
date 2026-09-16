@@ -205,11 +205,6 @@ def _ensure_demo_seed(conn) -> None:
     # screenshot and every visual gate, with status.ok still true so no banner
     # explains it. Vouch for the demo's own configured window instead. Written on
     # EVERY open, not just a fresh seed, so an already-seeded demo db gets it too.
-    demo_today = _today()
-    fdb.kv_set(conn, "calendar_covered", {
-        "from": (demo_today - dt.timedelta(days=cfg.calendar_past_days)).isoformat(),
-        "to": (demo_today + dt.timedelta(days=cfg.calendar_window_days)).isoformat(),
-    })
     if not fdemo.is_unseeded(conn):
         return
     try:
@@ -221,6 +216,22 @@ def _ensure_demo_seed(conn) -> None:
         # people and serving a permanently half-populated demo.
         fdemo.clear_demo(conn)
         raise
+    # DEMO never runs a sync (_sync_enabled() is false), so nothing would ever
+    # record calendar coverage and /api/calendar would report an EMPTY window —
+    # hatching every empty day on the demo wall, the README screenshot and every
+    # visual gate, with status.ok still true so no banner explains it. Vouch for
+    # the demo's own configured window.
+    #
+    # BELOW the is_unseeded guard on purpose: DEMO=1 can be set on a compose
+    # service pointed at a REAL db (README says to do exactly that), and stamping
+    # a config-derived record there would claim coverage nothing ever fetched —
+    # this work's own central bug, walked back in through the one door the
+    # issue #36 guard exists to close. Only a freshly seeded demo db gets it.
+    demo_today = _today()
+    fdb.kv_set(conn, "calendar_covered", {
+        "from": (demo_today - dt.timedelta(days=cfg.calendar_past_days)).isoformat(),
+        "to": (demo_today + dt.timedelta(days=cfg.calendar_window_days)).isoformat(),
+    })
     log.info("DEMO mode: seeded the sample family wall")
 
 
@@ -472,6 +483,11 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
         if cov is None:
             return -1, -1      # never synced cleanly yet — claim nothing
         if not isinstance(cov, dict):
+            # Belt-and-braces, and deliberately kept: the except below already
+            # catches the TypeError that indexing a str/list/int would raise, so
+            # this branch is behaviorally redundant. It stays so the ordinary
+            # shape check doesn't ride on exception control flow, and so the log
+            # line can name the real problem instead of a subscript error.
             log.warning("%s holds a malformed coverage record (%r); reporting "
                         "no synced window", key, cov)
             return -1, -1
@@ -482,8 +498,9 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             # This block is inlined into the /api/hub payload, so raising here
             # would blank the ENTIRE wall — chores, to-dos and all — over one bad
             # kv row. Claim nothing instead: never over-claim, never 500. A
-            # non-string date raises TypeError, a truncated row KeyError; the
-            # original `except ValueError` caught neither.
+            # All three are reachable from a hand-edited, partially-written or
+            # restored kv row: a non-string date raises TypeError, a truncated
+            # row KeyError, an unparseable date ValueError.
             log.warning("%s holds a malformed coverage record (%r): %s; "
                         "reporting no synced window", key, cov, e)
             return -1, -1
@@ -499,7 +516,13 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     # are filtered out above, so letting it narrow the window would hatch a
     # perfectly healthy Google-backed calendar over a source the operator
     # deliberately switched off.
-    if cal_caldav_on and any(col["enabled"] for col in caldav_cols.values()):
+    # VEVENT rows ONLY. caldav_covered records how far the EVENT fetch reached,
+    # but list_caldav_collections returns reminder lists (VTODO) too, and they are
+    # never pruned. Counting a VTODO row let an enabled reminders list — on an
+    # install with every actual iCloud calendar unchecked — collapse the window
+    # and hatch a perfectly healthy Google-backed wall.
+    if cal_caldav_on and any(col["enabled"] for col in caldav_cols.values()
+                             if col.get("comp_type") == "VEVENT"):
         synced_fwd, synced_back = _cap_to_coverage(
             "caldav_covered", synced_fwd, synced_back)
     return {
@@ -1891,15 +1914,20 @@ CAL_FETCH_PAST = 45
 # would overflow the date math into a 500.
 CAL_MAX_DAYS = 400
 
-if cfg.calendar_window_days < CAL_FETCH_DAYS:
-    # Not fatal (the window stays honest — those days just render "not synced"),
-    # but it IS the state where the wall hatches days for a reason no banner
-    # explains, so say it once at startup rather than leaving the operator to
-    # infer it from the config file.
-    log.warning(
-        "calendar_window_days=%d is below the %d days the wall fetches; days "
-        "beyond it will show as 'not synced'. Raise it in config.json.",
-        cfg.calendar_window_days, CAL_FETCH_DAYS)
+# Not fatal (the window stays honest — those days just render "not synced"), but
+# it IS the state where the wall hatches days for a reason no banner explains, so
+# say it once at startup rather than leaving the operator to infer it from their
+# config file. BOTH directions: the static guard pins the shipped configs, but an
+# existing install's private config.json is the one file it can never see, and
+# that is the only place this misconfiguration actually lives.
+for _key, _have, _want in (
+        ("calendar_window_days", cfg.calendar_window_days, CAL_FETCH_DAYS),
+        ("calendar_past_days", cfg.calendar_past_days, CAL_FETCH_PAST)):
+    if _have < _want:
+        log.warning(
+            "%s=%d is below the %d days the wall fetches; days beyond it will "
+            "show as 'not synced'. Raise it in config.json.",
+            _key, _have, _want)
 
 
 @app.get("/api/calendar")

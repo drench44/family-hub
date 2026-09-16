@@ -481,6 +481,15 @@ test('calStatusMessage: a failure with nothing cached never promises cached even
   assert.doesNotMatch(m, /last events we saw/i);
 });
 
+test('emptyWindow: vouches for nothing — every day, today included, falls outside it', () => {
+  const win = sandbox.emptyWindow('2026-09-16');
+  assert.equal(win.from, '2026-09-16');
+  assert.equal(win.to, '2026-09-15', 'to is the day BEFORE from, so the range is empty');
+  for (const day of ['2026-09-16', '2026-09-15', '2026-09-17', '2027-03-01', '2020-01-01']) {
+    assert.equal(sandbox.isDayOutsideWindow(day, win), true, `${day} must hatch`);
+  }
+});
+
 test('failedCalWindow: with a cached payload, keeps events + window and downgrades status', () => {
   const prev = { status: { ok: true }, events: [{ id: 'e1' }],
     window: { from: '2026-09-01', to: '2026-10-01' } };

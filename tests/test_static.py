@@ -401,6 +401,22 @@ def test_calendar_window_chain_stays_consistent():
             f"config.py defaults {field} to {dflt.group(1)}, under the {floor} fetched"
 
 
+def test_calendar_full_view_claims_nothing_when_no_window_is_known():
+    """The calendar overlay's FIRST paint runs before any fetch resolves, with
+    calWin still null. Falling back to an undefined window means
+    isDayOutsideWindow fails open and the grid paints a whole month as plain
+    empty days — under no banner, because calStatusMessage({}) returns '' — and
+    it persists for as long as the fetch is in flight, forever if it hangs rather
+    than rejects. Fall back to emptyWindow() so every day hatches instead, and
+    seed calWin from the /api/hub payload already in hand."""
+    assert "|| emptyWindow(todayStr)" in HUB, \
+        "renderCalFull must fall back to emptyWindow(), never to an unknown window"
+    assert "const win = calWin && calWin.window;" not in HUB, \
+        "the bare fail-open fallback is the bug; it must not come back"
+    assert "if (!calWin && hubData && hubData.calendar) calWin = hubData.calendar;" in HUB, \
+        "the first paint must seed calWin from the hub payload's real window"
+
+
 def test_calendar_overlay_opens_on_the_layout_default_view():
     """The calendar overlay picks its opening view from calDefaultMode() (Week
     agenda on a phone, month grid on the wall) rather than hard-coding 'month' —
