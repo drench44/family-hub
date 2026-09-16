@@ -14,7 +14,10 @@ class Config:
     climate_base: str = ""     # optional JSON tile proxy (/api/tiles/climate)
     weather_base: str = ""     # optional JSON tile proxy (/api/tiles/weather)
     go2rtc_base: str = ""      # go2rtc restreamer; empty = no cameras
-    calendar_window_days: int = 28
+    # Kept in step with config.example.json and the frontend's fixed fetch
+    # (hub.js) — a default BELOW the fetch makes an unconfigured install hatch
+    # every day past it as "not synced". A guard test pins the three together.
+    calendar_window_days: int = 400
     calendar_past_days: int = 45   # month view browses back this far
     # How many days ahead the chore mirror projects into each mapped person's
     # iCloud Reminders list (today .. today+N inclusive). Bigger = more of the
@@ -154,7 +157,7 @@ def load_config(path: str) -> Config:
         climate_base=raw.get("climate_base", ""),
         weather_base=raw.get("weather_base", ""),
         go2rtc_base=raw.get("go2rtc_base", ""),
-        calendar_window_days=int(raw.get("calendar_window_days", 28)),
+        calendar_window_days=int(raw.get("calendar_window_days", 400)),
         calendar_past_days=int(raw.get("calendar_past_days", 45)),
         chore_mirror_horizon_days=int(raw.get("chore_mirror_horizon_days", 7)),
         calendars=list(raw.get("calendars", [])),

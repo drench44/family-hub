@@ -312,6 +312,14 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                     empty_since[cid] = now.isoformat()
                     age_h = 0.0
                 if age_h >= _EMPTY_KEEP_HOURS:
+                    # Accepting the wipe drops every cached row for this
+                    # calendar, and deliberately does NOT append to `errors`, so
+                    # status stays ok and no banner fires. Say so in the log at
+                    # least: this is the one path that silently empties a
+                    # calendar the family still sees a window over.
+                    log.warning(
+                        "%s: empty for %.0fh (>= %sh) — accepting the wipe and "
+                        "dropping its cached events", cid, age_h, _EMPTY_KEEP_HOURS)
                     empty_since.pop(cid, None)         # kept long enough -> accept the empty (wipe)
                     continue
             suspicious_empty.append(cid)
@@ -340,6 +348,23 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                   "events": len(events)}
         if errors:
             status["error"] = "; ".join(errors)
+        # Coverage records how far the EVENT FETCH reached, so only a fetch-scope
+        # failure may hold it back: a calendar that errored, or was kept back on a
+        # suspicious empty, still holds rows covering just the OLD span, and
+        # /api/calendar must keep reporting that narrower window rather than
+        # promising days nobody fetched.
+        #
+        # Every `errors` entry in THIS module already pairs with a failed_ids or
+        # suspicious_empty entry, so gating on `errors` would behave identically
+        # today — no test distinguishes them, and none claims to. It is written in
+        # fetch-scope terms regardless, to say what the condition actually means
+        # and to keep a future non-fetch error (a push, a mirror, a reminder list
+        # — precisely what caldav_sync already collects into its own `errors`)
+        # from quietly freezing the window and hatching a healthy calendar.
+        if not (failed_ids or suspicious_empty):
+            fdb.kv_set(conn, "calendar_covered",
+                       {"from": lo_dt.date().isoformat(),
+                        "to": hi_dt.date().isoformat()})
         if needs_auth:
             status["needs_auth"] = True
         fdb.kv_set(conn, "calendar_status", status)

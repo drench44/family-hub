@@ -473,6 +473,56 @@ test('calStatusMessage: revoked token asks to reconnect', () => {
   assert.match(m, /reconnect it in settings/);
 });
 
+test('calStatusMessage: a failure with nothing cached never promises cached events', () => {
+  // The generic copy says "showing the last events we saw", which is a lie when
+  // the first fetch failed and there are none to show.
+  const m = sandbox.calStatusMessage({ ok: false, error: 'unreachable', nothing_cached: true });
+  assert.match(m, /no events are loaded/i);
+  assert.doesNotMatch(m, /last events we saw/i);
+});
+
+test('failedCalWindow: with a cached payload, keeps events + window and downgrades status', () => {
+  const prev = { status: { ok: true }, events: [{ id: 'e1' }],
+    window: { from: '2026-09-01', to: '2026-10-01' } };
+  const out = sandbox.failedCalWindow(prev, 'boom', '2026-09-16');
+  assert.equal(out.events.length, 1, 'cached events survive a failed refresh');
+  assert.deepEqual({ ...out.window }, { from: '2026-09-01', to: '2026-10-01' });
+  assert.equal(out.status.ok, false, 'a stale ok:true would paint old events as current');
+  assert.equal(out.status.error, 'boom');
+  assert.ok(!out.status.nothing_cached, 'there IS something cached');
+});
+
+test('failedCalWindow: with nothing cached, returns an EMPTY window so no day reads as free', () => {
+  const out = sandbox.failedCalWindow(null, 'days/past out of range', '2026-09-16');
+  assert.equal(out.events.length, 0);
+  assert.equal(out.status.ok, false);
+  // the real reason survives — a 422 is an operator bug, not flaky wifi
+  assert.equal(out.status.error, 'days/past out of range');
+  assert.equal(out.status.nothing_cached, true);
+  // every day, INCLUDING today, must fall outside the window and hatch
+  assert.equal(sandbox.isDayOutsideWindow('2026-09-16', out.window), true, 'today hatches');
+  assert.equal(sandbox.isDayOutsideWindow('2027-03-01', out.window), true, 'next year hatches');
+  assert.equal(sandbox.isDayOutsideWindow('2026-01-01', out.window), true, 'the past hatches');
+});
+
+test('failedCalWindow: a SECOND consecutive failure still reports nothing cached', () => {
+  // fetchCalWindow runs on every calendar open / refresh, so two failures in a
+  // row is the NORMAL case while the server is down. Feeding the first failure's
+  // own (empty) payload back in must not drop the flag, or the banner goes back
+  // to promising "the last events we saw" with zero events to show.
+  const first = sandbox.failedCalWindow(null, 'unreachable', '2026-09-16');
+  const second = sandbox.failedCalWindow(first, 'unreachable', '2026-09-16');
+  assert.equal(second.events.length, 0);
+  assert.equal(second.status.nothing_cached, true, 'the flag survives a refresh');
+  assert.doesNotMatch(sandbox.calStatusMessage(second.status), /last events we saw/i);
+  // and the window stays empty, so days keep hatching
+  assert.equal(sandbox.isDayOutsideWindow('2026-09-16', second.window), true);
+});
+
+test('failedCalWindow: a missing message still yields a usable error, never undefined', () => {
+  assert.equal(sandbox.failedCalWindow(null, '', '2026-09-16').status.error, 'unreachable');
+});
+
 test('calStatusMessage: not-configured vs generic error', () => {
   assert.match(sandbox.calStatusMessage({ ok: false, error: 'not configured' }), /connected yet/);
   assert.match(sandbox.calStatusMessage({ ok: false, error: 'quota exceeded' }), /hit a snag/);
