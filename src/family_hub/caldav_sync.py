@@ -358,6 +358,15 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                         empty_since[cid] = now.isoformat()
                         age_h = 0.0
                     if age_h >= _EMPTY_KEEP_HOURS:
+                        # Accepting the wipe drops this collection's cached rows
+                        # and deliberately appends no error, so status stays ok
+                        # and no banner fires. Log it: this is the one path that
+                        # silently empties a calendar the wall still reports a
+                        # synced window over.
+                        log.warning(
+                            "%s: empty for %.0fh (>= %sh) — accepting the wipe "
+                            "and dropping its cached events",
+                            cid, age_h, _EMPTY_KEEP_HOURS)
                         empty_since.pop(cid, None)   # kept long enough -> accept wipe
                         continue
                 suspicious.append(cid)
@@ -432,6 +441,17 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
               "pending": len(fdb.caldav_pending(conn))}
         if errors:
             st["error"] = "; ".join(errors)
+        # Only FETCH-scope failures may hold coverage back. `errors` also
+        # collects outbox-push and reminder-list problems, which say nothing
+        # about how far the event fetch reached: gating on it would let a stuck
+        # chore-mirror push freeze the window forever, and — before any clean
+        # pass — leave no record at all, hatching the whole wall on an install
+        # whose calendars pulled fine. An empty `collections` means nothing was
+        # fetched from anything, so it can never evidence coverage either.
+        if collections and not (failed or suspicious):
+            fdb.kv_set(conn, "caldav_covered",
+                       {"from": lo_dt.date().isoformat(),
+                        "to": hi_dt.date().isoformat()})
         if needs_auth:
             st["needs_auth"] = True
         # Only a genuine fetch/discover EXCEPTION (a collection or reminder list

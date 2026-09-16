@@ -1,6 +1,7 @@
 import datetime as dt
 import importlib
 import json
+import logging
 
 import pytest
 from fastapi.testclient import TestClient
@@ -445,19 +446,272 @@ def test_calendar_exposes_synced_window(tmp_path, monkeypatch):
     assert win["from"] == (today - dt.timedelta(days=5)).isoformat()
 
 
+def test_calendar_window_never_promises_more_than_the_sync_covered(tmp_path, monkeypatch):
+    """The window is a promise that a missing day in it is really free. Config is
+    not evidence of that: right after calendar_window_days is raised (or while a
+    source keeps failing and holds stale rows) the cache covers less than config
+    claims, and those days would render "nothing scheduled" — a confident lie
+    about a calendar nobody fetched. Intersect with what a sync really covered."""
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        today = appmod._today()
+        # Nothing synced yet: claim NOTHING. An empty window (to < from) hatches
+        # every day, which is the honest answer before the first successful pass.
+        win = c.get("/api/calendar").json()["window"]
+        assert win["to"] < win["from"]
+        assert win["to"] < today.isoformat(), "today itself is not yet vouched for"
+
+        # A pass that really covered 30 days caps the window to 30, not the 400
+        # config asks for.
+        appmod.fdb.kv_set(appmod._db(), "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=30)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=30)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
+
+
+def _with_icloud(monkeypatch):
+    """Make the CalDAV integration AVAILABLE: _integration_on requires real
+    credentials (env or the creds file), not just an enabled toggle, so without
+    these the CalDAV gate is off and the coverage cap never runs."""
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@example.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "app-specific-pw")
+
+
+def test_calendar_window_is_capped_by_caldav_coverage_too(tmp_path, monkeypatch):
+    """The CalDAV half of the intersection. An iCloud collection that only pulled
+    28 days must cap the window at 28 even with Google's coverage AND the config
+    both at 400 — otherwise the wall reports days iCloud was never asked about as
+    free. (The Google half is covered above; this half had no API test at all.)"""
+    _with_icloud(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        full = {"from": (today - dt.timedelta(days=45)).isoformat(),
+                "to": (today + dt.timedelta(days=400)).isoformat()}
+        appmod.fdb.kv_set(conn, "calendar_covered", full)
+        appmod.fdb.kv_set(conn, "caldav_covered",
+                          {"from": full["from"],
+                           "to": (today + dt.timedelta(days=28)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=28)).isoformat(), \
+        "the narrowest ACTIVE source decides how far the window may claim"
+
+
+def test_calendar_window_is_not_narrowed_by_a_disabled_caldav_collection(tmp_path, monkeypatch):
+    """A collection the operator unchecked in the picker contributes no events —
+    they're filtered out of the payload — so it cannot be hiding a hole. Letting
+    it narrow the window hatched an entire healthy Google-backed calendar over a
+    source deliberately switched off."""
+    _with_icloud(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        appmod.fdb.set_caldav_collection_enabled(conn, "caldav:abc", False)
+        # Google covered the full window; CalDAV has NO coverage record at all,
+        # which for an active source would collapse the window to empty.
+        appmod.fdb.kv_set(conn, "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=400)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
+
+
+def test_calendar_window_is_not_narrowed_when_both_calendar_toggles_are_off(tmp_path, monkeypatch):
+    """The gate's OTHER limb: its sibling test covers only "no calendars
+    configured". With calendars configured but Google AND ICS both switched off,
+    their events are filtered out of the payload entirely, so a missing coverage
+    record cannot be hiding anything and the window must not collapse.
+
+    integration_enabled defaults to True on an UNSEEDED row, so the rows have to
+    be seeded before set_integration_enabled does anything at all — skip that and
+    this test passes for the wrong reason (toggles still on, gate still capping)."""
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 30, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        for iid in ("google_calendar", "ics_calendar"):
+            appmod.fdb.seed_integration(conn, iid, "calendar")
+            assert appmod.fdb.set_integration_enabled(conn, iid, False), \
+                "no row to toggle — the rest of this test would prove nothing"
+            assert appmod.fdb.integration_enabled(conn, iid) is False
+        # No calendar_covered record exists at all, which for an ACTIVE source
+        # collapses the window to empty. Both toggles off means it must not.
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=30)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
+
+
+def test_calendar_window_is_not_narrowed_when_caldav_is_unavailable(tmp_path, monkeypatch):
+    """The AVAILABILITY half of the CalDAV gate (its sibling pins the `enabled`
+    half). Collection rows are never pruned, so they outlive pulled credentials:
+    without this check a disconnected iCloud would keep collapsing the window of
+    a healthy Google-backed calendar, forever."""
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        appmod.fdb.kv_set(conn, "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=400)).isoformat()
+
+
+def test_calendar_window_is_not_narrowed_by_an_enabled_reminders_list(tmp_path, monkeypatch):
+    """caldav_covered tracks the EVENT fetch, but collection rows include VTODO
+    reminder lists. With every real calendar unchecked and only a reminders list
+    enabled, the gate must not fire — it would collapse the window to empty and
+    hatch the entire wall over a source that carries no events at all."""
+    _with_icloud(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:rem", "VTODO", "Reminders", None, today.isoformat())
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        appmod.fdb.set_caldav_collection_enabled(conn, "caldav:abc", False)
+        # No caldav_covered at all: for an ACTIVE source that collapses to empty.
+        appmod.fdb.kv_set(conn, "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=400)).isoformat()
+
+
+def test_caldav_coverage_caps_the_past_side_too(tmp_path, monkeypatch):
+    """The CalDAV back half of the intersection, the twin of the Google one."""
+    _with_icloud(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        appmod.fdb.kv_set(conn, "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        appmod.fdb.kv_set(conn, "caldav_covered",
+                          {"from": (today - dt.timedelta(days=7)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["from"] == (today - dt.timedelta(days=7)).isoformat()
+
+
+def test_startup_warns_when_a_configured_window_is_below_the_fetch(tmp_path, monkeypatch, caplog):
+    """An existing install's private config.json is the ONE file the static chain
+    guard can never see, and the only place this misconfiguration lives. Both
+    directions warn, or the hatching has no explanation anywhere."""
+    with caplog.at_level(logging.WARNING):
+        _reload_with(tmp_path, monkeypatch,
+                     {"calendar_window_days": 30, "calendar_past_days": 7})
+    msgs = "\n".join(r.getMessage() for r in caplog.records)
+    # Assert the THRESHOLD each one breached, not just the configured value:
+    # pairing calendar_past_days against CAL_FETCH_DAYS (400) instead of
+    # CAL_FETCH_PAST (45) would warn forever on a correct install, and a
+    # value-only assertion cannot see that.
+    assert "calendar_window_days=30 is below the 400 days" in msgs
+    assert "calendar_past_days=7 is below the 45 days" in msgs
+
+
+def test_startup_is_silent_when_the_configured_windows_match_the_fetch(tmp_path, monkeypatch, caplog):
+    """The boundary, which the warning test above cannot reach: a config sitting
+    exactly ON the fetch is correct and must stay silent. With `<` relaxed to
+    `<=`, every correctly configured install warns at every boot, which trains
+    the operator to ignore the one signal this warning exists to send."""
+    with caplog.at_level(logging.WARNING):
+        _reload_with(tmp_path, monkeypatch,
+                     {"calendar_window_days": 400, "calendar_past_days": 45})
+    msgs = "\n".join(r.getMessage() for r in caplog.records)
+    assert "days the wall fetches" not in msgs
+
+
+def test_calendar_window_coverage_caps_the_past_side_too(tmp_path, monkeypatch):
+    """The backward half of the intersection is real, not decorative: a sync that
+    only reached 7 days back must not have the window claim the configured 45."""
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        today = appmod._today()
+        appmod.fdb.kv_set(appmod._db(), "calendar_covered",
+                          {"from": (today - dt.timedelta(days=7)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["from"] == (today - dt.timedelta(days=7)).isoformat()
+    assert win["to"] == (today + dt.timedelta(days=400)).isoformat()
+
+
+@pytest.mark.parametrize("junk", [
+    "garbage-string",                       # not a dict -> stopped by the isinstance guard
+    ["2026-01-01", "2027-01-01"],           # not a dict -> stopped by the isinstance guard
+    {"from": 20260101, "to": 20270101},     # numbers -> TypeError
+    {"from": "not-a-date", "to": "nope"},   # unparseable -> ValueError
+    {"to": "2027-01-01"},                   # truncated -> KeyError
+])
+def test_calendar_survives_a_malformed_coverage_record(tmp_path, monkeypatch, junk):
+    """A bad kv row must degrade to the honest empty window, never raise.
+    _calendar_block is inlined into /api/hub, so an exception here blanks the
+    ENTIRE wall — chores, to-dos, cameras — over one unparseable record."""
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        appmod.fdb.kv_set(appmod._db(), "calendar_covered", junk)
+        r = c.get("/api/calendar")
+        assert r.status_code == 200
+        win = r.json()["window"]
+        assert win["to"] < win["from"], "junk must claim nothing, not over-claim"
+        assert c.get("/api/hub").status_code == 200, "the whole wall must survive it"
+
+
+def test_calendar_window_is_not_narrowed_by_an_inactive_source(tmp_path, monkeypatch):
+    """A source with nothing configured contributes no rows, so it can't leave a
+    hole and must not narrow the window — otherwise an install with no CalDAV
+    would hatch its whole (healthy, Google-backed) calendar."""
+    appmod = _reload_with(tmp_path, monkeypatch,
+                          {"calendar_window_days": 30, "calendars": []})
+    with TestClient(appmod.app) as c:
+        win = c.get("/api/calendar").json()["window"]
+        today = appmod._today()
+    assert win["to"] == (today + dt.timedelta(days=30)).isoformat()
+
+
 def test_calendar_window_is_intersection_of_fetch_and_sync(tmp_path, monkeypatch):
     """The window must be the INTERSECTION of the fetch range and the sync
     coverage. A config window wider than the fixed fetch (frontend uses
-    days=90&past=45) must cap to the fetch, or days the sync caches but this
+    days=400&past=45) must cap to the fetch, or days the sync caches but this
     request never fetched would render as falsely-empty instead of not-synced."""
     appmod = _reload_with(tmp_path, monkeypatch,
-                          {"calendar_window_days": 120, "calendar_past_days": 60})
+                          {"calendar_window_days": 500, "calendar_past_days": 60})
     with TestClient(appmod.app) as c:
-        win = c.get("/api/calendar").json()["window"]              # default fetch 90/45
+        win = c.get("/api/calendar").json()["window"]              # default fetch 400/45
         win2 = c.get("/api/calendar?days=10&past=5").json()["window"]
     today = appmod._today()
-    # config 120/60 capped to the fetch 90/45
-    assert win["to"] == (today + dt.timedelta(days=90)).isoformat()
+    # config 500/60 capped to the fetch 400/45
+    assert win["to"] == (today + dt.timedelta(days=400)).isoformat()
     assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
     # an explicit narrower fetch caps further
     assert win2["to"] == (today + dt.timedelta(days=10)).isoformat()
@@ -2105,6 +2359,14 @@ def test_calendar_endpoint_rejects_absurd_windows(client):
     assert client.get("/api/calendar?days=-1").status_code == 422
     assert client.get("/api/calendar?past=-1").status_code == 422
     assert client.get("/api/calendar?days=90&past=45").status_code == 200
+    # The ceiling must admit the frontend's own fixed fetch, or the wall's
+    # calendar 422s on every load (test_static guards the two staying in step).
+    assert client.get("/api/calendar?days=400&past=45").status_code == 200
+    assert client.get("/api/calendar?days=401").status_code == 422
+    # `past` shares the same ceiling (the constant is documented as covering both
+    # directions); pin its bound too rather than leaving it untested.
+    assert client.get("/api/calendar?past=400").status_code == 200
+    assert client.get("/api/calendar?past=401").status_code == 422
 
 
 def test_today_freeze_updates_when_the_plan_changes(client, app_mod):

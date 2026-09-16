@@ -155,9 +155,12 @@ function eventRow(ev, day) {
    and a genuinely free day must stay visually distinct from one Google was
    never asked about. `win` is optional (not every caller has fetched a
    calendar payload with a `window` field) and a missing/omitted one simply
-   never marks anything (isDayOutsideWindow fails open): the 5-day home feed
-   passes its own calendar.window too, it just never reaches far enough
-   forward to trip it under the default sync window. */
+   never marks anything (isDayOutsideWindow fails open). The 5-day home feed
+   passes its own calendar.window too, and CAN trip it: the window is capped by
+   what the last successful sync actually covered, so before the first one lands
+   — a fresh install, a failing source, a fetch that failed with nothing cached —
+   it is empty and even tomorrow hatches. That is deliberate: a day nobody
+   fetched must never read as free, on the home feed least of all. */
 function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter, win) {
   const byDay = bucketByDay(events);
   let html = '';
@@ -216,16 +219,16 @@ let calWin = null;    // {status, events} — the full cached window
 
 async function fetchCalWindow() {
   try {
-    calWin = await j('/api/calendar?days=90&past=45');
+    calWin = await j('/api/calendar?days=400&past=45');
     indexEvents(calWin.events);
   } catch (e) {
-    // On a failed refresh keep the cached events, but DON'T preserve a stale
-    // ok:true status — downgrade it so the existing "showing the last events we
-    // saw" banner fires instead of painting hours-old events as current.
+    // failedCalWindow (common.js) decides what a failure looks like: keep the
+    // cached events under a downgraded status, or — with nothing cached — an
+    // EMPTY window so no day renders as confidently free. Pure and unit-tested
+    // there; this stays the thin I/O shell.
     console.warn('calendar window refresh failed; keeping cached events', e);
-    calWin = calWin
-      ? { ...calWin, status: { ok: false, error: 'unreachable' } }
-      : { status: { ok: false, error: 'unreachable' }, events: [] };
+    calWin = failedCalWindow(calWin, (e && e.message) ? String(e.message) : '',
+                             todayISO());
   }
 }
 
@@ -334,7 +337,11 @@ function renderCalFull() {
   if (!host) return;
   const todayStr = data_date || todayISO();
   const events = (calWin && calWin.events) || [];
-  const win = calWin && calWin.window;   // the backend's actual sync range (issue #37)
+  // The backend's actual sync range (issue #37). With NO window known, claim
+  // nothing rather than failing open: an unknown range rendered as a free month
+  // is the confident lie this whole surface exists to prevent. An empty window
+  // (to before from) hatches every day, which is exactly what we know.
+  const win = (calWin && calWin.window) || emptyWindow(todayStr);
   let title = '';
   let body = '';
   if (calState.mode === 'day') {
@@ -1619,6 +1626,24 @@ function openOverlay(view) {
     content.innerHTML = `<div class="overlay-panel"><div id="cal-full"></div></div>`;
     calState.mode = calDefaultMode();
     calGoToday();
+    // First open has no calWin yet, and painting with NO window fails open:
+    // isDayOutsideWindow marks nothing, so the grid shows a whole month as free
+    // under no banner at all — for as long as the fetch is in flight, which is
+    // forever if it hangs rather than rejects (failedCalWindow only covers the
+    // reject). Seed from the /api/hub payload already in hand instead.
+    //
+    // That payload's window is the HOME FEED's, deliberately narrow: 14 days
+    // forward and none back (_calendar_block(c, today, 14)), not the overlay's
+    // own 400/45. So this UNDER-claims — days before today and past today+14
+    // hatch until the real fetch lands. Under-claiming is the safe direction,
+    // but it must not read as final either, so mark the payload in-flight and
+    // let the note say the full calendar is still loading.
+    if (!calWin && hubData && hubData.calendar) {
+      calWin = {
+        ...hubData.calendar,
+        status: { ...(hubData.calendar.status || {}), loading_full: true },
+      };
+    }
     renderCalFull();                       // instant paint from cache
     fetchCalWindow().then(renderCalFull);  // then refresh from the API
   } else if (view === 'chores') {

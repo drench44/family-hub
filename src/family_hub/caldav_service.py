@@ -155,11 +155,20 @@ class CalDavClient:
     def configured(self) -> bool:
         return bool(self.username and self.password)
 
+    # Per-request ceiling for every DAV call. Without it the sync thread — which
+    # also drives the chore mirror and the outbox flush — can hang indefinitely
+    # on a REPORT that iCloud never answers, with nothing logged and
+    # caldav_status still showing its last healthy sync (the issue #32 freeze
+    # class). The event search spans calendar_window_days, so a wider window
+    # makes a slow answer likelier, not rarer.
+    DAV_TIMEOUT_S = 30
+
     def _principal_obj(self):
         import caldav
         if self._principal is None:
             dav = caldav.DAVClient(url=self.url, username=self.username,
-                                   password=self.password)
+                                   password=self.password,
+                                   timeout=self.DAV_TIMEOUT_S)
             self._principal = dav.principal()
         return self._principal
 

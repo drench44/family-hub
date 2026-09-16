@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 
 from family_hub import calendar_sync as cs
 from family_hub import db as fdb
@@ -65,6 +66,37 @@ def test_sync_once_stores_and_reports(conn):
     assert fdb.kv_get(conn, "calendar_status")["ok"] is True
     assert fdb.kv_get(conn, "calendar_status")["events"] == 1
     assert n["ok"] is True
+
+
+def test_sync_records_the_span_it_actually_covered(conn):
+    """/api/calendar reports the range it can be trusted on, and config alone is
+    not that range: raising calendar_window_days would advertise the wider one
+    the instant the app restarted, before any sync had fetched it. Record what
+    this pass really pulled."""
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "color": "#fff", "person": None}],
+                   window=90)
+    now = dt.datetime(2026, 8, 12, 12)
+    cs.sync_once(FakeClient({"cal": [TIMED_FIXTURE]}), conn, cfg, now)
+    cov = fdb.kv_get(conn, "calendar_covered")
+    assert cov["to"] == (now.date() + dt.timedelta(days=90)).isoformat()
+    assert cov["from"] == (now.date() - dt.timedelta(days=cfg.calendar_past_days)).isoformat()
+
+
+def test_sync_with_a_failing_source_does_not_advance_coverage(conn):
+    """A calendar that failed keeps its PREVIOUS rows (keep_ids), and those cover
+    only the old span. Advancing the record would promise days nobody fetched,
+    and the wall would render them "nothing scheduled" instead of "not synced"."""
+    cals = [{"id": "good", "label": "G", "color": "#fff", "person": None},
+            {"id": "bad", "label": "B", "color": "#fff", "person": None}]
+    cfg = make_cfg(calendars=cals, window=90)
+    prior = {"from": "2026-08-01", "to": "2026-08-20"}
+    fdb.kv_set(conn, "calendar_covered", prior)
+    # FakeClient has no page for "bad" -> that fetch raises, the pass is dirty
+    st = cs.sync_once(FakeClient({"good": [TIMED_FIXTURE]}), conn, cfg,
+                      dt.datetime(2026, 8, 12, 12))
+    assert st["ok"] is False
+    assert fdb.kv_get(conn, "calendar_covered") == prior, \
+        "a dirty pass must leave the recorded coverage where it was"
 
 
 def test_sync_stores_google_calendar_colors(conn):
@@ -333,6 +365,26 @@ def test_sync_empty_beyond_ttl_finally_clears(conn):
     cs.sync_once(NotConfiguredClient(), conn, cfg, now, ics_fetch=lambda u: EMPTY_ICS)
     assert fdb.list_events(conn) == []                     # finally cleared
     assert "feed" not in (fdb.kv_get(conn, "calendar_empty_since") or {})
+
+
+def test_sync_logs_when_it_accepts_an_empty_wipe(conn, caplog):
+    """Accepting the wipe drops every cached row for the source and deliberately
+    appends NO error, so status stays ok and no banner fires. That makes this log
+    line the only signal a calendar was just silently emptied — the wall still
+    reports a synced window over those days, so they read "nothing scheduled"."""
+    cfg = make_cfg([{"id": "feed", "label": "F", "kind": "ics", "url": "https://f/x.ics"}])
+    fdb.replace_events(conn, [{
+        "id": "old", "calendar_id": "feed", "title": "Stale",
+        "start_ts": "2026-08-14", "end_ts": "2026-08-15", "all_day": 1, "updated": None}])
+    now = dt.datetime(2026, 8, 13, 9, 0)
+    fdb.kv_set(conn, "calendar_empty_since",
+               {"feed": (now - dt.timedelta(hours=25)).isoformat()})
+    with caplog.at_level(logging.WARNING):
+        st = cs.sync_once(NotConfiguredClient(), conn, cfg, now,
+                          ics_fetch=lambda u: EMPTY_ICS)
+    assert fdb.list_events(conn) == []          # the wipe happened
+    assert "accepting the wipe" in "\n".join(r.getMessage() for r in caplog.records), \
+        "a calendar emptied with no banner must at least be logged"
 
 
 def test_sync_empty_within_ttl_still_keeps(conn):

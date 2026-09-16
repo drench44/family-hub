@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 from types import SimpleNamespace
 
 from family_hub import caldav_service, caldav_sync
@@ -60,6 +61,138 @@ def test_caldav_sync_pulls_events_and_records_collection_colors(conn):
     assert cols["caldav:abc"]["display_name"] == "Family"
     assert cols["caldav:abc"]["color"] == "#FF0000"
     assert cols["caldav:abc"]["enabled"] is True
+
+
+def test_caldav_sync_records_the_span_it_actually_covered(conn):
+    """Same contract as the Google sync: the window /api/calendar reports must
+    follow real coverage, so record what this pass actually pulled."""
+    client = FakeCalDav([
+        {"id": "abc", "name": "Family", "comp": "VEVENT",
+         "ics": [_ics("u1", "Dentist", "20260820", "20260821")]},
+    ])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    cov = fdb.kv_get(conn, "caldav_covered")
+    assert cov["to"] == (_NOW.date() + dt.timedelta(days=28)).isoformat()
+    assert cov["from"] == (_NOW.date() - dt.timedelta(days=45)).isoformat()
+
+
+def test_caldav_sync_with_a_failing_collection_does_not_advance_coverage(conn):
+    """A collection that raised keeps its old rows, which cover only the old
+    span; the recorded coverage must not move past what was really fetched."""
+    class _BoomCalDav(FakeCalDav):
+        def fetch_ics(self, collection, lo, hi):
+            raise RuntimeError("iCloud said no")
+
+    client = _BoomCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    prior = {"from": "2026-08-01", "to": "2026-08-20"}
+    fdb.kv_set(conn, "caldav_covered", prior)
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["ok"] is False
+    assert fdb.kv_get(conn, "caldav_covered") == prior
+
+
+def test_caldav_records_coverage_even_when_a_reminder_list_fails(conn):
+    """Coverage records how far the EVENT fetch reached. A VTODO (reminders) list
+    that failed says nothing about that, and freezing coverage on it would hatch
+    a calendar that pulled its full window perfectly — on a first run, the whole
+    wall."""
+    class _TodoBoom(FakeCalDav):
+        def fetch_todos(self, collection):
+            raise RuntimeError("reminders unavailable")
+
+    client = _TodoBoom([
+        {"id": "abc", "name": "Family", "comp": "VEVENT",
+         "ics": [_ics("u1", "Dentist", "20260820", "20260821")]},
+        {"id": "rem", "name": "Reminders", "comp": "VTODO"},
+    ])
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["ok"] is False, "the reminder failure is still reported"
+    cov = fdb.kv_get(conn, "caldav_covered")
+    assert cov is not None, "the event fetch succeeded; coverage must advance"
+    assert cov["to"] == (_NOW.date() + dt.timedelta(days=28)).isoformat()
+
+
+def test_caldav_empty_discover_records_no_coverage(conn):
+    """Discover returning nothing means nothing was fetched from anything, which
+    is not evidence of coverage — recording it would report days as synced that
+    nobody ever asked iCloud about."""
+    st = caldav_sync.sync_once(FakeCalDav([]), conn, _CFG, _NOW)
+    assert fdb.kv_get(conn, "caldav_covered") is None
+    assert st is not None
+
+
+def _one_event_client():
+    return FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT",
+                        "ics": [_ics("u1", "Dentist", "20260820", "20260821")]}])
+
+
+def test_caldav_suspicious_empty_does_not_advance_coverage(conn):
+    """A collection that returns nothing while holding cached rows is kept back
+    (suspicious), so its rows still cover only the OLD span. Gating coverage on
+    `failed` alone would march the window forward over days nobody re-fetched."""
+    caldav_sync.sync_once(_one_event_client(), conn, _CFG, _NOW)
+    first = fdb.kv_get(conn, "caldav_covered")
+    assert first is not None
+
+    later = _NOW + dt.timedelta(days=10)
+    empty = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    st = caldav_sync.sync_once(empty, conn, _CFG, later)
+    assert st["ok"] is False, "a suspicious empty is reported"
+    assert fdb.kv_get(conn, "caldav_covered") == first, \
+        "coverage must not advance over a collection that was kept back"
+
+
+def test_caldav_logs_when_it_accepts_an_empty_wipe(conn, caplog):
+    """The twin of the Google-side guard: this wipe appends no error, so status
+    stays ok and no banner fires. The log line is the only signal the collection's
+    cached events were just dropped."""
+    caldav_sync.sync_once(_one_event_client(), conn, _CFG, _NOW)
+    assert fdb.list_events(conn), "seeded rows to be wiped"
+    # it first went empty 25h ago, past the keep window
+    fdb.kv_set(conn, "caldav_empty_since",
+               {"caldav:abc": (_NOW - dt.timedelta(hours=25)).isoformat()})
+    empty = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    with caplog.at_level(logging.WARNING):
+        caldav_sync.sync_once(empty, conn, _CFG, _NOW)
+    assert "accepting the wipe" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_caldav_empty_wipe_boundary_is_inclusive(conn):
+    """Exactly _EMPTY_KEEP_HOURS of emptiness accepts the wipe (>=), not one tick
+    more. Pre-existing behavior, previously only tested at 25h against a 24h
+    window, so the boundary itself was free to drift."""
+    caldav_sync.sync_once(_one_event_client(), conn, _CFG, _NOW)
+    assert fdb.list_events(conn), "seeded rows to be wiped"
+    fdb.kv_set(conn, "caldav_empty_since",
+               {"caldav:abc": (_NOW - dt.timedelta(
+                   hours=caldav_sync._EMPTY_KEEP_HOURS)).isoformat()})
+    empty = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    caldav_sync.sync_once(empty, conn, _CFG, _NOW)
+    assert fdb.list_events(conn) == [], "at exactly the TTL the wipe is accepted"
+
+
+def test_caldav_client_sends_a_request_timeout(monkeypatch):
+    """Every DAV call needs a ceiling. Without one a REPORT iCloud never answers
+    hangs the single sync thread — calendar, chore mirror and outbox flush all
+    stall, nothing is logged, and caldav_status still shows its last healthy
+    sync (the issue #32 freeze class). The event search spans the whole
+    calendar window, so a wider window makes a slow answer likelier."""
+    import caldav
+    seen = {}
+
+    class _FakeDav:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def principal(self):
+            return "P"
+
+    monkeypatch.setattr(caldav, "DAVClient", _FakeDav)
+    client = caldav_service.CalDavClient(username="u", password="p",
+                                         url="https://example.invalid/")
+    assert client._principal_obj() == "P"
+    assert seen.get("timeout") == caldav_service.CalDavClient.DAV_TIMEOUT_S
+    assert isinstance(seen["timeout"], (int, float)) and seen["timeout"] > 0
 
 
 def test_caldav_sync_skips_when_unconfigured(conn):
