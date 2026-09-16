@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from family_hub import chores as chlogic
 from family_hub import db
 from family_hub import demo
+from family_hub.config import Config
 
 
 def _write_cfg(tmp_path):
@@ -90,14 +91,31 @@ def test_demo_coverage_record_itself_does_not_over_claim(demo_app):
     is clamped on the way out and stays invisible through the endpoint - a
     mutation widening it by 10,000 days passed every API-level assertion. The
     record is the thing that must not claim days nothing fetched, so read it."""
-    import datetime as _dt
-    from family_hub.config import Config
-
     cov = demo_app.fdb.kv_get(demo_app._db(), "calendar_covered")
     assert cov is not None, "DEMO never syncs; without this record every day hatches"
     today = demo_app._today()
-    assert cov["to"] == (today + _dt.timedelta(days=Config.calendar_window_days)).isoformat()
-    assert cov["from"] == (today - _dt.timedelta(days=Config.calendar_past_days)).isoformat()
+    assert cov["to"] == (today + dt.timedelta(days=Config.calendar_window_days)).isoformat()
+    assert cov["from"] == (today - dt.timedelta(days=Config.calendar_past_days)).isoformat()
+
+
+def test_demo_reopen_restamps_a_missing_coverage_record(demo_app):
+    """A persisted demo volume seeded by a build predating this record has demo
+    rows but no calendar_covered. Gating the stamp on the fresh-seed path left
+    that db inverted forever: every day hatched "not synced" with status.ok true,
+    so no banner explained it. Reopening must re-stamp. (is_unseeded means "empty
+    db", which is why it is the wrong gate for this.)"""
+    conn = demo_app._db()
+    demo_app.fdb.kv_set(conn, "calendar_covered", None)   # the upgraded-volume state
+    assert demo_app.fdb.kv_get(conn, "calendar_covered") is None
+
+    demo_app._ensure_demo_seed(conn)                      # what the next open does
+
+    cov = demo_app.fdb.kv_get(conn, "calendar_covered")
+    assert cov is not None, "an already-seeded demo db must be re-stamped"
+    assert cov["from"] < cov["to"], "an inverted window hatches the whole wall"
+    today = demo_app._today()
+    assert cov["to"] == (today + dt.timedelta(days=Config.calendar_window_days)).isoformat(), \
+        "re-stamped against TODAY, so the span cannot rot as the volume ages"
 
 
 def test_demo_calendar_window_matches_the_demo_config_exactly(demo_client):
@@ -105,8 +123,7 @@ def test_demo_calendar_window_matches_the_demo_config_exactly(demo_client):
     demo's OWN configured window, no wider. A demo record reaching further than
     config would be the same confident lie on the wall used for the README
     screenshot and every visual gate."""
-    import datetime as _dt
-    today = _dt.date.fromisoformat(demo_client.get("/api/hub").json()["date"])
+    today = dt.date.fromisoformat(demo_client.get("/api/hub").json()["date"])
     # Ask /api/calendar, not /api/hub: the hub payload deliberately fetches a
     # narrow home-feed range, and the window is min(fetch, config, coverage), so
     # that fetch legitimately narrows it. The full fetch is what exposes whether
@@ -114,9 +131,8 @@ def test_demo_calendar_window_matches_the_demo_config_exactly(demo_client):
     win = demo_client.get("/api/calendar").json()["window"]
     # The demo fixture's config sets no calendar keys, so the dataclass defaults
     # apply and the seeded record must span exactly those - no wider.
-    from family_hub.config import Config
-    assert win["to"] == (today + _dt.timedelta(days=Config.calendar_window_days)).isoformat()
-    assert win["from"] == (today - _dt.timedelta(days=Config.calendar_past_days)).isoformat()
+    assert win["to"] == (today + dt.timedelta(days=Config.calendar_window_days)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=Config.calendar_past_days)).isoformat()
 
 
 def test_demo_calendar_window_vouches_for_the_demo_days(demo_client):

@@ -473,6 +473,16 @@ test('calStatusMessage: revoked token asks to reconnect', () => {
   assert.match(m, /reconnect it in settings/);
 });
 
+test('calStatusMessage: an in-flight first paint says the full calendar is still loading', () => {
+  // The seeded payload is ok:true but INCOMPLETE (the home feed's 14-day
+  // window), so days outside it show "not synced" that the full fetch will
+  // fill in. Without this branch the ok-status early return gives '' and the
+  // partial view reads as final, with nothing on screen to say otherwise.
+  const m = sandbox.calStatusMessage({ ok: true, loading_full: true });
+  assert.match(m, /loading/i);
+  assert.notEqual(m, '', 'an ok-but-incomplete payload must not render silently');
+});
+
 test('calStatusMessage: a failure with nothing cached never promises cached events', () => {
   // The generic copy says "showing the last events we saw", which is a lie when
   // the first fetch failed and there are none to show.

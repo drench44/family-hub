@@ -157,6 +157,20 @@ def test_caldav_logs_when_it_accepts_an_empty_wipe(conn, caplog):
     assert "accepting the wipe" in "\n".join(r.getMessage() for r in caplog.records)
 
 
+def test_caldav_empty_wipe_boundary_is_inclusive(conn):
+    """Exactly _EMPTY_KEEP_HOURS of emptiness accepts the wipe (>=), not one tick
+    more. Pre-existing behavior, previously only tested at 25h against a 24h
+    window, so the boundary itself was free to drift."""
+    caldav_sync.sync_once(_one_event_client(), conn, _CFG, _NOW)
+    assert fdb.list_events(conn), "seeded rows to be wiped"
+    fdb.kv_set(conn, "caldav_empty_since",
+               {"caldav:abc": (_NOW - dt.timedelta(
+                   hours=caldav_sync._EMPTY_KEEP_HOURS)).isoformat()})
+    empty = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    caldav_sync.sync_once(empty, conn, _CFG, _NOW)
+    assert fdb.list_events(conn) == [], "at exactly the TTL the wipe is accepted"
+
+
 def test_caldav_client_sends_a_request_timeout(monkeypatch):
     """Every DAV call needs a ceiling. Without one a REPORT iCloud never answers
     hangs the single sync thread — calendar, chore mirror and outbox flush all

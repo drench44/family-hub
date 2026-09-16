@@ -40,11 +40,21 @@ rolls that section to a dated version via `python scripts/release.py`.
   data. The first paint happens before the fetch resolves, and with no window
   yet it rendered every day as "nothing scheduled" under no banner at all —
   indefinitely, if that fetch hung rather than failed. It now paints from the
-  window the wall already has, and falls back to claiming nothing.
+  window the wall already has, falls back to claiming nothing, and says the full
+  calendar is still loading so the part it hasn't filled in doesn't read as
+  final either.
 - Running in demo mode no longer writes calendar coverage into a real database.
   Setting `DEMO=1` against a real install (which the README describes for
   compose) stamped a record saying days had been synced when nothing had fetched
-  them, and it outlived turning demo mode back off.
+  them, and it outlived turning demo mode back off. A demo wall that was already
+  set up also keeps working after an upgrade, instead of marking every day "not
+  synced", and its window now tracks today instead of the day it was first set
+  up.
+- A demo wall that was already set up keeps working after an upgrade. The demo
+  records which days it can vouch for, and that record was only written when the
+  sample family was first created, so an existing demo marked every day "not
+  synced" instead. It is now repaired whenever the wall is opened, and follows
+  today rather than the day it was first set up.
 - An enabled iCloud *reminders* list can no longer mark a healthy calendar as
   not-synced. Reminder lists carry no events, but counted toward the check for
   whether iCloud had anything to say about the window.

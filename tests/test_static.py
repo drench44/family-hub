@@ -402,19 +402,23 @@ def test_calendar_window_chain_stays_consistent():
 
 
 def test_calendar_full_view_claims_nothing_when_no_window_is_known():
-    """The calendar overlay's FIRST paint runs before any fetch resolves, with
-    calWin still null. Falling back to an undefined window means
-    isDayOutsideWindow fails open and the grid paints a whole month as plain
-    empty days — under no banner, because calStatusMessage({}) returns '' — and
-    it persists for as long as the fetch is in flight, forever if it hangs rather
-    than rejects. Fall back to emptyWindow() so every day hatches instead, and
-    seed calWin from the /api/hub payload already in hand."""
+    """A SPELLING ratchet, not coverage — don't mistake it for one.
+
+    The behavior is pinned by `openOverlay("calendar"): the first paint never
+    renders an unknown month as free` in tests/js/hub-dom.test.mjs, which drives
+    the real entry point and COUNTS what the grid marks. Source-string
+    assertions cannot see the two mutations that matter: moving the seed below
+    the paint, and renaming the fallback variable while leaving the old string
+    in a comment. Both restore the confident-lie behavior with every string here
+    intact. This only keeps the load-bearing pieces from being deleted outright.
+    """
     assert "|| emptyWindow(todayStr)" in HUB, \
         "renderCalFull must fall back to emptyWindow(), never to an unknown window"
     assert "const win = calWin && calWin.window;" not in HUB, \
         "the bare fail-open fallback is the bug; it must not come back"
-    assert "if (!calWin && hubData && hubData.calendar) calWin = hubData.calendar;" in HUB, \
-        "the first paint must seed calWin from the hub payload's real window"
+    assert "loading_full: true" in HUB, \
+        "the seeded first paint must be flagged in-flight, or its narrow " \
+        "home-feed window reads as the final answer"
 
 
 def test_calendar_overlay_opens_on_the_layout_default_view():

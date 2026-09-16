@@ -628,8 +628,24 @@ def test_startup_warns_when_a_configured_window_is_below_the_fetch(tmp_path, mon
         _reload_with(tmp_path, monkeypatch,
                      {"calendar_window_days": 30, "calendar_past_days": 7})
     msgs = "\n".join(r.getMessage() for r in caplog.records)
-    assert "calendar_window_days=30" in msgs
-    assert "calendar_past_days=7" in msgs
+    # Assert the THRESHOLD each one breached, not just the configured value:
+    # pairing calendar_past_days against CAL_FETCH_DAYS (400) instead of
+    # CAL_FETCH_PAST (45) would warn forever on a correct install, and a
+    # value-only assertion cannot see that.
+    assert "calendar_window_days=30 is below the 400 days" in msgs
+    assert "calendar_past_days=7 is below the 45 days" in msgs
+
+
+def test_startup_is_silent_when_the_configured_windows_match_the_fetch(tmp_path, monkeypatch, caplog):
+    """The boundary, which the warning test above cannot reach: a config sitting
+    exactly ON the fetch is correct and must stay silent. With `<` relaxed to
+    `<=`, every correctly configured install warns at every boot, which trains
+    the operator to ignore the one signal this warning exists to send."""
+    with caplog.at_level(logging.WARNING):
+        _reload_with(tmp_path, monkeypatch,
+                     {"calendar_window_days": 400, "calendar_past_days": 45})
+    msgs = "\n".join(r.getMessage() for r in caplog.records)
+    assert "days the wall fetches" not in msgs
 
 
 def test_calendar_window_coverage_caps_the_past_side_too(tmp_path, monkeypatch):

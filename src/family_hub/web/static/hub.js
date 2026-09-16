@@ -1626,13 +1626,24 @@ function openOverlay(view) {
     content.innerHTML = `<div class="overlay-panel"><div id="cal-full"></div></div>`;
     calState.mode = calDefaultMode();
     calGoToday();
-    // First open has no calWin yet. Seed it from the /api/hub payload already in
-    // hand — same server, same coverage math — so the instant paint carries a
-    // REAL window. Without this the grid paints a whole month as plain empty
-    // days (isDayOutsideWindow fails open on a missing window) under no banner
-    // at all, for as long as the fetch is in flight, which is forever if it
-    // hangs rather than rejects. failedCalWindow only covers the reject.
-    if (!calWin && hubData && hubData.calendar) calWin = hubData.calendar;
+    // First open has no calWin yet, and painting with NO window fails open:
+    // isDayOutsideWindow marks nothing, so the grid shows a whole month as free
+    // under no banner at all — for as long as the fetch is in flight, which is
+    // forever if it hangs rather than rejects (failedCalWindow only covers the
+    // reject). Seed from the /api/hub payload already in hand instead.
+    //
+    // That payload's window is the HOME FEED's, deliberately narrow: 14 days
+    // forward and none back (_calendar_block(c, today, 14)), not the overlay's
+    // own 400/45. So this UNDER-claims — days before today and past today+14
+    // hatch until the real fetch lands. Under-claiming is the safe direction,
+    // but it must not read as final either, so mark the payload in-flight and
+    // let the note say the full calendar is still loading.
+    if (!calWin && hubData && hubData.calendar) {
+      calWin = {
+        ...hubData.calendar,
+        status: { ...(hubData.calendar.status || {}), loading_full: true },
+      };
+    }
     renderCalFull();                       // instant paint from cache
     fetchCalWindow().then(renderCalFull);  // then refresh from the API
   } else if (view === 'chores') {
