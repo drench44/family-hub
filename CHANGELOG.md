@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-09-16
+
 ### Changed
 - The calendar can now sync 400 days ahead instead of 90, so paging the month
   view into next year no longer hatches every day as "not synced". The default,
