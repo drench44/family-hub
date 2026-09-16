@@ -314,6 +314,18 @@ function isDayOutsideWindow(dayISO, win) {
   return dayISO < win.from || dayISO > win.to;
 }
 
+/* A window that vouches for NOTHING: `to` is the day BEFORE `from`, so every
+   day, today included, falls outside it and hatches "not synced".
+
+   Used wherever the real synced range is unknown, because the alternative is
+   isDayOutsideWindow's fail-open, which renders an unknown range as a free
+   calendar — the one thing this surface must never do. Both callers reach it on
+   paths that really happen: a fetch that failed with nothing cached, and the
+   calendar overlay's very first paint before any fetch has resolved. */
+function emptyWindow(todayStr) {
+  return { from: todayStr, to: addDays(todayStr, -1) };
+}
+
 /* The calendar payload to fall back to when a /api/calendar fetch fails. Pure
    (the caller passes today) so every branch is testable without a network.
 
@@ -344,11 +356,7 @@ function failedCalWindow(prev, message, todayStr) {
   const status = { ok: false, error: message || 'unreachable' };
   if (!cached) status.nothing_cached = true;
   if (prev) return { ...prev, status };
-  return {
-    status,
-    events: [],
-    window: { from: todayStr, to: addDays(todayStr, -1) },
-  };
+  return { status, events: [], window: emptyWindow(todayStr) };
 }
 
 /* 42 Sunday-first cells covering `month` (1-12) of `year`, each

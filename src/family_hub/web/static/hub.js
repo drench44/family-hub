@@ -337,7 +337,11 @@ function renderCalFull() {
   if (!host) return;
   const todayStr = data_date || todayISO();
   const events = (calWin && calWin.events) || [];
-  const win = calWin && calWin.window;   // the backend's actual sync range (issue #37)
+  // The backend's actual sync range (issue #37). With NO window known, claim
+  // nothing rather than failing open: an unknown range rendered as a free month
+  // is the confident lie this whole surface exists to prevent. An empty window
+  // (to before from) hatches every day, which is exactly what we know.
+  const win = (calWin && calWin.window) || emptyWindow(todayStr);
   let title = '';
   let body = '';
   if (calState.mode === 'day') {
@@ -1622,6 +1626,13 @@ function openOverlay(view) {
     content.innerHTML = `<div class="overlay-panel"><div id="cal-full"></div></div>`;
     calState.mode = calDefaultMode();
     calGoToday();
+    // First open has no calWin yet. Seed it from the /api/hub payload already in
+    // hand — same server, same coverage math — so the instant paint carries a
+    // REAL window. Without this the grid paints a whole month as plain empty
+    // days (isDayOutsideWindow fails open on a missing window) under no banner
+    // at all, for as long as the fetch is in flight, which is forever if it
+    // hangs rather than rejects. failedCalWindow only covers the reject.
+    if (!calWin && hubData && hubData.calendar) calWin = hubData.calendar;
     renderCalFull();                       // instant paint from cache
     fetchCalWindow().then(renderCalFull);  // then refresh from the API
   } else if (view === 'chores') {

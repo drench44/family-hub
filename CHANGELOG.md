@@ -36,6 +36,21 @@ rolls that section to a dated version via `python scripts/release.py`.
   misconfigured window, a 5xx) in the payload and the browser console, instead
   of relabelling every failure "unreachable" and discarding it. The wall's own
   copy stays deliberately non-technical; this is for whoever diagnoses it.
+- Opening the calendar no longer shows a whole month as free before it has any
+  data. The first paint happens before the fetch resolves, and with no window
+  yet it rendered every day as "nothing scheduled" under no banner at all —
+  indefinitely, if that fetch hung rather than failed. It now paints from the
+  window the wall already has, and falls back to claiming nothing.
+- Running in demo mode no longer writes calendar coverage into a real database.
+  Setting `DEMO=1` against a real install (which the README describes for
+  compose) stamped a record saying days had been synced when nothing had fetched
+  them, and it outlived turning demo mode back off.
+- An enabled iCloud *reminders* list can no longer mark a healthy calendar as
+  not-synced. Reminder lists carry no events, but counted toward the check for
+  whether iCloud had anything to say about the window.
+- The startup warning covers `calendar_past_days` too, not just the forward
+  window. An install's own config.json is the one place this misconfiguration
+  can live, and half of it was going unreported.
 
 ## [1.3.7] — 2026-09-15
 

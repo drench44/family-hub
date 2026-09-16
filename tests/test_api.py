@@ -1,6 +1,7 @@
 import datetime as dt
 import importlib
 import json
+import logging
 
 import pytest
 from fastapi.testclient import TestClient
@@ -554,6 +555,83 @@ def test_calendar_window_is_not_narrowed_when_both_calendar_toggles_are_off(tmp_
     assert win["from"] == (today - dt.timedelta(days=45)).isoformat()
 
 
+def test_calendar_window_is_not_narrowed_when_caldav_is_unavailable(tmp_path, monkeypatch):
+    """The AVAILABILITY half of the CalDAV gate (its sibling pins the `enabled`
+    half). Collection rows are never pruned, so they outlive pulled credentials:
+    without this check a disconnected iCloud would keep collapsing the window of
+    a healthy Google-backed calendar, forever."""
+    monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
+    monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        appmod.fdb.kv_set(conn, "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=400)).isoformat()
+
+
+def test_calendar_window_is_not_narrowed_by_an_enabled_reminders_list(tmp_path, monkeypatch):
+    """caldav_covered tracks the EVENT fetch, but collection rows include VTODO
+    reminder lists. With every real calendar unchecked and only a reminders list
+    enabled, the gate must not fire — it would collapse the window to empty and
+    hatch the entire wall over a source that carries no events at all."""
+    _with_icloud(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:rem", "VTODO", "Reminders", None, today.isoformat())
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        appmod.fdb.set_caldav_collection_enabled(conn, "caldav:abc", False)
+        # No caldav_covered at all: for an ACTIVE source that collapses to empty.
+        appmod.fdb.kv_set(conn, "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["to"] == (today + dt.timedelta(days=400)).isoformat()
+
+
+def test_caldav_coverage_caps_the_past_side_too(tmp_path, monkeypatch):
+    """The CalDAV back half of the intersection, the twin of the Google one."""
+    _with_icloud(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "calendar_window_days": 400, "calendar_past_days": 45,
+        "calendars": [{"id": "cal", "label": "Fam", "color": "#fff"}]})
+    with TestClient(appmod.app) as c:
+        conn, today = appmod._db(), appmod._today()
+        appmod.fdb.upsert_caldav_collection(
+            conn, "caldav:abc", "VEVENT", "Family", None, today.isoformat())
+        appmod.fdb.kv_set(conn, "calendar_covered",
+                          {"from": (today - dt.timedelta(days=45)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        appmod.fdb.kv_set(conn, "caldav_covered",
+                          {"from": (today - dt.timedelta(days=7)).isoformat(),
+                           "to": (today + dt.timedelta(days=400)).isoformat()})
+        win = c.get("/api/calendar").json()["window"]
+    assert win["from"] == (today - dt.timedelta(days=7)).isoformat()
+
+
+def test_startup_warns_when_a_configured_window_is_below_the_fetch(tmp_path, monkeypatch, caplog):
+    """An existing install's private config.json is the ONE file the static chain
+    guard can never see, and the only place this misconfiguration lives. Both
+    directions warn, or the hatching has no explanation anywhere."""
+    with caplog.at_level(logging.WARNING):
+        _reload_with(tmp_path, monkeypatch,
+                     {"calendar_window_days": 30, "calendar_past_days": 7})
+    msgs = "\n".join(r.getMessage() for r in caplog.records)
+    assert "calendar_window_days=30" in msgs
+    assert "calendar_past_days=7" in msgs
+
+
 def test_calendar_window_coverage_caps_the_past_side_too(tmp_path, monkeypatch):
     """The backward half of the intersection is real, not decorative: a sync that
     only reached 7 days back must not have the window claim the configured 45."""
@@ -571,8 +649,8 @@ def test_calendar_window_coverage_caps_the_past_side_too(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("junk", [
-    "garbage-string",                       # not a dict at all -> AttributeError
-    ["2026-01-01", "2027-01-01"],           # a list -> AttributeError
+    "garbage-string",                       # not a dict -> stopped by the isinstance guard
+    ["2026-01-01", "2027-01-01"],           # not a dict -> stopped by the isinstance guard
     {"from": 20260101, "to": 20270101},     # numbers -> TypeError
     {"from": "not-a-date", "to": "nope"},   # unparseable -> ValueError
     {"to": "2027-01-01"},                   # truncated -> KeyError
