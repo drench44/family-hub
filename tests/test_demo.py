@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from family_hub import chores as chlogic
 from family_hub import db
 from family_hub import demo
+from family_hub.config import Config
 
 
 def _write_cfg(tmp_path):
@@ -82,6 +83,67 @@ def test_demo_hub_has_calendar_and_todos(demo_client):
     todos = hub["todos"]
     assert [t["title"] for t in todos["now"]] and len(todos["later"]) == 5
     assert hub["todos_ok"] is True
+
+
+def test_demo_coverage_record_itself_does_not_over_claim(demo_app):
+    """Assert the RECORD, not just the window. /api/calendar reports
+    min(fetch, config, coverage), so a seeded record reaching years past config
+    is clamped on the way out and stays invisible through the endpoint - a
+    mutation widening it by 10,000 days passed every API-level assertion. The
+    record is the thing that must not claim days nothing fetched, so read it."""
+    cov = demo_app.fdb.kv_get(demo_app._db(), "calendar_covered")
+    assert cov is not None, "DEMO never syncs; without this record every day hatches"
+    today = demo_app._today()
+    assert cov["to"] == (today + dt.timedelta(days=Config.calendar_window_days)).isoformat()
+    assert cov["from"] == (today - dt.timedelta(days=Config.calendar_past_days)).isoformat()
+
+
+def test_demo_reopen_restamps_a_missing_coverage_record(demo_app):
+    """A persisted demo volume seeded by a build predating this record has demo
+    rows but no calendar_covered. Gating the stamp on the fresh-seed path left
+    that db inverted forever: every day hatched "not synced" with status.ok true,
+    so no banner explained it. Reopening must re-stamp. (is_unseeded means "empty
+    db", which is why it is the wrong gate for this.)"""
+    conn = demo_app._db()
+    demo_app.fdb.kv_set(conn, "calendar_covered", None)   # the upgraded-volume state
+    assert demo_app.fdb.kv_get(conn, "calendar_covered") is None
+
+    demo_app._ensure_demo_seed(conn)                      # what the next open does
+
+    cov = demo_app.fdb.kv_get(conn, "calendar_covered")
+    assert cov is not None, "an already-seeded demo db must be re-stamped"
+    assert cov["from"] < cov["to"], "an inverted window hatches the whole wall"
+    today = demo_app._today()
+    assert cov["to"] == (today + dt.timedelta(days=Config.calendar_window_days)).isoformat(), \
+        "re-stamped against TODAY, so the span cannot rot as the volume ages"
+
+
+def test_demo_calendar_window_matches_the_demo_config_exactly(demo_client):
+    """Vouching is not licence to over-claim: the seeded record must span the
+    demo's OWN configured window, no wider. A demo record reaching further than
+    config would be the same confident lie on the wall used for the README
+    screenshot and every visual gate."""
+    today = dt.date.fromisoformat(demo_client.get("/api/hub").json()["date"])
+    # Ask /api/calendar, not /api/hub: the hub payload deliberately fetches a
+    # narrow home-feed range, and the window is min(fetch, config, coverage), so
+    # that fetch legitimately narrows it. The full fetch is what exposes whether
+    # the seeded coverage record itself over-claims.
+    win = demo_client.get("/api/calendar").json()["window"]
+    # The demo fixture's config sets no calendar keys, so the dataclass defaults
+    # apply and the seeded record must span exactly those - no wider.
+    assert win["to"] == (today + dt.timedelta(days=Config.calendar_window_days)).isoformat()
+    assert win["from"] == (today - dt.timedelta(days=Config.calendar_past_days)).isoformat()
+
+
+def test_demo_calendar_window_vouches_for_the_demo_days(demo_client):
+    """DEMO never runs a sync, so with no seeded coverage record the window comes
+    back INVERTED and every empty day on the demo wall hatches "not synced" —
+    while status.ok stays true, so nothing explains it. That wall is the README
+    screenshot and every visual gate, so pin it."""
+    hub = demo_client.get("/api/hub").json()
+    win = hub["calendar"]["window"]
+    assert win["from"] < win["to"], "an inverted window hatches every day"
+    assert win["from"] <= hub["date"] <= win["to"], "today must be vouched for"
 
 
 def test_demo_links_are_placeholder_cameras(demo_client):
@@ -190,6 +252,38 @@ def test_demo_calendar_dates_are_relative_to_today(demo_client):
     today = dt.date.fromisoformat(hub["date"])
     guitar = next(e for e in hub["calendar"]["events"] if e["title"] == "Guitar lesson")
     assert guitar["start_ts"][:10] == (today + dt.timedelta(days=3)).isoformat()
+
+
+def test_demo_does_not_stamp_coverage_into_a_real_db(tmp_path, monkeypatch):
+    """The demo's coverage seed sits BELOW the empty-db guard, with the rest of
+    the seeding. DEMO=1 pointed at a real family's db — which README tells compose
+    users to do, on a service using the real volume — must not stamp a
+    config-derived coverage record there: nothing fetched those days, and the
+    record would outlive switching DEMO back off."""
+    from fastapi.testclient import TestClient
+    import family_hub.db as fdb
+
+    db = tmp_path / "hub.db"
+    monkeypatch.setenv("DB_PATH", str(db))
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    monkeypatch.setenv("CONFIG_PATH", _write_cfg(tmp_path))
+    conn = fdb.connect(str(db))
+    fdb.ensure_schema(conn)
+    fdb.add_person(conn, "RealKid", "#123456")     # a real db, not an empty one
+    conn.close()
+
+    monkeypatch.setenv("DEMO", "1")
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    with TestClient(appmod.app) as c:
+        c.get("/api/hub")
+
+    conn = fdb.connect(str(db))
+    try:
+        assert fdb.kv_get(conn, "calendar_covered") is None, \
+            "a real db must never be handed coverage that nothing fetched"
+    finally:
+        conn.close()
 
 
 def test_demo_never_clobbers_an_existing_real_db(tmp_path, monkeypatch):

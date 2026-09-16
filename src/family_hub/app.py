@@ -199,18 +199,38 @@ def _ensure_demo_seed(conn) -> None:
     so a fresh `DEMO=1` run comes up as a fully populated wall. Guarded on EVERY
     seeded table being empty (not just people), so it never re-seeds or touches a
     real db (issue #36) — and a plain unset-DEMO run never reaches here at all."""
-    if not fdemo.is_unseeded(conn):
-        return
-    try:
-        fdemo.seed_demo(conn, _today())
-    except Exception:
-        # The fdb helpers self-commit, so a seed that raises partway has already
-        # written some rows (people first). Wipe them so the empty-db guard fires
-        # again next open and re-seeds cleanly, instead of seeing the half-written
-        # people and serving a permanently half-populated demo.
-        fdemo.clear_demo(conn)
-        raise
-    log.info("DEMO mode: seeded the sample family wall")
+    if fdemo.is_unseeded(conn):
+        try:
+            fdemo.seed_demo(conn, _today())
+        except Exception:
+            # The fdb helpers self-commit, so a seed that raises partway has
+            # already written some rows (people first). Wipe them so the empty-db
+            # guard fires again next open and re-seeds cleanly, instead of seeing
+            # the half-written people and serving a permanently half-populated
+            # demo.
+            fdemo.clear_demo(conn)
+            raise
+        log.info("DEMO mode: seeded the sample family wall")
+    # DEMO never runs a sync (_sync_enabled() is false), so nothing would ever
+    # record calendar coverage and /api/calendar would report an EMPTY window —
+    # hatching every empty day on the demo wall, the README screenshot and every
+    # visual gate, with status.ok still true so no banner explains it. Vouch for
+    # the demo's own configured window.
+    #
+    # Gated on the db being DEMO-SEEDED, which is NOT is_unseeded's "is this db
+    # empty" — getting that distinction wrong bites both ways. Keyed on
+    # emptiness, DEMO=1 against a REAL db (the README tells compose users to set
+    # it on a service using the real volume) stamps coverage nothing ever
+    # fetched. Keyed on the fresh-seed path alone, a persisted demo volume seeded
+    # before this record existed never gets one, and its whole wall hatches.
+    # Re-stamped on EVERY open so the span tracks today instead of freezing at
+    # first-seed date and rotting a day per day of volume life.
+    if fdemo.is_demo_seeded(conn):
+        demo_today = _today()
+        fdb.kv_set(conn, "calendar_covered", {
+            "from": (demo_today - dt.timedelta(days=cfg.calendar_past_days)).isoformat(),
+            "to": (demo_today + dt.timedelta(days=cfg.calendar_window_days)).isoformat(),
+        })
 
 
 def _init_db_once(conn) -> None:
@@ -433,14 +453,76 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
             "label": label,
             "event_color": GOOGLE_EVENT_COLORS.get(e["color_id"] or ""),
         })
-    # The range for which THIS payload is authoritative (a missing day is really
-    # free): the INTERSECTION of what was fetched (past_days .. days) and what
-    # the sync actually caches (cfg.calendar_past_days .. cfg.calendar_window_days).
-    # Reporting the raw config window would falsely mark a day that the sync
-    # caches but this request never fetched (e.g. calendar_past_days raised above
-    # the frontend's fixed past=45) as free instead of "not synced" (issue #37).
+    # The range for which THIS payload is authoritative (a missing day in it is
+    # really free): the INTERSECTION of what was fetched (past_days .. days),
+    # what config asks the sync to cache, and what the last SUCCESSFUL sync
+    # ACTUALLY covered.
+    #
+    # Reporting the raw config window would falsely mark a day the sync caches
+    # but this request never fetched (e.g. calendar_past_days raised above the
+    # frontend's fixed past=45) as free instead of "not synced" (issue #37).
+    # Trusting config ALONE is that same bug from the other side: raising
+    # calendar_window_days advertises the wider range the instant the app
+    # restarts, while the events table still holds only the old one until a tick
+    # lands, and a source that keeps failing holds its stale rows indefinitely
+    # (keep_ids) while config still promises the full window. Those uncovered
+    # days would render "nothing scheduled" — a confident lie about a calendar
+    # nobody asked Google for.
+    #
+    # So each sync records the span it really pulled, and an ACTIVE source with
+    # no record yet contributes NO authority: an empty window (every day hatches)
+    # is the honest answer before the first successful sync. A source that isn't
+    # active can't leave a hole, so it never narrows the window.
     synced_back = min(past_days, cfg.calendar_past_days)
     synced_fwd = min(days, cfg.calendar_window_days)
+
+    def _cap_to_coverage(key, fwd, back):
+        cov = fdb.kv_get(c, key)
+        if cov is None:
+            return -1, -1      # never synced cleanly yet — claim nothing
+        if not isinstance(cov, dict):
+            # Belt-and-braces, and deliberately kept: the except below already
+            # catches the TypeError that indexing a str/list/int would raise, so
+            # this branch is behaviorally redundant. It stays so the ordinary
+            # shape check doesn't ride on exception control flow, and so the log
+            # line can name the real problem instead of a subscript error.
+            log.warning("%s holds a malformed coverage record (%r); reporting "
+                        "no synced window", key, cov)
+            return -1, -1
+        try:
+            fwd = min(fwd, (dt.date.fromisoformat(cov["to"]) - today).days)
+            back = min(back, (today - dt.date.fromisoformat(cov["from"])).days)
+        except (KeyError, TypeError, ValueError) as e:
+            # This block is inlined into the /api/hub payload, so raising here
+            # would blank the ENTIRE wall — chores, to-dos and all — over one bad
+            # kv row. Claim nothing instead: never over-claim, never 500.
+            # All three are reachable from a hand-edited, partially-written or
+            # restored kv row: a non-string date raises TypeError, a truncated
+            # row KeyError, an unparseable date ValueError.
+            log.warning("%s holds a malformed coverage record (%r): %s; "
+                        "reporting no synced window", key, cov, e)
+            return -1, -1
+        return fwd, back
+
+    # google/ICS rows come from cfg.calendars; CalDAV rows only exist once a
+    # discover has recorded collections. Either module being switched off (or
+    # having nothing configured) means it contributes no rows to hide behind.
+    if cfg.calendars and (cal_google_on or cal_ics_on):
+        synced_fwd, synced_back = _cap_to_coverage(
+            "calendar_covered", synced_fwd, synced_back)
+    # Only an ENABLED collection can be hiding a hole: an unchecked one's events
+    # are filtered out above, so letting it narrow the window would hatch a
+    # perfectly healthy Google-backed calendar over a source the operator
+    # deliberately switched off.
+    # VEVENT rows ONLY. caldav_covered records how far the EVENT fetch reached,
+    # but list_caldav_collections returns reminder lists (VTODO) too, and they are
+    # never pruned. Counting a VTODO row let an enabled reminders list — on an
+    # install with every actual iCloud calendar unchecked — collapse the window
+    # and hatch a perfectly healthy Google-backed wall.
+    if cal_caldav_on and any(col["enabled"] for col in caldav_cols.values()
+                             if col.get("comp_type") == "VEVENT"):
+        synced_fwd, synced_back = _cap_to_coverage(
+            "caldav_covered", synced_fwd, synced_back)
     return {
         "status": status,
         "events": events,
@@ -1817,11 +1899,38 @@ def admin_away_delete(pid: int):
 
 # --- calendar + tiles -----------------------------------------------------
 
+# The window the WALL asks for on every calendar load — `fetchCalWindow` in
+# hub.js fetches exactly these numbers. Named here so a static guard can pin the
+# two together in BOTH directions, because each is silent on its own: a fetch
+# above the ceiling 422s the calendar on every load, and a fetch BELOW the
+# configured window silently caps the reported window, hatching days that are
+# cached — the very bug that widening this window set out to fix.
+CAL_FETCH_DAYS = 400
+CAL_FETCH_PAST = 45
+
+# Hard ceiling on a single /api/calendar fetch, forward or back. A huge value
+# would overflow the date math into a 500.
+CAL_MAX_DAYS = 400
+
+# Not fatal (the window stays honest — those days just render "not synced"), but
+# it IS the state where the wall hatches days for a reason no banner explains, so
+# say it once at startup rather than leaving the operator to infer it from their
+# config file. BOTH directions: the static guard pins the shipped configs, but an
+# existing install's private config.json is the one file it can never see, and
+# that is the only place this misconfiguration actually lives.
+for _key, _have, _want in (
+        ("calendar_window_days", cfg.calendar_window_days, CAL_FETCH_DAYS),
+        ("calendar_past_days", cfg.calendar_past_days, CAL_FETCH_PAST)):
+    if _have < _want:
+        log.warning(
+            "%s=%d is below the %d days the wall fetches; days beyond it will "
+            "show as 'not synced'. Raise it in config.json.",
+            _key, _have, _want)
+
+
 @app.get("/api/calendar")
-def calendar(days: int = 90, past: int = 45):
-    # Bounded to the order of the sync window; a huge value would otherwise
-    # overflow the date math into a 500.
-    if not (0 <= days <= 366 and 0 <= past <= 366):
+def calendar(days: int = CAL_FETCH_DAYS, past: int = CAL_FETCH_PAST):
+    if not (0 <= days <= CAL_MAX_DAYS and 0 <= past <= CAL_MAX_DAYS):
         raise HTTPException(422, "days/past out of range")
     c = _db()
     return _calendar_block(c, _today(), days, past_days=past)

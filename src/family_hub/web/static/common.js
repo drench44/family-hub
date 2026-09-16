@@ -314,6 +314,51 @@ function isDayOutsideWindow(dayISO, win) {
   return dayISO < win.from || dayISO > win.to;
 }
 
+/* A window that vouches for NOTHING: `to` is the day BEFORE `from`, so every
+   day, today included, falls outside it and hatches "not synced".
+
+   Used wherever the real synced range is unknown, because the alternative is
+   isDayOutsideWindow's fail-open, which renders an unknown range as a free
+   calendar — the one thing this surface must never do. Both callers reach it on
+   paths that really happen: a fetch that failed with nothing cached, and the
+   calendar overlay's very first paint before any fetch has resolved. */
+function emptyWindow(todayStr) {
+  return { from: todayStr, to: addDays(todayStr, -1) };
+}
+
+/* The calendar payload to fall back to when a /api/calendar fetch fails. Pure
+   (the caller passes today) so every branch is testable without a network.
+
+   With a PREVIOUS payload: keep its events and window, but downgrade the status
+   so the "showing the last events we saw" banner fires instead of painting
+   hours-old events as current.
+
+   With NOTHING cached there is no window either — and isDayOutsideWindow fails
+   open on a missing one, so every day the family paged to would read "nothing
+   scheduled": a confidently-empty year, growing with the sync window. Return an
+   EMPTY window instead (to = the day BEFORE from, so even today falls outside
+   it) and every day hatches "not synced", which is the truth: we know nothing
+   about any of them. `nothing_cached` lets the banner drop its promise of
+   cached events.
+
+   `message` keeps the real reason instead of relabelling everything
+   'unreachable' — j() digs the API's `detail` out of a non-2xx body, so a 422
+   (this fetch drifting past the endpoint's ceiling) stays distinguishable from a
+   dead network. It rides the payload and the console for whoever diagnoses it;
+   the wall's own copy stays deliberately non-technical. */
+function failedCalWindow(prev, message, todayStr) {
+  // Whether anything is cached is a fact about the PAYLOAD, not about which
+  // failure this is, so recompute it every call. On the second consecutive
+  // failure `prev` is the empty payload the first one produced: spreading a
+  // fresh status over it without re-deriving the flag silently went back to
+  // promising "the last events we saw" with none to show.
+  const cached = !!(prev && prev.events && prev.events.length);
+  const status = { ok: false, error: message || 'unreachable' };
+  if (!cached) status.nothing_cached = true;
+  if (prev) return { ...prev, status };
+  return { status, events: [], window: emptyWindow(todayStr) };
+}
+
 /* 42 Sunday-first cells covering `month` (1-12) of `year`, each
    {date:'YYYY-MM-DD', inMonth:bool}. Local-midnight math, tz-independent.
    (Sunday-first per operator request 2026-08-13; was Monday-first.) */
@@ -1085,9 +1130,23 @@ function calStatusMessage(status) {
     // even when st.ok is true (another source is still healthy and rendering).
     return 'A calendar is having trouble syncing — showing the last events we saw.';
   }
+  if (st.loading_full) {
+    // The calendar overlay's first paint runs on the home feed's narrow window
+    // (14 days forward, none back), so days outside it are marked "not synced"
+    // that the full fetch is about to fill in. Say it's still loading rather
+    // than letting that partial reading look like the final answer. Checked
+    // BEFORE the ok-status early return: this payload is ok, just incomplete.
+    return 'Loading the full calendar…';
+  }
   if (st.ok !== false) return '';
   if (String(st.error || '').includes('not configured')) {
     return 'No calendar is connected yet — add one in settings and the family’s events show up here.';
+  }
+  if (st.nothing_cached) {
+    // The generic copy below promises "the last events we saw", which is a lie
+    // when the very first fetch failed and there are none. Say what's true: we
+    // have nothing, so nothing shown here can be trusted as complete.
+    return 'Can’t reach the calendar — no events are loaded yet.';
   }
   return 'Calendar sync hit a snag — showing the last events we saw.';
 }
