@@ -62,6 +62,88 @@ def test_caldav_sync_pulls_events_and_records_collection_colors(conn):
     assert cols["caldav:abc"]["enabled"] is True
 
 
+def test_caldav_sync_records_the_span_it_actually_covered(conn):
+    """Same contract as the Google sync: the window /api/calendar reports must
+    follow real coverage, so record what this pass actually pulled."""
+    client = FakeCalDav([
+        {"id": "abc", "name": "Family", "comp": "VEVENT",
+         "ics": [_ics("u1", "Dentist", "20260820", "20260821")]},
+    ])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    cov = fdb.kv_get(conn, "caldav_covered")
+    assert cov["to"] == (_NOW.date() + dt.timedelta(days=28)).isoformat()
+    assert cov["from"] == (_NOW.date() - dt.timedelta(days=45)).isoformat()
+
+
+def test_caldav_sync_with_a_failing_collection_does_not_advance_coverage(conn):
+    """A collection that raised keeps its old rows, which cover only the old
+    span; the recorded coverage must not move past what was really fetched."""
+    class _BoomCalDav(FakeCalDav):
+        def fetch_ics(self, collection, lo, hi):
+            raise RuntimeError("iCloud said no")
+
+    client = _BoomCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    prior = {"from": "2026-08-01", "to": "2026-08-20"}
+    fdb.kv_set(conn, "caldav_covered", prior)
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["ok"] is False
+    assert fdb.kv_get(conn, "caldav_covered") == prior
+
+
+def test_caldav_records_coverage_even_when_a_reminder_list_fails(conn):
+    """Coverage records how far the EVENT fetch reached. A VTODO (reminders) list
+    that failed says nothing about that, and freezing coverage on it would hatch
+    a calendar that pulled its full window perfectly — on a first run, the whole
+    wall."""
+    class _TodoBoom(FakeCalDav):
+        def fetch_todos(self, collection):
+            raise RuntimeError("reminders unavailable")
+
+    client = _TodoBoom([
+        {"id": "abc", "name": "Family", "comp": "VEVENT",
+         "ics": [_ics("u1", "Dentist", "20260820", "20260821")]},
+        {"id": "rem", "name": "Reminders", "comp": "VTODO"},
+    ])
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["ok"] is False, "the reminder failure is still reported"
+    cov = fdb.kv_get(conn, "caldav_covered")
+    assert cov is not None, "the event fetch succeeded; coverage must advance"
+    assert cov["to"] == (_NOW.date() + dt.timedelta(days=28)).isoformat()
+
+
+def test_caldav_empty_discover_records_no_coverage(conn):
+    """Discover returning nothing means nothing was fetched from anything, which
+    is not evidence of coverage — recording it would report days as synced that
+    nobody ever asked iCloud about."""
+    st = caldav_sync.sync_once(FakeCalDav([]), conn, _CFG, _NOW)
+    assert fdb.kv_get(conn, "caldav_covered") is None
+    assert st is not None
+
+
+def test_caldav_client_sends_a_request_timeout(monkeypatch):
+    """Every DAV call needs a ceiling. Without one a REPORT iCloud never answers
+    hangs the single sync thread — calendar, chore mirror and outbox flush all
+    stall, nothing is logged, and caldav_status still shows its last healthy
+    sync (the issue #32 freeze class). The event search spans the whole
+    calendar window, so a wider window makes a slow answer likelier."""
+    import caldav
+    seen = {}
+
+    class _FakeDav:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def principal(self):
+            return "P"
+
+    monkeypatch.setattr(caldav, "DAVClient", _FakeDav)
+    client = caldav_service.CalDavClient(username="u", password="p",
+                                         url="https://example.invalid/")
+    assert client._principal_obj() == "P"
+    assert seen.get("timeout") == caldav_service.CalDavClient.DAV_TIMEOUT_S
+    assert isinstance(seen["timeout"], (int, float)) and seen["timeout"] > 0
+
+
 def test_caldav_sync_skips_when_unconfigured(conn):
     st = caldav_sync.sync_once(None, conn, _CFG, _NOW)
     assert st["ok"] is False and st["error"] == "not configured"

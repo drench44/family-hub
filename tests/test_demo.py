@@ -84,6 +84,17 @@ def test_demo_hub_has_calendar_and_todos(demo_client):
     assert hub["todos_ok"] is True
 
 
+def test_demo_calendar_window_vouches_for_the_demo_days(demo_client):
+    """DEMO never runs a sync, so with no seeded coverage record the window comes
+    back INVERTED and every empty day on the demo wall hatches "not synced" —
+    while status.ok stays true, so nothing explains it. That wall is the README
+    screenshot and every visual gate, so pin it."""
+    hub = demo_client.get("/api/hub").json()
+    win = hub["calendar"]["window"]
+    assert win["from"] < win["to"], "an inverted window hatches every day"
+    assert win["from"] <= hub["date"] <= win["to"], "today must be vouched for"
+
+
 def test_demo_links_are_placeholder_cameras(demo_client):
     links = demo_client.get("/api/hub").json()["links"]
     cams = links["cameras"]

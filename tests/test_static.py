@@ -22,6 +22,8 @@ ALL_HTML = "\n".join(p.read_text() for p in HTML_FILES)
 ALL_JS = "\n".join(p.read_text() for p in JS_FILES)
 OSK = (STATIC / "osk.js").read_text()
 HUB = (STATIC / "hub.js").read_text()
+APP_PY = (STATIC.parents[1] / "app.py").read_text()
+CONFIG_PY = (STATIC.parents[1] / "config.py").read_text()
 COMMON = (STATIC / "common.js").read_text()
 
 # The NEW load-bearing theme tokens (Task 10 finished the migration off the
@@ -338,6 +340,65 @@ def test_no_utc_today_fallback_in_hub():
     tz-local; keep the fallbacks in line."""
     assert "toISOString().slice(0, 10)" not in HUB and "toISOString().slice(0,10)" not in HUB, \
         "hub.js must not derive a local 'today' from UTC toISOString()"
+
+
+def test_calendar_window_chain_stays_consistent():
+    """The synced-window size is ONE number spread over four files, and every
+    link is silent when it breaks:
+
+        config window  >=  frontend fetch  <=  API ceiling
+
+    Too big a fetch and /api/calendar 422s the wall's calendar on every load (an
+    empty overlay, not a loud failure). Too small a fetch, or a config window
+    below it, and `_calendar_block` caps the reported window back down, so the
+    month view hatches "not synced" over days that ARE cached — the original
+    complaint this window-widening fixed. Both directions must be pinned: a
+    one-sided `fetch <= ceiling` guard passes happily with the fetch reverted to
+    days=1. Checks EVERY fetch in the file, not just the first."""
+    fetches = re.findall(r"/api/calendar\?days=(\d+)&past=(\d+)", HUB)
+    assert fetches, "hub.js must fetch /api/calendar with explicit days/past"
+
+    cap = re.search(r"^CAL_MAX_DAYS = (\d+)", APP_PY, re.M)
+    assert cap, "app.py must define CAL_MAX_DAYS"
+    ceiling = int(cap.group(1))
+
+    # The server NAMES the window the wall fetches, and hub.js must ask for
+    # exactly it. Equality, not `<=`: a one-sided bound is happily satisfied by a
+    # fetch reverted to days=90, which is silent and is the original bug.
+    want = re.search(r"^CAL_FETCH_DAYS = (\d+)", APP_PY, re.M)
+    want_past = re.search(r"^CAL_FETCH_PAST = (\d+)", APP_PY, re.M)
+    assert want and want_past, "app.py must name the wall's fetch window"
+    want_days, want_back = int(want.group(1)), int(want_past.group(1))
+
+    for raw_days, raw_past in fetches:
+        assert (int(raw_days), int(raw_past)) == (want_days, want_back), (
+            f"hub.js fetches {raw_days}/{raw_past} but app.py names "
+            f"{want_days}/{want_back}; a fetch below the configured window "
+            "silently caps the reported window and hatches cached days")
+
+    assert want_days <= ceiling, \
+        f"the wall fetches {want_days} days; /api/calendar rejects past {ceiling}"
+    assert want_back <= ceiling, \
+        f"the wall fetches {want_back} past days; /api/calendar rejects past {ceiling}"
+
+    # Every shipped config must cover the fetch — below it, the reported window
+    # caps to config and days that ARE cached hatch. config.demo.json counts:
+    # the demo wall is the README screenshot and every visual gate.
+    for name in ("config.example.json", "config.demo.json"):
+        shipped = json.loads((STATIC.parents[3] / name).read_text())
+        assert shipped["calendar_window_days"] >= want_days, \
+            f"{name} syncs {shipped['calendar_window_days']} days, under the {want_days} fetched"
+        assert shipped["calendar_past_days"] >= want_back, \
+            f"{name} syncs {shipped['calendar_past_days']} past days, under the {want_back} fetched"
+
+    # The dataclass defaults serve any config.json that omits the key; below the
+    # fetch they silently hatch the difference on an otherwise healthy install.
+    for field, floor in (("calendar_window_days", want_days),
+                         ("calendar_past_days", want_back)):
+        dflt = re.search(rf"^    {field}: int = (\d+)", CONFIG_PY, re.M)
+        assert dflt, f"config.py must define a {field} default"
+        assert int(dflt.group(1)) >= floor, \
+            f"config.py defaults {field} to {dflt.group(1)}, under the {floor} fetched"
 
 
 def test_calendar_overlay_opens_on_the_layout_default_view():

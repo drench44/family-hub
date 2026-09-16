@@ -188,7 +188,7 @@ once with **`?kiosk=1`** to turn it on (the setting is then remembered;
 |---|---|
 | `port` | Hub port (default 8138) |
 | `calendars` | Calendar sources, in display order (see below) |
-| `calendar_window_days` / `calendar_past_days` | Sync window forward / back |
+| `calendar_window_days` / `calendar_past_days` | Sync window forward / back (400 / 45 in the example config). The month view can page anywhere, but only days inside this window are actually fetched — outside it an empty day is marked "not synced" rather than shown as free. Raising it past 400 also needs `CAL_MAX_DAYS` in `app.py` raised, and the frontend's fixed fetch in `hub.js`. The reported window is additionally capped by what the last SUCCESSFUL sync actually covered, so an install that has never completed one — or whose source keeps failing — marks days as "not synced" even inside this configured window, rather than claiming days it never fetched. |
 | `cameras` | go2rtc streams shown as tiles: `{"src","label"}` + optional `"hd"` (higher-res twin used full-screen) |
 | `camera_page` | The phone/tablet **Cameras** tab as a 2×2 (row-major) live grid — same entry shape as `cameras`, but its own set and order, so the tab can show cameras the wall column doesn't. Omit to reuse `cameras`. |
 | `panels` | Always-on dashboard embeds (see below) |

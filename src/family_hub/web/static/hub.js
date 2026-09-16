@@ -155,9 +155,12 @@ function eventRow(ev, day) {
    and a genuinely free day must stay visually distinct from one Google was
    never asked about. `win` is optional (not every caller has fetched a
    calendar payload with a `window` field) and a missing/omitted one simply
-   never marks anything (isDayOutsideWindow fails open): the 5-day home feed
-   passes its own calendar.window too, it just never reaches far enough
-   forward to trip it under the default sync window. */
+   never marks anything (isDayOutsideWindow fails open). The 5-day home feed
+   passes its own calendar.window too, and CAN trip it: the window is capped by
+   what the last successful sync actually covered, so before the first one lands
+   — a fresh install, a failing source, a fetch that failed with nothing cached —
+   it is empty and even tomorrow hatches. That is deliberate: a day nobody
+   fetched must never read as free, on the home feed least of all. */
 function agendaHtml(events, startStr, todayStr, maxDays, skipEmptyAfter, win) {
   const byDay = bucketByDay(events);
   let html = '';
@@ -216,16 +219,16 @@ let calWin = null;    // {status, events} — the full cached window
 
 async function fetchCalWindow() {
   try {
-    calWin = await j('/api/calendar?days=90&past=45');
+    calWin = await j('/api/calendar?days=400&past=45');
     indexEvents(calWin.events);
   } catch (e) {
-    // On a failed refresh keep the cached events, but DON'T preserve a stale
-    // ok:true status — downgrade it so the existing "showing the last events we
-    // saw" banner fires instead of painting hours-old events as current.
+    // failedCalWindow (common.js) decides what a failure looks like: keep the
+    // cached events under a downgraded status, or — with nothing cached — an
+    // EMPTY window so no day renders as confidently free. Pure and unit-tested
+    // there; this stays the thin I/O shell.
     console.warn('calendar window refresh failed; keeping cached events', e);
-    calWin = calWin
-      ? { ...calWin, status: { ok: false, error: 'unreachable' } }
-      : { status: { ok: false, error: 'unreachable' }, events: [] };
+    calWin = failedCalWindow(calWin, (e && e.message) ? String(e.message) : '',
+                             todayISO());
   }
 }
 
