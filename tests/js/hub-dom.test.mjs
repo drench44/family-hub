@@ -4931,6 +4931,27 @@ test('renderIntegrations: shows a reconnect hint when status is needs_auth', () 
   assert.match(host.innerHTML, /reconnect/);
 });
 
+test('renderIntegrations: a broken laundry row carries its own badge', () => {
+  // The backend now keeps laundry listed and reports needs_auth (no/rejected
+  // token) or error (a config block that survived nothing, a machine stuck
+  // offline). Before that it dropped out of the registry entirely, so the wall
+  // showed neither a card nor a row: the whole 2026-09-17 incident.
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'laundry', kind: 'laundry', name: 'Laundry',
+      enabled: true, status: 'needs_auth' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /data-integ-toggle="laundry"/);
+  assert.match(host.innerHTML, /integ-warn">reconnect</);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'laundry', kind: 'laundry', name: 'Laundry',
+      enabled: true, status: 'error' },
+  ] });
+  assert.match(sandbox.document.getElementById('integrations-ctl').innerHTML,
+    /integ-warn">error</);
+});
+
 test('renderIntegrations: shows an error hint when status is error', () => {
   const { sandbox } = newHub();
   sandbox.renderIntegrations({ integrations: [

@@ -11,21 +11,38 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Fixed
-- Laundry no longer disappears when its Home Assistant token does. A hub with
-  laundry configured but no usable `HA_TOKEN` now stays in the integration
-  registry with a `needs_auth` status, so the wall renders an honest "Laundry
-  unavailable" card and the settings row says "reconnect". Previously the
-  integration dropped out of the registry entirely, taking the card and its own
-  settings row with it, while `/health` kept answering 200. Startup also logs
-  the misconfiguration once (except under `DEMO`, which serves canned laundry
-  and is not broken).
-- A Home Assistant token that is rejected rather than missing is now an error,
-  not a quiet outage. `401`/`403` used to be logged once at warning level and
-  then suppressed "until it recovers", which is indistinguishable from HA
-  restarting except that a revoked token never recovers. Credential rejections
-  get their own latch and log level, and the watcher escalates once when the
-  feed has been unavailable for five minutes, with a recovery line that re-arms
-  both.
+- Laundry no longer disappears when something about it breaks. A hub with
+  laundry configured but unusable now stays in the integration registry with a
+  `needs_auth` or `error` status, so the wall renders an honest "Laundry
+  unavailable" card and the settings row says which. Previously the integration
+  dropped out of the registry entirely, taking the card and its own settings row
+  with it, while `/health` kept answering 200. That covers every way it can be
+  configured and not work: no `HA_TOKEN`, a token Home Assistant rejects, and a
+  `laundry` config block that nothing valid survived (a typo'd entity key used
+  to delete the integration outright, logged once at warning level and nowhere
+  else). Startup logs the misconfiguration once, except under `DEMO`, which
+  serves canned laundry and is not broken.
+- A machine stuck offline while its sibling reports is no longer invisible.
+  `available` is an OR across machines, so a renamed washer entity left the tile
+  healthy, the card showing a dash, and nothing logged past the first warning.
+  It now escalates once per machine, marks the settings row, and clears when the
+  machine reports again.
+- A Home Assistant token that is rejected rather than missing is an error, not a
+  quiet outage. `401`/`403` used to be logged once at warning level and then
+  suppressed "until it recovers", which is indistinguishable from HA restarting
+  except that a revoked token never recovers. Credential rejections now need
+  three in a row before they are called revoked (a reverse proxy or HA's own
+  ip_ban answers 403 too, and those heal), then get their own error and latch,
+  with a recovery line at a level that is visible wherever the error was.
+- The watcher escalates once when the feed has been unavailable for five
+  minutes, and requires sustained recovery before closing the incident: a feed
+  that worked one tick in twenty used to reset the clock forever and never
+  escalate while the wall flickered. The card's own hold is unchanged, so a
+  brief blip still does not flicker.
+- A failing completion history is latched and named. It cannot blank the card,
+  but without it a load that finished and powered itself off renders as a bare
+  "Idle", and at one tick every five seconds it was writing a warning with a
+  traceback about 17,000 times a day, burying the errors above.
 - A whitespace-only `HA_TOKEN` is treated as no token everywhere. It used to be
   "present" to the registry and "empty" to the startup check, so the hub could
   report an empty token for a card it was busy rendering, and still send a
