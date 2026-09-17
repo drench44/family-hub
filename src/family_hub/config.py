@@ -44,6 +44,12 @@ class Config:
     # long-lived token comes from the HA_TOKEN env var, never this file.
     # None/absent = no laundry integration.
     laundry: dict | None = None
+    # Set when a `laundry` block WAS written but nothing valid survived
+    # cleaning. Without this the integration simply disappears: no card, no
+    # settings row, /health still 200, which is the same invisible failure a
+    # missing HA_TOKEN used to cause. The app surfaces this as an error state
+    # instead of an absence.
+    laundry_config_error: str | None = None
     # always-on dashboard embeds, in order. Each: {"id","label","url","vw",
     # "vh"} plus optional "page_w" (lay the page out wider than the visible
     # region), "crop_top"/"crop_left" (pan the region to a card), "full"
@@ -89,15 +95,28 @@ def _clean_theme(raw_theme: object) -> dict | None:
     return cleaned or None
 
 
-def _clean_laundry(raw: object) -> dict | None:
+def _clean_laundry(raw: object) -> tuple[dict | None, str | None]:
     """Keep only a well-formed laundry block: a dict with a non-empty ha_base
     and at least one machine carrying an id and both entity ids. Malformed
     machine entries are dropped (never crash on a config typo); an empty
     survivor list means no laundry integration at all. Returns
-    {"ha_base": str, "machines": [{"id","label","kind","status_entity",
-    "remaining_entity"}, ...]} or None."""
-    if not isinstance(raw, dict) or not raw.get("ha_base"):
-        return None
+    ({"ha_base": str, "machines": [{"id","label","kind","status_entity",
+    "remaining_entity"}, ...]}, None) when it survives, else (None, reason).
+
+    The reason is the difference between "this hub has no laundry" (raw is
+    absent: None, None) and "someone configured laundry and it is broken"
+    (None, "..."), which the caller turns into a visible error rather than a
+    feature that quietly does not exist."""
+    if raw is None:
+        return None, None                      # no laundry on this hub
+    if not isinstance(raw, dict):
+        log.error("laundry: the `laundry` config block is %s, not an object "
+                  "-- the laundry integration is OFF", type(raw).__name__)
+        return None, "the laundry block is not an object"
+    if not raw.get("ha_base"):
+        log.error("laundry: the `laundry` config block has no ha_base -- the "
+                  "laundry integration is OFF")
+        return None, "the laundry block has no ha_base"
     machines = []
     raw_machines = raw.get("machines")
     for m in (raw_machines if isinstance(raw_machines, list) else []):
@@ -123,10 +142,14 @@ def _clean_laundry(raw: object) -> dict | None:
             "remaining_entity": str(remaining),
         })
     if not machines:
-        log.warning("laundry: ha_base is set but no valid machines survived — "
-                    "the laundry integration is OFF")
-        return None
-    return {"ha_base": str(raw["ha_base"]).rstrip("/"), "machines": machines}
+        # ERROR, not warning: a hub that asked for laundry and got none is
+        # misconfigured, and the only other signal is a card that never
+        # appears. See Config.laundry_config_error.
+        log.error("laundry: ha_base is set but no valid machines survived -- "
+                  "the laundry integration is OFF")
+        return None, "no valid machines in the laundry block"
+    return ({"ha_base": str(raw["ha_base"]).rstrip("/"), "machines": machines},
+            None)
 
 
 def _clean_fleet(raw: object) -> dict | None:
@@ -152,6 +175,7 @@ def _clean_fleet(raw: object) -> dict | None:
 def load_config(path: str) -> Config:
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
+    _laundry_clean, _laundry_err = _clean_laundry(raw.get("laundry"))
     return Config(
         port=int(raw.get("port", 8138)),
         climate_base=raw.get("climate_base", ""),
@@ -163,7 +187,8 @@ def load_config(path: str) -> Config:
         calendars=list(raw.get("calendars", [])),
         cameras=list(raw.get("cameras", [])),
         camera_page=list(raw.get("camera_page", [])),
-        laundry=_clean_laundry(raw.get("laundry")),
+        laundry=_laundry_clean,
+        laundry_config_error=_laundry_err,
         panels=list(raw.get("panels", [])),
         theme=_clean_theme(raw.get("theme")),
         fleet=_clean_fleet(raw.get("fleet")),

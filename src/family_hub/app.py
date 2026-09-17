@@ -300,6 +300,18 @@ _http = httpx.AsyncClient()
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app):
+    # Configured but unusable is a misconfiguration, not a runtime failure:
+    # say it once, here, before anything tries to use it.
+    if _laundry_env_broken():
+        log.error("laundry is configured in config.json but HA_TOKEN is "
+                  "empty: every laundry read will fail and the wall can only "
+                  "show 'Laundry unavailable'. In a container this usually "
+                  "means the environment never reached it.")
+    elif not DEMO and getattr(cfg, "laundry_config_error", None):
+        log.error("laundry is configured in config.json but %s, so the "
+                  "integration is OFF and the wall shows an unavailable card. "
+                  "The per-entry reasons are logged above.",
+                  cfg.laundry_config_error)
     # The laundry watcher (see "laundry: annotation, background watcher"
     # below) lives on the app's own loop so it shares _http and the SSE
     # waiters' Event. Armed only where the calendar sync would run and only
@@ -622,11 +634,54 @@ def _reminder_lists(c) -> list:
             if col["comp_type"] == "VTODO" and col["enabled"]]
 
 
+def _laundry_row_status() -> str | None:
+    """The laundry integration's health for the settings row: 'needs_auth',
+    'error', or None when it is fine (or when there is nothing to complain
+    about, as in DEMO).
+
+    Every way laundry can be configured-and-not-working lands here, because
+    each of them otherwise shows up as a card that simply is not there:
+
+      - no HA token at all (the 2026-09-17 lost-.env incident);
+      - a token Home Assistant REJECTS, which looks identical on the wall and
+        is the likelier case, since tokens are revoked from HA's own UI;
+      - a `laundry` config block that nothing valid survived (a typo'd entity
+        key used to delete the integration outright);
+      - a machine stuck offline while its sibling reports, which keeps the
+        tile "available" and would otherwise never be mentioned anywhere;
+      - the whole feed being unavailable long enough to have earned an ERROR,
+        which is the loudest lane in the log and used to be the quietest one
+        here: HA down, or every configured entity renamed at once, left the row
+        reading healthy next to a wall that said "Laundry unavailable".
+
+    DEMO serves canned laundry with no Home Assistant at all, so a demo wall
+    is not broken and must not nag."""
+    if DEMO:
+        return None
+    if getattr(cfg, "laundry_config_error", None):
+        return "error"
+    if fintegrations.laundry_needs_auth(cfg, os.environ):
+        return "needs_auth"
+    if tiles.laundry_auth_rejected():
+        return "needs_auth"
+    if _laundry_machines_stuck or _laundry_unavail_alerted:
+        return "error"
+    return None
+
+
 def _integ_status(iid: str, caldav_status: dict, cal_status: dict,
-                  mirror_status: dict | None = None):
+                  mirror_status: dict | None = None,
+                  laundry_status: str | None = None):
     """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
-    or None for one with no sync (cameras/weather/climate/laundry). Drives the settings
+    or None for one with no sync (cameras/weather/climate). Drives the settings
     menu's 'Reconnect iCloud' / warning affordance on auth-failure or error.
+
+    Laundry has no sync of its own, but it DOES have a credential and a config
+    block, so `laundry_status` (computed once per request by
+    _laundry_row_status) is passed straight through: the row explains a card
+    that reads "unavailable" instead of the operator finding no laundry row at
+    all. It applies to the laundry row ONLY -- passing it in here for every id
+    would badge every integration on the wall.
 
     The chore mirror rides on the iCloud integration, so a failing mirror tick
     shows as an error on that row — it used to fail forever with the row still
@@ -634,6 +689,8 @@ def _integ_status(iid: str, caldav_status: dict, cal_status: dict,
     # calendar_status is shared by Google + ICS and can't tell them apart, and
     # needs_auth is a Google-only concept — so only surface it on google_calendar
     # (ICS gets no status rather than mis-inheriting Google's auth state).
+    if iid == "laundry":
+        return laundry_status
     src = (caldav_status if iid == "icloud_caldav"
            else cal_status if iid == "google_calendar" else None)
     if not src:
@@ -656,6 +713,7 @@ def _integrations_state(c) -> dict:
     caldav_status = fdb.kv_get(c, "caldav_status") or {}
     cal_status = fdb.kv_get(c, "calendar_status") or {}
     mirror_status = fdb.kv_get(c, "chore_mirror_status") or {}
+    laundry_status = _laundry_row_status()
     lst = []
     enabled_ids = set()
     for integ in _available_only():
@@ -666,7 +724,7 @@ def _integrations_state(c) -> dict:
                  "name": integ["name"], "enabled": en,
                  "group": integ.get("group", "integration"),
                  "status": _integ_status(integ["id"], caldav_status, cal_status,
-                                         mirror_status)}
+                                         mirror_status, laundry_status)}
         if integ["id"] == "icloud_caldav":
             # the connected Apple ID (not a secret) so settings can show it; the
             # password is never included. readonly = 1-way (read-only) vs 2-way.
@@ -1981,15 +2039,61 @@ LAUNDRY_SNAPSHOT_FRESH_S = 15.0
 # unavailable (the frontend's own last-good discipline, TILE_FAIL_LIMIT,
 # covers fetch failures the same way).
 LAUNDRY_UNAVAIL_HOLD_S = 30.0
+# ...and how long it must stay unavailable before the log says so once, loudly.
+# Comfortably longer than a Home Assistant restart (tens of seconds) so a
+# routine HA update is never called an incident, short enough that a revoked
+# token or a renamed entity is named the same morning it happens.
+LAUNDRY_UNAVAIL_ALERT_S = 300.0
 
 _laundry_snapshot: dict | None = None
 _laundry_snapshot_ts: float = 0.0
 _laundry_unavail_since: float | None = None
+# One-shot latch for the prolonged-outage ERROR below: a watcher ticking every
+# 5s must not reprint it 12 times a minute, and it re-arms on recovery.
+_laundry_unavail_alerted: bool = False
+# TWO clocks, deliberately. `_laundry_unavail_since` above drives what the WALL
+# shows and resets on the first good tick, because the hold exists to stop the
+# card flickering. `_laundry_alert_since` drives the LOG and only resets after
+# sustained recovery: a feed that works one tick in twenty would otherwise
+# reset the display clock often enough to never escalate, flapping all day
+# with nothing above DEBUG to show for it.
+_laundry_alert_since: float | None = None
+_laundry_ok_streak: int = 0
+LAUNDRY_RECOVERY_TICKS = 3
+# Per-machine outage tracking. `available` is an OR across machines, so one
+# healthy dryer keeps the tile available while a renamed or deleted washer
+# entity reads "offline" forever: no escalation, no status change, nothing but
+# a dash on the wall. These give a single stuck machine the same treatment the
+# whole-feed outage gets.
+_laundry_machine_offline_since: dict[str, float] = {}
+_laundry_machines_stuck: set[str] = set()
+# Consecutive failures of the annotation step (kv completion memory + cycle
+# log). It cannot make the card disappear, but it CAN make a finished load
+# render as a bare "Idle", so it is not allowed to fail quietly forever, and
+# at one tick every 5s it is not allowed to shout on every tick either.
+_laundry_annotate_failures: int = 0
+LAUNDRY_ANNOTATE_STRIKES = 6
 # The change signal for SSE waiters: each CHANGED tick swaps in a fresh
 # Event and sets the old one, so every waiter wakes exactly once per change
 # and re-arms on the new event. (Bound to the running loop at wait time;
 # in production the watcher and the stream handlers share the app's loop.)
 _laundry_change: asyncio.Event = asyncio.Event()
+
+
+def _laundry_env_broken() -> bool:
+    """Laundry is configured in config.json but the process has no usable
+    HA_TOKEN: every read fails and the card can only ever say "unavailable".
+
+    This is what a lost env file looks like from inside the app: on 2026-09-17
+    a deploy box's went missing and the container came up with an empty token,
+    so it gets a loud startup line instead of a dead tile nobody can explain.
+
+    DEMO serves canned laundry with no HA at all (_laundry_payload), so a demo
+    wall is not broken and must not be shouted at, the same carve-out
+    _laundry_watch_enabled makes via _sync_enabled(). One predicate for "no
+    token" (integrations.laundry_needs_auth) so the log line and the settings
+    row can never disagree about it."""
+    return not DEMO and fintegrations.laundry_needs_auth(cfg, os.environ)
 
 
 def _laundry_watch_enabled() -> bool:
@@ -2003,22 +2107,87 @@ async def _laundry_watch_tick() -> None:
     """One watcher iteration: fetch from HA, run the transition synthesis
     (kv completion memory + cycle log — see _laundry_annotate), publish the
     snapshot, and wake stream waiters iff the payload changed. Every failure
-    is soft: log and leave the previous snapshot standing for the next tick."""
+    is soft: log and leave the previous snapshot standing for the next tick.
+
+    Soft must not mean silent, so three lanes escalate here, each latched so a
+    5s cadence cannot turn a real problem into a log flood that buries it:
+    the whole feed being unavailable, one machine stuck offline while the
+    others report, and the annotation step failing (which silently downgrades
+    a finished load to a bare "Idle")."""
     global _laundry_snapshot, _laundry_snapshot_ts, _laundry_unavail_since, \
-        _laundry_change
+        _laundry_change, _laundry_unavail_alerted, _laundry_ok_streak, \
+        _laundry_annotate_failures, _laundry_alert_since
     try:
         t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
-        snap = _laundry_annotate(t) if t.get("available") else t
     except Exception:
-        log.warning("laundry watch: tick failed; retrying on cadence",
+        log.warning("laundry watch: fetch failed; retrying on cadence",
                     exc_info=True)
         return
+    if t.get("available"):
+        try:
+            snap = _laundry_annotate(t)
+            if _laundry_annotate_failures >= LAUNDRY_ANNOTATE_STRIKES:
+                log.warning("laundry: completion history is working again")
+            _laundry_annotate_failures = 0
+        except Exception:
+            _laundry_annotate_failures += 1
+            if _laundry_annotate_failures == LAUNDRY_ANNOTATE_STRIKES:
+                log.error("laundry: the completion history has failed %d ticks "
+                          "in a row. The card still renders, but a load that "
+                          "finished and powered itself off will read 'Idle' "
+                          "instead of 'Done at ...' until this is fixed.",
+                          _laundry_annotate_failures, exc_info=True)
+            elif _laundry_annotate_failures < LAUNDRY_ANNOTATE_STRIKES:
+                log.warning("laundry: completion history failed this tick",
+                            exc_info=True)
+            snap = t   # the live card, minus the synthesized history
+    else:
+        snap = t
     now = time.monotonic()
     if snap.get("available"):
-        _laundry_unavail_since = None
+        _laundry_unavail_since = None          # the card is live again, now
+        _laundry_ok_streak += 1
+        # ...but the ALERT clock needs sustained recovery, or a feed that
+        # succeeds one tick in twenty resets it forever and never escalates.
+        if _laundry_ok_streak >= LAUNDRY_RECOVERY_TICKS:
+            if _laundry_unavail_alerted:
+                log.warning("laundry: the feed recovered after being "
+                            "unavailable")
+            _laundry_alert_since = None
+            _laundry_unavail_alerted = False
     else:
+        _laundry_ok_streak = 0
         if _laundry_unavail_since is None:
             _laundry_unavail_since = now
+        if _laundry_alert_since is None:
+            _laundry_alert_since = now
+        # A card that says "unavailable" forever is the incident this exists
+        # for: a revoked HA token, a renamed entity, an HA that never came
+        # back. Each of those logs at most one WARNING per entity in tiles.py
+        # ("quiet until it recovers"), which reads exactly like HA rebooting
+        # for 20 seconds. One ERROR once the outage is minutes long tells the
+        # two apart, and the recovery line above closes it.
+        #
+        # ORDER IS LOAD-BEARING: this sits ABOVE the hold's early return, or a
+        # long outage that still has a last-good card standing would never
+        # escalate at all. (LAUNDRY_UNAVAIL_ALERT_S > LAUNDRY_UNAVAIL_HOLD_S,
+        # pinned by a test, so the card is honestly "unavailable" by the time
+        # this fires and the message cannot contradict the screen.)
+        if (not _laundry_unavail_alerted
+                and now - _laundry_alert_since >= LAUNDRY_UNAVAIL_ALERT_S):
+            _laundry_unavail_alerted = True
+            # TWO numbers, because they mean different things and have
+            # different fixes: the alert clock survives short recoveries, so a
+            # feed that comes up for a tick and drops again would otherwise be
+            # reported as one long outage the wall never actually showed.
+            log.error("laundry: the feed has been failing for %ds and is "
+                      "unavailable now (this stretch: %ds). If those numbers "
+                      "differ it is flapping, not down. Check that Home "
+                      "Assistant is up, that HA_TOKEN is still valid (a "
+                      "revoked token never recovers), and that the configured "
+                      "entities still exist.",
+                      int(now - _laundry_alert_since),
+                      int(now - _laundry_unavail_since))
         if (now - _laundry_unavail_since < LAUNDRY_UNAVAIL_HOLD_S
                 and _laundry_snapshot is not None
                 and _laundry_snapshot.get("available")):
@@ -2026,12 +2195,53 @@ async def _laundry_watch_tick() -> None:
             # so the route keeps serving it); honest once the hold expires
             _laundry_snapshot_ts = now
             return
+    _laundry_watch_machines(snap, now)
     changed = snap != _laundry_snapshot
     _laundry_snapshot = snap
     _laundry_snapshot_ts = now
     if changed:
         waiters, _laundry_change = _laundry_change, asyncio.Event()
         waiters.set()
+
+
+def _laundry_watch_machines(snap: dict, now: float) -> None:
+    """Per-machine outage escalation. `available` is an OR across machines, so
+    a washer whose entity was renamed reads `offline` forever while the dryer
+    keeps the tile healthy: no whole-feed alert, no status change, just a dash
+    on the wall that nobody can explain. One ERROR per machine once it has
+    been offline as long as a whole-feed outage would need, cleared (and
+    re-armed) when it reports again."""
+    if not snap.get("available"):
+        # The whole-feed lane owns this case, so nothing is judged here. The
+        # per-machine clocks are LEFT RUNNING on purpose: clearing them meant a
+        # machine offline for hours never escalated as long as the feed dropped
+        # often enough to keep resetting it, which is the same starvation the
+        # two-clock split fixed on the feed lane.
+        return
+    seen = set()
+    for m in snap.get("machines") or []:
+        mid = m.get("id")
+        if not mid:
+            continue
+        seen.add(mid)
+        if m.get("phase") != "offline":
+            if mid in _laundry_machines_stuck:
+                _laundry_machines_stuck.discard(mid)
+                log.warning("laundry: %s is reporting again", mid)
+            _laundry_machine_offline_since.pop(mid, None)
+            continue
+        since = _laundry_machine_offline_since.setdefault(mid, now)
+        if (mid not in _laundry_machines_stuck
+                and now - since >= LAUNDRY_UNAVAIL_ALERT_S):
+            _laundry_machines_stuck.add(mid)
+            log.error("laundry: %s has been offline for %ds while the rest of "
+                      "the card works. Its Home Assistant entities are most "
+                      "likely renamed or gone (config.json names them); the "
+                      "wall shows a dash for it until they are fixed.",
+                      mid, int(now - since))
+    for gone in set(_laundry_machine_offline_since) - seen:
+        _laundry_machine_offline_since.pop(gone, None)
+        _laundry_machines_stuck.discard(gone)
 
 
 async def laundry_watch_loop() -> None:
