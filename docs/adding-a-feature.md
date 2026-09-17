@@ -59,6 +59,14 @@ can never be turned off and don't degrade gracefully.*
       and its settings row both disappeared and `/health` stayed 200 for a
       day.) Pair it with a startup line for "configured but no credential"
       and an escalation for "credential rejected", which never heals itself.
+      **The exception is a credential the operator can supply from the wall
+      itself**: `icloud_caldav` drops out of the registry with no credentials
+      on purpose, because the Settings overlay renders its connect panel
+      regardless (`caldavPanelHtml`), so "absent" there means "not set up
+      yet" and has a visible way to fix it. Laundry's token can only arrive
+      out of band, in the box's `.env`, so its absence has to be reported.
+      If a new integration gains an in-app connect flow, it may follow
+      CalDAV; until then it follows laundry.
 - [ ] `config.example.json` gains a placeholder entry (use the
       `192.168.1.50` example-IP convention — this repo is public; never a
       real LAN IP, never house data).
