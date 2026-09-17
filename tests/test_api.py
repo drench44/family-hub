@@ -3084,7 +3084,8 @@ def test_integrations_laundry_toggle_roundtrip(client, monkeypatch):
     from family_hub.config import _clean_laundry
     monkeypatch.setattr(appmod.cfg, "laundry", _clean_laundry({
         "ha_base": "http://ha:8123", "machines": [
-            {"id": "washer", "status_entity": "s.a", "remaining_entity": "s.b"}]}))
+            {"id": "washer", "status_entity": "s.a",
+             "remaining_entity": "s.b"}]})[0])
     monkeypatch.setenv("HA_TOKEN", "tok")
     ids = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
     assert "laundry" in ids and ids["laundry"]["group"] == "integration"
@@ -3588,7 +3589,8 @@ def test_laundry_watch_gate_opens_in_production_shape(app_mod, monkeypatch):
     assert appmod.LAUNDRY_WATCH_S <= 10.0
     laundry = _clean_laundry({
         "ha_base": "http://ha:8123", "machines": [
-            {"id": "washer", "status_entity": "s.a", "remaining_entity": "s.b"}]})
+            {"id": "washer", "status_entity": "s.a",
+             "remaining_entity": "s.b"}]})[0]
     monkeypatch.setattr(appmod.cfg, "laundry", laundry)
     monkeypatch.delenv("DISABLE_SYNC", raising=False)
     assert appmod._laundry_watch_enabled() is True    # the production shape
@@ -3623,6 +3625,355 @@ def test_laundry_lifespan_arms_and_disarms_the_watcher(app_mod, monkeypatch):
     with TestClient(appmod.app):
         pass   # enter starts the lifespan; exit must cancel cleanly
     assert ran.is_set(), "lifespan never started the watch loop"
+
+
+# A laundry block as config.load actually produces one: _clean_laundry drops a
+# machine-less block to None, so a fixture with "machines": [] tests a state
+# that cannot exist on a real hub.
+_LAUNDRY_CFG = {"ha_base": "http://ha:8123", "machines": [
+    {"id": "washer", "label": "Washer", "kind": "washer",
+     "status_entity": "sensor.washer_current_status",
+     "remaining_entity": "sensor.washer_remaining_time"}]}
+
+
+def _errors(caplog):
+    return [r for r in caplog.records
+            if r.levelno >= logging.ERROR and r.name.startswith("family_hub")]
+
+
+def test_configured_laundry_without_a_token_shouts_at_startup(app_mod, monkeypatch, caplog):
+    # The 2026-09-17 bug: the deploy box lost its .env, compose recreated the
+    # container with an empty HA_TOKEN, and the wall's laundry card simply
+    # disappeared, with no error anywhere and /health still 200. A configured-
+    # tokenless laundry must be LOUD at startup.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "   ")   # whitespace is still no token
+    monkeypatch.setattr(appmod, "_laundry_watch_enabled", lambda: False)
+    assert appmod._laundry_env_broken() is True
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        with TestClient(appmod.app):
+            pass
+    hits = [r.getMessage() for r in _errors(caplog) if "HA_TOKEN" in r.getMessage()]
+    assert len(hits) == 1, hits          # once, not once per worker/route
+    assert "laundry" in hits[0]
+
+
+def test_a_healthy_laundry_setup_says_nothing_at_startup(app_mod, monkeypatch, caplog):
+    # The paired half: the loud line must not cry wolf on a working hub, or it
+    # gets tuned out. Both halves run through the real lifespan; asserting the
+    # predicate alone would miss a guard that shouts for every hub.
+    appmod = app_mod
+    monkeypatch.setattr(appmod, "_laundry_watch_enabled", lambda: False)
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    assert appmod._laundry_env_broken() is False
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        with TestClient(appmod.app):
+            pass
+    assert not _errors(caplog), "a working laundry must start silently"
+
+    monkeypatch.setattr(appmod.cfg, "laundry", None)
+    monkeypatch.delenv("HA_TOKEN", raising=False)
+    assert appmod._laundry_env_broken() is False   # no laundry, no complaint
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        with TestClient(appmod.app):
+            pass
+    assert not _errors(caplog)
+
+
+def test_demo_laundry_is_never_called_broken(app_mod, monkeypatch, caplog):
+    # DEMO serves canned laundry with no HA at all, and the compose quickstart
+    # tells people to run DEMO=1 against a real config.json. Shouting about a
+    # missing token there is an error line that is wrong in a documented mode,
+    # which is how error lines get tuned out.
+    appmod = app_mod
+    monkeypatch.setattr(appmod, "DEMO", True)
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.delenv("HA_TOKEN", raising=False)
+    monkeypatch.setattr(appmod, "_laundry_watch_enabled", lambda: False)
+    assert appmod._laundry_env_broken() is False
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        with TestClient(appmod.app):
+            pass
+    assert not _errors(caplog)
+
+
+def test_a_tokenless_laundry_stays_in_the_settings_menu_as_needs_auth(
+        app_mod, client, monkeypatch):
+    # The other half of the disappearing act: with no token the integration
+    # used to drop out of the registry, so the ONE surface an operator checks
+    # showed a hub with no laundry instead of a laundry that needs a token.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.delenv("HA_TOKEN", raising=False)
+    rows = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
+    assert "laundry" in rows, "a tokenless laundry vanished from settings again"
+    assert rows["laundry"]["status"] == "needs_auth"
+
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    rows = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
+    assert rows["laundry"]["status"] is None, "a working laundry must not nag"
+
+
+def test_the_laundry_status_never_leaks_onto_another_integration(
+        app_mod, client, monkeypatch):
+    # _integ_status takes the laundry health as a parameter and the call site
+    # passes it for EVERY row. Applying it to any id but laundry would paint a
+    # "reconnect" badge across the whole settings menu.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.delenv("HA_TOKEN", raising=False)
+    rows = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
+    assert rows["laundry"]["status"] == "needs_auth"
+    for iid, row in rows.items():
+        if iid not in ("laundry", "icloud_caldav", "google_calendar"):
+            assert row["status"] is None, f"{iid} inherited laundry's status"
+
+
+def test_a_laundry_block_that_survives_nothing_is_an_error_not_an_absence(
+        app_mod, client, monkeypatch, caplog):
+    # The same disappearing act through a different door: a typo'd entity key
+    # drops every machine, _clean_laundry returns None, and the integration
+    # used to leave the registry entirely -- blank slot on the wall, no
+    # settings row, /health 200.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", None)
+    monkeypatch.setattr(appmod.cfg, "laundry_config_error",
+                        "no valid machines in the laundry block")
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    rows = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
+    assert "laundry" in rows, "a broken laundry config vanished the integration"
+    assert rows["laundry"]["status"] == "error"
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        with TestClient(appmod.app):
+            pass
+    assert any("laundry is configured" in r.getMessage() for r in _errors(caplog))
+
+
+def test_a_rejected_token_also_asks_for_a_reconnect(app_mod, client, monkeypatch):
+    # A revoked token is the likelier failure than a missing one (they are
+    # revoked from HA's own UI), and it looks identical on the wall. The row
+    # has to say so, or "the settings row says reconnect" is only true for the
+    # case nobody hits.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "a-token-that-ha-no-longer-accepts")
+    rows = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
+    assert rows["laundry"]["status"] is None          # nothing rejected yet
+    monkeypatch.setattr(appmod.tiles, "laundry_auth_rejected", lambda: True)
+    rows = {i["id"]: i for i in client.get("/api/integrations").json()["integrations"]}
+    assert rows["laundry"]["status"] == "needs_auth"
+
+
+def test_a_machine_stuck_offline_is_escalated_and_shown(app_mod, monkeypatch, caplog):
+    # `available` is an OR across machines, so a washer whose entity was
+    # renamed reads offline forever while the dryer keeps the tile healthy.
+    # Nothing used to notice: no whole-feed alert, no status, just a dash.
+    appmod = app_mod
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(appmod.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "tok")     # the token is fine; the entity is not
+    monkeypatch.setattr(appmod, "_laundry_machine_offline_since", {})
+    monkeypatch.setattr(appmod, "_laundry_machines_stuck", set())
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        snap = {"available": True, "machines": [
+            {"id": "washer", "phase": "offline"},
+            {"id": "dryer", "phase": "running"}]}
+        appmod._laundry_watch_machines(snap, clock["t"])
+        assert appmod._laundry_row_status() is None      # inside the grace
+        clock["t"] += appmod.LAUNDRY_UNAVAIL_ALERT_S + 1
+        appmod._laundry_watch_machines(snap, clock["t"])
+        stuck = [r for r in _errors(caplog) if "washer" in r.getMessage()]
+        assert len(stuck) == 1, [r.getMessage() for r in stuck]
+        assert appmod._laundry_row_status() == "error"
+        clock["t"] += 600
+        appmod._laundry_watch_machines(snap, clock["t"])
+        assert len([r for r in _errors(caplog) if "washer" in r.getMessage()]) == 1
+
+        snap["machines"][0]["phase"] = "running"
+        appmod._laundry_watch_machines(snap, clock["t"])
+        assert appmod._laundry_row_status() is None
+        assert any("washer is reporting again" in r.getMessage()
+                   for r in caplog.records)
+
+
+def test_a_whole_feed_outage_reaches_the_settings_row_too(app_mod, monkeypatch):
+    # The loudest lane in the log used to be the quietest one in the UI: HA
+    # down, or every entity renamed at once, left the row reading healthy
+    # beside a wall that said "Laundry unavailable". That is the original
+    # incident in miniature -- the one surface an operator checks says nothing
+    # is wrong.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    monkeypatch.setattr(appmod, "_laundry_machines_stuck", set())
+    monkeypatch.setattr(appmod, "_laundry_unavail_alerted", False)
+    assert appmod._laundry_row_status() is None
+    monkeypatch.setattr(appmod, "_laundry_unavail_alerted", True)
+    assert appmod._laundry_row_status() == "error"
+
+
+def test_a_machines_outage_clock_survives_a_feed_outage(app_mod, monkeypatch, caplog):
+    # A machine offline for hours never escalated if the whole feed dropped
+    # often enough to keep resetting its clock: the same starvation the
+    # two-clock split fixed on the feed lane.
+    appmod = app_mod
+    monkeypatch.setattr(appmod, "_laundry_machine_offline_since", {})
+    monkeypatch.setattr(appmod, "_laundry_machines_stuck", set())
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    t = 100.0
+    offline = {"available": True, "machines": [
+        {"id": "washer", "phase": "offline"}, {"id": "dryer", "phase": "idle"}]}
+    appmod._laundry_watch_machines(offline, t)
+    started = dict(appmod._laundry_machine_offline_since)
+    assert "washer" in started
+    # the feed drops and comes back, repeatedly, while the washer stays gone
+    for _ in range(5):
+        t += 10
+        appmod._laundry_watch_machines({"available": False}, t)
+        t += 10
+        appmod._laundry_watch_machines(offline, t)
+    assert appmod._laundry_machine_offline_since == started, \
+        "the feed outage restarted the machine's clock"
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        appmod._laundry_watch_machines(offline, t + appmod.LAUNDRY_UNAVAIL_ALERT_S)
+    assert [r for r in _errors(caplog) if "washer" in r.getMessage()]
+
+
+def test_the_escalation_threshold_cannot_undercut_the_display_hold():
+    # The ERROR says the card is "stuck on unavailable". If the threshold ever
+    # dropped below the hold, it would say that about a card still showing
+    # live machines, and the two surfaces would contradict each other.
+    import family_hub.app as appmod
+    assert appmod.LAUNDRY_UNAVAIL_ALERT_S > appmod.LAUNDRY_UNAVAIL_HOLD_S
+    assert appmod.LAUNDRY_UNAVAIL_ALERT_S >= 120, \
+        "shorter than a Home Assistant restart: this would cry wolf"
+
+
+def test_a_long_outage_escalates_even_while_a_good_card_is_held(
+        app_mod, monkeypatch, caplog):
+    # The hold's early return sits BELOW the escalation for a reason: with a
+    # last-good card standing, an outage that never ends would otherwise skip
+    # the alert entirely. Drive a real outage from an available snapshot.
+    import asyncio
+    appmod = app_mod
+    clock = {"t": 9000.0}
+    monkeypatch.setattr(appmod.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(appmod, "_laundry_unavail_since", None)
+    monkeypatch.setattr(appmod, "_laundry_alert_since", None)
+    monkeypatch.setattr(appmod, "_laundry_unavail_alerted", False)
+    monkeypatch.setattr(appmod, "_laundry_ok_streak", 0)
+    monkeypatch.setattr(appmod, "_laundry_snapshot",
+                        {"available": True, "machines": []})
+    state = {"available": False}
+
+    async def fake_tile(*a, **kw):
+        return dict(state)
+    monkeypatch.setattr(appmod.tiles, "laundry_tile", fake_tile)
+
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        asyncio.run(appmod._laundry_watch_tick())     # inside the hold
+        assert appmod._laundry_snapshot["available"] is True, "hold broke"
+        assert not _errors(caplog)
+        clock["t"] += appmod.LAUNDRY_UNAVAIL_ALERT_S + 1
+        asyncio.run(appmod._laundry_watch_tick())
+        assert appmod._laundry_snapshot == {"available": False}
+        assert len([r for r in _errors(caplog)
+                    if "has been failing for" in r.getMessage()]) == 1
+
+
+def test_the_completion_history_failing_is_latched_not_flooded(
+        app_mod, monkeypatch, caplog):
+    # At a 5s cadence an un-latched warning here is ~17,000 lines a day, each
+    # with a traceback, burying the one ERROR this branch exists to make
+    # findable. And it is not cosmetic: without the synthesis a finished load
+    # renders as a bare "Idle".
+    import asyncio
+    appmod = app_mod
+    monkeypatch.setattr(appmod, "_laundry_annotate_failures", 0)
+
+    async def fake_tile(*a, **kw):
+        return {"available": True, "machines": []}
+    monkeypatch.setattr(appmod.tiles, "laundry_tile", fake_tile)
+
+    def boom(_t):
+        raise RuntimeError("kv layer down")
+    monkeypatch.setattr(appmod, "_laundry_annotate", boom)
+
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        for _ in range(appmod.LAUNDRY_ANNOTATE_STRIKES * 3):
+            asyncio.run(appmod._laundry_watch_tick())
+    errs = [r for r in _errors(caplog) if "completion history" in r.getMessage()]
+    assert len(errs) == 1, [r.getMessage() for r in errs]
+    warns = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warns) < appmod.LAUNDRY_ANNOTATE_STRIKES, "flooded the log"
+    # the card itself still renders: a missing history must not blank the wall
+    assert appmod._laundry_snapshot == {"available": True, "machines": []}
+
+
+def test_a_long_outage_is_escalated_once_and_closed_on_recovery(
+        app_mod, monkeypatch, caplog):
+    # tiles.py logs one WARNING per entity and goes quiet "until it recovers",
+    # which reads the same whether HA rebooted for 20s or the token was revoked
+    # last Tuesday. Minutes of unavailability earn exactly one ERROR, and the
+    # recovery closes it, so the next outage is loud again.
+    import asyncio
+    appmod = app_mod
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(appmod.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(appmod, "_laundry_snapshot", None)
+    monkeypatch.setattr(appmod, "_laundry_unavail_since", None)
+    monkeypatch.setattr(appmod, "_laundry_alert_since", None)
+    monkeypatch.setattr(appmod, "_laundry_unavail_alerted", False)
+    monkeypatch.setattr(appmod, "_laundry_ok_streak", 0)
+    state = {"available": False}
+
+    async def fake_tile(*a, **kw):
+        return dict(state)
+    monkeypatch.setattr(appmod.tiles, "laundry_tile", fake_tile)
+
+    def tick():
+        asyncio.run(appmod._laundry_watch_tick())
+
+    with caplog.at_level(logging.INFO, logger="family_hub"):
+        tick()                                    # outage starts
+        clock["t"] += appmod.LAUNDRY_UNAVAIL_ALERT_S - 1
+        tick()                                    # still inside the grace
+        assert not _errors(caplog), "escalated before the threshold"
+        clock["t"] += 2
+        tick()                                    # past it: one ERROR
+        clock["t"] += 600
+        tick()                                    # ...and not a second one
+        stuck = [r for r in _errors(caplog) if "has been failing for" in r.getMessage()]
+        assert len(stuck) == 1, [r.getMessage() for r in stuck]
+
+        state["available"] = True
+        state["machines"] = []
+        # Recovery must be SUSTAINED to close the incident: one good tick
+        # clears the card's hold, not the alert.
+        clock["t"] += 10
+        tick()
+        assert not any("feed recovered" in r.getMessage() for r in caplog.records), \
+            "closed the incident on a single good tick"
+        for _ in range(appmod.LAUNDRY_RECOVERY_TICKS - 1):
+            clock["t"] += 10
+            tick()
+        assert any("feed recovered" in r.getMessage() for r in caplog.records)
+
+        # a SECOND outage must shout again; a latch that never re-arms is the
+        # same silence in slower motion. (state.clear() first: the payload has
+        # to differ from the last one or the tick treats it as unchanged.)
+        state.clear()
+        state["available"] = False
+        clock["t"] += appmod.LAUNDRY_UNAVAIL_ALERT_S + 1
+        tick()
+        clock["t"] += appmod.LAUNDRY_UNAVAIL_ALERT_S + 1
+        tick()
+        stuck = [r for r in _errors(caplog) if "has been failing for" in r.getMessage()]
+        assert len(stuck) == 2, [r.getMessage() for r in stuck]
 
 
 def test_laundry_watch_loop_survives_a_tick_that_raises(app_mod, monkeypatch):
@@ -3958,7 +4309,7 @@ def test_tiles_laundry_route_end_to_end_real_tile(client, monkeypatch):
         "ha_base": "http://ha:8123", "machines": [
             {"id": "washer", "label": "Washer", "kind": "washer",
              "status_entity": "sensor.w_status",
-             "remaining_entity": "sensor.w_rem"}]}))
+             "remaining_entity": "sensor.w_rem"}]})[0])
     monkeypatch.setenv("HA_TOKEN", "tok")
     done_at = "2026-08-17T21:02:00+00:00"
 

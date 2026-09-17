@@ -4931,6 +4931,27 @@ test('renderIntegrations: shows a reconnect hint when status is needs_auth', () 
   assert.match(host.innerHTML, /reconnect/);
 });
 
+test('renderIntegrations: a broken laundry row carries its own badge', () => {
+  // The backend now keeps laundry listed and reports needs_auth (no/rejected
+  // token) or error (a config block that survived nothing, a machine stuck
+  // offline). Before that it dropped out of the registry entirely, so the wall
+  // showed neither a card nor a row: the whole 2026-09-17 incident.
+  const { sandbox } = newHub();
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'laundry', kind: 'laundry', name: 'Laundry',
+      enabled: true, status: 'needs_auth' },
+  ] });
+  const host = sandbox.document.getElementById('integrations-ctl');
+  assert.match(host.innerHTML, /data-integ-toggle="laundry"/);
+  assert.match(host.innerHTML, /integ-warn">reconnect</);
+  sandbox.renderIntegrations({ integrations: [
+    { id: 'laundry', kind: 'laundry', name: 'Laundry',
+      enabled: true, status: 'error' },
+  ] });
+  assert.match(sandbox.document.getElementById('integrations-ctl').innerHTML,
+    /integ-warn">error</);
+});
+
 test('renderIntegrations: shows an error hint when status is error', () => {
   const { sandbox } = newHub();
   sandbox.renderIntegrations({ integrations: [
@@ -6602,8 +6623,14 @@ test('renderWeather re-renders a minute apart land the clouds a minute further o
   const t0 = 1757950000123;
   const a = renderAt(t0);
   const b = renderAt(t0 + 60000);
-  assert.deepEqual(Object.keys(a).sort(), ['c1', 'c2', 'c3'], 'a cloudy card must stamp all three clouds');
-  for (const key of Object.keys(a)) {
+  // The three clouds must be there; the sky may legitimately stamp OTHER
+  // layers alongside them ('stars' after dark), and `new Date()` here is real,
+  // so an exact key list made this test pass or fail on the wall clock of
+  // whoever ran it. CI runs in UTC and failed every evening.
+  for (const key of ['c1', 'c2', 'c3']) {
+    assert.ok(key in a, `a cloudy card must stamp ${key}`);
+  }
+  for (const key of ['c1', 'c2', 'c3']) {
     const { period } = loops[key];
     const advanced = ((b[key] - a[key]) % period + period) % period;
     assert.ok(Math.abs(advanced - 60 % period) < 0.002,

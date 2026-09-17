@@ -16,12 +16,38 @@ from __future__ import annotations
 CALENDAR_KINDS = ("calendar", "caldav")
 
 
-def laundry_configured(cfg, env: dict) -> bool:
-    """True iff the laundry block is configured (config.py validated it into
-    cfg.laundry) AND the Home Assistant token is present in the environment.
-    Mirrors caldav_configured: without the credential the whole subsystem is
-    inert and the integration simply isn't available."""
-    return bool(getattr(cfg, "laundry", None) and env.get("HA_TOKEN"))
+def ha_token(env: dict) -> str:
+    """The Home Assistant token, whitespace-stripped. ONE definition, because a
+    token of "   " used to read as present here and as absent elsewhere: the
+    same "notions of on cannot drift" rule the render gates follow."""
+    return (env.get("HA_TOKEN") or "").strip()
+
+
+def laundry_configured(cfg, env: dict | None = None) -> bool:
+    """True iff this hub ASKED for laundry: either a laundry block survived
+    cleaning, or one was written and nothing valid survived it (config.py
+    records that in cfg.laundry_config_error).
+
+    Deliberately not gated on the token, and deliberately true for a broken
+    config: a hub whose laundry is misconfigured must stay LISTED, carrying
+    needs_auth or error, so the wall shows an honest "Laundry unavailable"
+    card and the settings row says why.
+
+    Dropping it from the registry instead is how the 2026-09-17 incident hid:
+    the deploy box lost its .env, the card vanished from the wall AND the row
+    vanished from settings, so the one surface an operator checks showed a hub
+    with no laundry rather than a laundry that is broken. A `laundry` block
+    full of typos used to vanish the same way.
+
+    `env` is accepted and ignored so every registry predicate keeps one shape.
+    """
+    return bool(getattr(cfg, "laundry", None)
+                or getattr(cfg, "laundry_config_error", None))
+
+
+def laundry_needs_auth(cfg, env: dict) -> bool:
+    """Configured, cleanly, but with no usable HA token: listed, and broken."""
+    return bool(getattr(cfg, "laundry", None)) and not ha_token(env)
 
 
 def caldav_configured(env: dict) -> bool:

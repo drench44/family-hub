@@ -67,6 +67,8 @@ def reset_caches() -> None:
     _laundry_cache.clear()
     _fleet_cache.clear()
     _ha_warned.clear()
+    _ha_auth_failed.clear()
+    _ha_auth_strikes.clear()
 
 
 async def climate_tile(client, cfg) -> dict:
@@ -493,11 +495,28 @@ def _laundry_ts(raw: object) -> str | None:
 # warning lines a minute, drowning the log used to diagnose that very
 # outage (and burying any one-time crash line under the flood).
 _ha_warned: set[str] = set()
+# Entities whose failure was a CREDENTIAL rejection, latched separately so the
+# one-and-only ERROR line isn't re-armed by an unrelated blip in between.
+_ha_auth_failed: set[str] = set()
+# How many consecutive credential rejections before we call it a rejected
+# token. HA's own ip_ban and any reverse proxy in front of it also answer 403,
+# and a one-off from those heals on the next poll; a genuinely revoked token
+# produces one of these every LAUNDRY_WATCH_S for as long as it stays revoked.
+HA_AUTH_STRIKES = 3
+_ha_auth_strikes: dict[str, int] = {}
+
+
+def laundry_auth_rejected() -> bool:
+    """True while Home Assistant is rejecting our token (not merely failing).
+    The registry reads this so the settings row can say "reconnect" for a
+    REVOKED token, not just a missing one."""
+    return bool(_ha_auth_failed)
 
 
 async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
     """One HA entity state, or None on any failure (auth, LAN, non-dict body).
-    Failures are per-entity so one flaky sensor can't sink the whole card."""
+    Failures are per-entity so one flaky sensor can't sink the whole card, and
+    a rejected token is told apart from a transient outage (see below)."""
     try:
         r = await client.get(f"{base}/api/states/{entity}", timeout=TIMEOUT,
                              headers={"Authorization": f"Bearer {token}"})
@@ -506,6 +525,30 @@ async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
         if not isinstance(body, dict):
             raise ValueError(f"non-dict body {type(body).__name__}")
     except Exception as e:
+        # A credential error is NOT transient: a revoked, expired or wrong
+        # token returns 401/403 on every future call too, so the "quiet until
+        # it recovers" treatment below would bury a permanently dead card under
+        # one warning that reads exactly like HA rebooting for 20 seconds.
+        # Those get their own latch and ERROR level; everything else (LAN
+        # blips, HA restarts, a renamed entity's 404) keeps the quiet path.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (401, 403):
+            strikes = _ha_auth_strikes.get(entity, 0) + 1
+            _ha_auth_strikes[entity] = strikes
+            if strikes >= HA_AUTH_STRIKES and entity not in _ha_auth_failed:
+                _ha_auth_failed.add(entity)
+                log.error("laundry: Home Assistant has rejected our token for "
+                          "%s %d times in a row (HTTP %s). A revoked or "
+                          "expired HA_TOKEN looks exactly like this and will "
+                          "not recover on its own; the card reads "
+                          "'unavailable' until it is replaced.",
+                          entity, strikes, status)
+            elif strikes < HA_AUTH_STRIKES:
+                log.warning("laundry: Home Assistant refused our token for %s "
+                            "(HTTP %s); retrying before calling it revoked",
+                            entity, status)
+            return None
+        _ha_auth_strikes.pop(entity, None)   # a non-auth failure breaks the run
         if entity not in _ha_warned:
             _ha_warned.add(entity)
             log.warning("laundry: HA state %s unavailable: %s "
@@ -513,6 +556,14 @@ async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
         else:
             log.debug("laundry: HA state %s still unavailable: %s", entity, e)
         return None
+    _ha_auth_strikes.pop(entity, None)
+    if entity in _ha_auth_failed:
+        _ha_auth_failed.discard(entity)
+        # WARNING, not INFO: the alert it closes is an ERROR, and a box running
+        # at LOG_LEVEL=WARNING would otherwise show the incident and never its
+        # resolution.
+        log.warning("laundry: Home Assistant accepted our token for %s again",
+                    entity)
     if entity in _ha_warned:
         _ha_warned.discard(entity)
         log.info("laundry: HA state %s recovered", entity)
@@ -537,8 +588,10 @@ async def laundry_tile(client, cfg, token: str) -> dict:
     read failing at once — returns ``{"available": False}``, and errors are
     never cached, so a transient blip retries on the next poll."""
     laundry = getattr(cfg, "laundry", None)
-    if not laundry or not token:
-        return {"available": False}   # not configured; no fetch attempted
+    token = (token or "").strip()   # a whitespace-only token is NO token: it
+    if not laundry or not token:    # would otherwise reach HA as a malformed
+        return {"available": False}  # header, and the app would report the
+                                     # opposite ("HA_TOKEN is empty") in its log
     base = laundry["ha_base"]
     cached = _laundry_cache.get(base)
     if cached is not None and cached[0] > time.monotonic():

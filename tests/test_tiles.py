@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 import httpx
+import pytest
 
 from family_hub import tiles
 from family_hub.config import Config
@@ -645,6 +646,108 @@ def test_laundry_ha_outage_logging_is_edge_triggered(caplog):
     infos = [r for r in caplog.records if r.levelno == logging.INFO
              and "recovered" in r.getMessage()]
     assert len(warns) == 2 and len(infos) == 1
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_a_rejected_token_is_an_error_not_a_quiet_outage(caplog, code):
+    # The edge-triggered WARNING above is right for HA rebooting and wrong for
+    # a revoked token: that one fails forever, so the card reads "unavailable"
+    # for good while the log says the same thing it says about a 20-second
+    # blip. Credential rejections get their own level, their own latch, and a
+    # recovery line when a new token lands.
+    #
+    # But not on the FIRST refusal: HA's own ip_ban and any reverse proxy in
+    # front of it also answer 403, and those heal. Three in a row is a revoked
+    # token; one is noise, and an ERROR that is wrong twice a minute is how the
+    # whole lane gets tuned out.
+    tiles.reset_caches()
+    denied = lambda req: httpx.Response(code)
+    ok = lambda req: httpx.Response(200, json={"state": "running"})
+
+    async def probe(handler):
+        async with make_client(handler) as client:
+            return await tiles._ha_state(client, "http://ha", "t", "sensor.x")
+
+    def errors():
+        return [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    with caplog.at_level(logging.DEBUG, logger="family_hub.tiles"):
+        for _ in range(tiles.HA_AUTH_STRIKES - 1):
+            assert asyncio.run(probe(denied)) is None
+        assert not errors(), "called it revoked on the first refusal"
+        assert asyncio.run(probe(denied)) is None      # the strike that counts
+        assert len(errors()) == 1, [r.getMessage() for r in errors()]
+        assert "revoked" in errors()[0].getMessage()
+        assert asyncio.run(probe(denied)) is None      # still the same token
+        assert len(errors()) == 1, "re-alerted on an open incident"
+        assert tiles.laundry_auth_rejected() is True
+
+        assert asyncio.run(probe(ok)) is not None      # a new token lands
+        assert tiles.laundry_auth_rejected() is False
+        recovery = [r for r in caplog.records
+                    if "accepted our token" in r.getMessage()]
+        assert recovery and recovery[-1].levelno >= logging.WARNING, \
+            "the recovery must be visible wherever the alert was"
+        for _ in range(tiles.HA_AUTH_STRIKES):         # revoked again: loud again
+            assert asyncio.run(probe(denied)) is None
+        assert len(errors()) == 2
+
+
+def test_an_isolated_refusal_never_becomes_a_revoked_token_alert(caplog):
+    # A 403 from a reverse proxy or HA's ip_ban, with good reads in between,
+    # must never accumulate into "your token is revoked".
+    tiles.reset_caches()
+    denied = lambda req: httpx.Response(403)
+    ok = lambda req: httpx.Response(200, json={"state": "running"})
+
+    async def probe(handler):
+        async with make_client(handler) as client:
+            return await tiles._ha_state(client, "http://ha", "t", "sensor.x")
+
+    with caplog.at_level(logging.DEBUG, logger="family_hub.tiles"):
+        for _ in range(tiles.HA_AUTH_STRIKES * 2):
+            asyncio.run(probe(denied))
+            asyncio.run(probe(ok))
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert tiles.laundry_auth_rejected() is False
+
+
+def test_reset_caches_clears_the_auth_latch(caplog):
+    # Test-hygiene infrastructure nothing else holds in place: if reset_caches
+    # forgets this set, auth state bleeds between tests and shows up later as
+    # an intermittent missing-ERROR failure.
+    tiles.reset_caches()
+    denied = lambda req: httpx.Response(401)
+
+    async def probe():
+        async with make_client(denied) as client:
+            return await tiles._ha_state(client, "http://ha", "t", "sensor.x")
+
+    with caplog.at_level(logging.DEBUG, logger="family_hub.tiles"):
+        for _ in range(tiles.HA_AUTH_STRIKES):
+            asyncio.run(probe())
+        assert tiles.laundry_auth_rejected() is True
+        tiles.reset_caches()
+        assert tiles.laundry_auth_rejected() is False
+        caplog.clear()
+        for _ in range(tiles.HA_AUTH_STRIKES):
+            asyncio.run(probe())
+    assert len([r for r in caplog.records if r.levelno >= logging.ERROR]) == 1
+
+
+def test_a_whitespace_token_is_treated_as_no_token(caplog):
+    # A token of "   " reached HA as a malformed Authorization header while the
+    # app's own startup guard called it empty. The tile and the guard must
+    # agree, and neither should send the request.
+    tiles.reset_caches()
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return httpx.Response(200, json={"state": "running"})
+
+    assert run_laundry(handler, token="   ") == {"available": False}
+    assert calls["n"] == 0, "a blank token must not be sent to Home Assistant"
 
 
 def test_laundry_unconfigured_or_tokenless_unavailable():

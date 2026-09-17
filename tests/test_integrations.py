@@ -57,24 +57,42 @@ def test_chores_and_todos_are_always_available_features():
     assert ids["cameras"]["group"] == "integration"
 
 
-def test_laundry_available_only_with_config_and_token():
-    # not configured at all
-    assert fi.laundry_configured(_cfg(), {}) is False
-    # configured but no HA token in the env -> inert, not available
+def test_laundry_stays_listed_without_a_token_and_says_needs_auth():
+    # 2026-09-17: a lost .env emptied HA_TOKEN and laundry dropped OUT of the
+    # registry, so the wall blanked the card and settings showed a hub with no
+    # laundry at all. Configured is configured; the missing token is a HEALTH
+    # state (needs_auth), not an absence.
+    assert fi.laundry_configured(_cfg(), {}) is False      # nothing configured
+    assert fi.laundry_needs_auth(_cfg(), {}) is False      # ...so nothing broken
     laundry = {"ha_base": "http://ha:8123", "machines": [
         {"id": "washer", "label": "Washer", "kind": "washer",
          "status_entity": "sensor.w_status", "remaining_entity": "sensor.w_rem"}]}
     cfg = _cfg(laundry=laundry)
-    assert fi.laundry_configured(cfg, {}) is False
-    # configured + token -> available, tagged an integration (not a feature)
+    assert fi.laundry_configured(cfg, {}) is True
+    assert fi.laundry_needs_auth(cfg, {}) is True
+    assert {i["id"] for i in fi.available_only(cfg, {})} >= {"laundry"}, \
+        "a tokenless laundry must still reach the settings menu"
+    # configured + token -> healthy, tagged an integration (not a feature)
     env = {"HA_TOKEN": "secret"}
-    assert fi.laundry_configured(cfg, env) is True
+    assert fi.laundry_needs_auth(cfg, env) is False
     avail = {i["id"]: i for i in fi.available_integrations(cfg, env)}
     assert avail["laundry"]["available"] is True
     assert avail["laundry"]["group"] == "integration"
     assert avail["laundry"]["kind"] == "laundry"
     # token alone (no config block) is not enough
     assert fi.laundry_configured(_cfg(), env) is False
+
+
+def test_a_whitespace_token_counts_as_no_token_everywhere():
+    # "   " used to be truthy in the registry and falsy in the startup guard,
+    # so the hub could report "HA_TOKEN is empty" about a card it was showing.
+    laundry = {"ha_base": "http://ha:8123", "machines": [
+        {"id": "washer", "label": "Washer", "kind": "washer",
+         "status_entity": "sensor.w_status", "remaining_entity": "sensor.w_rem"}]}
+    cfg = _cfg(laundry=laundry)
+    assert fi.ha_token({"HA_TOKEN": "  \t "}) == ""
+    assert fi.ha_token({"HA_TOKEN": " tok "}) == "tok"
+    assert fi.laundry_needs_auth(cfg, {"HA_TOKEN": "   "}) is True
 
 
 def test_laundry_config_cleaning():
@@ -88,19 +106,22 @@ def test_laundry_config_cleaning():
         "not-a-dict",
         {"id": "dryer", "label": "Dryer", "kind": "dryer",
          "status_entity": "s.f", "remaining_entity": "s.g"}]}
-    cleaned = _clean_laundry(ok)
+    cleaned, err = _clean_laundry(ok)
+    assert err is None
     assert cleaned["ha_base"] == "http://ha:8123"          # trailing / stripped
     assert [m["id"] for m in cleaned["machines"]] == ["washer", "dryer"]
     assert cleaned["machines"][0]["label"] == "washer"     # label defaults to id
     assert cleaned["machines"][0]["kind"] == "washer"      # kind defaults
     assert cleaned["machines"][1]["kind"] == "dryer"
-    # rejected shapes -> None (no laundry integration)
-    assert _clean_laundry(None) is None
-    assert _clean_laundry("nope") is None
-    assert _clean_laundry({"ha_base": ""}) is None
-    assert _clean_laundry({"ha_base": "http://ha", "machines": []}) is None
-    assert _clean_laundry({"ha_base": "http://ha",
-                           "machines": [{"id": "w"}]}) is None
+    # No laundry block at all is the only SILENT None: that hub simply has no
+    # laundry. Every other rejection carries a reason, because someone asked
+    # for laundry and did not get it, and an integration that merely fails to
+    # appear is the hardest kind of broken to notice.
+    assert _clean_laundry(None) == (None, None)
+    for raw in ("nope", {"ha_base": ""}, {"ha_base": "http://ha", "machines": []},
+                {"ha_base": "http://ha", "machines": [{"id": "w"}]}):
+        cleaned, err = _clean_laundry(raw)
+        assert cleaned is None and err, raw
 
 
 def test_fleet_available_reflects_config():
@@ -147,7 +168,7 @@ def test_laundry_config_cleaning_warns_loudly(caplog):
     # character by character while the card silently never appears).
     import logging
     from family_hub.config import _clean_laundry
-    with caplog.at_level(logging.WARNING, logger="family_hub.config"):
+    with caplog.at_level(logging.DEBUG, logger="family_hub.config"):
         _clean_laundry({"ha_base": "http://ha", "machines": [
             {"id": "w", "status_entity": "s.a"},        # missing remaining_entity
             "not-a-dict"]})
@@ -155,3 +176,7 @@ def test_laundry_config_cleaning_warns_loudly(caplog):
     assert "dropping machine entry" in msgs
     assert "dropping non-dict machine entry" in msgs
     assert "no valid machines survived" in msgs
+    # ...and losing the WHOLE integration is an error, not a warning buried
+    # among the per-entry ones.
+    assert any(r.levelno >= logging.ERROR and "no valid machines survived" in r.message
+               for r in caplog.records)
