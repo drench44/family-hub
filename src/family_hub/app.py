@@ -648,7 +648,11 @@ def _laundry_row_status() -> str | None:
       - a `laundry` config block that nothing valid survived (a typo'd entity
         key used to delete the integration outright);
       - a machine stuck offline while its sibling reports, which keeps the
-        tile "available" and would otherwise never be mentioned anywhere.
+        tile "available" and would otherwise never be mentioned anywhere;
+      - the whole feed being unavailable long enough to have earned an ERROR,
+        which is the loudest lane in the log and used to be the quietest one
+        here: HA down, or every configured entity renamed at once, left the row
+        reading healthy next to a wall that said "Laundry unavailable".
 
     DEMO serves canned laundry with no Home Assistant at all, so a demo wall
     is not broken and must not nag."""
@@ -660,7 +664,7 @@ def _laundry_row_status() -> str | None:
         return "needs_auth"
     if tiles.laundry_auth_rejected():
         return "needs_auth"
-    if _laundry_machines_stuck:
+    if _laundry_machines_stuck or _laundry_unavail_alerted:
         return "error"
     return None
 
@@ -2172,12 +2176,18 @@ async def _laundry_watch_tick() -> None:
         if (not _laundry_unavail_alerted
                 and now - _laundry_alert_since >= LAUNDRY_UNAVAIL_ALERT_S):
             _laundry_unavail_alerted = True
-            log.error("laundry: the feed has been unavailable for %ds and "
-                      "the card is stuck on 'unavailable'. Check that Home "
+            # TWO numbers, because they mean different things and have
+            # different fixes: the alert clock survives short recoveries, so a
+            # feed that comes up for a tick and drops again would otherwise be
+            # reported as one long outage the wall never actually showed.
+            log.error("laundry: the feed has been failing for %ds and is "
+                      "unavailable now (this stretch: %ds). If those numbers "
+                      "differ it is flapping, not down. Check that Home "
                       "Assistant is up, that HA_TOKEN is still valid (a "
                       "revoked token never recovers), and that the configured "
                       "entities still exist.",
-                      int(now - _laundry_alert_since))
+                      int(now - _laundry_alert_since),
+                      int(now - _laundry_unavail_since))
         if (now - _laundry_unavail_since < LAUNDRY_UNAVAIL_HOLD_S
                 and _laundry_snapshot is not None
                 and _laundry_snapshot.get("available")):
@@ -2202,10 +2212,11 @@ def _laundry_watch_machines(snap: dict, now: float) -> None:
     been offline as long as a whole-feed outage would need, cleared (and
     re-armed) when it reports again."""
     if not snap.get("available"):
-        # the whole-feed lane owns this case; per-machine state waits for the
-        # feed to come back rather than alerting twice about one cause
-        _laundry_machine_offline_since.clear()
-        _laundry_machines_stuck.clear()
+        # The whole-feed lane owns this case, so nothing is judged here. The
+        # per-machine clocks are LEFT RUNNING on purpose: clearing them meant a
+        # machine offline for hours never escalated as long as the feed dropped
+        # often enough to keep resetting it, which is the same starvation the
+        # two-clock split fixed on the feed lane.
         return
     seen = set()
     for m in snap.get("machines") or []:
