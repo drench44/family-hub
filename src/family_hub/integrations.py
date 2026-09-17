@@ -16,12 +16,29 @@ from __future__ import annotations
 CALENDAR_KINDS = ("calendar", "caldav")
 
 
+def ha_token(env: dict) -> str:
+    """The Home Assistant token, whitespace-stripped. ONE definition, because a
+    token of "   " used to read as present here and as absent elsewhere: the
+    same "notions of on cannot drift" rule the render gates follow."""
+    return (env.get("HA_TOKEN") or "").strip()
+
+
 def laundry_configured(cfg, env: dict) -> bool:
     """True iff the laundry block is configured (config.py validated it into
-    cfg.laundry) AND the Home Assistant token is present in the environment.
-    Mirrors caldav_configured: without the credential the whole subsystem is
-    inert and the integration simply isn't available."""
-    return bool(getattr(cfg, "laundry", None) and env.get("HA_TOKEN"))
+    cfg.laundry). Deliberately NOT gated on the token: a configured hub whose
+    token went missing must stay LISTED, carrying needs_auth, so the wall shows
+    an honest "Laundry unavailable" card and the settings row can say why.
+
+    Dropping it from the registry instead is how the 2026-09-17 incident hid:
+    the deploy box lost its .env, the card vanished from the wall AND the row
+    vanished from settings, so the one surface an operator checks showed a hub
+    with no laundry rather than a laundry that is broken."""
+    return bool(getattr(cfg, "laundry", None))
+
+
+def laundry_needs_auth(cfg, env: dict) -> bool:
+    """Configured, but with no usable HA token: available, and broken."""
+    return bool(getattr(cfg, "laundry", None)) and not ha_token(env)
 
 
 def caldav_configured(env: dict) -> bool:

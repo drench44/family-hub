@@ -11,11 +11,25 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Fixed
-- A hub with laundry in `config.json` but no `HA_TOKEN` now says so loudly at
-  startup instead of just dropping the card. Every read fails in that state and
-  the frontend hides the card entirely, so the wall silently loses a feature
-  while `/health` stays 200 — which is exactly how a deploy box that lost its
-  `.env` went unnoticed.
+- Laundry no longer disappears when its Home Assistant token does. A hub with
+  laundry configured but no usable `HA_TOKEN` now stays in the integration
+  registry with a `needs_auth` status, so the wall renders an honest "Laundry
+  unavailable" card and the settings row says "reconnect". Previously the
+  integration dropped out of the registry entirely, taking the card and its own
+  settings row with it, while `/health` kept answering 200. Startup also logs
+  the misconfiguration once (except under `DEMO`, which serves canned laundry
+  and is not broken).
+- A Home Assistant token that is rejected rather than missing is now an error,
+  not a quiet outage. `401`/`403` used to be logged once at warning level and
+  then suppressed "until it recovers", which is indistinguishable from HA
+  restarting except that a revoked token never recovers. Credential rejections
+  get their own latch and log level, and the watcher escalates once when the
+  feed has been unavailable for five minutes, with a recovery line that re-arms
+  both.
+- A whitespace-only `HA_TOKEN` is treated as no token everywhere. It used to be
+  "present" to the registry and "empty" to the startup check, so the hub could
+  report an empty token for a card it was busy rendering, and still send a
+  malformed `Authorization` header to Home Assistant.
 
 ## [1.4.0] — 2026-09-16
 

@@ -50,6 +50,15 @@ can never be turned off and don't degrade gracefully.*
       a var missing from the allowlist is invisible inside the container and
       the feature silently can't turn on. (Laundry shipped without it; the
       integration could never enable in Docker until review caught it.)
+- [ ] An integration whose credential lives in an env var **stays listed when
+      that credential is missing**, carrying a `needs_auth` status. It must
+      not drop out of the registry. Absent-from-settings is not an error
+      state: it reads as "this hub has no laundry" instead of "this laundry
+      needs a token", and the card silently vanishes from the wall with it.
+      (2026-09-17: a deploy deleted the box's `.env`; the washer/dryer card
+      and its settings row both disappeared and `/health` stayed 200 for a
+      day.) Pair it with a startup line for "configured but no credential"
+      and an escalation for "credential rejected", which never heals itself.
 - [ ] `config.example.json` gains a placeholder entry (use the
       `192.168.1.50` example-IP convention — this repo is public; never a
       real LAN IP, never house data).

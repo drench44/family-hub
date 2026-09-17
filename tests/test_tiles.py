@@ -647,6 +647,52 @@ def test_laundry_ha_outage_logging_is_edge_triggered(caplog):
     assert len(warns) == 2 and len(infos) == 1
 
 
+def test_a_rejected_token_is_an_error_not_a_quiet_outage(caplog):
+    # The edge-triggered WARNING above is right for HA rebooting and wrong for
+    # a revoked token: that one 401s forever, so the card reads "unavailable"
+    # for good while the log says the same thing it says about a 20-second
+    # blip. Credential rejections get their own level, their own latch, and a
+    # recovery line when a new token lands.
+    import logging
+
+    tiles.reset_caches()
+    denied = lambda req: httpx.Response(401)
+    ok = lambda req: httpx.Response(200, json={"state": "running"})
+
+    async def probe(handler):
+        async with make_client(handler) as client:
+            return await tiles._ha_state(client, "http://ha", "t", "sensor.x")
+
+    with caplog.at_level(logging.DEBUG, logger="family_hub.tiles"):
+        assert asyncio.run(probe(denied)) is None
+        assert asyncio.run(probe(denied)) is None      # same bad token: once
+        errs = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errs) == 1, [r.getMessage() for r in errs]
+        assert "token" in errs[0].getMessage()
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING], \
+            "a credential failure must not hide in the transient-outage lane"
+        assert asyncio.run(probe(ok)) is not None      # new token accepted
+        assert any("again" in r.getMessage() for r in caplog.records
+                   if r.levelno == logging.INFO)
+        assert asyncio.run(probe(denied)) is None      # revoked again: loud again
+        assert len([r for r in caplog.records if r.levelno >= logging.ERROR]) == 2
+
+
+def test_a_whitespace_token_is_treated_as_no_token(caplog):
+    # A token of "   " reached HA as a malformed Authorization header while the
+    # app's own startup guard called it empty. The tile and the guard must
+    # agree, and neither should send the request.
+    tiles.reset_caches()
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return httpx.Response(200, json={"state": "running"})
+
+    assert run_laundry(handler, token="   ") == {"available": False}
+    assert calls["n"] == 0, "a blank token must not be sent to Home Assistant"
+
+
 def test_laundry_unconfigured_or_tokenless_unavailable():
     tiles.reset_caches()
     async def run(c, t):
