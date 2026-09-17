@@ -11,6 +11,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Fixed
+- Documented why `icloud_caldav` is allowed to leave the registry when its
+  credentials are missing while laundry may not: the Settings overlay draws the
+  CalDAV connect panel either way, so an absent row still has a visible way to
+  fix it. No behavior change.
 - Laundry no longer disappears when something about it breaks. A hub with
   laundry configured but unusable now stays in the integration registry with a
   `needs_auth` or `error` status, so the wall renders an honest "Laundry
