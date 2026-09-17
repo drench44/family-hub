@@ -53,7 +53,15 @@ def laundry_needs_auth(cfg, env: dict) -> bool:
 def caldav_configured(env: dict) -> bool:
     """True iff the iCloud CalDAV bot credentials are present. This is the
     feature flag: with no credential the whole CalDAV subsystem is inert and the
-    integration simply isn't available."""
+    integration simply isn't available.
+
+    This is the documented EXCEPTION to the rule laundry_configured follows
+    (and to the checklist line in docs/adding-a-feature.md): dropping out of
+    the registry is safe here only because the Settings overlay draws the
+    CalDAV connect panel either way, so an absent row still has a visible way
+    to fix it, and an explicit Disconnect SHOULD delist it. An integration
+    whose credential can only arrive out of band (laundry's HA token, in the
+    box's .env) must stay listed and report needs_auth instead."""
     return bool(env.get("ICLOUD_CALDAV_USER")
                 and env.get("ICLOUD_CALDAV_APP_PASSWORD"))
 
