@@ -3625,6 +3625,40 @@ def test_laundry_lifespan_arms_and_disarms_the_watcher(app_mod, monkeypatch):
     assert ran.is_set(), "lifespan never started the watch loop"
 
 
+def test_configured_laundry_without_a_token_shouts_at_startup(app_mod, monkeypatch, caplog):
+    # The 2026-09-17 bug: the deploy box lost its .env, compose recreated the
+    # container with an empty HA_TOKEN, and the wall's laundry card simply
+    # disappeared — no error anywhere, /health still 200. A configured-but-
+    # tokenless laundry must be LOUD at startup.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", {"ha_base": "http://ha", "machines": []})
+    monkeypatch.setenv("HA_TOKEN", "   ")   # whitespace is still no token
+    monkeypatch.setattr(appmod, "_laundry_watch_enabled", lambda: False)
+    assert appmod._laundry_env_broken() is True
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        with TestClient(appmod.app):
+            pass
+    msgs = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
+    assert "HA_TOKEN" in msgs and "laundry" in msgs, msgs
+
+
+def test_a_healthy_laundry_setup_says_nothing_at_startup(app_mod, monkeypatch, caplog):
+    # The paired half: the loud line must not cry wolf on a working hub, or it
+    # gets tuned out (and an unconfigured hub has no laundry to complain about).
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", {"ha_base": "http://ha", "machines": []})
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    monkeypatch.setattr(appmod, "_laundry_watch_enabled", lambda: False)
+    assert appmod._laundry_env_broken() is False
+    monkeypatch.setattr(appmod.cfg, "laundry", None)
+    monkeypatch.delenv("HA_TOKEN", raising=False)
+    assert appmod._laundry_env_broken() is False   # no laundry, no complaint
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        with TestClient(appmod.app):
+            pass
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
 def test_laundry_watch_loop_survives_a_tick_that_raises(app_mod, monkeypatch):
     # The loop's own armor: _laundry_watch_tick guards fetch+annotate, but
     # an exception escaping the tick (a future edit past the try, an

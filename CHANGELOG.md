@@ -10,6 +10,13 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- A hub with laundry in `config.json` but no `HA_TOKEN` now says so loudly at
+  startup instead of just dropping the card. Every read fails in that state and
+  the frontend hides the card entirely, so the wall silently loses a feature
+  while `/health` stays 200 — which is exactly how a deploy box that lost its
+  `.env` went unnoticed.
+
 ## [1.4.0] — 2026-09-16
 
 ### Changed
