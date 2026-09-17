@@ -6623,8 +6623,14 @@ test('renderWeather re-renders a minute apart land the clouds a minute further o
   const t0 = 1757950000123;
   const a = renderAt(t0);
   const b = renderAt(t0 + 60000);
-  assert.deepEqual(Object.keys(a).sort(), ['c1', 'c2', 'c3'], 'a cloudy card must stamp all three clouds');
-  for (const key of Object.keys(a)) {
+  // The three clouds must be there; the sky may legitimately stamp OTHER
+  // layers alongside them ('stars' after dark), and `new Date()` here is real,
+  // so an exact key list made this test pass or fail on the wall clock of
+  // whoever ran it. CI runs in UTC and failed every evening.
+  for (const key of ['c1', 'c2', 'c3']) {
+    assert.ok(key in a, `a cloudy card must stamp ${key}`);
+  }
+  for (const key of ['c1', 'c2', 'c3']) {
     const { period } = loops[key];
     const advanced = ((b[key] - a[key]) % period + period) % period;
     assert.ok(Math.abs(advanced - 60 % period) < 0.002,
