@@ -57,24 +57,42 @@ def test_chores_and_todos_are_always_available_features():
     assert ids["cameras"]["group"] == "integration"
 
 
-def test_laundry_available_only_with_config_and_token():
-    # not configured at all
-    assert fi.laundry_configured(_cfg(), {}) is False
-    # configured but no HA token in the env -> inert, not available
+def test_laundry_stays_listed_without_a_token_and_says_needs_auth():
+    # 2026-09-17: a lost .env emptied HA_TOKEN and laundry dropped OUT of the
+    # registry, so the wall blanked the card and settings showed a hub with no
+    # laundry at all. Configured is configured; the missing token is a HEALTH
+    # state (needs_auth), not an absence.
+    assert fi.laundry_configured(_cfg(), {}) is False      # nothing configured
+    assert fi.laundry_needs_auth(_cfg(), {}) is False      # ...so nothing broken
     laundry = {"ha_base": "http://ha:8123", "machines": [
         {"id": "washer", "label": "Washer", "kind": "washer",
          "status_entity": "sensor.w_status", "remaining_entity": "sensor.w_rem"}]}
     cfg = _cfg(laundry=laundry)
-    assert fi.laundry_configured(cfg, {}) is False
-    # configured + token -> available, tagged an integration (not a feature)
+    assert fi.laundry_configured(cfg, {}) is True
+    assert fi.laundry_needs_auth(cfg, {}) is True
+    assert {i["id"] for i in fi.available_only(cfg, {})} >= {"laundry"}, \
+        "a tokenless laundry must still reach the settings menu"
+    # configured + token -> healthy, tagged an integration (not a feature)
     env = {"HA_TOKEN": "secret"}
-    assert fi.laundry_configured(cfg, env) is True
+    assert fi.laundry_needs_auth(cfg, env) is False
     avail = {i["id"]: i for i in fi.available_integrations(cfg, env)}
     assert avail["laundry"]["available"] is True
     assert avail["laundry"]["group"] == "integration"
     assert avail["laundry"]["kind"] == "laundry"
     # token alone (no config block) is not enough
     assert fi.laundry_configured(_cfg(), env) is False
+
+
+def test_a_whitespace_token_counts_as_no_token_everywhere():
+    # "   " used to be truthy in the registry and falsy in the startup guard,
+    # so the hub could report "HA_TOKEN is empty" about a card it was showing.
+    laundry = {"ha_base": "http://ha:8123", "machines": [
+        {"id": "washer", "label": "Washer", "kind": "washer",
+         "status_entity": "sensor.w_status", "remaining_entity": "sensor.w_rem"}]}
+    cfg = _cfg(laundry=laundry)
+    assert fi.ha_token({"HA_TOKEN": "  \t "}) == ""
+    assert fi.ha_token({"HA_TOKEN": " tok "}) == "tok"
+    assert fi.laundry_needs_auth(cfg, {"HA_TOKEN": "   "}) is True
 
 
 def test_laundry_config_cleaning():
