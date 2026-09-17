@@ -307,6 +307,11 @@ async def _lifespan(_app):
     # callback is the loud backstop for the "impossible" exit: the loop
     # armors every tick, so anything that still kills the task (a
     # BaseException like MemoryError) must at least leave a log line.
+    if _laundry_env_broken():
+        log.error("laundry is configured in config.json but HA_TOKEN is empty "
+                  "— every laundry read will fail and the card stays HIDDEN on "
+                  "the wall. On a deploy box this means the environment did not "
+                  "reach the container: check its .env and recreate it.")
     watch = None
     if _laundry_watch_enabled():
         watch = asyncio.create_task(laundry_watch_loop())
@@ -1990,6 +1995,19 @@ _laundry_unavail_since: float | None = None
 # and re-arms on the new event. (Bound to the running loop at wait time;
 # in production the watcher and the stream handlers share the app's loop.)
 _laundry_change: asyncio.Event = asyncio.Event()
+
+
+def _laundry_env_broken() -> bool:
+    """Laundry is configured in config.json but the process has no HA_TOKEN:
+    every read fails, `available` is False forever, and the frontend HIDES the
+    card rather than showing it broken — a silently missing feature.
+
+    This is what a lost box-only `.env` looks like from inside the app (a
+    deploy's `rsync --delete` removed it on 2026-09-17 and compose recreated
+    the container with an empty token), so it gets a loud startup line instead
+    of an empty tile nobody can explain."""
+    return (bool(getattr(cfg, "laundry", None))
+            and not os.environ.get("HA_TOKEN", "").strip())
 
 
 def _laundry_watch_enabled() -> bool:
