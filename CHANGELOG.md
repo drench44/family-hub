@@ -22,6 +22,11 @@ rolls that section to a dated version via `python scripts/release.py`.
   to delete the integration outright, logged once at warning level and nowhere
   else). Startup logs the misconfiguration once, except under `DEMO`, which
   serves canned laundry and is not broken.
+- A whole-feed outage now marks the settings row too, not just the log. Home
+  Assistant being down, or every configured entity being renamed at once, left
+  the row reading healthy beside a wall that said "Laundry unavailable", which
+  is the original incident in miniature: the one surface an operator checks says
+  nothing is wrong.
 - A machine stuck offline while its sibling reports is no longer invisible.
   `available` is an OR across machines, so a renamed washer entity left the tile
   healthy, the card showing a dash, and nothing logged past the first warning.

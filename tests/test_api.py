@@ -3799,6 +3799,50 @@ def test_a_machine_stuck_offline_is_escalated_and_shown(app_mod, monkeypatch, ca
                    for r in caplog.records)
 
 
+def test_a_whole_feed_outage_reaches_the_settings_row_too(app_mod, monkeypatch):
+    # The loudest lane in the log used to be the quietest one in the UI: HA
+    # down, or every entity renamed at once, left the row reading healthy
+    # beside a wall that said "Laundry unavailable". That is the original
+    # incident in miniature -- the one surface an operator checks says nothing
+    # is wrong.
+    appmod = app_mod
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    monkeypatch.setattr(appmod, "_laundry_machines_stuck", set())
+    monkeypatch.setattr(appmod, "_laundry_unavail_alerted", False)
+    assert appmod._laundry_row_status() is None
+    monkeypatch.setattr(appmod, "_laundry_unavail_alerted", True)
+    assert appmod._laundry_row_status() == "error"
+
+
+def test_a_machines_outage_clock_survives_a_feed_outage(app_mod, monkeypatch, caplog):
+    # A machine offline for hours never escalated if the whole feed dropped
+    # often enough to keep resetting its clock: the same starvation the
+    # two-clock split fixed on the feed lane.
+    appmod = app_mod
+    monkeypatch.setattr(appmod, "_laundry_machine_offline_since", {})
+    monkeypatch.setattr(appmod, "_laundry_machines_stuck", set())
+    monkeypatch.setattr(appmod.cfg, "laundry", _LAUNDRY_CFG)
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    t = 100.0
+    offline = {"available": True, "machines": [
+        {"id": "washer", "phase": "offline"}, {"id": "dryer", "phase": "idle"}]}
+    appmod._laundry_watch_machines(offline, t)
+    started = dict(appmod._laundry_machine_offline_since)
+    assert "washer" in started
+    # the feed drops and comes back, repeatedly, while the washer stays gone
+    for _ in range(5):
+        t += 10
+        appmod._laundry_watch_machines({"available": False}, t)
+        t += 10
+        appmod._laundry_watch_machines(offline, t)
+    assert appmod._laundry_machine_offline_since == started, \
+        "the feed outage restarted the machine's clock"
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        appmod._laundry_watch_machines(offline, t + appmod.LAUNDRY_UNAVAIL_ALERT_S)
+    assert [r for r in _errors(caplog) if "washer" in r.getMessage()]
+
+
 def test_the_escalation_threshold_cannot_undercut_the_display_hold():
     # The ERROR says the card is "stuck on unavailable". If the threshold ever
     # dropped below the hold, it would say that about a card still showing
@@ -3837,7 +3881,8 @@ def test_a_long_outage_escalates_even_while_a_good_card_is_held(
         clock["t"] += appmod.LAUNDRY_UNAVAIL_ALERT_S + 1
         asyncio.run(appmod._laundry_watch_tick())
         assert appmod._laundry_snapshot == {"available": False}
-        assert len([r for r in _errors(caplog) if "unavailable for" in r.getMessage()]) == 1
+        assert len([r for r in _errors(caplog)
+                    if "has been failing for" in r.getMessage()]) == 1
 
 
 def test_the_completion_history_failing_is_latched_not_flooded(
@@ -3902,7 +3947,7 @@ def test_a_long_outage_is_escalated_once_and_closed_on_recovery(
         tick()                                    # past it: one ERROR
         clock["t"] += 600
         tick()                                    # ...and not a second one
-        stuck = [r for r in _errors(caplog) if "unavailable for" in r.getMessage()]
+        stuck = [r for r in _errors(caplog) if "has been failing for" in r.getMessage()]
         assert len(stuck) == 1, [r.getMessage() for r in stuck]
 
         state["available"] = True
@@ -3927,7 +3972,7 @@ def test_a_long_outage_is_escalated_once_and_closed_on_recovery(
         tick()
         clock["t"] += appmod.LAUNDRY_UNAVAIL_ALERT_S + 1
         tick()
-        stuck = [r for r in _errors(caplog) if "unavailable for" in r.getMessage()]
+        stuck = [r for r in _errors(caplog) if "has been failing for" in r.getMessage()]
         assert len(stuck) == 2, [r.getMessage() for r in stuck]
 
 
