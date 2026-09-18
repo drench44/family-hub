@@ -4082,7 +4082,9 @@ test('sky phase follows the feed sunrise/sunset when present, fixed boundaries o
   // parseHmm: the feed's "HH:MM" shape, and nothing else
   assert.equal(sandbox.parseHmm('06:15'), 6.25);
   assert.equal(sandbox.parseHmm('20:15'), 20.25);
-  for (const bad of ['', null, undefined, '6:15pm', '25:00', '12:60', 'soon', 615]) {
+  // The feed's 12-hour clock ('6:58\u00a0AM') is NOT parsed here on purpose:
+  // tiles._clock_24h turns it into 'HH:MM' server-side before the card sees it.
+  for (const bad of ['', null, undefined, '6:15pm', '6:58\u00a0AM', '25:00', '12:60', 'soon', 615]) {
     assert.equal(sandbox.parseHmm(bad), null, `parseHmm(${bad}) must be null`);
   }
   // winter sun (rise 7:30, set 16:45): 7am is DAWN with real times where the
