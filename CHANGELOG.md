@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-09-17
+
 ### Fixed
 - The weather card keeps its real dawn and dusk when the weather feed is set
   to a 12-hour clock. The feed can now send sunrise and sunset as "6:58 AM"
