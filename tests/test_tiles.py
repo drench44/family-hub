@@ -249,6 +249,17 @@ def test_weather_sun_times_are_24h_whatever_clock_the_feed_uses(raw, want):
     assert t["sunrise"] == want and t["sunset"] == want
 
 
+def test_an_unreadable_sun_time_is_logged_once_and_a_missing_one_never(caplog):
+    tiles._warned_clock_values.clear()
+    for body in (dict(WX_OK, sunrise="6:58 a.m."), dict(WX_OK, sunrise="6:58 a.m."),
+                 dict(WX_OK, sunrise=None, sunset=None)):
+        tiles.reset_caches()
+        run_tile(tiles.weather_tile, lambda req, b=body: httpx.Response(200, json=b))
+    warns = [r for r in caplog.records if "unknown clock shape" in r.getMessage()]
+    assert len(warns) == 1, [r.getMessage() for r in warns]
+    assert "sunrise" in warns[0].getMessage()
+
+
 def test_weather_non_dict_body_unavailable_not_500():
     # A flaky LAN device can serve valid-but-non-dict JSON. wx.get(...) would
     # raise AttributeError; the tile must still fail soft to {available:false}.
