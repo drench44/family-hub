@@ -17,6 +17,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   would have quietly fallen back to fixed dawn/dusk hours. The weather tile now
   turns either shape into "HH:MM" before the card sees it, and anything
   unreadable still falls back as before.
+- A sunrise or sunset the weather tile cannot read is now logged, once per new
+  shape, so the next change to the feed's clock format shows up in the logs
+  instead of quietly on the wall.
 - Documented why `icloud_caldav` is allowed to leave the registry when its
   credentials are missing while laundry may not: the Settings overlay draws the
   CalDAV connect panel either way, so an absent row still has a visible way to
