@@ -8,6 +8,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import re
 import time
 
 import httpx
@@ -176,6 +177,34 @@ def _weather_spark(wx: dict) -> dict:
     return {"temps": temps, "now": now}
 
 
+_CLOCK_RE = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*([AaPp][Mm])?\s*$")
+
+
+def _clock_24h(value):
+    """The feed's local sunrise/sunset as "HH:MM", or None.
+
+    The weather feed writes either "06:58" (24-hour) or "6:58 AM" / "6 AM"
+    (12-hour, a no-break space before the meridiem) depending on its clock
+    setting. The card's sky phase parses "HH:MM" only, so normalize here and
+    the card keeps its real dawn/dusk whichever clock the feed is set to.
+    Anything else is None (the card falls back to fixed phase boundaries)."""
+    if not isinstance(value, str):
+        return None
+    m = _CLOCK_RE.match(value.replace("\u00a0", " "))
+    if not m:
+        return None
+    h, mins, mer = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+    if mins > 59:
+        return None
+    if mer:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if mer.lower() == "pm" else 0)
+    elif m.group(2) is None or h > 23:
+        return None
+    return f"{h:02d}:{mins:02d}"
+
+
 def _weather_forecast(wx: dict) -> list:
     """Daily forecast for the weather card's 5-day strip, from the feed's
     ``dailyForecast`` — a list of ``{day, hi, lo, cond}`` dicts, today first (see
@@ -270,13 +299,14 @@ async def weather_tile(client, cfg) -> dict:
             "forecast": _weather_forecast(wx),
             "stale": wx.get("weatherStale"),
             # Sky-scene inputs (verified against the live feed 2026-08-17):
-            # sunrise/sunset are "HH:MM" local strings that drive the sky's
+            # sunrise/sunset are "HH:MM" local strings (normalized from the
+            # feed's 24- or 12-hour clock by _clock_24h) that drive the sky's
             # dawn/day/dusk/night phase (absent -> the frontend's fixed civil
             # boundaries); moonPhase is a name ("Waxing Crescent") and
             # moonIllum a lit percentage that shape the drawn moon (absent ->
             # a full disc).
-            "sunrise": wx.get("sunrise"),
-            "sunset": wx.get("sunset"),
+            "sunrise": _clock_24h(wx.get("sunrise")),
+            "sunset": _clock_24h(wx.get("sunset")),
             "moon_phase": wx.get("moonPhase"),
             "moon_illum": wx.get("moonIllum"),
         }
