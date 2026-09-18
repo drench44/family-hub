@@ -228,6 +228,27 @@ def test_weather_missing_keys_become_none_not_crash():
     assert t["moon_phase"] is None and t["moon_illum"] is None
 
 
+@pytest.mark.parametrize("raw, want", [
+    ("06:15", "06:15"), ("6:15", "06:15"), ("20:15", "20:15"),
+    # the weather feed's 12-hour clock (a no-break space before AM/PM)
+    ("6:15\u00a0AM", "06:15"), ("8:15\u00a0PM", "20:15"), ("8:15 pm", "20:15"),
+    ("12:05\u00a0AM", "00:05"), ("12:05\u00a0PM", "12:05"),
+    # on the hour, the feed can drop the minutes
+    ("6\u00a0AM", "06:00"), ("12\u00a0PM", "12:00"),
+    # junk degrades to None (the card then uses its fixed phase boundaries)
+    (None, None), ("", None), ("sunrise", None), ("25:00", None), ("13:00 PM", None),
+    ("0:30 AM", None), (615, None),
+])
+def test_weather_sun_times_are_24h_whatever_clock_the_feed_uses(raw, want):
+    # 2026-09-17: the weather feed gained a 12-hour clock setting. The card's
+    # sky phase parses "HH:MM" only, so "6:58 AM" would quietly drop it to the
+    # fixed dawn/dusk hours. The tile normalizes both shapes to "HH:MM".
+    tiles.reset_caches()
+    body = dict(WX_OK, sunrise=raw, sunset=raw)
+    t = run_tile(tiles.weather_tile, lambda req: httpx.Response(200, json=body))
+    assert t["sunrise"] == want and t["sunset"] == want
+
+
 def test_weather_non_dict_body_unavailable_not_500():
     # A flaky LAN device can serve valid-but-non-dict JSON. wx.get(...) would
     # raise AttributeError; the tile must still fail soft to {available:false}.

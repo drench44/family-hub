@@ -11,6 +11,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Fixed
+- The weather card keeps its real dawn and dusk when the weather feed is set
+  to a 12-hour clock. The feed can now send sunrise and sunset as "6:58 AM"
+  instead of "06:58"; the card's sky phase only understood the second shape and
+  would have quietly fallen back to fixed dawn/dusk hours. The weather tile now
+  turns either shape into "HH:MM" before the card sees it, and anything
+  unreadable still falls back as before.
 - Documented why `icloud_caldav` is allowed to leave the registry when its
   credentials are missing while laundry may not: the Settings overlay draws the
   CalDAV connect panel either way, so an absent row still has a visible way to

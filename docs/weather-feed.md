@@ -44,6 +44,14 @@ It is a **single-station, real-time** feed. Ranges beyond "now" are limited:
 | Astronomy | sun/moon | `sunrise` `sunset` `daylight` `moonPhase` `moonIllum` `moonrise` `moonset` `nextFull` `nextNew` |
 | Meta | staleness/alerts | `weatherStale` `weatherAgeSec` `aqiStale` `alerts` `alertCount` |
 
+**Clock strings follow the feed's own clock setting.** `sunrise`, `sunset`,
+`moonrise`, `moonset`, `time` and every other clock string come out as
+`"06:58"` (24-hour) or `"6:58 AM"` / `"6 AM"` (12-hour, a no-break space before
+the meridiem), depending on how the feed is configured. Never parse them
+directly on the client: the tile normalizes `sunrise`/`sunset` to `"HH:MM"`
+(`tiles._clock_24h`) before the card's sky phase reads them. Any new clock
+field needs the same treatment.
+
 Full key list (for reference — types/notes): `ts, station, date, time,
 locationLine, temp, tempUnit, feelsLike, feelsDesc, tempTrendPerHr, temp24hDelta,
 obsLow, obsLowTime, obsHigh, obsHighTime, tempSeries, fcLow, fcHigh, humidity,
