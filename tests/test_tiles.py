@@ -237,7 +237,11 @@ def test_weather_missing_keys_become_none_not_crash():
     ("6\u00a0AM", "06:00"), ("12\u00a0PM", "12:00"),
     # junk degrades to None (the card then uses its fixed phase boundaries)
     (None, None), ("", None), ("sunrise", None), ("25:00", None), ("13:00 PM", None),
-    ("0:30 AM", None), (615, None),
+    ("0:30 AM", None), (615, None), ("6:60 AM", None), ("6", None),
+    # trailing junk must not be half-read ("8:15 p.m." as 08:15 is 12 h off)
+    ("8:15 p.m.", None), ("06:15:30", None),
+    # the narrow no-break space JS/ICU put before AM/PM
+    ("6:58\u202fAM", "06:58"),
 ])
 def test_weather_sun_times_are_24h_whatever_clock_the_feed_uses(raw, want):
     # 2026-09-17: the weather feed gained a 12-hour clock setting. The card's
