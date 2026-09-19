@@ -1559,3 +1559,122 @@ def test_month_lane_count_matches_css_row_template():
     rows = re.findall(r"grid-template-rows:\s*\d+px repeat\((\d+), var\(--mg-lane\)\)", css)
     assert rows, ".mg-week row template missing"
     assert all(int(r) == lanes for r in rows), f"CSS lane rows {rows} != MONTH_MAX_LANES {lanes}"
+
+
+# ------------------------------------------------------------ seasonal looks
+# theme.js's SEASONS registry is the source of truth for look ids; everything a
+# look needs to paint lives in styles.css and static/seasons/. These guards make
+# "added a look to the registry" fail loudly until every piece exists.
+
+def _look_ids():
+    theme = (STATIC / "theme.js").read_text()
+    reg = theme[theme.index("var SEASONS = ["):theme.index("var SEASON_PREFS")]
+    ids = re.findall(r'\{ id: "([a-z]+-[a-z]+)"', reg)
+    assert ids, "no look ids found in theme.js SEASONS"
+    return ids
+
+
+# every look repaints these; good/warn/crit stay the theme family's status hues
+_LOOK_TOKENS = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
+                "--ink", "--dim", "--faint", "--accent", "--accent-ink",
+                "--accent-soft", "--shadow", "--sn-sky-1", "--sn-sky-2",
+                "--sn-sky-3", "--sn-glow", "--sn-r1", "--sn-r1b", "--sn-r2",
+                "--sn-r2b", "--sn-grain"]
+
+
+def _block_after(selector_start):
+    i = CSS.index(selector_start)
+    return CSS[CSS.index("{", i) + 1:CSS.index("}", i)]
+
+
+@pytest.mark.parametrize("look", _look_ids())
+def test_every_look_has_a_dark_and_a_daytime_palette(look):
+    """Both flavours of every look, each carrying every token it must repaint.
+    The wall selectors are (0,4,0) so they beat every theme+accent block (max
+    0,3,0) whatever the file order; the preview tile shares the same block."""
+    dark = f':root[data-look="{look}"][data-theme][data-accent]'
+    day = f':root[data-look="{look}"][data-accent]:is([data-theme="light"],[data-theme="soft"])'
+    for sel in (dark, day):
+        assert sel in CSS, f"missing palette block: {sel}"
+        body = _block_after(sel)
+        for tok in _LOOK_TOKENS:
+            assert re.search(rf"{re.escape(tok)}\s*:", body), f"{sel} never sets {tok}"
+    assert f'.look-swatch[data-look="{look}"] {{' in CSS or \
+        f'.look-swatch[data-look="{look}"],' in CSS or \
+        f'.look-swatch[data-look="{look}"]\n' in CSS, f"{look} preview tile has no palette"
+
+
+@pytest.mark.parametrize("look", _look_ids())
+def test_every_look_paints_a_scene_and_a_mark(look):
+    """A look with a palette but no scene rules would paint a blank sky; one
+    with no mark rule would leave an accent-coloured square by the wordmark."""
+    assert f':root[data-look="{look}"] body > .season .sn-r1' in CSS or \
+        f':root[data-look="{look}"] body > .season .sn-ridge' in CSS, f"{look} shows no ridges"
+    assert f'.look-swatch[data-look="{look}"] .sn-r1' in CSS or \
+        f'.look-swatch[data-look="{look}"] .sn-ridge' in CSS, f"{look} preview shows no ridges"
+    assert re.search(rf'\[data-look="{re.escape(look)}"\] \.season-mark[^{{]*\{{[^}}]*--mark:', CSS), \
+        f"{look} has no seasonal mark"
+
+
+def test_season_art_files_exist_and_are_credited():
+    """Every url("seasons/...") the stylesheet asks for ships in the repo (a
+    missing mask renders the layer as a solid block), and every file not made
+    by this repo's generator is listed in CREDITS.md with its licence."""
+    seasons = STATIC / "seasons"
+    for ref in set(re.findall(r'url\("seasons/([^"]+)"\)', CSS)):
+        assert (seasons / ref).is_file(), f"styles.css references missing seasons/{ref}"
+    credits = (seasons / "CREDITS.md").read_text()
+    for f in seasons.iterdir():
+        if f.name == "CREDITS.md" or re.search(r"-ridge-\d+\.svg$", f.name):
+            continue
+        assert f"`{f.name}`" in credits, f"seasons/{f.name} is not in CREDITS.md"
+    assert "`*-ridge-*.svg`" in credits
+
+
+def test_season_scene_sits_behind_and_never_takes_a_tap():
+    """The scene is a full-viewport fixed layer: it must be inert
+    (pointer-events none), painted UNDER the page (z-index -1 with the body's
+    own background stepping aside), and free of backdrop-filter (the iOS
+    tap-through trap on fixed elements)."""
+    m = re.search(r':root\[data-look\]:not\(\[data-look="none"\]\) body > \.season \{([^}]*)\}', CSS)
+    assert m, "missing the wall scene rule"
+    rule = m.group(1)
+    for decl in ("position: fixed", "z-index: -1", "pointer-events: none"):
+        assert decl in rule, f"scene rule must set {decl}"
+    assert "backdrop-filter" not in rule
+    assert re.search(r':root\[data-look\]:not\(\[data-look="none"\]\) body \{ background: transparent; \}', CSS), \
+        "the body must step aside or its background hides the scene"
+    hub = (STATIC / "hub.js").read_text()
+    assert "insertAdjacentHTML('afterbegin', seasonSceneHtml())" in hub, \
+        "the scene mounts FIRST in <body> (under everything, a direct child for the night dim)"
+
+
+def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
+    """The leaf rules are near the end of the file, so the reduced-motion
+    override must come AFTER them or it loses the cascade at equal
+    specificity (the main reduced-motion block is too early). Night pauses
+    the leaves: nobody needs them falling in a dark kitchen."""
+    last_anim = CSS.rindex("animation: sn-")
+    blocks = [m for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\) \{", CSS)]
+    assert blocks and blocks[-1].start() > last_anim, \
+        "a reduced-motion block must follow the last seasonal animation rule"
+    tail = CSS[blocks[-1].start():]
+    for sel in (".sn-leaf.fall", ".sn-leaf b", "body > .season"):
+        assert sel in tail[:tail.index("\n}")], f"reduced motion must stop {sel}"
+    assert re.search(r"\.is-night \.sn-leaf[^{]*\{[^}]*animation-play-state:\s*paused", CSS)
+    # blur on a masked element must sit on its PARENT: filter runs before mask
+    assert re.search(r"\.sn-leaf\.near \{ filter: blur", CSS)
+    assert not re.search(r"\.sn-leaf\.near b \{[^}]*filter", CSS)
+
+
+def test_season_controls_are_wired_in_the_popover_and_config():
+    index = (STATIC / "index.html").read_text()
+    assert 'data-season-set="off"' in index and 'data-season-set="on"' in index
+    assert 'class="season-mark"' in index, "the wordmark's seasonal mark"
+    assert 'class="look-accent-note"' in index, "the swatches say why they stepped back"
+    assert 'class="theme-pop-sep"' in index, "look settings and screen settings are split"
+    # the season row sits with the look controls, above the divider
+    assert index.index('data-season-set="on"') < index.index('class="theme-pop-sep"') \
+        < index.index('data-layout-set="auto"')
+    config = (ROOT / "src" / "family_hub" / "config.py").read_text()
+    assert re.search(r'"season":\s*\{"on", "off"\}', config), "config.py must accept theme.season"

@@ -7005,3 +7005,166 @@ test('self-heal: the settle timer, not the wake instant, drives the decision', (
   assert.equal(h.beacons.length, 1);
   assert.equal(JSON.parse(h.beacons.at(-1).blob.parts[0]).reason, 'hold:disabled');
 });
+
+// ------------------------------------------------------------ seasonal looks
+// theme.js owns the registry + prefs (tested in theme.test.mjs); hub.js paints
+// the scene and the Settings picker. These stub theme.js's globals on the
+// sandbox, the way the house-theme tests stub stampLayout.
+const FALL = [{ id: 'fall', name: 'Fall', from: [9, 1], to: [11, 30], looks: [
+  { id: 'fall-harvest', name: 'Harvest', blurb: 'Rolling hills' },
+  { id: 'fall-maple', name: 'Maple', blurb: 'Leaves <drifting>' },
+] }];
+
+function seasonHub() {
+  const env = newHub();
+  const calls = [];
+  Object.assign(env.sandbox, {
+    FH_SEASONS: FALL,
+    seasonLook: () => 'fall-maple',
+    activeSeason: () => 'fall',
+    setSeason: (v) => calls.push(['setSeason', v]),
+    setSeasonLook: (v) => calls.push(['setSeasonLook', v]),
+  });
+  return { ...env, calls };
+}
+
+test('seasonSceneHtml: balanced spans, every layer, six falling and two near leaves', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.seasonSceneHtml();
+  const opens = (html.match(/<span\b/g) || []).length;
+  const closes = (html.match(/<\/span>/g) || []).length;
+  assert.equal(opens, closes, 'every span closes (a stray one would re-parent the next tile)');
+  assert.match(html, /^<span class="season" aria-hidden="true">/, 'hidden from assistive tech');
+  for (const cls of ['sn-glow', 'sn-r1', 'sn-r2', 'sn-r3', 'sn-r4', 'sn-mist', 'sn-leaves', 'sn-grain']) {
+    assert.match(html, new RegExp(`class="[^"]*\\b${cls}\\b`), `has the ${cls} layer`);
+  }
+  assert.equal((html.match(/class="sn-leaf fall/g) || []).length, 6);
+  assert.equal((html.match(/class="sn-leaf near"/g) || []).length, 2);
+  // the nth-child placement rules count leaves; any other child in .sn-leaves
+  // would shift every leaf's position and speed
+  const leaves = html.slice(html.indexOf('sn-leaves'), html.indexOf('sn-grain'));
+  assert.equal((leaves.match(/<span class="sn-leaf/g) || []).length, 8);
+  assert.doesNotMatch(html, /<div/, 'spans only: the same markup sits inside a <button> tile');
+});
+
+test('mountSeasonScene inserts the scene once, first in <body>', () => {
+  const { document, sandbox } = newHub();
+  const inserted = [];
+  document.body.insertAdjacentHTML = (where, html) => inserted.push([where, html]);
+  vm.runInContext('seasonMounted = false;', sandbox);
+  sandbox.mountSeasonScene();
+  sandbox.mountSeasonScene();
+  assert.equal(inserted.length, 1, 'idempotent');
+  assert.equal(inserted[0][0], 'afterbegin');
+  assert.match(inserted[0][1], /class="season"/);
+});
+
+test('renderSettingsFull: a Seasonal looks card with an Off/On switch and a preview tile per look', () => {
+  const { document, sandbox } = seasonHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.renderSettingsFull();
+  const html = host.innerHTML;
+  assert.match(html, /<h2>Seasonal looks<\/h2>/);
+  assert.match(html, /<h2>This screen<\/h2>/, 'layout + auto-return live in their own card');
+  assert.match(html, /data-season-set="off"/);
+  assert.match(html, /data-season-set="on"/);
+  for (const id of ['fall-harvest', 'fall-maple']) {
+    assert.match(html, new RegExp(`data-look-pick="${id}"`), `${id} has a tile`);
+    assert.match(html, new RegExp(`class="look-swatch" data-look="${id}"`), `${id} tile previews its own look`);
+  }
+  assert.match(html, /Sep 1 to Nov 30/, 'the season says when it shows');
+  assert.match(html, /In season/, 'the current season is marked');
+  assert.match(html, /Leaves &lt;drifting&gt;/, 'registry strings are escaped');
+  assert.doesNotMatch(html, /<drifting>/);
+  // the Settings card and the popover both carry the accent note
+  assert.match(html, /class="look-accent-note"/);
+});
+
+test('reflectThemeControls marks the season switch and each season\'s picked look', () => {
+  const { document, sandbox } = seasonHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.setAttribute('data-season', 'on');
+  sandbox.renderSettingsFull();
+  const on = host.querySelectorAll('[data-season-set]').filter((b) => b.classList.contains('on'));
+  assert.deepEqual(on.map((b) => b.dataset.seasonSet), ['on']);
+  const maple = host.querySelector('[data-look-pick="fall-maple"]');
+  const harvest = host.querySelector('[data-look-pick="fall-harvest"]');
+  assert.ok(maple.classList.contains('on'));
+  assert.equal(maple.getAttribute('aria-pressed'), 'true');
+  assert.ok(!harvest.classList.contains('on'));
+  assert.equal(harvest.getAttribute('aria-pressed'), 'false');
+});
+
+test('reflectThemeControls: an unstamped season reflects as Off, never a blank switch', () => {
+  const { document, sandbox } = seasonHub();
+  const pop = document.createElement('div');
+  pop.innerHTML = '<div class="theme-ctl"><button data-season-set="off">Off</button>'
+    + '<button data-season-set="on">On</button></div>';
+  pop._id = 'theme-pop';
+  document.body.appendChild(pop);
+  sandbox.reflectThemeControls();
+  const on = pop.querySelectorAll('[data-season-set]').filter((b) => b.classList.contains('on'));
+  assert.deepEqual(on.map((b) => b.dataset.seasonSet), ['off']);
+});
+
+test('tapping the season switch and a look tile calls theme.js\'s setters', () => {
+  const { document, sandbox, docListeners, calls } = seasonHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.renderSettingsFull();
+  const tap = (sel) => {
+    const node = host.querySelector(sel);
+    // the fake DOM can't resolve '.theme-ctl [attr]' combinators; answer the
+    // listener's closest() only for selectors naming this control's attribute
+    const attr = sel.match(/\[([\w-]+)/)[1];
+    node.closest = (s) => (s.includes(`[${attr}]`) ? node : null);
+    (docListeners.click || []).forEach((fn) => fn({ target: node }));
+  };
+  tap('[data-season-set="on"]');
+  tap('[data-look-pick="fall-harvest"]');
+  assert.deepEqual(calls, [['setSeason', 'on'], ['setSeasonLook', 'fall-harvest']]);
+});
+
+test('applyHouseTheme stamps the house season on a fresh device only', () => {
+  const fresh = newHub();
+  const stamped = [];
+  fresh.sandbox.stampSeason = (v) => stamped.push(v);
+  fresh.sandbox.applyHouseTheme({ season: 'on' });
+  assert.deepEqual(stamped, ['on']);
+
+  const chosen = newHub();
+  const stamped2 = [];
+  chosen.sandbox.stampSeason = (v) => stamped2.push(v);
+  chosen.sandbox.localStorage = { getItem: (k) => (k === 'fh.season' ? 'off' : null) };
+  chosen.sandbox.applyHouseTheme({ season: 'on' });
+  assert.deepEqual(stamped2, [], 'a device that chose Off keeps it');
+});
+
+test('tickClock re-derives the look once per calendar day, not every second', () => {
+  const { sandbox } = newHub();
+  const seen = [];
+  sandbox.refreshLook = (d) => seen.push(d.getDate());
+  vm.runInContext('lookCheckedDay = null;', sandbox);
+  sandbox.tickClock();
+  sandbox.tickClock();
+  assert.equal(seen.length, 1, 'same day: one refresh');
+  vm.runInContext('lookCheckedDay = -1;', sandbox);   // as if the date just turned
+  sandbox.tickClock();
+  assert.equal(seen.length, 2, 'a new day refreshes again');
+});
+
+test('hub.js survives theme.js missing: no registry, no setters, no throw', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.renderSettingsFull();
+  assert.match(host.innerHTML, /<h2>Seasonal looks<\/h2>/);
+  assert.doesNotMatch(host.innerHTML, /data-look-pick=/, 'no registry, no tiles');
+  sandbox.applyHouseTheme({ season: 'on' });   // no stampSeason defined: must not throw
+});
