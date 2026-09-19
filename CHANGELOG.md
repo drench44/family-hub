@@ -28,6 +28,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   them and compares the result with the committed files. The leaf and mark
   shapes come from Twemoji (CC-BY 4.0) and Phosphor Icons (MIT), credited in
   `static/seasons/CREDITS.md`.
+- A look's daytime and evening scenes share the same layout, tree for tree,
+  so switching between a light and a dark theme only changes the light.
 - The seasonal art under `/seasons/` is served `no-cache`, so a phone picks up
   new art after a release instead of keeping old copies. The stylesheet points
   at these files directly, where no `?v=` can reach them.

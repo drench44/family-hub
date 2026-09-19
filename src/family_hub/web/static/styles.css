@@ -2662,7 +2662,7 @@ body.integ-off-todos .todo-slot { display: none; }
   --sn-leaf-1:#F58A2E; --sn-leaf-2:#F7B733; --sn-leaf-3:#F2733C; --sn-leaf-4:#FFD56B;
 }
 
-/* ---- Maple: a park of maples, a winding path, leaves drifting down ---- */
+/* ---- Golden Hills (id fall-maple, Minimal): soft gradient hills ---- */
 :root[data-look="fall-maple"][data-theme][data-accent],
 .look-swatch[data-look="fall-maple"] {
   --ground:#16193A; --surface:#1E2245; --surface-2:#272C52; --edge:#3A4178; --edge-soft:#2D3363;
@@ -2737,10 +2737,14 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 .sn-leaf.slender b { -webkit-mask-image: url("seasons/leaf-slender.svg"); mask-image: url("seasons/leaf-slender.svg"); }
 .sn-leaf.fall { top: 0; animation: sn-fall var(--d) linear var(--dl) infinite; }
-.sn-leaf.fall b, .sn-leaf.near b { animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
-/* blur on the OUTER box: filter runs before mask on one element, so blurring
-   the masked <b> itself would leave its edge crisp */
-.sn-leaf.near { filter: blur(10px); }
+.sn-leaf.fall b { animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
+/* The two big soft leaves up close. Blur on the OUTER box: filter runs before
+   mask on one element, so blurring the masked <b> itself would leave its edge
+   crisp. And the sway moves that same blurred box, never its content: moving
+   the inner <b> would make the browser re-blur every frame, all day, on the
+   wall's small GPU; moving the filtered box just slides an already-blurred
+   layer. */
+.sn-leaf.near { filter: blur(10px); animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
 @keyframes sn-fall { from { transform: translate3d(0, -12vh, 0); } to { transform: translate3d(0, 112vh, 0); } }
 @keyframes sn-sway {
   from { transform: translate3d(calc(var(--amp, 26px) * -1), 0, 0) rotate(var(--r0, -18deg)); }
@@ -2831,6 +2835,6 @@ body.integ-off-todos .todo-slot { display: none; }
    at equal specificity. The scene still shows, just still: no arrival fade,
    no falling, no sway, and each falling leaf rests at its own spot. */
 @media (prefers-reduced-motion: reduce) {
-  :root[data-look]:not([data-look="none"]) body > .season, .sn-leaf, .sn-leaf.fall, .sn-leaf b, .sn-leaf.fall b, .sn-leaf.near b { animation: none; }
+  :root[data-look]:not([data-look="none"]) body > .season, .sn-leaf, .sn-leaf.fall, .sn-leaf.near, .sn-leaf b, .sn-leaf.fall b { animation: none; }
   .sn-leaf.fall { top: var(--y); }
 }
