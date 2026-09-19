@@ -42,6 +42,13 @@
   /* person hues (work on both grounds) */
   --p1: #E86A9E; --p2: #3E9BE8; --p3: #E39A2A;
   --accent: #0E9BCF; --accent-ink: #FFFFFF; --accent-soft: rgba(14,155,207,.12);
+  /* seasonal scene tokens (only painted while a look is active; each look's
+     blocks near the end of the file set them — these are neutral defaults) */
+  --sn-scene: none; --sn-pos: center;
+  /* Light's glass and wash (other themes set their own near the end) */
+  --sn-wash: linear-gradient(180deg, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
+  --glass: rgba(255,255,255,.80); --glass-edge: rgba(255,255,255,.55);
+  --sn-leaf-1: #F58A2E; --sn-leaf-2: #F7B733; --sn-leaf-3: #EE6446; --sn-leaf-4: #FFD56B;
 }
 :root[data-accent="violet"] { --accent:#7A5AF0; --accent-soft:rgba(122,90,240,.12); }
 :root[data-accent="amber"]  { --accent:#D98A15; --accent-soft:rgba(217,138,21,.14); }
@@ -2490,6 +2497,9 @@ body.integ-off-todos .todo-slot { display: none; }
   .sky-snow, .sky-snow::before, .sky-snow::after,
   .spark .sp-halo,
   .card-celebrate { animation: none; }
+  /* the seasonal scene's motion is stopped by its own block at the END of the
+     file ("seasonal looks, reduced motion"): its animated rules come later
+     than this block, so rules here would lose the cascade to them */
   .card-celebrate { border-color: var(--good); }
   .confetti-particle { display: none; }
 }
@@ -2610,3 +2620,306 @@ body.integ-off-todos .todo-slot { display: none; }
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .hub-toast-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ======================== seasonal looks (fall) ========================
+   A seasonal look fills the screen with a real photograph (or public-domain
+   artwork) and floats the wall on top of it as frosted glass, the way iPad
+   widgets sit on a wallpaper: the whole screen feels like the season, and
+   the cards, section titles and top bar stay readable because each one
+   blurs what is behind it. Leaves drift down over the wall. Standards,
+   sourcing rules and the how-to for new seasons: docs/seasonal-looks.md.
+
+   Two layers of tokens, so every theme keeps its own character with a
+   season on:
+   - The THEME owns the glass and the wash (per-theme blocks below): Light
+     is white glass, Soft warm cream, Blue navy, Grey neutral grey, Black
+     near-black. Ink, borders and every other colour stay the theme's own.
+   - The LOOK owns the photo, its focal point, the leaf colours and the
+     accent (matched to the photo, in a light-theme and a dark-theme tone).
+
+   theme.js stamps data-look on <html> ("none" or a look id) before first
+   paint; hub.js mounts two layers once at startup (.season: the photo and
+   the far leaves; .season-fx: the near leaves) and builds the Settings
+   preview tiles, which paint the same photo through the same tokens.
+
+   Look selectors are (0,4,0) so their accent beats every theme and
+   theme+accent block above (max 0,3,0) regardless of order; the light-theme
+   block must come AFTER the dark-theme one (same specificity, and the
+   dark-theme selector also matches Light/Soft). .look-swatch[data-look] is
+   a Settings preview tile: the same tokens scoped to the tile. The glass
+   rules use :where() so they stay at the specificity of the plain .card rule
+   they restyle: any section that paints its own card background (today's
+   calendar header, the weather sky) keeps it. */
+
+/* ---- per-theme glass and wash (used only while a look paints) ----
+   --glass is the theme's own card surface, made translucent; --sn-wash sits
+   between the photo and the wall. Light themes get an airy veil, dark themes
+   a dusk that deepens from Blue to Black. Light is the bare :root default. */
+:root[data-theme="soft"] {
+  --glass:rgba(247,243,235,.82); --glass-edge:rgba(255,251,242,.55);
+  --sn-wash:linear-gradient(180deg, rgba(250,242,226,.30) 0%, rgba(250,242,226,.04) 36%, rgba(250,242,226,.12) 100%);
+}
+:root[data-theme="dark"] {
+  --glass:rgba(18,25,40,.70); --glass-edge:rgba(150,180,240,.14);
+  --sn-wash:linear-gradient(180deg, rgba(6,14,34,.56) 0%, rgba(6,14,34,.30) 40%, rgba(6,14,34,.46) 100%);
+}
+:root[data-theme="grey"] {
+  --glass:rgba(31,31,33,.68); --glass-edge:rgba(255,255,255,.10);
+  --sn-wash:linear-gradient(180deg, rgba(12,12,14,.52) 0%, rgba(12,12,14,.28) 40%, rgba(12,12,14,.42) 100%);
+}
+:root[data-theme="black"] {
+  --glass:rgba(8,8,10,.76); --glass-edge:rgba(255,255,255,.08);
+  --sn-wash:linear-gradient(180deg, rgba(0,0,0,.66) 0%, rgba(0,0,0,.42) 40%, rgba(0,0,0,.58) 100%);
+}
+
+/* ---- Aspen Grove: sunlit gold under a blue sky (NPS, public domain) ---- */
+:root[data-look="fall-aspen-grove"][data-theme][data-accent],
+.look-swatch[data-look="fall-aspen-grove"] {
+  --accent:#F4C542; --accent-ink:#241B00; --accent-soft:rgba(244,197,66,.18);
+  --sn-scene:url("seasons/fall-aspen-grove.webp"); --sn-pos:center 35%;
+  --sn-leaf-1:#F4C542; --sn-leaf-2:#E8A92E; --sn-leaf-3:#F7D96A; --sn-leaf-4:#D98C2A;
+}
+:root[data-look="fall-aspen-grove"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-aspen-grove"] {
+  --accent:#A57508; --accent-ink:#FFFFFF; --accent-soft:rgba(165,117,8,.13);
+}
+
+/* ---- Misty Road: fog and fallen leaves (Bernd Schulz, CC0) ---- */
+:root[data-look="fall-misty-road"][data-theme][data-accent],
+.look-swatch[data-look="fall-misty-road"] {
+  --accent:#F29A5B; --accent-ink:#2A1200; --accent-soft:rgba(242,154,91,.18);
+  --sn-scene:url("seasons/fall-misty-road.webp"); --sn-pos:center 60%;
+  --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
+}
+:root[data-look="fall-misty-road"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-misty-road"] {
+  --accent:#B6531F; --accent-ink:#FFFFFF; --accent-soft:rgba(182,83,31,.12);
+}
+
+/* ---- Maple Sky: a maple canopy against clear blue sky (Aaron Burden, CC0) ---- */
+:root[data-look="fall-maple-sky"][data-theme][data-accent],
+.look-swatch[data-look="fall-maple-sky"] {
+  --accent:#FF8C4A; --accent-ink:#2A1000; --accent-soft:rgba(255,140,74,.18);
+  --sn-scene:url("seasons/fall-maple-sky.webp"); --sn-pos:center 25%;
+  --sn-leaf-1:#F07A2E; --sn-leaf-2:#F5A142; --sn-leaf-3:#D9502A; --sn-leaf-4:#F6C45A;
+}
+:root[data-look="fall-maple-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-maple-sky"] {
+  --accent:#CC4F16; --accent-ink:#FFFFFF; --accent-soft:rgba(204,79,22,.12);
+}
+
+/* ---- the scene ---- */
+/* Behind everything: z-index -1 paints under the page content, and the body's
+   own background steps aside so the scene is what shows (html keeps --ground
+   as the canvas backstop, also the colour shown while the photo loads).
+   Pointer-events none: it can never eat a tap. The night dim reaches it as a
+   direct child of <body> (.is-night > *). Layers, top to bottom: the wash,
+   the photo (cover, at the look's focal point), the ground colour. */
+.season { display: none; }
+:root[data-look]:not([data-look="none"]) body { background: transparent; }
+:root[data-look]:not([data-look="none"]) body > .season {
+  display: block; position: fixed; inset: 0; z-index: -1;
+  pointer-events: none; overflow: hidden;
+  background: var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground);
+  animation: sn-arrive 1.2s ease-out both;
+}
+@keyframes sn-arrive { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---- glass: the wall floats on the photo ----
+   Cards, their expand buttons, the section titles and the top bar become
+   frosted glass while a look paints. None of these is position:fixed or
+   sticky (backdrop-filter on those breaks taps on iOS; see CLAUDE.md). At
+   night the glass goes nearly solid instead (the .is-night rule below). */
+/* .wrap only: the full-screen views sit on a solid ground, where glass would
+   cost the wall's GPU a blur for nothing */
+:where(:root[data-look]:not([data-look="none"]) .wrap) .card,
+:where(:root[data-look]:not([data-look="none"]) .wrap) .expand {
+  background: var(--glass); border-color: var(--glass-edge);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);
+}
+/* At night the dim filter on the page's children makes .wrap a backdrop root,
+   so the glass stops blurring and the photo showed through sharp and busy.
+   With no blur to lean on, the glass goes nearly solid (the theme's own
+   surface) until morning. */
+.is-night { --glass: color-mix(in srgb, var(--surface) 94%, transparent); }
+/* empty check rings are drawn in --edge, which nearly vanishes on glass over
+   a bright photo; a ticked ring keeps its colour (its rule is more specific) */
+:where(:root[data-look]:not([data-look="none"]) .wrap) .chore-check,
+:where(:root[data-look]:not([data-look="none"]) .wrap) .todo-check { border-color: var(--faint); }
+:where(:root[data-look]:not([data-look="none"]) .wrap) .shead .tick { display: none; }
+:where(:root[data-look]:not([data-look="none"]) .wrap) .shead h2 {
+  color: var(--ink); background: var(--glass); border: 1px solid var(--glass-edge);
+  padding: 5px 12px; border-radius: 999px;
+  -webkit-backdrop-filter: blur(16px) saturate(1.3); backdrop-filter: blur(16px) saturate(1.3);
+}
+/* z-index: backdrop-filter makes the bar its own stacking context, which traps
+   the gear popover (z-index 60) inside it; without lifting the bar, the glass
+   cards later in the page paint over the open popover. */
+:where(:root[data-look]:not([data-look="none"])) .topbar {
+  position: relative; z-index: 30;
+  background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 16px;
+  margin: 10px 0 6px; padding: 8px 14px;
+  -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);
+}
+@media (max-width: 1000px) {
+  /* the phone's top row is already full (wordmark, mark, live, clock, gear):
+     the glass bar may not widen it, or the whole page spills sideways */
+  :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .topbar { padding: 6px 6px 6px 10px; margin: 8px 0; gap: 8px; }
+  /* ...and it only just fits: a two-digit hour ("10:51:46am") overflowed it
+     by 8px. The mark is decoration the phone row has no room for, and the
+     wordmark may give way before the page ever scrolls sideways. */
+  :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .season-mark { display: none; }
+  :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .wordmark { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ---- drifting leaves (every fall look, in its own colours) ----
+   On the wall they live in their own layer, .season-fx, the LAST child of
+   <body>: above the cards (behind the glass they were nearly invisible, "the
+   leaves falling are a bit hard to see"), under the top bar (z 30) and every
+   overlay, menu and toast (z 50+). The layer never takes a tap
+   (pointer-events: none) and is not a glass element, so the iOS rules for
+   fixed layers hold. On a phone it stops above the tab bar.
+   Each leaf is two boxes: the outer .sn-leaf span falls straight down at a
+   constant speed, the inner <b> sways side to side and turns, eased, so the
+   path reads as a leaf rocking on the air instead of a zig-zag. A small soft
+   shadow lifts each leaf off a leafy photo of the same colour; six small
+   leaves are cheap to repaint, but never blur a leaf (a big blurred moving
+   layer re-blurs every frame on the wall's small GPU). Placement and speed per
+   leaf live in the nth-child rules so the markup stays bare. */
+.season-fx { display: none; }
+:root[data-look^="fall-"] body > .season-fx {
+  display: block; position: fixed; inset: 0; z-index: 20;
+  pointer-events: none; overflow: hidden;
+}
+@media (max-width: 1000px) {
+  /* the tab bar is 64px plus the iPhone home-indicator inset (home-screen app) */
+  :root:not([data-layout="desktop"])[data-look^="fall-"] body > .season-fx { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+}
+.sn-leaves { display: none; position: absolute; inset: 0; }
+:root[data-look^="fall-"] body > .season-fx .sn-leaves,
+:root[data-look^="fall-"] body > .season .sn-leaves,
+.look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
+.sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); }
+.sn-leaf b {
+  display: block; width: 100%; height: 100%;
+  background: linear-gradient(140deg, var(--c1), var(--c2));
+  -webkit-mask: url("seasons/leaf-maple.svg") center / contain no-repeat;
+  mask: url("seasons/leaf-maple.svg") center / contain no-repeat;
+  opacity: var(--o, 1);
+}
+.sn-leaf.slender b { -webkit-mask-image: url("seasons/leaf-slender.svg"); mask-image: url("seasons/leaf-slender.svg"); }
+.sn-leaf.fall {
+  top: 0; animation: sn-fall var(--d) linear var(--dl) infinite;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,.30)) drop-shadow(0 4px 6px rgba(0,0,0,.22));
+}
+.sn-leaf.fall b { animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
+@keyframes sn-fall { from { transform: translate3d(0, -12vh, 0); } to { transform: translate3d(0, 112vh, 0); } }
+@keyframes sn-sway {
+  from { transform: translate3d(calc(var(--amp, 26px) * -1), 0, 0) rotate(var(--r0, -18deg)); }
+  to   { transform: translate3d(var(--amp, 26px), 0, 0) rotate(var(--r1, 32deg)); }
+}
+/* the six near leaves (the far set overrides these under .sn-leaves.back) */
+.sn-leaf:nth-child(1) { --x: 6%;  --y: 22%; --s: 40px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-3); --d: 30s; --dl: -4s; }
+.sn-leaf:nth-child(2) { --x: 30%; --y: 64%; --s: 34px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-1); --d: 36s; --dl: -19s; --sw: 6.5s; --r1: 48deg; }
+.sn-leaf:nth-child(3) { --x: 57%; --y: 38%; --s: 44px; --c1: var(--sn-leaf-4); --c2: var(--sn-leaf-2); --d: 33s; --dl: -27s; --amp: 34px; }
+.sn-leaf:nth-child(4) { --x: 82%; --y: 71%; --s: 36px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-2); --d: 39s; --dl: -11s; --sw: 7s; }
+.sn-leaf:nth-child(5) { --x: 44%; --y: 12%; --s: 24px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 48s; --dl: -33s; --o: .85; --amp: 18px; }
+.sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 22px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 52s; --dl: -44s; --o: .85; --amp: 16px; }
+/* The far leaves: a second set inside the photo layer, behind the glass, so
+   a card they pass behind blurs them and the open photo shows them sharp.
+   Smaller and slower than the near ones, on their own lanes, no shadow:
+   size, speed and blur together read as depth. */
+.sn-leaves.back .sn-leaf.fall { filter: none; }
+.sn-leaves.back .sn-leaf:nth-child(1) { --x: 18%; --y: 30%; --s: 22px; --d: 44s; --dl: -9s; --amp: 18px; --o: .9; }
+.sn-leaves.back .sn-leaf:nth-child(2) { --x: 38%; --y: 55%; --s: 18px; --d: 52s; --dl: -30s; --amp: 14px; --o: .85; }
+.sn-leaves.back .sn-leaf:nth-child(3) { --x: 66%; --y: 20%; --s: 24px; --d: 47s; --dl: -16s; --amp: 20px; --o: .9; }
+.sn-leaves.back .sn-leaf:nth-child(4) { --x: 74%; --y: 80%; --s: 20px; --d: 55s; --dl: -38s; --amp: 16px; --o: .85; }
+.sn-leaves.back .sn-leaf:nth-child(5) { --x: 11%; --y: 70%; --s: 16px; --d: 60s; --dl: -22s; --amp: 12px; --o: .8; }
+.sn-leaves.back .sn-leaf:nth-child(6) { --x: 88%; --y: 50%; --s: 18px; --d: 58s; --dl: -50s; --amp: 14px; --o: .8; }
+/* A wall left on overnight doesn't need leaves falling in a dark kitchen. */
+.is-night .sn-leaf, .is-night .sn-leaf b { animation-play-state: paused; }
+/* ...and the near layer goes away: the night dim turns .wrap into its own
+   stacking layer, which would put the top bar and the open gear menu UNDER
+   the leaves. The far leaves stay, still, behind the glass. */
+:root[data-look]:not([data-look="none"]) body.is-night > .season-fx { display: none; }
+
+/* ---- the seasonal mark beside the wordmark ---- */
+.season-mark { display: none; }
+:root[data-look]:not([data-look="none"]) .season-mark {
+  display: inline-block; flex: none; width: 17px; height: 17px; margin-left: -4px;
+  background: var(--accent);
+  -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat;
+}
+[data-look="fall-aspen-grove"] .season-mark,
+.look-swatch[data-look="fall-aspen-grove"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-misty-road"] .season-mark,
+.look-swatch[data-look="fall-misty-road"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-maple-sky"] .season-mark,
+.look-swatch[data-look="fall-maple-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+
+/* While a look paints, it owns the accent: the swatches step back and say why. */
+.look-accent-note { display: none; font-size: 12px; color: var(--faint); }
+:root[data-look]:not([data-look="none"]) .theme-ctl .swatches { opacity: .35; pointer-events: none; }
+:root[data-look]:not([data-look="none"]) .look-accent-note { display: block; }
+
+/* ---- Settings: the Seasonal looks picker ---- */
+.look-picker { min-width: 0; }
+.look-season + .look-season { margin-top: 18px; }
+.look-season-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.look-season-name { font-size: 15px; font-weight: 650; color: var(--ink); }
+.look-season-when { font-size: 12.5px; color: var(--faint); }
+.look-season-now { font-size: 11.5px; font-weight: 600; color: var(--accent);
+  background: var(--accent-soft); padding: 2px 8px; border-radius: 999px; }
+.look-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; max-width: 900px; }
+.look-tile {
+  appearance: none; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--edge); border-radius: 14px;
+}
+.look-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.look-tile.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+/* the preview: the real photo in miniature, painted by the look's own tokens */
+.look-swatch { position: relative; height: 128px; overflow: hidden; isolation: isolate;
+  background: var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground); }
+.look-swatch .season { display: block; position: absolute; inset: 0; z-index: 0; animation: none; background: none; }
+.look-swatch .sn-leaf.fall { top: var(--y); animation: none; }
+.look-swatch .sn-leaf b { animation: none; }
+.look-swatch .sn-leaf { --s: 12px; }
+/* a tiny glass card floating on the photo, so the preview shows how the wall reads */
+.look-card { position: absolute; z-index: 1; left: 12px; top: 12px; width: 58%;
+  padding: 8px 10px; border-radius: 9px; background: var(--glass); border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  display: flex; align-items: center; gap: 7px; }
+.look-mark { flex: none; width: 13px; height: 13px; background: var(--accent);
+  -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; }
+.look-card-line { height: 6px; border-radius: 3px; background: var(--dim); opacity: .55; flex: 1; }
+.look-card-line.short { flex: .5; background: var(--accent); opacity: 1; }
+.look-label { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 2px; }
+.look-name { font-size: 14px; font-weight: 650; color: var(--ink); }
+.look-blurb { font-size: 12px; color: var(--dim); }
+/* who made the photo or artwork (full attribution in static/seasons/CREDITS.md) */
+.look-credit { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.settings-sub { font-size: 12.5px; color: var(--faint); margin-top: -4px; }
+/* "Nothing is in season today. Fall starts Sep 1." (Season on, out of season) */
+.season-idle-note { font-size: 12px; color: var(--faint); max-width: 240px; }
+/* a row's switch keeps its own width when a note beside it is wider */
+.theme-pop .theme-pop-row > .seg { align-self: flex-start; }
+/* nowrap matters: a WRAPPING column flex box sizes its height as if the tile
+   grid were one tile wide, leaving a tall empty gap under the tiles */
+.theme-ctl.stack { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 16px; }
+.theme-ctl.stack .seg { align-self: flex-start; }
+:root:not([data-season="on"]) .look-tile.on { box-shadow: none; }
+/* the gear popover: a hairline between "how the hub looks" and "how this screen behaves" */
+.theme-pop .theme-pop-sep { align-self: stretch; height: 1px; background: var(--edge-soft); margin: 16px 0 14px; }
+/* ---- seasonal looks, reduced motion ----
+   Last in the file on purpose: these must beat the animated leaf rules above
+   at equal specificity. The photo still shows, just without the arrival
+   fade. The wall's leaf layer goes away entirely: it sits OVER the cards, so
+   still leaves would rest on the same words forever (they covered "Workout"
+   and the Laundry title in testing). The Settings previews keep their
+   leaves, still, at their own spots. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-look]:not([data-look="none"]) body > .season, .sn-leaf, .sn-leaf.fall, .sn-leaf b, .sn-leaf.fall b { animation: none; }
+  .sn-leaf.fall { top: var(--y); }
+  :root[data-look^="fall-"] body > .season-fx { display: none; }
+}

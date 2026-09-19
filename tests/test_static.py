@@ -1559,3 +1559,352 @@ def test_month_lane_count_matches_css_row_template():
     rows = re.findall(r"grid-template-rows:\s*\d+px repeat\((\d+), var\(--mg-lane\)\)", css)
     assert rows, ".mg-week row template missing"
     assert all(int(r) == lanes for r in rows), f"CSS lane rows {rows} != MONTH_MAX_LANES {lanes}"
+
+
+# ------------------------------------------------------------ seasonal looks
+# theme.js's SEASONS registry is the source of truth for look ids; everything a
+# look needs to paint lives in styles.css and static/seasons/. These guards make
+# "added a look to the registry" fail loudly until every piece exists.
+
+def _look_ids():
+    theme = (STATIC / "theme.js").read_text()
+    reg = theme[theme.index("var SEASONS = ["):theme.index("var SEASON_PREFS")]
+    # every hyphenated id is a look (season ids are bare words, pinned by
+    # theme.test.mjs "the season registry is well formed")
+    ids = [i for i in re.findall(r'\bid: "([^"]+)"', reg) if "-" in i]
+    assert ids, "no look ids found in theme.js SEASONS"
+    return ids
+
+
+# A look owns only the photo, its focal point, the leaf colours and the accent
+# (matched to the photo). Everything else (surfaces, ink, borders, the glass
+# and the wash) stays the THEME's, so Light, Soft, Blue, Grey and Black each
+# keep their own character with a season on ("they should still work with
+# the seasons on": an early version gave all three dark themes one charcoal).
+_LOOK_TOKENS = ["--accent", "--accent-ink", "--accent-soft", "--sn-scene", "--sn-pos",
+                "--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
+_THEME_OWNED = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
+                "--ink", "--dim", "--faint", "--shadow", "--glass", "--glass-edge", "--sn-wash"]
+
+
+def _block_after(selector_start):
+    i = CSS.index(selector_start)
+    return CSS[CSS.index("{", i) + 1:CSS.index("}", i)]
+
+
+@pytest.mark.parametrize("look", _look_ids())
+def test_every_look_sets_its_photo_and_accent_and_leaves_the_theme_alone(look):
+    """Each look sets its photo, focal point, leaf colours and a dark-theme
+    accent, plus a light-theme accent block. It must NOT set any theme-owned
+    token, or it would flatten the five themes into one. Look selectors are
+    (0,4,0) so their accent beats every theme+accent block (max 0,3,0)."""
+    eve = f':root[data-look="{look}"][data-theme][data-accent]'
+    day = f':root[data-look="{look}"][data-accent]:is([data-theme="light"],[data-theme="soft"])'
+    assert eve in CSS and day in CSS, f"{look} needs a dark-theme and a light-theme block"
+    body = _block_after(eve)
+    for tok in _LOOK_TOKENS:
+        assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
+    assert f'--sn-scene:url("seasons/{look}.webp")' in body, f"{eve} must paint seasons/{look}.webp"
+    for sel in (eve, day):
+        blk = _block_after(sel)
+        for tok in _THEME_OWNED:
+            assert not re.search(rf"(?<![\w-]){re.escape(tok)}\s*:", blk), \
+                f"{sel} sets {tok}, which belongs to the theme"
+    for tok in ("--accent", "--accent-ink", "--accent-soft"):
+        assert re.search(rf"{re.escape(tok)}\s*:", _block_after(day)), f"{day} must set its own {tok}"
+    # same specificity, and the dark-theme selector also matches Light and
+    # Soft: the light-theme accent wins only by coming later in the file
+    assert CSS.index(day) > CSS.index(eve), f"{look}: the light-theme block must follow the dark one"
+    assert f'.look-swatch[data-look="{look}"] {{' in CSS or \
+        f'.look-swatch[data-look="{look}"],' in CSS or \
+        f'.look-swatch[data-look="{look}"]\n' in CSS, f"{look} preview tile has no palette"
+
+
+def test_every_theme_has_its_own_glass_and_wash():
+    """With a season on, each of the five themes keeps its character: its own
+    translucent glass and its own wash over the photo. Light's are the bare
+    :root defaults; the other four set theirs. At night the dim stops the
+    blur, so the glass goes nearly solid (the theme's own surface)."""
+    root = re.search(r":root\s*\{([^{}]*)\}", CSS).group(1)
+    for tok in ("--glass", "--glass-edge", "--sn-wash"):
+        assert re.search(rf"{re.escape(tok)}\s*:", root), f"Light's {tok} belongs on the bare :root"
+    seen = {}
+    for theme in ("soft", "dark", "grey", "black"):
+        m = re.search(rf':root\[data-theme="{theme}"\] \{{([^}}]*--glass:[^}}]*)\}}', CSS)
+        assert m, f"the {theme} theme sets no glass"
+        for tok in ("--glass", "--glass-edge", "--sn-wash"):
+            assert re.search(rf"{re.escape(tok)}\s*:", m.group(1)), f"the {theme} theme never sets {tok}"
+        seen[theme] = re.search(r"--glass:\s*([^;]+);", m.group(1)).group(1)
+    seen["light"] = re.search(r"--glass:\s*([^;]+);", root).group(1)
+    assert len(set(seen.values())) == 5, f"two themes share one glass: {seen}"
+    assert re.search(r"\.is-night \{ --glass: color-mix\(in srgb, var\(--surface\) 9\d%", CSS), \
+        "at night the glass must go nearly solid (no blur behind the dim)"
+
+
+def _webp_chunks(data):
+    """The chunk ids in a RIFF/WebP file (VP8/VP8L/VP8X/EXIF/XMP /ICCP...)."""
+    assert data[:4] == b"RIFF" and data[8:12] == b"WEBP", "not a WebP file"
+    ids, i = [], 12
+    while i + 8 <= len(data):
+        ids.append(data[i:i + 4])
+        size = int.from_bytes(data[i + 4:i + 8], "little")
+        i += 8 + size + (size & 1)
+    return ids
+
+
+@pytest.mark.parametrize("look", _look_ids())
+def test_every_look_ships_a_light_clean_photo_and_a_mark(look):
+    """Each look's photo exists, is sharp enough for the wall, and carries NO
+    metadata: EXIF/XMP can hold GPS and camera serials, and this repo is
+    public (scripts/prep-season-photo.py strips it). Sharp means 2560px wide:
+    a softened, 1920px aspen photo read as blur on the wall ("some of the
+    pics look blurry"), so width is pinned and the size cap is generous. A
+    look with no mark rule would leave an accent-coloured square by the
+    wordmark."""
+    photo = STATIC / "seasons" / f"{look}.webp"
+    assert photo.is_file(), f"missing seasons/{look}.webp"
+    data = photo.read_bytes()
+    assert len(data) < 2600 * 1024, f"{photo.name} is {len(data) // 1024} KB; try --quality 76"
+    chunks = _webp_chunks(data)
+    vp8 = data.index(b"VP8 ") if b"VP8 " in data else -1
+    assert vp8 > 0, f"{photo.name} is not a lossy WebP (prep-season-photo.py writes VP8)"
+    # VP8 key frame: 3-byte tag + start code 9d 01 2a, then 14-bit width/height
+    frame = data[vp8 + 8:]
+    assert frame[3:6] == b"\x9d\x01\x2a", f"{photo.name}: unexpected VP8 header"
+    width = int.from_bytes(frame[6:8], "little") & 0x3FFF
+    assert width >= 2560, f"{photo.name} is {width}px wide; re-run prep-season-photo.py at 2560 (no softening)"
+    assert not {b"EXIF", b"XMP "} & set(chunks), f"{photo.name} still carries metadata {chunks}"
+    assert re.search(rf'\[data-look="{re.escape(look)}"\] \.season-mark[^{{]*\{{[^}}]*--mark:', CSS), \
+        f"{look} has no seasonal mark"
+
+
+def test_the_scene_and_its_preview_paint_the_look_token():
+    """The wall layer and the Settings preview both paint the wash over the
+    photo at its focal point, so a preview always shows what the wall will."""
+    for sel in (r"body > \.season", r"\.look-swatch"):
+        assert re.search(sel + r" \{[^}]*background:\s*var\(--sn-wash\),\s*var\(--sn-scene\) var\(--sn-pos\) / cover", CSS), \
+            f"{sel} must paint var(--sn-wash) over var(--sn-scene) at var(--sn-pos)"
+
+
+def test_glass_keeps_every_section_readable_and_stays_off_fixed_elements():
+    """While a look paints, the cards, their buttons, the section titles and
+    the top bar are frosted glass. The rules sit inside :where() so they keep
+    the plain .card specificity (a section that paints its own background
+    keeps it), and none of the glass targets is a fixed/sticky element (the
+    iOS tap-through trap in CLAUDE.md)."""
+    for target in (".card", ".expand", ".shead h2", ".topbar"):
+        assert re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)( \.wrap)?\) '
+                         + re.escape(target) + r"[^{]*\{[^}]*backdrop-filter", CSS), \
+            f"{target} must be glass while a look paints"
+    for fixed in (".tabbar", ".overlay", ".theme-pop", ".season"):
+        assert not re.search(r":where\([^)]*\)\) " + re.escape(fixed) + r"\b[^{]*\{[^}]*backdrop-filter", CSS)
+    # empty check rings drawn in --edge nearly vanished on light glass over a
+    # bright photo (caught on Misty Road in Light); they use --faint instead
+    assert re.search(r'\.chore-check,\s*:where\(:root\[data-look\]:not\(\[data-look="none"\]\) \.wrap\) '
+                     r'\.todo-check \{ border-color: var\(--faint\); \}', CSS)
+    # glass makes the top bar a stacking context that traps the gear popover:
+    # the bar itself must sit above the glass cards or they cover the popover
+    tb = re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) \.topbar \{([^}]*)\}', CSS)
+    z = tb and re.search(r"z-index:\s*(\d+)", tb.group(1))
+    overlay = re.search(r"\.overlay \{[^}]*z-index:\s*(\d+)", CSS)
+    assert z and "position: relative" in tb.group(1) and overlay, \
+        "the glass top bar must be lifted (position + z-index) above the glass cards"
+    assert 0 < int(z.group(1)) < int(overlay.group(1)), \
+        "lifted above the cards, but still under the full-screen overlay"
+    # the phone's top row is full: the glass bar's padding must shrink there,
+    # or the whole phone page spills sideways (it did, by 31px)
+    assert re.search(r'@media \(max-width: 1000px\) \{[^}]*\[data-look\]:not\(\[data-look="none"\]\) '
+                     r'\.topbar \{ padding: 6px 6px 6px 10px;', CSS)
+
+
+def test_season_art_files_exist_and_are_credited():
+    """Every url("seasons/...") the stylesheet asks for ships in the repo (a
+    missing file paints nothing), and every file in static/seasons/ has a
+    CREDITS.md row with its source and licence."""
+    seasons = STATIC / "seasons"
+    for ref in set(re.findall(r'url\("seasons/([^"]+)"\)', CSS)):
+        assert (seasons / ref).is_file(), f"styles.css references missing seasons/{ref}"
+    credits = (seasons / "CREDITS.md").read_text()
+    for f in seasons.iterdir():
+        if f.name == "CREDITS.md":
+            continue
+        assert f"`{f.name}`" in credits, f"seasons/{f.name} is not in CREDITS.md"
+
+def test_season_scene_sits_behind_and_never_takes_a_tap():
+    """The scene is a full-viewport fixed layer: it must be inert
+    (pointer-events none), painted UNDER the page (z-index -1 with the body's
+    own background stepping aside), and free of backdrop-filter (the iOS
+    tap-through trap on fixed elements)."""
+    m = re.search(r':root\[data-look\]:not\(\[data-look="none"\]\) body > \.season \{([^}]*)\}', CSS)
+    assert m, "missing the wall scene rule"
+    rule = m.group(1)
+    for decl in ("position: fixed", "z-index: -1", "pointer-events: none"):
+        assert decl in rule, f"scene rule must set {decl}"
+    assert "backdrop-filter" not in rule
+    assert re.search(r':root\[data-look\]:not\(\[data-look="none"\]\) body \{ background: transparent; \}', CSS), \
+        "the body must step aside or its background hides the scene"
+    hub = (STATIC / "hub.js").read_text()
+    assert "insertAdjacentHTML('afterbegin', `<span class=\"season\" aria-hidden=\"true\">${seasonLeavesHtml('back')}" in hub, \
+        "the photo (with the far leaves) mounts FIRST in <body> (under everything, a direct child for the night dim)"
+    # The leaves are their own layer, LAST in <body>, over the cards: behind
+    # the glass they were nearly invisible. It must never take a tap, must stay
+    # under the top bar (z 30) and every overlay (z 50+), and is not glass.
+    assert "insertAdjacentHTML('beforeend', `<span class=\"season-fx\"" in hub
+    fx = re.search(r'body > \.season-fx \{([^}]*)\}', CSS)
+    assert fx, "missing the leaf layer rule"
+    for decl in ("position: fixed", "pointer-events: none"):
+        assert decl in fx.group(1), f"leaf layer must set {decl}"
+    z = int(re.search(r"z-index:\s*(\d+)", fx.group(1)).group(1))
+    top = int(re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) \.topbar \{[^}]*z-index:\s*(\d+)', CSS).group(1))
+    assert 0 < z < top, "leaves drift over the cards but under the top bar and its menu"
+    assert "backdrop-filter" not in fx.group(1)
+
+
+def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
+    """The leaf rules are near the end of the file, so the reduced-motion
+    override must come AFTER them or it loses the cascade at equal
+    specificity (the main reduced-motion block is too early). Night pauses
+    the leaves: nobody needs them falling in a dark kitchen."""
+    last_anim = max(m.start() for m in re.finditer(r"animation(?:-name)?:\s*[^;]*\bsn-", CSS))
+    blocks = [m for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\) \{", CSS)]
+    assert blocks and blocks[-1].start() > last_anim, \
+        "a reduced-motion block must follow the last seasonal animation rule"
+    tail = CSS[blocks[-1].start():]
+    block = tail[:tail.index("\n}")]
+    # every selector that STARTS an animation, at its own specificity or more
+    for sel in (".sn-leaf.fall", ".sn-leaf b", "body > .season"):
+        assert sel in block, f"reduced motion must stop {sel}"
+    assert re.search(r"animation:\s*none", block), "the block must actually switch the animations off"
+    assert re.search(r"\.sn-leaf\.fall \{ top: var\(--y\); \}", block), \
+        "still leaves must rest at their own spots, not stack at the top"
+    # the wall's leaves sit OVER the cards: resting still, they would cover the
+    # same words forever, so reduced motion removes the wall's leaf layer
+    assert re.search(r'body > \.season-fx \{ display: none; \}', block), \
+        "reduced motion must hide the wall's leaf layer (still leaves hid text)"
+    assert re.search(r"\.is-night \.sn-leaf[^{]*\{[^}]*animation-play-state:\s*paused", CSS)
+    # never BLUR a leaf: a big blurred moving layer makes the wall's small GPU
+    # re-blur it every frame. A small drop shadow (to lift a gold leaf off a
+    # gold photo) is fine.
+    assert not re.search(r"\.sn-leaf[^{]*\{[^}]*filter:[^;}]*\bblur\(", CSS)
+
+
+def test_season_controls_are_wired_in_the_popover_and_config():
+    index = (STATIC / "index.html").read_text()
+    assert 'data-season-set="off"' in index and 'data-season-set="on"' in index
+    assert 'class="season-mark"' in index, "the wordmark's seasonal mark"
+    assert 'class="look-accent-note"' in index, "the swatches say why they stepped back"
+    assert 'class="theme-pop-sep"' in index, "look settings and screen settings are split"
+    # inside the popover's .theme-ctl (the click route is scoped to it), with
+    # the look controls, above the divider
+    pop = index[index.index('id="theme-pop"'):]
+    ctl = pop[pop.index('class="theme-ctl"'):pop.index("data-open-settings")]
+    assert 'data-season-set="on"' in ctl, "the Season row must sit inside the popover .theme-ctl"
+    assert index.index('data-season-set="on"') < index.index('class="theme-pop-sep"') \
+        < index.index('data-layout-set="auto"')
+    config = (ROOT / "src" / "family_hub" / "config.py").read_text()
+    assert re.search(r'"season":\s*\{"on", "off"\}', config), "config.py must accept theme.season"
+
+
+def test_every_season_surface_is_hidden_by_default():
+    """What every default install sees: no look, so no scene, no mark by the
+    wordmark (else an accent-coloured square), no accent note. Each hidden rule
+    pairs with the rule that shows it while a look paints."""
+    show = ':root[data-look]:not([data-look="none"])'
+    for cls in ("season", "season-fx", "season-mark", "look-accent-note"):
+        assert re.search(rf"(?m)^\.{re.escape(cls)} \{{ display: none;", CSS), f".{cls} must default hidden"
+    assert f"{show} body > .season {{" in CSS
+    assert f"{show} .season-mark {{" in CSS
+    assert f"{show} .look-accent-note {{ display: block; }}" in CSS
+
+
+# ---- selector-exact guards (a review's mutation tests showed substring
+# guards passing with the real rule weakened or deleted) ----
+
+def _rules():
+    """(selector_list, body, start) for every flat rule in styles.css."""
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS):
+        sels = [s.strip() for s in re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S).split(",")]
+        out.append(([s for s in sels if s], m.group(2), m.start()))
+    return out
+
+
+def _last_reduced_motion_selectors():
+    start = [m.start() for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\) \{", CSS)][-1]
+    tail = CSS[start:]
+    block = tail[tail.index("{") + 1:tail.index("\n}")]
+    stopped, hidden = set(), set()
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", block):
+        sels = {s.strip() for s in m.group(1).split(",")}
+        if re.search(r"animation:\s*none", m.group(2)):
+            stopped |= sels
+        if re.search(r"display:\s*none", m.group(2)):
+            hidden |= sels
+    return start, stopped, hidden
+
+
+def test_reduced_motion_stops_every_seasonal_animation_by_its_exact_selector():
+    """Every rule that starts a seasonal animation must be matched, selector
+    for selector, in the last reduced-motion block (the same selector later in
+    the file always wins; a weaker look-alike does not). And the wall's near
+    leaves are hidden there by the exact selector that shows them."""
+    start, stopped, hidden = _last_reduced_motion_selectors()
+    animated = [s for sels, body, pos in _rules() if pos < start
+                and re.search(r"animation:\s*[^;]*\bsn-", body) for s in sels]
+    assert animated, "found no seasonal animations to check"
+    missing = [s for s in animated if s not in stopped]
+    assert not missing, f"reduced motion does not stop: {missing}"
+    show = ':root[data-look^="fall-"] body > .season-fx'
+    assert any(show in s for sels, body, _ in _rules() for s in sels), "the near-leaf show rule moved"
+    assert show in hidden, "reduced motion must hide the near leaves with the SAME selector that shows them"
+
+
+def test_night_hides_the_near_leaves_and_pauses_the_far_ones():
+    """At night the dim makes .wrap its own stacking layer, so the near leaves
+    (z 20) would paint over the top bar and the gear menu: they are hidden.
+    The far leaves pause; both the fall and the sway must stop. Night glass
+    goes solid on <body> (where hub.js puts is-night)."""
+    assert re.search(r'(?m)^:root\[data-look\]:not\(\[data-look="none"\]\) body\.is-night > \.season-fx \{ display: none; \}', CSS)
+    assert re.search(r"(?m)^\.is-night \.sn-leaf, \.is-night \.sn-leaf b \{ animation-play-state: paused; \}", CSS)
+    assert re.search(r"(?m)^\.is-night \{ --glass: color-mix\(in srgb, var\(--surface\) 9\d%", CSS)
+
+
+def test_no_look_rule_anywhere_sets_a_theme_owned_token():
+    """Not just the two palette blocks: ANY rule that names a look id must
+    leave the theme's tokens alone, or it flattens the five themes."""
+    for look in _look_ids():
+        for sels, body, _ in _rules():
+            if not any(f'data-look="{look}"' in s for s in sels):
+                continue
+            for tok in _THEME_OWNED:
+                assert not re.search(rf"(?<![\w-]){re.escape(tok)}\s*:", body), \
+                    f"a {look} rule ({sels[0]}) sets the theme-owned {tok}"
+
+
+def test_leaves_fall_at_two_depths():
+    """Both leaf layers are shown, the far set has its own six lanes (not the
+    near leaves' paths), and the far set carries no shadow."""
+    shown = {s for sels, body, _ in _rules() if "display: block" in body for s in sels}
+    for sel in (':root[data-look^="fall-"] body > .season .sn-leaves',
+                ':root[data-look^="fall-"] body > .season-fx .sn-leaves'):
+        assert sel in shown, f"{sel} is never shown"
+    near = dict(re.findall(r"(?m)^\.sn-leaf:nth-child\((\d)\) \{ --x: ([\d.]+%)", CSS))
+    far = dict(re.findall(r"(?m)^\.sn-leaves\.back \.sn-leaf:nth-child\((\d)\) \{ --x: ([\d.]+%)", CSS))
+    assert sorted(near) == sorted(far) == [str(i) for i in range(1, 7)], "six near and six far leaves"
+    assert all(near[i] != far[i] for i in near), "far leaves need their own lanes, or the depth is lost"
+    assert re.search(r"\.sn-leaves\.back \.sn-leaf\.fall \{ filter: none; \}", CSS)
+
+
+def test_phone_top_row_and_leaf_layer_fit_the_phone():
+    """The phone's top row only just fits: a two-digit hour overflowed it by
+    8px. Each fix is pinned, scoped so a forced-Desktop TV keeps the wall
+    layout; and the near leaves stop above the tab bar plus the iPhone
+    home-indicator inset."""
+    m = re.search(r"@media \(max-width: 1000px\) \{((?:[^{}]|\{[^{}]*\})*)\}", CSS[CSS.index("seasonal looks (fall)"):])
+    assert m, "no phone block in the seasonal section"
+    phone = m.group(1)
+    scope = ':root:not([data-layout="desktop"])[data-look]:not([data-look="none"])'
+    assert f"{scope} .season-mark {{ display: none; }}" in phone
+    assert re.search(re.escape(f"{scope} .wordmark {{") + r"[^}]*min-width: 0;[^}]*text-overflow: ellipsis", phone)
+    assert f"{scope} .topbar {{ padding: 6px 6px 6px 10px;" in phone
+    assert re.search(r'body > \.season-fx \{ bottom: calc\(64px \+ env\(safe-area-inset-bottom, 0px\)\); \}', CSS)

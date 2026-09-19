@@ -12,7 +12,7 @@
        there is no toolbar whose stale inset could be applied. The self-heal
        reload in hub.js still covers the case of opening the hub in a normal
        browser tab. -->
-  <link rel="manifest" href="manifest.webmanifest?v=1.4.1">
+  <link rel="manifest" href="manifest.webmanifest?v=1.5.0">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <!-- "black": the status-bar area gets a solid dark bar and the web content
@@ -23,16 +23,18 @@
   <meta name="apple-mobile-web-app-title" content="Family Hub">
   <meta name="theme-color" content="#0A0D14">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=1.4.1">
+  <link rel="stylesheet" href="styles.css?v=1.5.0">
   <!-- Stamps data-theme/data-accent/data-cols on <html> before first paint
        (no theme flash). Must be the FIRST script in the document. -->
-  <script src="theme.js?v=1.4.1"></script>
+  <script src="theme.js?v=1.5.0"></script>
 </head>
 <body class="wall" data-conn="up" data-tab="chores">
   <div class="wrap">
     <header class="topbar">
       <span class="breath-dot"></span>
       <span class="wordmark">Family Hub</span>
+      <!-- the seasonal look's small mark (a leaf for fall); hidden with no look -->
+      <span class="season-mark" aria-hidden="true"></span>
       <span class="conn" id="conn-word">live</span>
       <span class="backup-badge warn" id="backup-badge" role="status" aria-live="polite" hidden></span>
       <span class="spacer"></span>
@@ -66,6 +68,19 @@
               <button class="swatch" type="button" data-c="amber"  aria-label="Amber accent"></button>
               <button class="swatch" type="button" data-c="green"  aria-label="Green accent"></button>
             </div>
+            <div class="look-accent-note">The seasonal look sets the color while it shows</div>
+          </div>
+          <!-- Seasonal looks: On follows the calendar (fall runs Sep 1 to Nov 30).
+               Which look each season paints is picked in All settings, where
+               the preview tiles have room. -->
+          <div class="theme-pop-row">
+            <span class="theme-pop-k">Season</span>
+            <div class="seg" role="group" aria-label="Seasonal looks">
+              <button type="button" data-season-set="off">Off</button>
+              <button type="button" data-season-set="on">On</button>
+            </div>
+            <!-- filled by hub.js when Season is on but nothing is in season -->
+            <div class="season-idle-note" hidden></div>
           </div>
           <div class="theme-pop-row">
             <span class="theme-pop-k">Columns</span>
@@ -75,6 +90,8 @@
               <button type="button" data-cols-set="lines">Lines</button>
             </div>
           </div>
+          <!-- above: how the hub looks; below: how THIS screen behaves -->
+          <div class="theme-pop-sep" role="separator"></div>
           <!-- Layout: Auto follows the screen width (a phone gets the phone
                layout, the wall gets the full wall). Desktop forces the full wall
                at any width — the escape hatch for a TV browser that mis-reports a
@@ -189,10 +206,10 @@
     </div>
   </div>
 
-  <script src="common.js?v=1.4.1"></script>
+  <script src="common.js?v=1.5.0"></script>
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js; self-gates on touch. -->
-  <script src="osk.js?v=1.4.1"></script>
-  <script src="hub.js?v=1.4.1"></script>
+  <script src="osk.js?v=1.5.0"></script>
+  <script src="hub.js?v=1.5.0"></script>
 </body>
 </html>

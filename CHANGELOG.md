@@ -10,6 +10,54 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-09-19
+
+### Added
+- Seasonal looks. Turn **Season** on in the gear menu and the wall follows the
+  calendar: a real photograph fills the screen, the dashboard floats on it as
+  frosted glass (cards, section titles and the top bar), leaves fall at two
+  depths (big, sharp ones drifting over the cards and smaller ones behind the
+  glass, softened by it), and a small mark sits beside the wordmark. Fall
+  (Sep 1 to Nov 30) ships **Aspen Grove** (the default), **Misty Road** and
+  **Maple Sky**, picked per device from live preview tiles under All settings,
+  each crediting its photographer. A house can turn seasons on for every
+  fresh device with `theme.season` in config.json.
+- Every theme keeps its own character with a season on: Light is white glass,
+  Soft warm cream, Blue navy, Grey neutral grey and Black near-black over a
+  deeper dusk, with each theme's own text and border colours. The look brings
+  the photo, the leaves and an accent matched to the photo.
+- Quiet by design: the leaves never block a tap and stay under the top bar,
+  every menu and the phone's tab bar. At night the near leaves go away, the
+  far ones pause and the glass turns nearly solid. With reduced motion the
+  near leaves are hidden and the far ones rest behind the glass. With Season
+  on but nothing in season, the menu says when the next season starts. With
+  seasons off, the wall is exactly as before.
+- The photos ship sharp, 2560px wide and never softened: public domain
+  (National Park Service) and CC0, with the leaf shapes from Twemoji
+  (CC-BY 4.0) and Phosphor Icons (MIT), all credited in
+  `static/seasons/CREDITS.md`. `/seasons/` is served `no-cache`, so a
+  replaced photo reaches phones after a release.
+- `scripts/prep-season-photo.py` turns a downloaded photo or artwork into a
+  look's image: converted to sRGB, flattened, 2560px WebP, metadata stripped,
+  and it never silently overwrites a shipped photo. Pillow joins CI's
+  test-only installs for its tests.
+- `docs/seasonal-looks.md`, the design standards for seasonal and holiday
+  looks: the bar, what failed and why, what comparable products do, the glass
+  and readability rules, allowed image sources and licences, a step-by-step
+  for a new look, and the lessons from the fall build. New visual gates in
+  `docs/adding-a-feature.md` (all five themes, pixel-diff the off state,
+  widest phone content, menus over new layers). CLAUDE.md points to both.
+
+### Changed
+- Settings is regrouped. **Display** keeps Theme, Accent and Columns, the new
+  **Seasonal looks** card holds the season switch and the look picker, and
+  Layout and Auto-return move to their own **This screen** card, since they
+  are about how one device behaves rather than how the hub looks. The gear
+  popover gains a Season row and a thin divider between the same two groups.
+- While a seasonal look shows, the Accent swatches dim and ignore taps, with a
+  short note saying the look sets the color. Your accent comes back as it was
+  when the look ends.
+
 ## [1.4.1] — 2026-09-17
 
 ### Fixed

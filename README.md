@@ -32,6 +32,19 @@ at one URL.
   grey, black) **with a pick-your-accent color** (cyan, violet, amber, or green)
   and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
+- **Seasonal looks:** turn **Season** on in the gear menu and the wall follows
+  the calendar: a real photograph fills the screen and the dashboard floats
+  on it as frosted glass in your theme's colours, leaves fall at two depths
+  (over the cards and softly behind them), and a matching accent and a small
+  mark sit beside the wordmark. Fall (Sep 1 to
+  Nov 30) offers **Aspen Grove** (the default), **Misty Road** and **Maple
+  Sky**, picked per device under **All settings → Seasonal looks** from
+  live preview tiles. Each of the five themes keeps its own glass: Light and
+  Soft show the photo bright and airy, Blue, Grey and Black at dusk. The
+  leaves rest at night and for reduced motion, and the photos (public domain and CC0) ship inside the app.
+  Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
+
+  ![Fall seasonal looks](docs/seasons.jpg)
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
   hub in **Safari** and use Share → **Add to Home Screen** for a full-screen
@@ -197,7 +210,7 @@ once with **`?kiosk=1`** to turn it on (the setting is then remembered;
 | `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
 | `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
 | `fleet` | Fleet Console card: `{"base": "http://192.168.1.50:3000"}` — the base URL of a separate home-lab dashboard app exposing a compact `/api/rollup` status endpoint (host + 3D-printer status). Optional `"label"`. Omit to skip the card. Pair with a `"fleet"` entry in `panels` (below) to get the **⛶ Console** full-screen button. |
-| `theme` | House default display theme — `{"mode","accent","columns"}` (`mode`: light/dark, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines). Applied on a fresh device with no saved override |
+| `theme` | House default display theme — `{"mode","accent","columns","layout","idleReturn","season"}` (`mode`: light/soft/dark/grey/black, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines, `layout`: auto/desktop, `idleReturn`: on/off, `season`: on/off for seasonal looks). Applied on a fresh device with no saved override |
 
 ### Calendars: Google
 
@@ -428,3 +441,6 @@ to exercise it.
 ## License
 
 MIT.
+
+The seasonal look artwork credits (Twemoji, CC-BY 4.0; Phosphor Icons, MIT) are in
+[`src/family_hub/web/static/seasons/CREDITS.md`](src/family_hub/web/static/seasons/CREDITS.md).
