@@ -6,7 +6,11 @@
  * Writes src/family_hub/web/static/seasons/<look>-day.svg and -eve.svg: one
  * layered illustration per look, in a daytime palette (Light / Soft themes)
  * and an evening palette (Blue / Grey / Black). Both variants share every
- * shape; only the palette differs, so they always match.
+ * shape; only the palette differs, so they always match. The only exceptions
+ * are the sky (<g id="…-skybox">: gradient, stars, sun or moon) and the daytime
+ * clouds and birds (<g id="…-weather">), which draw from their OWN random
+ * streams so they can never shift where a tree lands; season-art.test.mjs
+ * checks this.
  *
  * Each season offers the same spectrum of styles, so a family can pick how
  * much illustration they want on the wall:
@@ -245,7 +249,7 @@ function sky(p, id, sx, sy) {
   if (p.night) {
     s += `<circle cx="${sx + 11}" cy="${sy - 9}" r="7" fill="${p.orb[1]}" opacity=".6"/><circle cx="${sx - 12}" cy="${sy + 11}" r="5" fill="${p.orb[1]}" opacity=".55"/>`;
   }
-  return { defs, s };
+  return { defs, s: `<g id="${id}-skybox">${s}</g>` };
 }
 
 /* ---------------------------------------------------------------- scenes */
@@ -257,9 +261,9 @@ function harvest(p, id) {
   let s = skyS;
   const d = defs + vgrad(`${id}-field`, p.fieldGrad) + vgrad(`${id}-near`, p.nearGrad);
   if (!p.night) {
-    s += puff(r, 360, 60, 0.55, p.cloud, p.cloudShade) + puff(r, 680, 44, 0.45, p.cloud, p.cloudShade)
-      + puff(r, 1400, 56, 0.5, p.cloud, p.cloudShade);
-    s += birds(880, 52, p.bird);
+    const rc = rng(107);   // its own stream: day-only extras must not shift the shared shapes
+    s += `<g id="${id}-weather">` + puff(rc, 360, 60, 0.55, p.cloud, p.cloudShade) + puff(rc, 680, 44, 0.45, p.cloud, p.cloudShade)
+      + puff(rc, 1400, 56, 0.5, p.cloud, p.cloudShade) + birds(880, 52, p.bird) + `</g>`;
   }
   const far = ridge(11, 600, [[1, 26], [3, 14]]);
   const mid = ridge(23, 668, [[1, 34], [2, 22], [5, 6]]);
@@ -310,9 +314,9 @@ function woodland(p, id) {
     + `<linearGradient id="${id}-haze" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${p.haze}" stop-opacity="0"/><stop offset=".6" stop-color="${p.haze}" stop-opacity=".7"/><stop offset="1" stop-color="${p.haze}" stop-opacity="0"/></linearGradient>`
     + `<clipPath id="${id}-water"><rect x="0" y="744" width="${W}" height="140"/></clipPath>`;
   if (!p.night) {
-    s += stratus(r, 520, 42, 150, p.cloud, ".75") + stratus(r, 780, 62, 110, p.cloud, ".6")
-      + stratus(r, 1450, 36, 130, p.cloud, ".7");
-    s += birds(900, 50, p.bird);
+    const rc = rng(307);   // its own stream: day-only extras must not shift the shared shapes
+    s += `<g id="${id}-weather">` + stratus(rc, 520, 42, 150, p.cloud, ".75") + stratus(rc, 780, 62, 110, p.cloud, ".6")
+      + stratus(rc, 1450, 36, 130, p.cloud, ".7") + birds(900, 50, p.bird) + `</g>`;
   }
   s += path(range(311, [[-40, 520], [180, 380], [420, 470], [640, 330], [900, 450], [1120, 350], [1380, 460], [1620, 360], [1960, 480]], 90), `url(#${id}-far)`);
   s += path(range(313, [[-40, 600], [260, 500], [560, 580], [820, 480], [1100, 570], [1400, 470], [1700, 560], [1960, 520]], 70), `url(#${id}-mid)`);
@@ -360,7 +364,10 @@ function maple(p, id) {
   const { defs, s: skyS } = sky(p, id, 1240, 64);
   let s = skyS;
   let d = defs;
-  if (!p.night) s += stratus(r, 460, 40, 170, p.cloud, ".55") + stratus(r, 1450, 58, 140, p.cloud, ".5");
+  if (!p.night) {
+    const rc = rng(207);   // its own stream: day-only extras must not shift the shared shapes
+    s += `<g id="${id}-weather">` + stratus(rc, 460, 40, 170, p.cloud, ".55") + stratus(rc, 1450, 58, 140, p.cloud, ".5") + `</g>`;
+  }
   const lines = [ridge(61, 640, [[1, 30], [2, 12]]), ridge(64, 730, [[1, 40], [2, 16]]),
     ridge(67, 830, [[1, 44], [3, 12]]), ridge(71, 930, [[1, 36], [2, 14]])];
   lines.forEach((line, i) => {

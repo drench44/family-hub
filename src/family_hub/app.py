@@ -2705,7 +2705,7 @@ if _sync_enabled():
 # buster of its own — heuristic caching served phones a stale page on
 # 2026-08-13 (no tab bar) after a deploy.
 # The seasonal art under /seasons/ is referenced from INSIDE styles.css, where
-# no ?v= reaches it, and the ridges are regenerated under the same names, so it
+# no ?v= reaches it, and the scenes are redrawn under the same names, so it
 # revalidates too (a 304 costs a phone almost nothing).
 @app.middleware("http")
 async def html_no_cache(request, call_next):

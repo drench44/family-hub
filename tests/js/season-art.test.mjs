@@ -58,3 +58,19 @@ test('each scene covers the screen from the bottom and resolves all its own refe
     assert.ok(svg.length < 260 * 1024, `${f} stays light enough for a phone (${Math.round(svg.length / 1024)} KB)`);
   }
 });
+
+test('day and evening share every shape: only colours (and the sky extras) differ', () => {
+  // Switching Light to Blue must not reshuffle the forest. The sky extras
+  // (the skybox: gradient, stars, sun or moon; and the daytime clouds and birds)
+  // live in their own groups and random streams; everything else must match.
+  const shapes = (f) => read(join(committed, f))
+    .replace(/<g id="[^"]*-(weather|skybox)">.*?<\/g>(?=<)/g, '')
+    .match(/ d="[^"]+"|<(circle|ellipse|rect) [^>]*?(?= fill)/g);
+  const looks = new Set(scenes().map((f) => f.replace(/-(day|eve)\.svg$/, '')));
+  for (const look of looks) {
+    const day = shapes(`${look}-day.svg`);
+    const eve = shapes(`${look}-eve.svg`);
+    assert.ok(day.length > 50, `${look} has real geometry to compare`);
+    assert.deepEqual(eve, day, `${look}: the evening scene's shapes differ from the daytime ones`);
+  }
+});

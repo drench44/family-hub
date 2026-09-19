@@ -1674,15 +1674,18 @@ def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
         "a reduced-motion block must follow the last seasonal animation rule"
     tail = CSS[blocks[-1].start():]
     block = tail[:tail.index("\n}")]
-    for sel in (".sn-leaf.fall", ".sn-leaf b", "body > .season"):
+    # every selector that STARTS an animation, at its own specificity or more
+    for sel in (".sn-leaf.fall", ".sn-leaf.near", ".sn-leaf b", "body > .season"):
         assert sel in block, f"reduced motion must stop {sel}"
     assert re.search(r"animation:\s*none", block), "the block must actually switch the animations off"
     assert re.search(r"\.sn-leaf\.fall \{ top: var\(--y\); \}", block), \
         "still leaves must rest at their own spots, not stack at the top"
     assert re.search(r"\.is-night \.sn-leaf[^{]*\{[^}]*animation-play-state:\s*paused", CSS)
-    # blur on a masked element must sit on its PARENT: filter runs before mask
-    assert re.search(r"\.sn-leaf\.near \{ filter: blur", CSS)
-    assert not re.search(r"\.sn-leaf\.near b \{[^}]*filter", CSS)
+    # blur on a masked element must sit on its PARENT (filter runs before mask),
+    # and the sway must move that blurred box, not its content, or the wall
+    # re-blurs two big layers every frame
+    assert re.search(r"\.sn-leaf\.near \{ filter: blur[^}]*animation: sn-sway", CSS)
+    assert not re.search(r"\.sn-leaf\.near b[^{]*\{[^}]*(filter|animation)", CSS)
 
 
 def test_season_controls_are_wired_in_the_popover_and_config():
