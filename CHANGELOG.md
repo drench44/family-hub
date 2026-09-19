@@ -16,7 +16,7 @@ rolls that section to a dated version via `python scripts/release.py`.
   as frosted glass (cards, section titles and the top bar), with leaves
   drifting down behind the cards, a matching accent and a small mark beside
   the wordmark. Fall (Sep 1 to Nov 30) ships **Aspen Grove** (the default),
-  **Misty Road** and **Maple Light**. Light and Soft show the photo bright and
+  **Misty Road** and **Maple Sky**. Light and Soft show the photo bright and
   airy; Blue, Grey and Black show it at dusk. Each device picks its look from
   live preview tiles under All settings, and a house can turn seasons on for
   every fresh device with `theme.season` in config.json. The leaves pause at
@@ -34,6 +34,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The photos ship sharp: 2560px wide, never softened, so leaves and bark
   stay crisp on the wall and on a phone's zoomed-in view. A test fails any
   photo narrower than that.
+- Maple Sky replaces an earlier maple close-up whose sharp leaves hid behind
+  the cards, leaving mostly its soft background on show.
 - Each look's Settings tile names the photographer, for example "Photo by
   Patrick Myers, NPS".
 - The seasonal art under `/seasons/` is served `no-cache`, so a phone picks up
