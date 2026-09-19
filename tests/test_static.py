@@ -1576,15 +1576,15 @@ def _look_ids():
     return ids
 
 
-# every look repaints these; good/warn/crit stay the theme family's status hues.
-# --sn-scene is the photo, --sn-pos its focal point, --sn-wash the light or
-# dusk veil over it, --glass/--glass-edge the frosted cards; the leaf tokens
-# colour the drifting leaves.
-_LOOK_TOKENS = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
-                "--ink", "--dim", "--faint", "--accent", "--accent-ink",
-                "--accent-soft", "--shadow", "--sn-scene", "--sn-pos", "--sn-wash",
-                "--glass", "--glass-edge", "--sn-leaf-1", "--sn-leaf-2",
-                "--sn-leaf-3", "--sn-leaf-4"]
+# A look owns only the photo, its focal point, the leaf colours and the accent
+# (matched to the photo). Everything else (surfaces, ink, borders, the glass
+# and the wash) stays the THEME's, so Light, Soft, Blue, Grey and Black each
+# keep their own character with a season on ("they should still work with
+# the seasons on": an early version gave all three dark themes one charcoal).
+_LOOK_TOKENS = ["--accent", "--accent-ink", "--accent-soft", "--sn-scene", "--sn-pos",
+                "--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
+_THEME_OWNED = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
+                "--ink", "--dim", "--faint", "--shadow", "--glass", "--glass-edge", "--sn-wash"]
 
 
 def _block_after(selector_start):
@@ -1593,26 +1593,52 @@ def _block_after(selector_start):
 
 
 @pytest.mark.parametrize("look", _look_ids())
-def test_every_look_has_an_evening_and_a_daytime_palette(look):
-    """Both versions of every look (dusk for the dark themes, daylight for
-    Light/Soft), each carrying every token it must repaint and each painting
-    the look's own photo. The wall selectors are (0,4,0) so they beat every
-    theme+accent block (max 0,3,0) whatever the file order; the preview tile
-    shares the same block."""
+def test_every_look_sets_its_photo_and_accent_and_leaves_the_theme_alone(look):
+    """Each look sets its photo, focal point, leaf colours and a dark-theme
+    accent, plus a light-theme accent block. It must NOT set any theme-owned
+    token, or it would flatten the five themes into one. Look selectors are
+    (0,4,0) so their accent beats every theme+accent block (max 0,3,0)."""
     eve = f':root[data-look="{look}"][data-theme][data-accent]'
     day = f':root[data-look="{look}"][data-accent]:is([data-theme="light"],[data-theme="soft"])'
+    assert eve in CSS and day in CSS, f"{look} needs a dark-theme and a light-theme block"
+    body = _block_after(eve)
+    for tok in _LOOK_TOKENS:
+        assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
+    assert f'--sn-scene:url("seasons/{look}.webp")' in body, f"{eve} must paint seasons/{look}.webp"
     for sel in (eve, day):
-        assert sel in CSS, f"missing palette block: {sel}"
-        body = _block_after(sel)
-        for tok in _LOOK_TOKENS:
-            assert re.search(rf"{re.escape(tok)}\s*:", body), f"{sel} never sets {tok}"
-        assert f'--sn-scene:url("seasons/{look}.webp")' in body, f"{sel} must paint seasons/{look}.webp"
-    # evening and day are BOTH (0,4,0) and the evening selector also matches
-    # Light and Soft: the day block wins only by coming later in the file
-    assert CSS.index(day) > CSS.index(eve), f"{look}: the daytime palette must follow the evening one"
+        blk = _block_after(sel)
+        for tok in _THEME_OWNED:
+            assert not re.search(rf"(?<![\w-]){re.escape(tok)}\s*:", blk), \
+                f"{sel} sets {tok}, which belongs to the theme"
+    for tok in ("--accent", "--accent-ink", "--accent-soft"):
+        assert re.search(rf"{re.escape(tok)}\s*:", _block_after(day)), f"{day} must set its own {tok}"
+    # same specificity, and the dark-theme selector also matches Light and
+    # Soft: the light-theme accent wins only by coming later in the file
+    assert CSS.index(day) > CSS.index(eve), f"{look}: the light-theme block must follow the dark one"
     assert f'.look-swatch[data-look="{look}"] {{' in CSS or \
         f'.look-swatch[data-look="{look}"],' in CSS or \
         f'.look-swatch[data-look="{look}"]\n' in CSS, f"{look} preview tile has no palette"
+
+
+def test_every_theme_has_its_own_glass_and_wash():
+    """With a season on, each of the five themes keeps its character: its own
+    translucent glass and its own wash over the photo. Light's are the bare
+    :root defaults; the other four set theirs. At night the dim stops the
+    blur, so the glass goes nearly solid (the theme's own surface)."""
+    root = re.search(r":root\s*\{([^{}]*)\}", CSS).group(1)
+    for tok in ("--glass", "--glass-edge", "--sn-wash"):
+        assert re.search(rf"{re.escape(tok)}\s*:", root), f"Light's {tok} belongs on the bare :root"
+    seen = {}
+    for theme in ("soft", "dark", "grey", "black"):
+        m = re.search(rf':root\[data-theme="{theme}"\] \{{([^}}]*--glass:[^}}]*)\}}', CSS)
+        assert m, f"the {theme} theme sets no glass"
+        for tok in ("--glass", "--glass-edge", "--sn-wash"):
+            assert re.search(rf"{re.escape(tok)}\s*:", m.group(1)), f"the {theme} theme never sets {tok}"
+        seen[theme] = re.search(r"--glass:\s*([^;]+);", m.group(1)).group(1)
+    seen["light"] = re.search(r"--glass:\s*([^;]+);", root).group(1)
+    assert len(set(seen.values())) == 5, f"two themes share one glass: {seen}"
+    assert re.search(r"\.is-night \{ --glass: color-mix\(in srgb, var\(--surface\) 9\d%", CSS), \
+        "at night the glass must go nearly solid (no blur behind the dim)"
 
 
 def _webp_chunks(data):
@@ -1751,6 +1777,10 @@ def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
     assert re.search(r"animation:\s*none", block), "the block must actually switch the animations off"
     assert re.search(r"\.sn-leaf\.fall \{ top: var\(--y\); \}", block), \
         "still leaves must rest at their own spots, not stack at the top"
+    # the wall's leaves sit OVER the cards: resting still, they would cover the
+    # same words forever, so reduced motion removes the wall's leaf layer
+    assert re.search(r'body > \.season-fx \{ display: none; \}', block), \
+        "reduced motion must hide the wall's leaf layer (still leaves hid text)"
     assert re.search(r"\.is-night \.sn-leaf[^{]*\{[^}]*animation-play-state:\s*paused", CSS)
     # never BLUR a leaf: a big blurred moving layer makes the wall's small GPU
     # re-blur it every frame. A small drop shadow (to lift a gold leaf off a
