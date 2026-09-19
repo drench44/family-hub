@@ -2738,8 +2738,10 @@ body.integ-off-todos .todo-slot { display: none; }
    sticky (backdrop-filter on those breaks taps on iOS; see CLAUDE.md). At
    night the dim filter on the page makes .wrap a backdrop root, so the glass
    shows the photo unblurred through its tint; the wall is dark by then. */
-:where(:root[data-look]:not([data-look="none"])) .card,
-:where(:root[data-look]:not([data-look="none"])) .expand {
+/* .wrap only: the full-screen views sit on a solid ground, where glass would
+   cost the wall's GPU a blur for nothing */
+:where(:root[data-look]:not([data-look="none"]) .wrap) .card,
+:where(:root[data-look]:not([data-look="none"]) .wrap) .expand {
   background: var(--glass); border-color: var(--glass-edge);
   -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);
 }
@@ -2753,7 +2755,11 @@ body.integ-off-todos .todo-slot { display: none; }
   padding: 5px 12px; border-radius: 999px;
   -webkit-backdrop-filter: blur(16px) saturate(1.3); backdrop-filter: blur(16px) saturate(1.3);
 }
+/* z-index: backdrop-filter makes the bar its own stacking context, which traps
+   the gear popover (z-index 60) inside it; without lifting the bar, the glass
+   cards later in the page paint over the open popover. */
 :where(:root[data-look]:not([data-look="none"])) .topbar {
+  position: relative; z-index: 30;
   background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 16px;
   margin: 10px 0 6px; padding: 8px 14px;
   -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);

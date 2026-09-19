@@ -209,9 +209,9 @@
     // static/seasons/CREDITS.md). Ids are storage keys and image file names:
     // renaming a look is free, changing its id resets that choice everywhere.
     { id: "fall", name: "Fall", from: [9, 1], to: [11, 30], looks: [
-      { id: "fall-aspen-grove", name: "Aspen Grove", blurb: "Sunlit gold under a blue sky", credit: "Photo by NPS", default: true },
+      { id: "fall-aspen-grove", name: "Aspen Grove", blurb: "Sunlit gold under a blue sky", credit: "Photo by Patrick Myers, NPS", default: true },
       { id: "fall-misty-road", name: "Misty Road", blurb: "A quiet road through fog and fallen leaves", credit: "Photo by Bernd Schulz" },
-      { id: "fall-maple-light", name: "Maple Light", blurb: "Backlit maple leaves up close", credit: "Photo by NPS" },
+      { id: "fall-maple-light", name: "Maple Light", blurb: "Backlit maple leaves up close", credit: "Photo by Luca Pfeiffer, NPS" },
     ] },
   ];
   var SEASON_PREFS = ["on", "off"];
