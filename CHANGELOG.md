@@ -34,6 +34,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The photos ship sharp: 2560px wide, never softened, so leaves and bark
   stay crisp on the wall and on a phone's zoomed-in view. A test fails any
   photo narrower than that.
+- The falling leaves are easy to see: bigger, fully opaque, with a soft
+  shadow, and drifting over the cards instead of hidden behind them. They
+  never block a tap and stay under the top bar, menus and the phone's tab
+  bar.
 - Maple Sky replaces an earlier maple close-up whose sharp leaves hid behind
   the cards, leaving mostly its soft background on show.
 - Each look's Settings tile names the photographer, for example "Photo by

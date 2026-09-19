@@ -7048,16 +7048,20 @@ test('seasonSceneHtml: balanced spans, the leaf layer, six falling leaves', () =
   assert.doesNotMatch(html, /<div/, 'spans only: the same markup sits inside a <button> tile');
 });
 
-test('mountSeasonScene inserts the scene once, first in <body>', () => {
+test('mountSeasonScene: the photo first in <body>, the leaves last (over the cards), once', () => {
   const { document, sandbox } = newHub();
   const inserted = [];
   document.body.insertAdjacentHTML = (where, html) => inserted.push([where, html]);
   vm.runInContext('seasonMounted = false;', sandbox);
   sandbox.mountSeasonScene();
   sandbox.mountSeasonScene();
-  assert.equal(inserted.length, 1, 'idempotent');
-  assert.equal(inserted[0][0], 'afterbegin');
-  assert.match(inserted[0][1], /class="season"/);
+  assert.equal(inserted.length, 2, 'two layers, mounted once');
+  const [photo, fx] = inserted;
+  assert.equal(photo[0], 'afterbegin', 'the photo sits under everything');
+  assert.match(photo[1], /^<span class="season" aria-hidden="true"><\/span>$/, 'the photo layer carries no leaves');
+  assert.equal(fx[0], 'beforeend', 'the leaves come after the wall, so they drift over the cards');
+  assert.match(fx[1], /^<span class="season-fx" aria-hidden="true"><span class="sn-leaves">/);
+  assert.equal((fx[1].match(/class="sn-leaf fall/g) || []).length, 6);
 });
 
 test('renderSettingsFull: a Seasonal looks card with an Off/On switch and a preview tile per look', () => {
