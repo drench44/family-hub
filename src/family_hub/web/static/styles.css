@@ -2795,7 +2795,9 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"])[data-look^="fall-"] body > .season-fx { bottom: 64px; }
 }
 .sn-leaves { display: none; position: absolute; inset: 0; }
-:root[data-look^="fall-"] body > .season-fx .sn-leaves, .look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
+:root[data-look^="fall-"] body > .season-fx .sn-leaves,
+:root[data-look^="fall-"] body > .season .sn-leaves,
+.look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
 .sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); }
 .sn-leaf b {
   display: block; width: 100%; height: 100%;
@@ -2822,6 +2824,17 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-leaf:nth-child(4) { --x: 82%; --y: 71%; --s: 36px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-2); --d: 39s; --dl: -11s; --sw: 7s; }
 .sn-leaf:nth-child(5) { --x: 44%; --y: 12%; --s: 24px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 48s; --dl: -33s; --o: .85; --amp: 18px; }
 .sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 22px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 52s; --dl: -44s; --o: .85; --amp: 16px; }
+/* The far leaves: a second set inside the photo layer, behind the glass, so
+   a card they pass behind blurs them and the open photo shows them sharp.
+   Smaller and slower than the near ones, on their own lanes, no shadow:
+   size, speed and blur together read as depth. */
+.sn-leaves.back .sn-leaf.fall { filter: none; }
+.sn-leaves.back .sn-leaf:nth-child(1) { --x: 18%; --y: 30%; --s: 22px; --d: 44s; --dl: -9s; --amp: 18px; --o: .9; }
+.sn-leaves.back .sn-leaf:nth-child(2) { --x: 38%; --y: 55%; --s: 18px; --d: 52s; --dl: -30s; --amp: 14px; --o: .85; }
+.sn-leaves.back .sn-leaf:nth-child(3) { --x: 66%; --y: 20%; --s: 24px; --d: 47s; --dl: -16s; --amp: 20px; --o: .9; }
+.sn-leaves.back .sn-leaf:nth-child(4) { --x: 74%; --y: 80%; --s: 20px; --d: 55s; --dl: -38s; --amp: 16px; --o: .85; }
+.sn-leaves.back .sn-leaf:nth-child(5) { --x: 11%; --y: 70%; --s: 16px; --d: 60s; --dl: -22s; --amp: 12px; --o: .8; }
+.sn-leaves.back .sn-leaf:nth-child(6) { --x: 88%; --y: 50%; --s: 18px; --d: 58s; --dl: -50s; --amp: 14px; --o: .8; }
 /* A wall left on overnight doesn't need leaves falling in a dark kitchen. */
 .is-night .sn-leaf, .is-night .sn-leaf b { animation-play-state: paused; }
 

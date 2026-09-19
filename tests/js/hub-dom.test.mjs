@@ -7037,7 +7037,7 @@ test('seasonSceneHtml: balanced spans, the leaf layer, six falling leaves', () =
   assert.match(html, /^<span class="season" aria-hidden="true">/, 'hidden from assistive tech');
   // the photo is the .season background (the look's --sn-scene); the
   // markup only carries the leaf layer
-  assert.match(html, /class="sn-leaves"/);
+  assert.match(html, /class="sn-leaves front"/, 'a preview shows the near leaves');
   assert.doesNotMatch(html, /sn-ridge|sn-glow|sn-grain/, 'no leftovers from the old layered scene');
   assert.equal((html.match(/class="sn-leaf fall/g) || []).length, 6);
   assert.doesNotMatch(html, /sn-leaf near/, 'no blurred foreground leaves: over a photo they read as smudges');
@@ -7048,7 +7048,7 @@ test('seasonSceneHtml: balanced spans, the leaf layer, six falling leaves', () =
   assert.doesNotMatch(html, /<div/, 'spans only: the same markup sits inside a <button> tile');
 });
 
-test('mountSeasonScene: the photo first in <body>, the leaves last (over the cards), once', () => {
+test('mountSeasonScene: photo + far leaves first in <body>, near leaves last (over the cards), once', () => {
   const { document, sandbox } = newHub();
   const inserted = [];
   document.body.insertAdjacentHTML = (where, html) => inserted.push([where, html]);
@@ -7058,9 +7058,12 @@ test('mountSeasonScene: the photo first in <body>, the leaves last (over the car
   assert.equal(inserted.length, 2, 'two layers, mounted once');
   const [photo, fx] = inserted;
   assert.equal(photo[0], 'afterbegin', 'the photo sits under everything');
-  assert.match(photo[1], /^<span class="season" aria-hidden="true"><\/span>$/, 'the photo layer carries no leaves');
-  assert.equal(fx[0], 'beforeend', 'the leaves come after the wall, so they drift over the cards');
-  assert.match(fx[1], /^<span class="season-fx" aria-hidden="true"><span class="sn-leaves">/);
+  // depth: far leaves fall inside the photo layer (behind the glass, blurred
+  // by the cards), near leaves in their own layer over the cards
+  assert.match(photo[1], /^<span class="season" aria-hidden="true"><span class="sn-leaves back">/, 'the far leaves ride in the photo layer');
+  assert.equal((photo[1].match(/class="sn-leaf fall/g) || []).length, 6);
+  assert.equal(fx[0], 'beforeend', 'the near leaves come after the wall, so they drift over the cards');
+  assert.match(fx[1], /^<span class="season-fx" aria-hidden="true"><span class="sn-leaves front">/);
   assert.equal((fx[1].match(/class="sn-leaf fall/g) || []).length, 6);
 });
 

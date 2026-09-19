@@ -1744,8 +1744,8 @@ def test_season_scene_sits_behind_and_never_takes_a_tap():
     assert re.search(r':root\[data-look\]:not\(\[data-look="none"\]\) body \{ background: transparent; \}', CSS), \
         "the body must step aside or its background hides the scene"
     hub = (STATIC / "hub.js").read_text()
-    assert "insertAdjacentHTML('afterbegin', '<span class=\"season\"" in hub, \
-        "the photo mounts FIRST in <body> (under everything, a direct child for the night dim)"
+    assert "insertAdjacentHTML('afterbegin', `<span class=\"season\" aria-hidden=\"true\">${seasonLeavesHtml('back')}" in hub, \
+        "the photo (with the far leaves) mounts FIRST in <body> (under everything, a direct child for the night dim)"
     # The leaves are their own layer, LAST in <body>, over the cards: behind
     # the glass they were nearly invisible. It must never take a tap, must stay
     # under the top bar (z 30) and every overlay (z 50+), and is not glass.
