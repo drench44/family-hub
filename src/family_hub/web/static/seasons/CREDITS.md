@@ -1,18 +1,29 @@
 # Seasonal look artwork
 
-Everything in this folder is either made for this project or used under a free
-licence. All of it ships inside the app, so the wall never loads art from the
-internet.
+Every file in this folder is public domain, CC0, or made for this project,
+and ships inside the app, so the wall never loads art from the internet.
+Sourcing rules and how to add more: [`docs/seasonal-looks.md`](../../../../../docs/seasonal-looks.md).
+
+## Photos
+
+Each photo was resized and re-encoded by `scripts/prep-season-photo.py`
+(WebP, metadata stripped); `fall-aspen-grove.webp` was also softened very
+slightly to keep the file small.
+
+| File | Photo | Source | Licence |
+| --- | --- | --- | --- |
+| `fall-aspen-grove.webp` | "Golden Aspens, Mosca Pass Trail", National Park Service, Great Sand Dunes National Park and Preserve | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Golden_Aspens,_Mosca_Pass_Trail_(36725223263).jpg) | Public domain (work of the US federal government) |
+| `fall-misty-road.webp` | "Foggy fall road", Bernd Schulz | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Foggy_fall_road_(Unsplash).jpg) (from Unsplash, 2016) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (published under Unsplash's CC0 terms, before its 2017 licence change) |
+| `fall-maple-light.webp` | "Fall Foliage October 28, 2024", National Park Service, Shenandoah National Park | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Fall_Foliage_October_28,_2024.jpg) | Public domain (work of the US federal government) |
+
+## Shapes
 
 | File | Source | Licence |
 | --- | --- | --- |
-| `*-day.svg`, `*-eve.svg` | The scenes, drawn by `scripts/gen-season-art.mjs` (this repo) | MIT, same as the app |
 | `leaf-maple.svg` | [Twemoji](https://github.com/jdecked/twemoji) 1f341 "maple leaf". Changed: fill colour removed, path numbers given explicit separators (same shape) | [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/), © Twitter, Inc and other contributors |
 | `leaf-slender.svg` | [Phosphor Icons](https://github.com/phosphor-icons/core) "leaf" (fill), unchanged | MIT, notice below |
-| `mark-grains.svg` | [Phosphor Icons](https://github.com/phosphor-icons/core) "grains" (fill), unchanged | MIT, notice below |
-| `mark-evergreen.svg` | [Phosphor Icons](https://github.com/phosphor-icons/core) "tree-evergreen" (fill), unchanged | MIT, notice below |
 
-The leaf and mark shapes are used as CSS masks, so each look paints them in its own colours.
+The leaf shapes are used as CSS masks, so each look paints them in its own colours.
 
 ## Phosphor Icons licence
 

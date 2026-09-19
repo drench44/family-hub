@@ -3859,17 +3859,16 @@ function pickedLook(seasonId) {
   return typeof seasonLook === 'function' ? seasonLook(seasonId) : null;
 }
 
-// The scene layer, bare: the illustration itself is the .season background
-// (the look's --sn-scene), and every leaf's colour, placement and speed comes
-// from styles.css. Spans rather than divs so the same markup can sit inside a
-// Settings tile <button>. The leaves (every fall look): six that fall, two with
-// the slender leaf shape, and two big soft ones up close.
+// The scene layer, bare: the photo itself is the .season background (the
+// look's --sn-scene), and every leaf's colour, placement and speed comes from
+// styles.css. Spans rather than divs so the same markup can sit inside a
+// Settings tile <button>. Six leaves fall, two of them the slender shape.
 function seasonSceneHtml() {
   const leaf = (cls) => `<span class="sn-leaf ${cls}"><b></b></span>`;
   return '<span class="season" aria-hidden="true">'
     + '<span class="sn-leaves">'
     + leaf('fall') + leaf('fall slender') + leaf('fall') + leaf('fall')
-    + leaf('fall slender') + leaf('fall') + leaf('near') + leaf('near')
+    + leaf('fall slender') + leaf('fall')
     + '</span>'
     + '</span>';
 }
@@ -3901,10 +3900,10 @@ function seasonalCardHtml() {
     + '<span class="look-card"><span class="look-mark"></span>'
     + '<span class="look-card-line short"></span><span class="look-card-line"></span></span>'
     + '</span>'
-    + `<span class="look-label"><span class="look-name">${escapeHtml(look.name)}`
-    + (look.style ? `<span class="look-style">${escapeHtml(look.style)}</span>` : '')
+    + `<span class="look-label"><span class="look-name">${escapeHtml(look.name)}</span>`
+    + `<span class="look-blurb">${escapeHtml(look.blurb || '')}</span>`
+    + (look.credit ? `<span class="look-credit">${escapeHtml(look.credit)}</span>` : '')
     + '</span>'
-    + `<span class="look-blurb">${escapeHtml(look.blurb || '')}</span></span>`
     + '</button>';
   const groups = seasonList().map((s) => '<div class="look-season">'
     + '<div class="look-season-head">'
@@ -3920,7 +3919,7 @@ function seasonalCardHtml() {
     + '<button type="button" data-season-set="off">Off</button>'
     + '<button type="button" data-season-set="on">On</button>'
     + '</div>'
-    + '<div class="settings-sub">On follows the calendar. Pick the look you like for each season, and Light or Soft gives you its daytime version.</div>'
+    + '<div class="settings-sub">On follows the calendar. Pick the photo you like for each season. Light and Soft show it bright; the darker themes show it at dusk.</div>'
     + '</div>'
     + `<div class="look-picker">${groups}</div>`;
 }

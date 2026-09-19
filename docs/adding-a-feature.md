@@ -191,7 +191,8 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       styles.css, an image path built in hub.js) get no `?v=`. If they can
       change under the same name, serve them `no-cache` from the
       `html_no_cache` middleware in app.py and add a test. (The seasonal
-      look art under `/seasons/` is the first case, and regenerates in place.)
+      look art under `/seasons/` is the first case: a photo can be swapped
+      under the same name.)
 - [ ] New third-party art or code: record source, changes and licence in a
       CREDITS file next to it, including the full notice when the licence
       asks for it (MIT does), and run the full Python suite AFTER committing:

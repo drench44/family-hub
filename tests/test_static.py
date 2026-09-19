@@ -1577,11 +1577,14 @@ def _look_ids():
 
 
 # every look repaints these; good/warn/crit stay the theme family's status hues.
-# --sn-scene is the illustration; the leaf tokens colour the drifting leaves.
+# --sn-scene is the photo, --sn-pos its focal point, --sn-wash the light or
+# dusk veil over it, --glass/--glass-edge the frosted cards; the leaf tokens
+# colour the drifting leaves.
 _LOOK_TOKENS = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                 "--ink", "--dim", "--faint", "--accent", "--accent-ink",
-                "--accent-soft", "--shadow", "--sn-scene", "--sn-leaf-1",
-                "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
+                "--accent-soft", "--shadow", "--sn-scene", "--sn-pos", "--sn-wash",
+                "--glass", "--glass-edge", "--sn-leaf-1", "--sn-leaf-2",
+                "--sn-leaf-3", "--sn-leaf-4"]
 
 
 def _block_after(selector_start):
@@ -1591,20 +1594,19 @@ def _block_after(selector_start):
 
 @pytest.mark.parametrize("look", _look_ids())
 def test_every_look_has_an_evening_and_a_daytime_palette(look):
-    """Both versions of every look, each carrying every token it must repaint,
-    and each pointing at ITS OWN scene file (evening art for the dark themes,
-    daytime art for Light/Soft). The wall selectors are (0,4,0) so they beat
-    every theme+accent block (max 0,3,0) whatever the file order; the preview
-    tile shares the same block."""
+    """Both versions of every look (dusk for the dark themes, daylight for
+    Light/Soft), each carrying every token it must repaint and each painting
+    the look's own photo. The wall selectors are (0,4,0) so they beat every
+    theme+accent block (max 0,3,0) whatever the file order; the preview tile
+    shares the same block."""
     eve = f':root[data-look="{look}"][data-theme][data-accent]'
     day = f':root[data-look="{look}"][data-accent]:is([data-theme="light"],[data-theme="soft"])'
-    for sel, variant in ((eve, "eve"), (day, "day")):
+    for sel in (eve, day):
         assert sel in CSS, f"missing palette block: {sel}"
         body = _block_after(sel)
         for tok in _LOOK_TOKENS:
             assert re.search(rf"{re.escape(tok)}\s*:", body), f"{sel} never sets {tok}"
-        assert f'--sn-scene:url("seasons/{look}-{variant}.svg")' in body, \
-            f"{sel} must paint seasons/{look}-{variant}.svg"
+        assert f'--sn-scene:url("seasons/{look}.webp")' in body, f"{sel} must paint seasons/{look}.webp"
     # evening and day are BOTH (0,4,0) and the evening selector also matches
     # Light and Soft: the day block wins only by coming later in the file
     assert CSS.index(day) > CSS.index(eve), f"{look}: the daytime palette must follow the evening one"
@@ -1613,37 +1615,75 @@ def test_every_look_has_an_evening_and_a_daytime_palette(look):
         f'.look-swatch[data-look="{look}"]\n' in CSS, f"{look} preview tile has no palette"
 
 
+def _webp_chunks(data):
+    """The chunk ids in a RIFF/WebP file (VP8/VP8L/VP8X/EXIF/XMP /ICCP...)."""
+    assert data[:4] == b"RIFF" and data[8:12] == b"WEBP", "not a WebP file"
+    ids, i = [], 12
+    while i + 8 <= len(data):
+        ids.append(data[i:i + 4])
+        size = int.from_bytes(data[i + 4:i + 8], "little")
+        i += 8 + size + (size & 1)
+    return ids
+
+
 @pytest.mark.parametrize("look", _look_ids())
-def test_every_look_has_its_scenes_and_a_mark(look):
-    """A look whose scene file is missing paints a flat ground; one with no mark
-    rule would leave an accent-coloured square by the wordmark."""
-    for variant in ("day", "eve"):
-        assert (STATIC / "seasons" / f"{look}-{variant}.svg").is_file(), f"missing seasons/{look}-{variant}.svg"
+def test_every_look_ships_a_light_clean_photo_and_a_mark(look):
+    """Each look's photo exists, stays light enough for a phone on cellular,
+    and carries NO metadata: EXIF/XMP can hold GPS and camera serials, and
+    this repo is public (scripts/prep-season-photo.py strips it). A look with
+    no mark rule would leave an accent-coloured square by the wordmark."""
+    photo = STATIC / "seasons" / f"{look}.webp"
+    assert photo.is_file(), f"missing seasons/{look}.webp"
+    data = photo.read_bytes()
+    assert len(data) < 600 * 1024, f"{photo.name} is {len(data) // 1024} KB; re-run prep-season-photo.py"
+    chunks = _webp_chunks(data)
+    assert not {b"EXIF", b"XMP "} & set(chunks), f"{photo.name} still carries metadata {chunks}"
     assert re.search(rf'\[data-look="{re.escape(look)}"\] \.season-mark[^{{]*\{{[^}}]*--mark:', CSS), \
         f"{look} has no seasonal mark"
 
 
 def test_the_scene_and_its_preview_paint_the_look_token():
-    """The wall layer and the Settings preview both paint var(--sn-scene), so a
-    preview always shows exactly the art the wall will."""
-    assert re.search(r"body > \.season \{[^}]*background:[^;]*var\(--sn-scene\)[^;]*cover", CSS)
-    assert re.search(r"\.look-swatch \{[^}]*background:[^;]*var\(--sn-scene\)[^;]*cover", CSS)
+    """The wall layer and the Settings preview both paint the wash over the
+    photo at its focal point, so a preview always shows what the wall will."""
+    for sel in (r"body > \.season", r"\.look-swatch"):
+        assert re.search(sel + r" \{[^}]*background:\s*var\(--sn-wash\),\s*var\(--sn-scene\) var\(--sn-pos\) / cover", CSS), \
+            f"{sel} must paint var(--sn-wash) over var(--sn-scene) at var(--sn-pos)"
+
+
+def test_glass_keeps_every_section_readable_and_stays_off_fixed_elements():
+    """While a look paints, the cards, their buttons, the section titles and
+    the top bar are frosted glass. The rules sit inside :where() so they keep
+    the plain .card specificity (a section that paints its own background
+    keeps it), and none of the glass targets is a fixed/sticky element (the
+    iOS tap-through trap in CLAUDE.md)."""
+    for target in (".card", ".expand", ".shead h2", ".topbar"):
+        assert re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) '
+                         + re.escape(target) + r"[^{]*\{[^}]*backdrop-filter", CSS), \
+            f"{target} must be glass while a look paints"
+    for fixed in (".tabbar", ".overlay", ".theme-pop", ".season"):
+        assert not re.search(r":where\([^)]*\)\) " + re.escape(fixed) + r"\b[^{]*\{[^}]*backdrop-filter", CSS)
+    # empty check rings drawn in --edge nearly vanished on light glass over a
+    # bright photo (caught on Misty Road in Light); they use --faint instead
+    assert re.search(r'\.chore-check,\s*:where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) '
+                     r'\.todo-check \{ border-color: var\(--faint\); \}', CSS)
+    # the phone's top row is full: the glass bar's padding must shrink there,
+    # or the whole phone page spills sideways (it did, by 31px)
+    assert re.search(r'@media \(max-width: 1000px\) \{[^}]*\[data-look\]:not\(\[data-look="none"\]\) '
+                     r'\.topbar \{ padding: 6px 6px 6px 10px;', CSS)
 
 
 def test_season_art_files_exist_and_are_credited():
     """Every url("seasons/...") the stylesheet asks for ships in the repo (a
-    missing file paints nothing), and every file not made by this repo's
-    generator is listed in CREDITS.md with its licence."""
+    missing file paints nothing), and every file in static/seasons/ has a
+    CREDITS.md row with its source and licence."""
     seasons = STATIC / "seasons"
     for ref in set(re.findall(r'url\("seasons/([^"]+)"\)', CSS)):
         assert (seasons / ref).is_file(), f"styles.css references missing seasons/{ref}"
     credits = (seasons / "CREDITS.md").read_text()
     for f in seasons.iterdir():
-        if f.name == "CREDITS.md" or re.search(r"-(day|eve)\.svg$", f.name):
+        if f.name == "CREDITS.md":
             continue
         assert f"`{f.name}`" in credits, f"seasons/{f.name} is not in CREDITS.md"
-    assert "`*-day.svg`, `*-eve.svg`" in credits
-
 
 def test_season_scene_sits_behind_and_never_takes_a_tap():
     """The scene is a full-viewport fixed layer: it must be inert
@@ -1675,17 +1715,15 @@ def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
     tail = CSS[blocks[-1].start():]
     block = tail[:tail.index("\n}")]
     # every selector that STARTS an animation, at its own specificity or more
-    for sel in (".sn-leaf.fall", ".sn-leaf.near", ".sn-leaf b", "body > .season"):
+    for sel in (".sn-leaf.fall", ".sn-leaf b", "body > .season"):
         assert sel in block, f"reduced motion must stop {sel}"
     assert re.search(r"animation:\s*none", block), "the block must actually switch the animations off"
     assert re.search(r"\.sn-leaf\.fall \{ top: var\(--y\); \}", block), \
         "still leaves must rest at their own spots, not stack at the top"
     assert re.search(r"\.is-night \.sn-leaf[^{]*\{[^}]*animation-play-state:\s*paused", CSS)
-    # blur on a masked element must sit on its PARENT (filter runs before mask),
-    # and the sway must move that blurred box, not its content, or the wall
-    # re-blurs two big layers every frame
-    assert re.search(r"\.sn-leaf\.near \{ filter: blur[^}]*animation: sn-sway", CSS)
-    assert not re.search(r"\.sn-leaf\.near b[^{]*\{[^}]*(filter|animation)", CSS)
+    # no filter on a leaf: the leaves fall behind glass cards, and a filtered
+    # moving layer would make the wall's small GPU re-blur it every frame
+    assert not re.search(r"\.sn-leaf[^{]*\{[^}]*filter:", CSS)
 
 
 def test_season_controls_are_wired_in_the_popover_and_config():

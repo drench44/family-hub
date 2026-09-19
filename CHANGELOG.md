@@ -12,24 +12,25 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Added
 - Seasonal looks. Turn **Season** on in the gear menu and the wall follows the
-  calendar: an illustrated scene behind the cards, leaves drifting down, a
-  matching palette and accent, and a small mark beside the wordmark. Every
-  season comes in the same three styles, calm to lively. Fall (Sep 1 to
-  Nov 30) ships **Golden Hills** (Minimal), **Aspen Lake** (Scenic, the
-  default) and **Pumpkin Farm** (Playful). Light and Soft get a sunny daytime
-  version of each; Blue, Grey and Black get a blue-hour evening with a moon
-  and stars. Each device picks its look from live preview tiles under All
-  settings, and a house can turn seasons on for every fresh device with
-  `theme.season` in config.json. The leaves pause at night and stop for
-  reduced motion, the cards stay solid so nothing gets harder to read, and all
-  the art ships inside the app. Halloween, Christmas and the rest slot into
-  the same registry in `theme.js`.
-- The scenes are drawn by `scripts/gen-season-art.mjs`, and a test redraws
-  them and compares the result with the committed files. The leaf and mark
-  shapes come from Twemoji (CC-BY 4.0) and Phosphor Icons (MIT), credited in
+  calendar: a real photograph fills the screen and the dashboard floats on it
+  as frosted glass (cards, section titles and the top bar), with leaves
+  drifting down behind the cards, a matching accent and a small mark beside
+  the wordmark. Fall (Sep 1 to Nov 30) ships **Aspen Grove** (the default),
+  **Misty Road** and **Maple Light**. Light and Soft show the photo bright and
+  airy; Blue, Grey and Black show it at dusk. Each device picks its look from
+  live preview tiles under All settings, and a house can turn seasons on for
+  every fresh device with `theme.season` in config.json. The leaves pause at
+  night and stop for reduced motion. Halloween, Christmas and the rest slot
+  into the same registry in `theme.js`.
+- `docs/seasonal-looks.md`, the design standards for seasonal looks: the bar,
+  what failed and why, what comparable products do, the glass and
+  readability rules, which image sources and licences this public repo may
+  use, and the step-by-step for a new look. CLAUDE.md points to it.
+- `scripts/prep-season-photo.py` turns a downloaded photo or artwork into a
+  look's image: resized, WebP, metadata stripped. The photos are public
+  domain (National Park Service) and CC0, and the leaf shapes come from
+  Twemoji (CC-BY 4.0) and Phosphor Icons (MIT), all credited in
   `static/seasons/CREDITS.md`.
-- A look's daytime and evening scenes share the same layout, tree for tree,
-  so switching between a light and a dark theme only changes the light.
 - The seasonal art under `/seasons/` is served `no-cache`, so a phone picks up
   new art after a release instead of keeping old copies. The stylesheet points
   at these files directly, where no `?v=` can reach them.

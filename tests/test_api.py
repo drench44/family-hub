@@ -202,12 +202,12 @@ def test_hub_theme_season_survives(tmp_path, monkeypatch):
 
 def test_seasonal_art_revalidates(tmp_path, monkeypatch):
     """The seasonal SVGs are referenced from inside styles.css, where no ?v=
-    reaches them, and are redrawn under the same names: they must revalidate
+    reaches them, and a photo can be swapped under the same name: they must revalidate
     or phones keep stale art after a release. Other static assets keep their
     existing (?v=-busted) caching."""
     appmod = _reload_with(tmp_path, monkeypatch, {})
     with TestClient(appmod.app) as c:
-        r = c.get("/seasons/fall-woodland-day.svg")
+        r = c.get("/seasons/fall-aspen-grove.webp")
         assert r.status_code == 200
         assert r.headers.get("cache-control") == "no-cache"
         assert "cache-control" not in c.get("/theme.js").headers
