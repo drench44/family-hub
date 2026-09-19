@@ -40,6 +40,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   brings the photo, the leaves and a matching accent. At night the glass goes
   nearly solid so the photo doesn't show through busy. With reduced motion on,
   the wall shows no leaves (resting still, they covered words).
+- The leaves fall at two depths: big, sharp ones drift over the cards and
+  smaller, slower ones fall behind the glass, softened by the cards they
+  pass behind.
 - The falling leaves are easy to see: bigger, fully opaque, with a soft
   shadow, and drifting over the cards instead of hidden behind them. They
   never block a tap and stay under the top bar, menus and the phone's tab

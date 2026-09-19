@@ -11,6 +11,13 @@ This document is the standard every look is held to. It exists because the
 first three attempts at fall missed, for reasons worth not repeating. Read it
 before adding Halloween, Christmas, winter, spring, or anything else.
 
+**What's next, in the owner's order:** Halloween, then Thanksgiving, then
+Christmas. The first two sit inside fall's Sep 1 to Nov 30 window, so list
+each one in `SEASONS` before fall, since the first matching window wins.
+Each gets its own photos, falling shapes (leaves for fall; think bats or
+candlelight for Halloween, snow for Christmas, never cartoon props) and a
+matching accent.
+
 ---
 
 ## 1. The bar
@@ -166,7 +173,12 @@ the cards, kept few, small and slow (see Motion below).
 **Motion**
 - Only the drifting leaves (or, later, snow): six shapes, 22 to 44px,
   opaque, transform only, paused at night, still under reduced motion.
-- They drift **over the cards** in their own layer (`.season-fx`, last in
+- **Two depths** (the owner's idea): six near leaves (22 to 44px, shadowed)
+  drift over the cards, and six far leaves (16 to 24px, slower, no shadow)
+  fall inside the photo layer, behind the glass, so a card they pass behind
+  blurs them. Size, speed and blur together read as depth. Under reduced
+  motion the far ones rest behind the glass and the near layer is hidden.
+- The near leaves drift **over the cards** in their own layer (`.season-fx`, last in
   `<body>`). Behind the glass they were nearly invisible ("the leaves
   falling are a bit hard to see"), and the same gold as the photo hid them
   further. The layer never takes a tap, stays under the top bar and every
