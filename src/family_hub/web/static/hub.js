@@ -73,7 +73,16 @@ function tickClock() {
   document.getElementById('clock-time').textContent =
     `${h12}:${mm}:${ss}${hh < 12 ? 'am' : 'pm'}`;
   document.body.classList.toggle('is-night', nightClass(hh) === 'is-night');
+  // A wall runs for weeks: re-derive the seasonal look when the date turns, so
+  // fall arrives (and leaves) at midnight with no reload. Keyed on the FULL
+  // date: a wall asleep from Aug 20 to Sep 20 has the same day-of-month.
+  const dayKey = d.toDateString();
+  if (dayKey !== lookCheckedDay) {
+    lookCheckedDay = dayKey;
+    if (typeof refreshLook === 'function') refreshLook(d);
+  }
 }
+let lookCheckedDay = null;
 
 /* --------------------------------------------------------------- calendar */
 
@@ -3787,6 +3796,11 @@ function applyHouseTheme(theme) {
   // when configured, so these no-op on a default install).
   if (theme.layout && noOverride('fh.layout')) stampLayout(theme.layout);
   if (theme.idleReturn && noOverride('fh.idleReturn')) stampIdleReturn(theme.idleReturn);
+  // seasonal looks on/off: same fresh-device-only house default. "Fresh" also
+  // means nobody chose this session: on a kiosk where storage refuses writes
+  // the key stays empty, and the next poll would undo a tap.
+  const seasonChosen = typeof seasonChoiceMade === 'function' && seasonChoiceMade();
+  if (theme.season && noOverride('fh.season') && !seasonChosen && typeof stampSeason === 'function') stampSeason(theme.season);
   reflectThemeControls();
 }
 
@@ -3805,7 +3819,29 @@ function reflectThemeControls() {
   const layout = el.getAttribute('data-layout');
   // default ON: an unstamped attribute reflects as 'on', never a blank control
   const idle = el.getAttribute('data-idle-return') === 'off' ? 'off' : 'on';
+  // default OFF: an unstamped season reflects as 'off', like theme.js's default
+  const season = el.getAttribute('data-season') === 'on' ? 'on' : 'off';
+  // each season's chosen look (what it paints on this device when in season)
+  const picked = new Set(seasonList().map((s) => pickedLook(s.id)));
+  // Season on but nothing in season: say when the next one starts, or the
+  // switch looks broken (On, and nothing changes).
+  const upcoming = season === 'on' && typeof activeSeason === 'function' && !activeSeason()
+    && typeof nextSeason === 'function' ? nextSeason() : null;
+  document.querySelectorAll('.season-idle-note').forEach((n) => {
+    n.hidden = !upcoming;
+    n.textContent = upcoming ? `Nothing is in season today. ${upcoming.name} starts ${seasonWindowText(upcoming).split(' to ')[0]}.` : '';
+  });
   document.querySelectorAll('.theme-ctl').forEach((ctl) => {
+    ctl.querySelectorAll('[data-season-set]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.seasonSet === season));
+    // .on marks each season's favourite either way (the CSS softens it while
+    // seasons are off); aria-pressed only claims "pressed" while seasons are on
+    // (the favourite then paints whenever its season is on the calendar)
+    ctl.querySelectorAll('[data-look-pick]').forEach((b) => {
+      const on = picked.has(b.dataset.lookPick);
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on && season === 'on' ? 'true' : 'false');
+    });
     ctl.querySelectorAll('[data-theme-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.themeSet === mode));
     ctl.querySelectorAll('[data-c]').forEach((b) =>
@@ -3820,6 +3856,95 @@ function reflectThemeControls() {
     ctl.querySelectorAll('[data-idle-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.idleSet === idle));
   });
+}
+
+/* ------------------------------------------------------ seasonal looks */
+/* theme.js owns the season registry (FH_SEASONS), the prefs and the data-look
+   stamp; hub.js paints the scene layers and the Settings picker. The typeof
+   guards keep hub.js whole if theme.js ever failed to load: the wall simply
+   shows no seasonal look. */
+function seasonList() {
+  return typeof FH_SEASONS !== 'undefined' && Array.isArray(FH_SEASONS) ? FH_SEASONS : [];
+}
+function pickedLook(seasonId) {
+  return typeof seasonLook === 'function' ? seasonLook(seasonId) : null;
+}
+
+// The falling leaves, bare: every leaf's colour, placement and speed comes
+// from styles.css. Six leaves, two of them the slender shape. Spans rather
+// than divs so the same markup can sit inside a Settings tile <button>.
+// `depth` is 'front' (over the cards) or 'back' (behind the glass, so the
+// cards blur them): two layers read as depth.
+function seasonLeavesHtml(depth = 'front') {
+  const leaf = (cls) => `<span class="sn-leaf ${cls}"><b></b></span>`;
+  return `<span class="sn-leaves ${depth}">`
+    + leaf('fall') + leaf('fall slender') + leaf('fall') + leaf('fall')
+    + leaf('fall slender') + leaf('fall')
+    + '</span>';
+}
+
+// A Settings preview: the look's photo (the .season background, the look's
+// --sn-scene) with its leaves resting on it.
+function seasonSceneHtml() {
+  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}</span>`;
+}
+
+// Mount the wall's scene once, in two layers (CSS shows both only while
+// data-look names a look). The photo goes FIRST in <body>, under everything,
+// with the far leaves falling in it, behind the glass, blurred by the cards
+// they pass behind. The near leaves go LAST, in their own layer drifting over
+// the cards: behind the glass alone they were nearly invisible ("the leaves
+// falling are a bit hard to see"), and near + far reads as depth. Both are
+// direct children of <body>, so the night dim reaches them. Idempotent.
+let seasonMounted = false;
+function mountSeasonScene() {
+  const body = document.body;
+  if (seasonMounted || !body || typeof body.insertAdjacentHTML !== 'function') return;
+  body.insertAdjacentHTML('afterbegin', `<span class="season" aria-hidden="true">${seasonLeavesHtml('back')}</span>`);
+  body.insertAdjacentHTML('beforeend', `<span class="season-fx" aria-hidden="true">${seasonLeavesHtml()}</span>`);
+  seasonMounted = true;
+}
+
+// "Sep 1 to Nov 30" from a season's [month, day] window.
+function seasonWindowText(s) {
+  const md = ([m, d]) => `${MONTHS[m - 1]} ${d}`;
+  return `${md(s.from)} to ${md(s.to)}`;
+}
+
+// The Settings "Seasonal looks" card body: the Off/On switch, then each
+// season's looks as live preview tiles (the real scene in miniature, painted by
+// the look's own tokens). A tile sets that season's look and turns seasons on.
+function seasonalCardHtml() {
+  const now = typeof activeSeason === 'function' ? activeSeason() : null;
+  const tile = (look) => `<button class="look-tile" type="button" data-look-pick="${escapeHtml(look.id)}" aria-pressed="false">`
+    + `<span class="look-swatch" data-look="${escapeHtml(look.id)}" aria-hidden="true">`
+    + seasonSceneHtml()
+    + '<span class="look-card"><span class="look-mark"></span>'
+    + '<span class="look-card-line short"></span><span class="look-card-line"></span></span>'
+    + '</span>'
+    + `<span class="look-label"><span class="look-name">${escapeHtml(look.name)}</span>`
+    + `<span class="look-blurb">${escapeHtml(look.blurb || '')}</span>`
+    + (look.credit ? `<span class="look-credit">${escapeHtml(look.credit)}</span>` : '')
+    + '</span>'
+    + '</button>';
+  const groups = seasonList().map((s) => '<div class="look-season">'
+    + '<div class="look-season-head">'
+    + `<span class="look-season-name">${escapeHtml(s.name)}</span>`
+    + `<span class="look-season-when">${seasonWindowText(s)}</span>`
+    + (s.id === now ? '<span class="look-season-now">In season</span>' : '')
+    + '</div>'
+    + `<div class="look-tiles" role="group" aria-label="${escapeHtml(s.name)} looks">`
+    + s.looks.map(tile).join('')
+    + '</div></div>').join('');
+  return '<div class="settings-row">'
+    + '<div class="seg" role="group" aria-label="Seasonal looks">'
+    + '<button type="button" data-season-set="off">Off</button>'
+    + '<button type="button" data-season-set="on">On</button>'
+    + '</div>'
+    + '<div class="settings-sub">On follows the calendar. Pick the photo you like for each season. Light and Soft show it bright; the darker themes show it at dusk.</div>'
+    + '<div class="season-idle-note" hidden></div>'
+    + '</div>'
+    + `<div class="look-picker">${groups}</div>`;
 }
 
 /* The settings popover's Integrations section: one on/off switch per available
@@ -3914,13 +4039,24 @@ function renderSettingsFull() {
     + `<button class="swatch" type="button" data-c="violet" aria-label="Violet accent"></button>`
     + `<button class="swatch" type="button" data-c="amber" aria-label="Amber accent"></button>`
     + `<button class="swatch" type="button" data-c="green" aria-label="Green accent"></button>`
-    + `</div></div>`
+    + `</div><div class="look-accent-note">The seasonal look sets the color while it shows</div></div>`
     + `<div class="settings-row"><span class="settings-k">Columns</span>`
     + `<div class="seg" role="group" aria-label="Column separation">`
     + `<button type="button" data-cols-set="none">None</button>`
     + `<button type="button" data-cols-set="wells">Wells</button>`
     + `<button type="button" data-cols-set="lines">Lines</button>`
     + `</div></div>`
+    + `</div></div>`
+    // Seasonal looks: their own card, since the preview tiles need the room.
+    + `<div class="card pad settings-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Seasonal looks</h2></div>`
+    + `<div class="theme-ctl stack">${seasonalCardHtml()}</div>`
+    + `</div>`
+    // Per-device behavior, apart from the look: these two answer "how does THIS
+    // screen act", so a phone and the wall can differ.
+    + `<div class="card pad settings-card">`
+    + `<div class="shead"><span class="tick"></span><h2>This screen</h2></div>`
+    + `<div class="theme-ctl">`
     // Auto follows screen width; Desktop forces the full wall at any width
     // (the escape hatch for a TV that mis-reports a phone-narrow width).
     + `<div class="settings-row"><span class="settings-k">Layout</span>`
@@ -4185,7 +4321,14 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('.theme-ctl [data-theme-set]');
   if (t) { setTheme(t.dataset.themeSet); reflectThemeControls(); return; }
   const a = e.target.closest('.theme-ctl [data-c]');
-  if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
+  if (a) {
+    // While a seasonal look paints it owns the accent: the swatches are dimmed
+    // and pointer-dead in CSS, and this stops a keyboard press from saving a
+    // change nobody can see (the note under the swatches says why).
+    const look = document.documentElement.getAttribute('data-look');
+    if (look && look !== 'none') return;
+    setAccent(a.dataset.c); reflectThemeControls(); return;
+  }
   const c = e.target.closest('.theme-ctl [data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
   // Layout (Auto/Desktop): scoped to '.theme-ctl [...]' like the controls above,
@@ -4197,6 +4340,12 @@ document.addEventListener('click', (e) => {
   // not only on the next interaction.
   const ir = e.target.closest('.theme-ctl [data-idle-set]');
   if (ir) { setIdleReturn(ir.dataset.idleSet); reflectThemeControls(); if (openView) armIdle(); return; }
+  // Seasonal looks: Off/On (popover + Settings), and a look tile (Settings),
+  // which picks that season's look and turns seasons on.
+  const ss = e.target.closest('.theme-ctl [data-season-set]');
+  if (ss) { if (typeof setSeason === 'function') setSeason(ss.dataset.seasonSet); reflectThemeControls(); return; }
+  const lp = e.target.closest('.theme-ctl [data-look-pick]');
+  if (lp) { if (typeof setSeasonLook === 'function') setSeasonLook(lp.dataset.lookPick); reflectThemeControls(); return; }
   // Integrations switch list: also unscoped now that it only ever renders
   // inside the Settings overlay (#integrations-ctl), never the popover.
   const ig = e.target.closest('[data-integ-toggle]');
@@ -4503,6 +4652,7 @@ function paintViewportDiag() {
     + ` · best ${d.learnedMax || '?'} · gap ${d.shortfall} · ${d.orient} · ${mode}`;
 }
 
+mountSeasonScene();
 tickClock();
 setInterval(tickClock, 1000);
 poll().then(probeCamera);

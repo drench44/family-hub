@@ -15,8 +15,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      # pytest/httpx are test-only deps (FastAPI TestClient transport)
-      - run: pip install -r requirements.txt pytest httpx
+      # pytest/httpx are test-only deps (FastAPI TestClient transport); pillow
+      # is for scripts/prep-season-photo.py's tests (the app never imports it)
+      - run: pip install -r requirements.txt pytest httpx pillow
       - run: python -m pytest tests -q
         env:
           PYTHONPATH: src

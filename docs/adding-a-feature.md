@@ -149,6 +149,25 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
 - [ ] If it animates: **watch it move** — or better, sample element
       positions numerically over a cycle. Stills hid a chord-cutting
       trajectory that looked fine frozen and wrong in motion.
+- [ ] **Clear the test browser's cache first.** Assets keep the same `?v=`
+      between releases, so an automation browser runs old JS/CSS against
+      new files. Twice, seasonal looks showed a "bug" that was only the cache
+      (Playwright: `Network.clearBrowserCache` over CDP).
+- [ ] **All five themes** (Light, Soft, Blue, Grey, Black), not just "a light
+      and a dark". Seasonal looks once made Blue, Grey and Black identical,
+      and only a five-way check showed it.
+- [ ] **Anything the feature can switch off must not move a pixel when
+      off.** Screenshot the off state on main and on the branch, all five
+      themes, and diff them.
+- [ ] **Phone with the widest real content**: 390px and 360px, and the
+      clock at "12:59:59pm". A one-digit hour hid an 8px sideways overflow.
+- [ ] **Reduced motion and night are states too.** Look at them. Anything
+      that animates over the UI must not rest over text when stilled.
+- [ ] **Open every menu over the new UI.** A new layer (backdrop-filter,
+      transform, opacity) makes a stacking context, and the gear popover
+      once opened underneath the cards.
+- [ ] **Asked "have you looked at all of them?"**, the answer must be yes,
+      at full size. A thumbnail grid is not a review.
 
 ## 8. Docs & screenshots — updated IN THE SAME PR
 
@@ -187,6 +206,17 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       so one command busts every asset at once (a `test_static.py` guard fails
       any drift). This replaced the old per-asset manual bump that let two
       branches mint the same `v78` and ship stale caches.
+- [ ] Assets referenced from INSIDE a stylesheet or script (`url(...)` in
+      styles.css, an image path built in hub.js) get no `?v=`. If they can
+      change under the same name, serve them `no-cache` from the
+      `html_no_cache` middleware in app.py and add a test. (The seasonal
+      look art under `/seasons/` is the first case: a photo can be swapped
+      under the same name.)
+- [ ] New third-party art or code: record source, changes and licence in a
+      CREDITS file next to it, including the full notice when the licence
+      asks for it (MIT does), and run the full Python suite AFTER committing:
+      `test_no_house_data` only scans tracked files, and dense SVG path data
+      can look like an IP address to it.
 - [ ] Because the wall's phone clients cache assets aggressively, treat a
       deploy as a release (at least a `patch`) so `?v=` moves and phones pick
       up the new bytes — the wall itself already auto-reloads on the build hash.
