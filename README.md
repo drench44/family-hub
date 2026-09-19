@@ -33,15 +33,17 @@ at one URL.
   and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
 - **Seasonal looks:** turn **Season** on in the gear menu and the wall follows
-  the calendar. Fall (Sep 1 to Nov 30) comes in three looks, picked per device
-  under **All settings → Seasonal looks** from live preview tiles. **Harvest**
-  is rolling farmland at dusk, **Maple** has a few leaves drifting down behind
-  the cards, and **Woodland** is misty ridges of spruce. Each look is a quiet
-  landscape behind the cards with its own palette, accent color, and a small
-  mark beside the wordmark. Light and Soft get the daytime version, the other
-  themes the dusk version. The cards stay solid, the leaves pause at night and
-  stop for reduced motion, and the art ships inside the app (no downloads).
-  More seasons slot into one registry in `theme.js`.
+  the calendar with an illustrated scene behind the cards, leaves drifting
+  down, a matching palette and accent, and a small mark beside the wordmark.
+  Every season comes in the same three styles, from calm to lively, picked per
+  device under **All settings → Seasonal looks** from live preview tiles. For
+  fall (Sep 1 to Nov 30) that's **Golden Hills** (Minimal, soft gradient
+  hills), **Aspen Lake** (Scenic, a mountain lake among spruce and golden
+  aspens, the default) and **Pumpkin Farm** (Playful, a storybook farm).
+  Light and Soft get a sunny daytime version; Blue, Grey and Black get a
+  blue-hour evening with a moon and stars. The cards stay solid, the leaves
+  pause at night and stop for reduced motion, and the art ships inside the
+  app (no downloads). More seasons slot into one registry in `theme.js`.
 
   ![Fall seasonal looks](docs/seasons.png)
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —

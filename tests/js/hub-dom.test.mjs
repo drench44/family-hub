@@ -7028,21 +7028,22 @@ function seasonHub() {
   return { ...env, calls };
 }
 
-test('seasonSceneHtml: balanced spans, every layer, six falling and two near leaves', () => {
+test('seasonSceneHtml: balanced spans, the leaf layer, six falling and two near leaves', () => {
   const { sandbox } = newHub();
   const html = sandbox.seasonSceneHtml();
   const opens = (html.match(/<span\b/g) || []).length;
   const closes = (html.match(/<\/span>/g) || []).length;
   assert.equal(opens, closes, 'every span closes (a stray one would re-parent the next tile)');
   assert.match(html, /^<span class="season" aria-hidden="true">/, 'hidden from assistive tech');
-  for (const cls of ['sn-glow', 'sn-r1', 'sn-r2', 'sn-r3', 'sn-r4', 'sn-mist', 'sn-leaves', 'sn-grain']) {
-    assert.match(html, new RegExp(`class="[^"]*\\b${cls}\\b`), `has the ${cls} layer`);
-  }
+  // the illustration is the .season background (the look's --sn-scene); the
+  // markup only carries the leaf layer
+  assert.match(html, /class="sn-leaves"/);
+  assert.doesNotMatch(html, /sn-ridge|sn-glow|sn-grain/, 'no leftovers from the old layered scene');
   assert.equal((html.match(/class="sn-leaf fall/g) || []).length, 6);
   assert.equal((html.match(/class="sn-leaf near"/g) || []).length, 2);
   // the nth-child placement rules count leaves; any other child in .sn-leaves
   // would shift every leaf's position and speed
-  const leaves = html.slice(html.indexOf('sn-leaves'), html.indexOf('sn-grain'));
+  const leaves = html.slice(html.indexOf('sn-leaves'));
   assert.equal((leaves.match(/<span class="sn-leaf/g) || []).length, 8);
   assert.doesNotMatch(html, /<div/, 'spans only: the same markup sits inside a <button> tile');
 });

@@ -201,10 +201,14 @@
   // window may wrap the new year (from Dec 1 to Feb 28 works). Dates are
   // [month, day], both 1-based.
   var SEASONS = [
+    // Every season offers the same spectrum, listed calm to lively: Minimal,
+    // Scenic, Playful. `default: true` marks the look a device gets before it
+    // picks one (the middle of the spectrum). Ids are storage keys: renaming a
+    // look is free, changing its id resets that choice on every device.
     { id: "fall", name: "Fall", from: [9, 1], to: [11, 30], looks: [
-      { id: "fall-harvest", name: "Harvest", blurb: "Rolling hills at golden hour" },
-      { id: "fall-maple", name: "Maple", blurb: "Maple leaves drifting down" },
-      { id: "fall-woodland", name: "Woodland", blurb: "Misty ridges of spruce" },
+      { id: "fall-maple", name: "Golden Hills", style: "Minimal", blurb: "Soft hills and drifting leaves" },
+      { id: "fall-woodland", name: "Aspen Lake", style: "Scenic", blurb: "Mountains, spruce and golden aspens", default: true },
+      { id: "fall-harvest", name: "Pumpkin Farm", style: "Playful", blurb: "A storybook farm with a pumpkin patch" },
     ] },
   ];
   var SEASON_PREFS = ["on", "off"];
@@ -243,10 +247,12 @@
   // session is correct" promise writeStored makes for every other pref).
   var lookPicks = {};
   // The look a season paints on this device: the device's favourite if it is
-  // still one of the season's looks, else the season's first look.
+  // still one of the season's looks, else the season's default look (or its
+  // first, if none is marked).
   function lookFor(season) {
     var fav = lookPicks[season.id] || readStored("fh.look." + season.id);
     for (var i = 0; i < season.looks.length; i++) if (season.looks[i].id === fav) return fav;
+    for (var j = 0; j < season.looks.length; j++) if (season.looks[j].default) return season.looks[j].id;
     return season.looks[0].id;
   }
 
