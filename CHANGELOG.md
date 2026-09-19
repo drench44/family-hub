@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-09-19
+
 ### Added
 - Seasonal looks. Turn **Season** on in the gear menu and the wall follows the
   calendar: a real photograph fills the screen, the dashboard floats on it as
@@ -55,6 +57,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 - While a seasonal look shows, the Accent swatches dim and ignore taps, with a
   short note saying the look sets the color. Your accent comes back as it was
   when the look ends.
+
 ## [1.4.1] — 2026-09-17
 
 ### Fixed
