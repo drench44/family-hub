@@ -78,6 +78,9 @@ _THEME_AXES = {
     # applyHouseTheme on a device that has made no local choice)
     "layout": {"auto", "desktop"},
     "idleReturn": {"on", "off"},
+    # seasonal looks follow the calendar when "on" (theme.js SEASONS holds the
+    # seasons and their looks; which look a season paints is a per-device pick)
+    "season": {"on", "off"},
 }
 
 

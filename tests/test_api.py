@@ -189,6 +189,17 @@ def test_hub_theme_layout_and_idle_return_survive(tmp_path, monkeypatch):
         assert c.get("/api/hub").json()["theme"] is None
 
 
+def test_hub_theme_season_survives(tmp_path, monkeypatch):
+    """A house can turn seasonal looks on for fresh devices: theme.season must
+    round-trip through config validation, and a junk value is dropped."""
+    appmod = _reload_with(tmp_path, monkeypatch, {"theme": {"season": "on"}})
+    with TestClient(appmod.app) as c:
+        assert c.get("/api/hub").json()["theme"] == {"season": "on"}
+    appmod2 = _reload_with(tmp_path, monkeypatch, {"theme": {"season": "halloween"}})
+    with TestClient(appmod2.app) as c:
+        assert c.get("/api/hub").json()["theme"] is None
+
+
 def test_hub_theme_new_modes_survive(tmp_path, monkeypatch):
     """All five wall modes (light/soft/dark/grey/black) round-trip through config
     validation. Regression: _THEME_AXES['mode'] listed only light/dark, so a

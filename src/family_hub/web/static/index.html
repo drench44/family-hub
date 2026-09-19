@@ -33,6 +33,8 @@
     <header class="topbar">
       <span class="breath-dot"></span>
       <span class="wordmark">Family Hub</span>
+      <!-- the seasonal look's small mark (wheat, maple leaf, spruce); hidden with no look -->
+      <span class="season-mark" aria-hidden="true"></span>
       <span class="conn" id="conn-word">live</span>
       <span class="backup-badge warn" id="backup-badge" role="status" aria-live="polite" hidden></span>
       <span class="spacer"></span>
@@ -66,6 +68,17 @@
               <button class="swatch" type="button" data-c="amber"  aria-label="Amber accent"></button>
               <button class="swatch" type="button" data-c="green"  aria-label="Green accent"></button>
             </div>
+            <div class="look-accent-note">The seasonal look sets the color while it shows</div>
+          </div>
+          <!-- Seasonal looks: On follows the calendar (fall runs Sep 1 to Nov 30).
+               Which look each season paints is picked in All settings, where
+               the preview tiles have room. -->
+          <div class="theme-pop-row">
+            <span class="theme-pop-k">Season</span>
+            <div class="seg" role="group" aria-label="Seasonal looks">
+              <button type="button" data-season-set="off">Off</button>
+              <button type="button" data-season-set="on">On</button>
+            </div>
           </div>
           <div class="theme-pop-row">
             <span class="theme-pop-k">Columns</span>
@@ -75,6 +88,8 @@
               <button type="button" data-cols-set="lines">Lines</button>
             </div>
           </div>
+          <!-- above: how the hub looks; below: how THIS screen behaves -->
+          <div class="theme-pop-sep" role="separator"></div>
           <!-- Layout: Auto follows the screen width (a phone gets the phone
                layout, the wall gets the full wall). Desktop forces the full wall
                at any width — the escape hatch for a TV browser that mis-reports a

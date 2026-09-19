@@ -293,3 +293,130 @@ test('stampIdleReturn applies the choice WITHOUT persisting (house-default path)
   assert.equal(root.getAttribute('data-idle-return'), 'off');
   assert.equal(localStorage.getItem('fh.idleReturn'), null);     // but NOT stored
 });
+
+// ---------------------------------------------------------------- seasonal looks
+// data-season (on|off) is the per-device choice; data-look is DERIVED from it
+// and the date through theme.js's SEASONS registry. Dates are built from local
+// components (new Date(y, m, d)) so these hold under TZ=UTC as well.
+const day = (m, d) => new Date(2026, m - 1, d, 12, 0, 0);
+
+test('fresh device: seasonal looks default off, paint nothing, persist nothing', () => {
+  const { root, localStorage } = loadTheme();
+  assert.equal(root.getAttribute('data-season'), 'off');
+  assert.equal(root.getAttribute('data-look'), 'none');
+  assert.equal(localStorage.getItem('fh.season'), null);
+});
+
+test('setSeason(on) persists and paints the season\'s first look inside its window', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.setSeason('on');
+  assert.equal(localStorage.getItem('fh.season'), 'on');
+  assert.equal(win.refreshLook(day(10, 15)), 'fall-harvest');
+  assert.equal(root.getAttribute('data-look'), 'fall-harvest');
+});
+
+test('outside every season window the look is none even with seasons on', () => {
+  const { root, win } = loadTheme({ storage: { 'fh.season': 'on' } });
+  win.refreshLook(day(1, 15));
+  assert.equal(root.getAttribute('data-look'), 'none');
+  win.refreshLook(day(7, 4));
+  assert.equal(root.getAttribute('data-look'), 'none');
+});
+
+test('the fall window is inclusive at both ends: Sep 1 and Nov 30 in, Aug 31 and Dec 1 out', () => {
+  const { win } = loadTheme({ storage: { 'fh.season': 'on' } });
+  assert.equal(win.refreshLook(day(8, 31)), 'none');
+  assert.equal(win.refreshLook(day(9, 1)), 'fall-harvest');
+  assert.equal(win.refreshLook(day(11, 30)), 'fall-harvest');
+  assert.equal(win.refreshLook(day(12, 1)), 'none');
+});
+
+test('setSeason(off) takes the look down immediately', () => {
+  const { root, win } = loadTheme({ storage: { 'fh.season': 'on' } });
+  win.refreshLook(day(10, 1));
+  win.setSeason('off');
+  assert.equal(root.getAttribute('data-look'), 'none');
+});
+
+test('setSeasonLook stores the favourite for ITS season and turns seasons on', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.setSeasonLook('fall-maple');
+  assert.equal(localStorage.getItem('fh.look.fall'), 'fall-maple');
+  assert.equal(localStorage.getItem('fh.season'), 'on');
+  assert.equal(root.getAttribute('data-season'), 'on');
+  assert.equal(win.refreshLook(day(10, 20)), 'fall-maple');
+  assert.equal(win.seasonLook('fall'), 'fall-maple');
+});
+
+test('a stored favourite survives a reload', () => {
+  const { win } = loadTheme({ storage: { 'fh.season': 'on', 'fh.look.fall': 'fall-woodland' } });
+  assert.equal(win.refreshLook(day(9, 30)), 'fall-woodland');
+});
+
+test('an unknown stored favourite falls back to the season\'s first look', () => {
+  // e.g. a look renamed or removed in a later release
+  const { win } = loadTheme({ storage: { 'fh.season': 'on', 'fh.look.fall': 'fall-gone' } });
+  assert.equal(win.refreshLook(day(10, 5)), 'fall-harvest');
+});
+
+test('invalid season values and unknown look ids are rejected: no stamp, no persist', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.setSeason('sometimes');
+  assert.equal(root.getAttribute('data-season'), 'off');
+  assert.equal(localStorage.getItem('fh.season'), null);
+  win.setSeasonLook('winter-nope');
+  assert.equal(root.getAttribute('data-season'), 'off');
+  assert.equal(localStorage._map.size, 0, 'nothing written for an unknown look');
+});
+
+test('FH_THEME.season is the house fallback; a stored choice beats it; stampSeason never persists', () => {
+  const house = loadTheme({ fhTheme: { season: 'on' } });
+  assert.equal(house.root.getAttribute('data-season'), 'on');
+  assert.equal(house.localStorage.getItem('fh.season'), null);
+
+  const mine = loadTheme({ storage: { 'fh.season': 'off' }, fhTheme: { season: 'on' } });
+  assert.equal(mine.root.getAttribute('data-season'), 'off');
+
+  const fresh = loadTheme();
+  fresh.win.stampSeason('on');
+  assert.equal(fresh.root.getAttribute('data-season'), 'on');
+  assert.equal(fresh.localStorage.getItem('fh.season'), null, 'house path must not persist');
+  fresh.win.stampSeason('bogus');
+  assert.equal(fresh.root.getAttribute('data-season'), 'on', 'invalid house value ignored');
+});
+
+test('a window may wrap the new year, and the FIRST matching season wins', () => {
+  // Pins the two rules the registry comment promises future seasons: a
+  // Dec->Feb window works, and a short holiday listed before its broad
+  // season takes precedence inside it.
+  const { win } = loadTheme({ storage: { 'fh.season': 'on' } });
+  win.FH_SEASONS.push({ id: 'winter', name: 'Winter', from: [12, 1], to: [2, 28],
+    looks: [{ id: 'winter-snow', name: 'Snow' }] });
+  win.FH_SEASONS.unshift({ id: 'halloween', name: 'Halloween', from: [10, 20], to: [10, 31],
+    looks: [{ id: 'halloween-moon', name: 'Moon' }] });
+  assert.equal(win.refreshLook(day(12, 25)), 'winter-snow');
+  assert.equal(win.refreshLook(day(1, 10)), 'winter-snow');
+  assert.equal(win.refreshLook(day(3, 1)), 'none');
+  assert.equal(win.refreshLook(day(10, 25)), 'halloween-moon');
+  assert.equal(win.refreshLook(day(10, 19)), 'fall-harvest');
+  assert.equal(win.activeSeason(day(10, 25)), 'halloween');
+});
+
+test('the season registry is well formed', () => {
+  const { win } = loadTheme();
+  const ids = new Set();
+  assert.ok(win.FH_SEASONS.length >= 1);
+  for (const s of win.FH_SEASONS) {
+    assert.match(s.id, /^[a-z]+$/);
+    for (const [m, d] of [s.from, s.to]) {
+      assert.ok(m >= 1 && m <= 12 && d >= 1 && d <= 31, `${s.id} has a real date`);
+    }
+    assert.ok(s.looks.length >= 1, `${s.id} has at least one look`);
+    for (const l of s.looks) {
+      assert.ok(l.id.startsWith(s.id + '-'), `${l.id} is prefixed by its season`);
+      assert.ok(!ids.has(l.id), `${l.id} is unique`);
+      ids.add(l.id);
+      assert.ok(l.name && l.blurb, `${l.id} has a name and a blurb for its tile`);
+    }
+  }
+});
