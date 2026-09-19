@@ -2771,37 +2771,55 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 
 /* ---- drifting leaves (every fall look, in its own colours) ----
+   On the wall they live in their own layer, .season-fx, the LAST child of
+   <body>: above the cards (behind the glass they were nearly invisible, "the
+   leaves falling are a bit hard to see"), under the top bar (z 30) and every
+   overlay, menu and toast (z 50+). The layer never takes a tap
+   (pointer-events: none) and is not a glass element, so the iOS rules for
+   fixed layers hold. On a phone it stops above the tab bar.
    Each leaf is two boxes: the outer .sn-leaf span falls straight down at a
    constant speed, the inner <b> sways side to side and turns, eased, so the
-   path reads as a leaf rocking on the air instead of a zig-zag. Transform
-   only (compositor work, fine on the wall's modest hardware). They fall
-   behind the glass, so a leaf passing behind a card blurs softly. Placement
-   and speed per leaf live in the nth-child rules so the markup stays bare. */
+   path reads as a leaf rocking on the air instead of a zig-zag. A small soft
+   shadow lifts each leaf off a leafy photo of the same colour; six small
+   leaves are cheap to repaint, but never blur a leaf (a big blurred moving
+   layer re-blurs every frame on the wall's small GPU). Placement and speed per
+   leaf live in the nth-child rules so the markup stays bare. */
+.season-fx { display: none; }
+:root[data-look^="fall-"] body > .season-fx {
+  display: block; position: fixed; inset: 0; z-index: 20;
+  pointer-events: none; overflow: hidden;
+}
+@media (max-width: 1000px) {
+  :root:not([data-layout="desktop"])[data-look^="fall-"] body > .season-fx { bottom: 64px; }
+}
 .sn-leaves { display: none; position: absolute; inset: 0; }
-:root[data-look^="fall-"] body > .season .sn-leaves, .look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
+:root[data-look^="fall-"] body > .season-fx .sn-leaves, .look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
 .sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); }
 .sn-leaf b {
   display: block; width: 100%; height: 100%;
   background: linear-gradient(140deg, var(--c1), var(--c2));
   -webkit-mask: url("seasons/leaf-maple.svg") center / contain no-repeat;
   mask: url("seasons/leaf-maple.svg") center / contain no-repeat;
-  opacity: var(--o, .85);
+  opacity: var(--o, 1);
 }
 .sn-leaf.slender b { -webkit-mask-image: url("seasons/leaf-slender.svg"); mask-image: url("seasons/leaf-slender.svg"); }
-.sn-leaf.fall { top: 0; animation: sn-fall var(--d) linear var(--dl) infinite; }
+.sn-leaf.fall {
+  top: 0; animation: sn-fall var(--d) linear var(--dl) infinite;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,.30)) drop-shadow(0 4px 6px rgba(0,0,0,.22));
+}
 .sn-leaf.fall b { animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
 @keyframes sn-fall { from { transform: translate3d(0, -12vh, 0); } to { transform: translate3d(0, 112vh, 0); } }
 @keyframes sn-sway {
   from { transform: translate3d(calc(var(--amp, 26px) * -1), 0, 0) rotate(var(--r0, -18deg)); }
   to   { transform: translate3d(var(--amp, 26px), 0, 0) rotate(var(--r1, 32deg)); }
 }
-/* six falling: three near-sized, three far and faint */
-.sn-leaf:nth-child(1) { --x: 7%;  --y: 22%; --s: 30px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-3); --d: 34s; --dl: -4s; }
-.sn-leaf:nth-child(2) { --x: 31%; --y: 64%; --s: 24px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-1); --d: 41s; --dl: -19s; --sw: 6.5s; --r1: 48deg; }
-.sn-leaf:nth-child(3) { --x: 58%; --y: 38%; --s: 34px; --c1: var(--sn-leaf-4); --c2: var(--sn-leaf-2); --d: 37s; --dl: -27s; --amp: 34px; }
-.sn-leaf:nth-child(4) { --x: 83%; --y: 71%; --s: 26px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-2); --d: 45s; --dl: -11s; --sw: 7s; }
-.sn-leaf:nth-child(5) { --x: 45%; --y: 12%; --s: 15px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 58s; --dl: -33s; --o: .55; --amp: 16px; }
-.sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 14px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 63s; --dl: -48s; --o: .5; --amp: 14px; }
+/* six falling: four near, two farther off (smaller, slower, a touch lighter) */
+.sn-leaf:nth-child(1) { --x: 6%;  --y: 22%; --s: 40px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-3); --d: 30s; --dl: -4s; }
+.sn-leaf:nth-child(2) { --x: 30%; --y: 64%; --s: 34px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-1); --d: 36s; --dl: -19s; --sw: 6.5s; --r1: 48deg; }
+.sn-leaf:nth-child(3) { --x: 57%; --y: 38%; --s: 44px; --c1: var(--sn-leaf-4); --c2: var(--sn-leaf-2); --d: 33s; --dl: -27s; --amp: 34px; }
+.sn-leaf:nth-child(4) { --x: 82%; --y: 71%; --s: 36px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-2); --d: 39s; --dl: -11s; --sw: 7s; }
+.sn-leaf:nth-child(5) { --x: 44%; --y: 12%; --s: 24px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 48s; --dl: -33s; --o: .85; --amp: 18px; }
+.sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 22px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 52s; --dl: -44s; --o: .85; --amp: 16px; }
 /* A wall left on overnight doesn't need leaves falling in a dark kitchen. */
 .is-night .sn-leaf, .is-night .sn-leaf b { animation-play-state: paused; }
 

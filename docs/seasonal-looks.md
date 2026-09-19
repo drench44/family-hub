@@ -60,8 +60,9 @@ Surveyed before settling on this design (2026-09):
 
 Patterns we copied: real photos, a readability layer between the art and the
 UI, day and evening variants of one image, automatic by date with a manual
-pick from thumbnails. Pitfall we avoid: animation over the UI (our leaves
-fall *behind* the glass).
+pick from thumbnails. Pitfall we weigh: animation over the UI. Our leaves
+started behind the glass and nobody could see them, so they now drift over
+the cards, kept few, small and slow (see Motion below).
 
 ## 4. Visual standards
 
@@ -96,11 +97,17 @@ fall *behind* the glass).
 - Cards stay neutral charcoal or white. The photo carries the season.
 
 **Motion**
-- Only the drifting leaves (or, later, snow): six small shapes, transform
-  only, behind the glass, paused at night, still under reduced motion.
-- No filter on a moving layer: a blurred moving element makes the wall's
-  small GPU (an i3 iGPU) re-blur it every frame.
-- No motion over the UI.
+- Only the drifting leaves (or, later, snow): six shapes, 22 to 44px,
+  opaque, transform only, paused at night, still under reduced motion.
+- They drift **over the cards** in their own layer (`.season-fx`, last in
+  `<body>`). Behind the glass they were nearly invisible ("the leaves
+  falling are a bit hard to see"), and the same gold as the photo hid them
+  further. The layer never takes a tap, stays under the top bar and every
+  menu and overlay, and stops above the phone's tab bar. Keep it to a
+  handful of slow shapes, so it reads as weather, not as noise over text.
+- Each leaf gets a small soft drop shadow so it lifts off a photo of the
+  same colour. Never blur a moving layer: a blurred moving element makes the
+  wall's small GPU (an i3 iGPU) re-blur it every frame.
 
 **Mark**
 - A small silhouette beside the wordmark in the accent colour (a leaf for

@@ -3859,27 +3859,35 @@ function pickedLook(seasonId) {
   return typeof seasonLook === 'function' ? seasonLook(seasonId) : null;
 }
 
-// The scene layer, bare: the photo itself is the .season background (the
-// look's --sn-scene), and every leaf's colour, placement and speed comes from
-// styles.css. Spans rather than divs so the same markup can sit inside a
-// Settings tile <button>. Six leaves fall, two of them the slender shape.
-function seasonSceneHtml() {
+// The falling leaves, bare: every leaf's colour, placement and speed comes
+// from styles.css. Six leaves, two of them the slender shape. Spans rather
+// than divs so the same markup can sit inside a Settings tile <button>.
+function seasonLeavesHtml() {
   const leaf = (cls) => `<span class="sn-leaf ${cls}"><b></b></span>`;
-  return '<span class="season" aria-hidden="true">'
-    + '<span class="sn-leaves">'
+  return '<span class="sn-leaves">'
     + leaf('fall') + leaf('fall slender') + leaf('fall') + leaf('fall')
     + leaf('fall slender') + leaf('fall')
-    + '</span>'
     + '</span>';
 }
 
-// Mount the wall's scene once, as the first child of <body> (under everything;
-// CSS shows it only while data-look names a look). Idempotent.
+// A Settings preview: the look's photo (the .season background, the look's
+// --sn-scene) with its leaves resting on it.
+function seasonSceneHtml() {
+  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}</span>`;
+}
+
+// Mount the wall's scene once, in two layers (CSS shows both only while
+// data-look names a look). The photo goes FIRST in <body>, under everything.
+// The leaves go LAST, in their own layer drifting over the cards: behind the
+// glass they were nearly invisible ("the leaves falling are a bit hard to
+// see"). Both are direct children of <body>, so the night dim reaches them.
+// Idempotent.
 let seasonMounted = false;
 function mountSeasonScene() {
   const body = document.body;
   if (seasonMounted || !body || typeof body.insertAdjacentHTML !== 'function') return;
-  body.insertAdjacentHTML('afterbegin', seasonSceneHtml());
+  body.insertAdjacentHTML('afterbegin', '<span class="season" aria-hidden="true"></span>');
+  body.insertAdjacentHTML('beforeend', `<span class="season-fx" aria-hidden="true">${seasonLeavesHtml()}</span>`);
   seasonMounted = true;
 }
 

@@ -1718,8 +1718,20 @@ def test_season_scene_sits_behind_and_never_takes_a_tap():
     assert re.search(r':root\[data-look\]:not\(\[data-look="none"\]\) body \{ background: transparent; \}', CSS), \
         "the body must step aside or its background hides the scene"
     hub = (STATIC / "hub.js").read_text()
-    assert "insertAdjacentHTML('afterbegin', seasonSceneHtml())" in hub, \
-        "the scene mounts FIRST in <body> (under everything, a direct child for the night dim)"
+    assert "insertAdjacentHTML('afterbegin', '<span class=\"season\"" in hub, \
+        "the photo mounts FIRST in <body> (under everything, a direct child for the night dim)"
+    # The leaves are their own layer, LAST in <body>, over the cards: behind
+    # the glass they were nearly invisible. It must never take a tap, must stay
+    # under the top bar (z 30) and every overlay (z 50+), and is not glass.
+    assert "insertAdjacentHTML('beforeend', `<span class=\"season-fx\"" in hub
+    fx = re.search(r'body > \.season-fx \{([^}]*)\}', CSS)
+    assert fx, "missing the leaf layer rule"
+    for decl in ("position: fixed", "pointer-events: none"):
+        assert decl in fx.group(1), f"leaf layer must set {decl}"
+    z = int(re.search(r"z-index:\s*(\d+)", fx.group(1)).group(1))
+    top = int(re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) \.topbar \{[^}]*z-index:\s*(\d+)', CSS).group(1))
+    assert 0 < z < top, "leaves drift over the cards but under the top bar and its menu"
+    assert "backdrop-filter" not in fx.group(1)
 
 
 def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
@@ -1740,9 +1752,10 @@ def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
     assert re.search(r"\.sn-leaf\.fall \{ top: var\(--y\); \}", block), \
         "still leaves must rest at their own spots, not stack at the top"
     assert re.search(r"\.is-night \.sn-leaf[^{]*\{[^}]*animation-play-state:\s*paused", CSS)
-    # no filter on a leaf: the leaves fall behind glass cards, and a filtered
-    # moving layer would make the wall's small GPU re-blur it every frame
-    assert not re.search(r"\.sn-leaf[^{]*\{[^}]*filter:", CSS)
+    # never BLUR a leaf: a big blurred moving layer makes the wall's small GPU
+    # re-blur it every frame. A small drop shadow (to lift a gold leaf off a
+    # gold photo) is fine.
+    assert not re.search(r"\.sn-leaf[^{]*\{[^}]*filter:[^;}]*\bblur\(", CSS)
 
 
 def test_season_controls_are_wired_in_the_popover_and_config():
