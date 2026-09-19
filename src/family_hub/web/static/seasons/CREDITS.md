@@ -6,9 +6,8 @@ Sourcing rules and how to add more: [`docs/seasonal-looks.md`](../../../../../do
 
 ## Photos
 
-Each photo was resized and re-encoded by `scripts/prep-season-photo.py`
-(WebP, metadata stripped); `fall-aspen-grove.webp` was also softened very
-slightly to keep the file small.
+Each photo was resized to 2560px wide, converted to sRGB and re-encoded by
+`scripts/prep-season-photo.py` (WebP, metadata stripped).
 
 | File | Photo | Source | Licence |
 | --- | --- | --- | --- |
