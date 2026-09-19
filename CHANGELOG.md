@@ -12,48 +12,39 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Added
 - Seasonal looks. Turn **Season** on in the gear menu and the wall follows the
-  calendar: a real photograph fills the screen and the dashboard floats on it
-  as frosted glass (cards, section titles and the top bar), with leaves
-  drifting down behind the cards, a matching accent and a small mark beside
-  the wordmark. Fall (Sep 1 to Nov 30) ships **Aspen Grove** (the default),
-  **Misty Road** and **Maple Sky**. Light and Soft show the photo bright and
-  airy; Blue, Grey and Black show it at dusk. Each device picks its look from
-  live preview tiles under All settings, and a house can turn seasons on for
-  every fresh device with `theme.season` in config.json. The leaves pause at
-  night and stop for reduced motion. Halloween, Christmas and the rest slot
-  into the same registry in `theme.js`.
-- `docs/seasonal-looks.md`, the design standards for seasonal looks: the bar,
-  what failed and why, what comparable products do, the glass and
-  readability rules, which image sources and licences this public repo may
-  use, and the step-by-step for a new look. CLAUDE.md points to it.
+  calendar: a real photograph fills the screen, the dashboard floats on it as
+  frosted glass (cards, section titles and the top bar), leaves fall at two
+  depths (big, sharp ones drifting over the cards and smaller ones behind the
+  glass, softened by it), and a small mark sits beside the wordmark. Fall
+  (Sep 1 to Nov 30) ships **Aspen Grove** (the default), **Misty Road** and
+  **Maple Sky**, picked per device from live preview tiles under All settings,
+  each crediting its photographer. A house can turn seasons on for every
+  fresh device with `theme.season` in config.json.
+- Every theme keeps its own character with a season on: Light is white glass,
+  Soft warm cream, Blue navy, Grey neutral grey and Black near-black over a
+  deeper dusk, with each theme's own text and border colours. The look brings
+  the photo, the leaves and an accent matched to the photo.
+- Quiet by design: the leaves never block a tap and stay under the top bar,
+  every menu and the phone's tab bar. At night the near leaves go away, the
+  far ones pause and the glass turns nearly solid. With reduced motion the
+  near leaves are hidden and the far ones rest behind the glass. With Season
+  on but nothing in season, the menu says when the next season starts. With
+  seasons off, the wall is exactly as before.
+- The photos ship sharp, 2560px wide and never softened: public domain
+  (National Park Service) and CC0, with the leaf shapes from Twemoji
+  (CC-BY 4.0) and Phosphor Icons (MIT), all credited in
+  `static/seasons/CREDITS.md`. `/seasons/` is served `no-cache`, so a
+  replaced photo reaches phones after a release.
 - `scripts/prep-season-photo.py` turns a downloaded photo or artwork into a
-  look's image: resized, WebP, metadata stripped. The photos are public
-  domain (National Park Service) and CC0, and the leaf shapes come from
-  Twemoji (CC-BY 4.0) and Phosphor Icons (MIT), all credited in
-  `static/seasons/CREDITS.md`.
-- The photos ship sharp: 2560px wide, never softened, so leaves and bark
-  stay crisp on the wall and on a phone's zoomed-in view. A test fails any
-  photo narrower than that.
-- All five themes keep their own character with a season on: Light is white
-  glass, Soft warm cream, Blue navy, Grey neutral grey and Black near-black
-  over a deeper dusk, with each theme's own text and border colours. The look
-  brings the photo, the leaves and a matching accent. At night the glass goes
-  nearly solid so the photo doesn't show through busy. With reduced motion on,
-  the wall shows no leaves (resting still, they covered words).
-- The leaves fall at two depths: big, sharp ones drift over the cards and
-  smaller, slower ones fall behind the glass, softened by the cards they
-  pass behind.
-- The falling leaves are easy to see: bigger, fully opaque, with a soft
-  shadow, and drifting over the cards instead of hidden behind them. They
-  never block a tap and stay under the top bar, menus and the phone's tab
-  bar.
-- Maple Sky replaces an earlier maple close-up whose sharp leaves hid behind
-  the cards, leaving mostly its soft background on show.
-- Each look's Settings tile names the photographer, for example "Photo by
-  Patrick Myers, NPS".
-- The seasonal art under `/seasons/` is served `no-cache`, so a phone picks up
-  new art after a release instead of keeping old copies. The stylesheet points
-  at these files directly, where no `?v=` can reach them.
+  look's image: converted to sRGB, flattened, 2560px WebP, metadata stripped,
+  and it never silently overwrites a shipped photo. Pillow joins CI's
+  test-only installs for its tests.
+- `docs/seasonal-looks.md`, the design standards for seasonal and holiday
+  looks: the bar, what failed and why, what comparable products do, the glass
+  and readability rules, allowed image sources and licences, a step-by-step
+  for a new look, and the lessons from the fall build. New visual gates in
+  `docs/adding-a-feature.md` (all five themes, pixel-diff the off state,
+  widest phone content, menus over new layers). CLAUDE.md points to both.
 
 ### Changed
 - Settings is regrouped. **Display** keeps Theme, Accent and Columns, the new
@@ -64,7 +55,6 @@ rolls that section to a dated version via `python scripts/release.py`.
 - While a seasonal look shows, the Accent swatches dim and ignore taps, with a
   short note saying the look sets the color. Your accent comes back as it was
   when the look ends.
-
 ## [1.4.1] — 2026-09-17
 
 ### Fixed

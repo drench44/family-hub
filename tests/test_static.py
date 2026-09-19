@@ -1700,7 +1700,7 @@ def test_glass_keeps_every_section_readable_and_stays_off_fixed_elements():
         assert not re.search(r":where\([^)]*\)\) " + re.escape(fixed) + r"\b[^{]*\{[^}]*backdrop-filter", CSS)
     # empty check rings drawn in --edge nearly vanished on light glass over a
     # bright photo (caught on Misty Road in Light); they use --faint instead
-    assert re.search(r'\.chore-check,\s*:where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) '
+    assert re.search(r'\.chore-check,\s*:where\(:root\[data-look\]:not\(\[data-look="none"\]\) \.wrap\) '
                      r'\.todo-check \{ border-color: var\(--faint\); \}', CSS)
     # glass makes the top bar a stacking context that traps the gear popover:
     # the bar itself must sit above the glass cards or they cover the popover
@@ -1810,8 +1810,101 @@ def test_every_season_surface_is_hidden_by_default():
     wordmark (else an accent-coloured square), no accent note. Each hidden rule
     pairs with the rule that shows it while a look paints."""
     show = ':root[data-look]:not([data-look="none"])'
-    for cls in ("season", "season-mark", "look-accent-note"):
+    for cls in ("season", "season-fx", "season-mark", "look-accent-note"):
         assert re.search(rf"(?m)^\.{re.escape(cls)} \{{ display: none;", CSS), f".{cls} must default hidden"
     assert f"{show} body > .season {{" in CSS
     assert f"{show} .season-mark {{" in CSS
     assert f"{show} .look-accent-note {{ display: block; }}" in CSS
+
+
+# ---- selector-exact guards (a review's mutation tests showed substring
+# guards passing with the real rule weakened or deleted) ----
+
+def _rules():
+    """(selector_list, body, start) for every flat rule in styles.css."""
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS):
+        sels = [s.strip() for s in re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S).split(",")]
+        out.append(([s for s in sels if s], m.group(2), m.start()))
+    return out
+
+
+def _last_reduced_motion_selectors():
+    start = [m.start() for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\) \{", CSS)][-1]
+    tail = CSS[start:]
+    block = tail[tail.index("{") + 1:tail.index("\n}")]
+    stopped, hidden = set(), set()
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", block):
+        sels = {s.strip() for s in m.group(1).split(",")}
+        if re.search(r"animation:\s*none", m.group(2)):
+            stopped |= sels
+        if re.search(r"display:\s*none", m.group(2)):
+            hidden |= sels
+    return start, stopped, hidden
+
+
+def test_reduced_motion_stops_every_seasonal_animation_by_its_exact_selector():
+    """Every rule that starts a seasonal animation must be matched, selector
+    for selector, in the last reduced-motion block (the same selector later in
+    the file always wins; a weaker look-alike does not). And the wall's near
+    leaves are hidden there by the exact selector that shows them."""
+    start, stopped, hidden = _last_reduced_motion_selectors()
+    animated = [s for sels, body, pos in _rules() if pos < start
+                and re.search(r"animation:\s*[^;]*\bsn-", body) for s in sels]
+    assert animated, "found no seasonal animations to check"
+    missing = [s for s in animated if s not in stopped]
+    assert not missing, f"reduced motion does not stop: {missing}"
+    show = ':root[data-look^="fall-"] body > .season-fx'
+    assert any(show in s for sels, body, _ in _rules() for s in sels), "the near-leaf show rule moved"
+    assert show in hidden, "reduced motion must hide the near leaves with the SAME selector that shows them"
+
+
+def test_night_hides_the_near_leaves_and_pauses_the_far_ones():
+    """At night the dim makes .wrap its own stacking layer, so the near leaves
+    (z 20) would paint over the top bar and the gear menu: they are hidden.
+    The far leaves pause; both the fall and the sway must stop. Night glass
+    goes solid on <body> (where hub.js puts is-night)."""
+    assert re.search(r'(?m)^:root\[data-look\]:not\(\[data-look="none"\]\) body\.is-night > \.season-fx \{ display: none; \}', CSS)
+    assert re.search(r"(?m)^\.is-night \.sn-leaf, \.is-night \.sn-leaf b \{ animation-play-state: paused; \}", CSS)
+    assert re.search(r"(?m)^\.is-night \{ --glass: color-mix\(in srgb, var\(--surface\) 9\d%", CSS)
+
+
+def test_no_look_rule_anywhere_sets_a_theme_owned_token():
+    """Not just the two palette blocks: ANY rule that names a look id must
+    leave the theme's tokens alone, or it flattens the five themes."""
+    for look in _look_ids():
+        for sels, body, _ in _rules():
+            if not any(f'data-look="{look}"' in s for s in sels):
+                continue
+            for tok in _THEME_OWNED:
+                assert not re.search(rf"(?<![\w-]){re.escape(tok)}\s*:", body), \
+                    f"a {look} rule ({sels[0]}) sets the theme-owned {tok}"
+
+
+def test_leaves_fall_at_two_depths():
+    """Both leaf layers are shown, the far set has its own six lanes (not the
+    near leaves' paths), and the far set carries no shadow."""
+    shown = {s for sels, body, _ in _rules() if "display: block" in body for s in sels}
+    for sel in (':root[data-look^="fall-"] body > .season .sn-leaves',
+                ':root[data-look^="fall-"] body > .season-fx .sn-leaves'):
+        assert sel in shown, f"{sel} is never shown"
+    near = dict(re.findall(r"(?m)^\.sn-leaf:nth-child\((\d)\) \{ --x: ([\d.]+%)", CSS))
+    far = dict(re.findall(r"(?m)^\.sn-leaves\.back \.sn-leaf:nth-child\((\d)\) \{ --x: ([\d.]+%)", CSS))
+    assert sorted(near) == sorted(far) == [str(i) for i in range(1, 7)], "six near and six far leaves"
+    assert all(near[i] != far[i] for i in near), "far leaves need their own lanes, or the depth is lost"
+    assert re.search(r"\.sn-leaves\.back \.sn-leaf\.fall \{ filter: none; \}", CSS)
+
+
+def test_phone_top_row_and_leaf_layer_fit_the_phone():
+    """The phone's top row only just fits: a two-digit hour overflowed it by
+    8px. Each fix is pinned, scoped so a forced-Desktop TV keeps the wall
+    layout; and the near leaves stop above the tab bar plus the iPhone
+    home-indicator inset."""
+    m = re.search(r"@media \(max-width: 1000px\) \{((?:[^{}]|\{[^{}]*\})*)\}", CSS[CSS.index("seasonal looks (fall)"):])
+    assert m, "no phone block in the seasonal section"
+    phone = m.group(1)
+    scope = ':root:not([data-layout="desktop"])[data-look]:not([data-look="none"])'
+    assert f"{scope} .season-mark {{ display: none; }}" in phone
+    assert re.search(re.escape(f"{scope} .wordmark {{") + r"[^}]*min-width: 0;[^}]*text-overflow: ellipsis", phone)
+    assert f"{scope} .topbar {{ padding: 6px 6px 6px 10px;" in phone
+    assert re.search(r'body > \.season-fx \{ bottom: calc\(64px \+ env\(safe-area-inset-bottom, 0px\)\); \}', CSS)

@@ -7255,3 +7255,40 @@ test('an accent tap is ignored while a seasonal look owns the color, and works a
   tap();
   assert.deepEqual(set, ['violet']);
 });
+
+test('applyHouseTheme never undoes a season tap made this session, even with storage dead', () => {
+  // kiosk WebView: storage refuses writes, so fh.season stays empty and the
+  // house default would stamp over the tap on the next poll
+  const { sandbox } = newHub();
+  const stamped = [];
+  sandbox.stampSeason = (v) => stamped.push(v);
+  sandbox.seasonChoiceMade = () => true;
+  sandbox.applyHouseTheme({ season: 'off' });
+  assert.deepEqual(stamped, [], 'the tap stands');
+  sandbox.seasonChoiceMade = () => false;
+  sandbox.applyHouseTheme({ season: 'off' });
+  assert.deepEqual(stamped, ['off'], 'a device that never chose still follows the house');
+});
+
+test('Season on, out of season: the note says when the next season starts', () => {
+  const { document, sandbox } = seasonHub();
+  const pop = document.createElement('div');
+  pop.innerHTML = '<div class="theme-ctl"><button data-season-set="on">On</button>'
+    + '<div class="season-idle-note" hidden></div></div>';
+  pop._id = 'theme-pop';
+  document.body.appendChild(pop);
+  const note = pop.querySelector('.season-idle-note');
+  sandbox.activeSeason = () => null;
+  sandbox.nextSeason = () => FALL[0];
+  document.documentElement.setAttribute('data-season', 'on');
+  sandbox.reflectThemeControls();
+  assert.equal(note.hidden, false);
+  assert.equal(note.textContent, 'Nothing is in season today. Fall starts Sep 1.');
+  sandbox.activeSeason = () => 'fall';           // in season: no note
+  sandbox.reflectThemeControls();
+  assert.equal(note.hidden, true);
+  sandbox.activeSeason = () => null;             // off: no note either
+  document.documentElement.setAttribute('data-season', 'off');
+  sandbox.reflectThemeControls();
+  assert.equal(note.hidden, true);
+});

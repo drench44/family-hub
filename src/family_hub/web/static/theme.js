@@ -272,8 +272,15 @@
     if (root.getAttribute("data-look") !== look) root.setAttribute("data-look", look);
     return look;
   }
+  // Did someone on THIS device choose the season pref this session? The house
+  // default only applies to a device that never chose, and hub.js asks this
+  // as well as localStorage, because on a kiosk where storage refuses writes
+  // the next poll would otherwise stamp the house value over a fresh tap.
+  var seasonChosen = false;
+  function seasonChoiceMade() { return seasonChosen; }
   function setSeason(v) {
     if (SEASON_PREFS.indexOf(v) === -1) return;
+    seasonChosen = true;
     writeStored("fh.season", v);
     stampSeason(v);
     refreshLook();
@@ -292,6 +299,7 @@
     var season = seasonOfLook(lookId);
     if (!season) return;
     lookPicks[season.id] = lookId;
+    seasonChosen = true;
     writeStored("fh.look." + season.id, lookId);
     writeStored("fh.season", "on");
     stampSeason("on");
@@ -312,6 +320,21 @@
   window.setSeason = setSeason;
   window.stampSeason = stampSeasonIf;
   window.setSeasonLook = setSeasonLook;
+  window.seasonChoiceMade = seasonChoiceMade;
+  // The season whose window opens soonest after `date` (or null with no
+  // seasons): lets the UI say "Fall starts Sep 1" when nothing is in season.
+  window.nextSeason = function (date) {
+    var d = isDate(date) ? date : new Date();
+    var today = (d.getMonth() + 1) * 100 + d.getDate();
+    var best = null, bestGap = Infinity;
+    for (var i = 0; i < SEASONS.length; i++) {
+      var start = SEASONS[i].from[0] * 100 + SEASONS[i].from[1];
+      // days-ish ordering is enough: compare month*100+day, wrapping the year
+      var gap = start > today ? start - today : start + 1300 - today;
+      if (gap < bestGap) { bestGap = gap; best = SEASONS[i]; }
+    }
+    return best;
+  };
   window.refreshLook = refreshLook;
   window.seasonLook = seasonLook;
   window.activeSeason = activeSeason;
