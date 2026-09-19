@@ -70,6 +70,9 @@ fall *behind* the glass).
 - Calm and happy: the season shown through subject and light. Sunlit gold,
   soft fog, backlit leaves. No red washes, no gloom, no clip-art props.
 - Immersive: it fills the screen (`cover`), not a strip at the bottom.
+- Sharp: the original must be at least 2560px wide, shipped at 2560px, never
+  softened. A photo that is soft by nature (fog, a blurred background) still
+  needs its subject in focus.
 - It must survive being cropped: the wall shows the whole frame, a phone in
   portrait shows roughly the middle third. Set the look's `--sn-pos` to its
   focal point.
@@ -152,9 +155,13 @@ CC0), Shenandoah NPS rolling hills.
    write down its title, creator, source URL and licence.
 2. **Prepare it:** `pip install pillow`, then
    `python scripts/prep-season-photo.py original.jpg <look-id>`. That writes
-   `static/seasons/<look-id>.webp`: resized, re-encoded and stripped of
-   metadata. Keep it under 600 KB. For a leafy, detailed photo, use
-   `--soften 1.2`, then `--width 1920`.
+   `static/seasons/<look-id>.webp`: 2560px wide, converted to sRGB,
+   re-encoded and stripped of metadata. **Never soften it or make it narrower
+   to save bytes.** We tried that on the aspen photo and the wall showed it
+   as blur ("some of the pics look blurry"). The hub runs on the home network
+   and fetches each photo once per release, so ~2 MB for a leafy photo is
+   fine. If a file tops the 2.6 MB guard, lower `--quality` to 76 first. The
+   source needs to be at least 2560px wide; smaller originals will look soft.
 3. **Credit it:** add a row to `static/seasons/CREDITS.md`.
 4. **Register it** in `theme.js`'s `SEASONS`. Give it a name, a blurb and a
    credit, and mark one look per season `default: true`. A new season needs

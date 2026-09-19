@@ -1628,15 +1628,25 @@ def _webp_chunks(data):
 
 @pytest.mark.parametrize("look", _look_ids())
 def test_every_look_ships_a_light_clean_photo_and_a_mark(look):
-    """Each look's photo exists, stays light enough for a phone on cellular,
-    and carries NO metadata: EXIF/XMP can hold GPS and camera serials, and
-    this repo is public (scripts/prep-season-photo.py strips it). A look with
-    no mark rule would leave an accent-coloured square by the wordmark."""
+    """Each look's photo exists, is sharp enough for the wall, and carries NO
+    metadata: EXIF/XMP can hold GPS and camera serials, and this repo is
+    public (scripts/prep-season-photo.py strips it). Sharp means 2560px wide:
+    a softened, 1920px aspen photo read as blur on the wall ("some of the
+    pics look blurry"), so width is pinned and the size cap is generous. A
+    look with no mark rule would leave an accent-coloured square by the
+    wordmark."""
     photo = STATIC / "seasons" / f"{look}.webp"
     assert photo.is_file(), f"missing seasons/{look}.webp"
     data = photo.read_bytes()
-    assert len(data) < 600 * 1024, f"{photo.name} is {len(data) // 1024} KB; re-run prep-season-photo.py"
+    assert len(data) < 2600 * 1024, f"{photo.name} is {len(data) // 1024} KB; try --quality 76"
     chunks = _webp_chunks(data)
+    vp8 = data.index(b"VP8 ") if b"VP8 " in data else -1
+    assert vp8 > 0, f"{photo.name} is not a lossy WebP (prep-season-photo.py writes VP8)"
+    # VP8 key frame: 3-byte tag + start code 9d 01 2a, then 14-bit width/height
+    frame = data[vp8 + 8:]
+    assert frame[3:6] == b"\x9d\x01\x2a", f"{photo.name}: unexpected VP8 header"
+    width = int.from_bytes(frame[6:8], "little") & 0x3FFF
+    assert width >= 2560, f"{photo.name} is {width}px wide; re-run prep-season-photo.py at 2560 (no softening)"
     assert not {b"EXIF", b"XMP "} & set(chunks), f"{photo.name} still carries metadata {chunks}"
     assert re.search(rf'\[data-look="{re.escape(look)}"\] \.season-mark[^{{]*\{{[^}}]*--mark:', CSS), \
         f"{look} has no seasonal mark"

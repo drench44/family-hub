@@ -31,6 +31,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   domain (National Park Service) and CC0, and the leaf shapes come from
   Twemoji (CC-BY 4.0) and Phosphor Icons (MIT), all credited in
   `static/seasons/CREDITS.md`.
+- The photos ship sharp: 2560px wide, never softened, so leaves and bark
+  stay crisp on the wall and on a phone's zoomed-in view. A test fails any
+  photo narrower than that.
 - Each look's Settings tile names the photographer, for example "Photo by
   Patrick Myers, NPS".
 - The seasonal art under `/seasons/` is served `no-cache`, so a phone picks up
