@@ -3859,24 +3859,18 @@ function pickedLook(seasonId) {
   return typeof seasonLook === 'function' ? seasonLook(seasonId) : null;
 }
 
-// The scene's layers, bare: every colour, shape and placement comes from the
-// look's CSS (styles.css "seasonal looks"). Spans rather than divs so the same
-// markup can sit inside a Settings tile <button>. The leaves: six that fall
-// (two with the slender leaf shape) and two big soft ones up close.
+// The scene layer, bare: the illustration itself is the .season background
+// (the look's --sn-scene), and every leaf's colour, placement and speed comes
+// from styles.css. Spans rather than divs so the same markup can sit inside a
+// Settings tile <button>. The leaves (every fall look): six that fall, two with
+// the slender leaf shape, and two big soft ones up close.
 function seasonSceneHtml() {
   const leaf = (cls) => `<span class="sn-leaf ${cls}"><b></b></span>`;
   return '<span class="season" aria-hidden="true">'
-    + '<span class="sn-layer sn-glow"></span>'
-    + '<span class="sn-layer sn-ridge sn-r1"></span>'
-    + '<span class="sn-layer sn-mist"></span>'
-    + '<span class="sn-layer sn-ridge sn-r2"></span>'
-    + '<span class="sn-layer sn-ridge sn-r3"></span>'
-    + '<span class="sn-layer sn-ridge sn-r4"></span>'
     + '<span class="sn-leaves">'
     + leaf('fall') + leaf('fall slender') + leaf('fall') + leaf('fall')
     + leaf('fall slender') + leaf('fall') + leaf('near') + leaf('near')
     + '</span>'
-    + '<span class="sn-layer sn-grain"></span>'
     + '</span>';
 }
 
@@ -3907,7 +3901,9 @@ function seasonalCardHtml() {
     + '<span class="look-card"><span class="look-mark"></span>'
     + '<span class="look-card-line short"></span><span class="look-card-line"></span></span>'
     + '</span>'
-    + `<span class="look-label"><span class="look-name">${escapeHtml(look.name)}</span>`
+    + `<span class="look-label"><span class="look-name">${escapeHtml(look.name)}`
+    + (look.style ? `<span class="look-style">${escapeHtml(look.style)}</span>` : '')
+    + '</span>'
     + `<span class="look-blurb">${escapeHtml(look.blurb || '')}</span></span>`
     + '</button>';
   const groups = seasonList().map((s) => '<div class="look-season">'

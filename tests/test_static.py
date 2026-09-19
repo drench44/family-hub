@@ -1576,12 +1576,12 @@ def _look_ids():
     return ids
 
 
-# every look repaints these; good/warn/crit stay the theme family's status hues
+# every look repaints these; good/warn/crit stay the theme family's status hues.
+# --sn-scene is the illustration; the leaf tokens colour the drifting leaves.
 _LOOK_TOKENS = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                 "--ink", "--dim", "--faint", "--accent", "--accent-ink",
-                "--accent-soft", "--shadow", "--sn-sky-1", "--sn-sky-2",
-                "--sn-sky-3", "--sn-glow", "--sn-r1", "--sn-r1b", "--sn-r2",
-                "--sn-r2b", "--sn-grain"]
+                "--accent-soft", "--shadow", "--sn-scene", "--sn-leaf-1",
+                "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
 
 
 def _block_after(selector_start):
@@ -1590,68 +1590,59 @@ def _block_after(selector_start):
 
 
 @pytest.mark.parametrize("look", _look_ids())
-def test_every_look_has_a_dark_and_a_daytime_palette(look):
-    """Both flavours of every look, each carrying every token it must repaint.
-    The wall selectors are (0,4,0) so they beat every theme+accent block (max
-    0,3,0) whatever the file order; the preview tile shares the same block."""
-    dark = f':root[data-look="{look}"][data-theme][data-accent]'
+def test_every_look_has_an_evening_and_a_daytime_palette(look):
+    """Both versions of every look, each carrying every token it must repaint,
+    and each pointing at ITS OWN scene file (evening art for the dark themes,
+    daytime art for Light/Soft). The wall selectors are (0,4,0) so they beat
+    every theme+accent block (max 0,3,0) whatever the file order; the preview
+    tile shares the same block."""
+    eve = f':root[data-look="{look}"][data-theme][data-accent]'
     day = f':root[data-look="{look}"][data-accent]:is([data-theme="light"],[data-theme="soft"])'
-    for sel in (dark, day):
+    for sel, variant in ((eve, "eve"), (day, "day")):
         assert sel in CSS, f"missing palette block: {sel}"
         body = _block_after(sel)
         for tok in _LOOK_TOKENS:
             assert re.search(rf"{re.escape(tok)}\s*:", body), f"{sel} never sets {tok}"
-    # dark and day are BOTH (0,4,0) and the dark selector also matches Light and
-    # Soft: the day block wins only by coming later in the file
-    assert CSS.index(day) > CSS.index(dark), f"{look}: the daytime palette must follow the dark one"
-    # a layer the look SHOWS must be coloured by the look, or it silently paints
-    # the neutral :root defaults
-    shown = {m.group(1) for m in re.finditer(
-        rf'\[data-look="{re.escape(look)}"\] body > \.season \.sn-([\w-]+)', CSS)}
-    need = []
-    if "ridge" in shown:
-        need += ["--sn-r3", "--sn-r3b", "--sn-r4", "--sn-r4b"]
-    for n in (3, 4):
-        if f"r{n}" in shown:
-            need += [f"--sn-r{n}", f"--sn-r{n}b"]
-    if "mist" in shown:
-        need.append("--sn-mist")
-    if "leaves" in shown:
-        need += ["--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
-    for sel in (dark, day):
-        body = _block_after(sel)
-        for tok in need:
-            assert re.search(rf"{re.escape(tok)}\s*:", body), f"{look} shows a layer but {sel} never sets {tok}"
+        assert f'--sn-scene:url("seasons/{look}-{variant}.svg")' in body, \
+            f"{sel} must paint seasons/{look}-{variant}.svg"
+    # evening and day are BOTH (0,4,0) and the evening selector also matches
+    # Light and Soft: the day block wins only by coming later in the file
+    assert CSS.index(day) > CSS.index(eve), f"{look}: the daytime palette must follow the evening one"
     assert f'.look-swatch[data-look="{look}"] {{' in CSS or \
         f'.look-swatch[data-look="{look}"],' in CSS or \
         f'.look-swatch[data-look="{look}"]\n' in CSS, f"{look} preview tile has no palette"
 
 
 @pytest.mark.parametrize("look", _look_ids())
-def test_every_look_paints_a_scene_and_a_mark(look):
-    """A look with a palette but no scene rules would paint a blank sky; one
-    with no mark rule would leave an accent-coloured square by the wordmark."""
-    assert f':root[data-look="{look}"] body > .season .sn-r1' in CSS or \
-        f':root[data-look="{look}"] body > .season .sn-ridge' in CSS, f"{look} shows no ridges"
-    assert f'.look-swatch[data-look="{look}"] .sn-r1' in CSS or \
-        f'.look-swatch[data-look="{look}"] .sn-ridge' in CSS, f"{look} preview shows no ridges"
+def test_every_look_has_its_scenes_and_a_mark(look):
+    """A look whose scene file is missing paints a flat ground; one with no mark
+    rule would leave an accent-coloured square by the wordmark."""
+    for variant in ("day", "eve"):
+        assert (STATIC / "seasons" / f"{look}-{variant}.svg").is_file(), f"missing seasons/{look}-{variant}.svg"
     assert re.search(rf'\[data-look="{re.escape(look)}"\] \.season-mark[^{{]*\{{[^}}]*--mark:', CSS), \
         f"{look} has no seasonal mark"
 
 
+def test_the_scene_and_its_preview_paint_the_look_token():
+    """The wall layer and the Settings preview both paint var(--sn-scene), so a
+    preview always shows exactly the art the wall will."""
+    assert re.search(r"body > \.season \{[^}]*background:[^;]*var\(--sn-scene\)[^;]*cover", CSS)
+    assert re.search(r"\.look-swatch \{[^}]*background:[^;]*var\(--sn-scene\)[^;]*cover", CSS)
+
+
 def test_season_art_files_exist_and_are_credited():
     """Every url("seasons/...") the stylesheet asks for ships in the repo (a
-    missing mask renders the layer as a solid block), and every file not made
-    by this repo's generator is listed in CREDITS.md with its licence."""
+    missing file paints nothing), and every file not made by this repo's
+    generator is listed in CREDITS.md with its licence."""
     seasons = STATIC / "seasons"
     for ref in set(re.findall(r'url\("seasons/([^"]+)"\)', CSS)):
         assert (seasons / ref).is_file(), f"styles.css references missing seasons/{ref}"
     credits = (seasons / "CREDITS.md").read_text()
     for f in seasons.iterdir():
-        if f.name == "CREDITS.md" or re.search(r"-ridge-\d+\.svg$", f.name):
+        if f.name == "CREDITS.md" or re.search(r"-(day|eve)\.svg$", f.name):
             continue
         assert f"`{f.name}`" in credits, f"seasons/{f.name} is not in CREDITS.md"
-    assert "`*-ridge-*.svg`" in credits
+    assert "`*-day.svg`, `*-eve.svg`" in credits
 
 
 def test_season_scene_sits_behind_and_never_takes_a_tap():
