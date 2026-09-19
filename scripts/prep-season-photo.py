@@ -18,10 +18,11 @@ allowed, how to pick an image that works behind the cards, and what to put
 in static/seasons/CREDITS.md.
 """
 import argparse
+import io
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageCms, ImageFilter, ImageOps
 
 REPO = Path(__file__).resolve().parents[1]
 OUT_DIR = REPO / "src" / "family_hub" / "web" / "static" / "seasons"
@@ -41,6 +42,13 @@ def main(argv):
         return 2
     img = Image.open(src)
     img = ImageOps.exif_transpose(img)       # honour camera rotation before the tags go
+    # Convert to sRGB BEFORE the profile is dropped: an Adobe RGB or Display P3
+    # original (common in park-service exports) shown as if it were sRGB comes
+    # out washed out. The profile itself is not written to the output.
+    icc = img.info.get("icc_profile")
+    if icc:
+        img = ImageCms.profileToProfile(img, ImageCms.ImageCmsProfile(io.BytesIO(icc)),
+                                        ImageCms.createProfile("sRGB"), outputMode="RGB")
     img = img.convert("RGB")                  # drops alpha/CMYK/palette; WebP wants RGB
     if img.width > args.width:
         img = img.resize((args.width, round(img.height * args.width / img.width)), Image.LANCZOS)

@@ -1657,7 +1657,7 @@ def test_glass_keeps_every_section_readable_and_stays_off_fixed_elements():
     keeps it), and none of the glass targets is a fixed/sticky element (the
     iOS tap-through trap in CLAUDE.md)."""
     for target in (".card", ".expand", ".shead h2", ".topbar"):
-        assert re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) '
+        assert re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)( \.wrap)?\) '
                          + re.escape(target) + r"[^{]*\{[^}]*backdrop-filter", CSS), \
             f"{target} must be glass while a look paints"
     for fixed in (".tabbar", ".overlay", ".theme-pop", ".season"):
@@ -1666,6 +1666,15 @@ def test_glass_keeps_every_section_readable_and_stays_off_fixed_elements():
     # bright photo (caught on Misty Road in Light); they use --faint instead
     assert re.search(r'\.chore-check,\s*:where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) '
                      r'\.todo-check \{ border-color: var\(--faint\); \}', CSS)
+    # glass makes the top bar a stacking context that traps the gear popover:
+    # the bar itself must sit above the glass cards or they cover the popover
+    tb = re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\)\) \.topbar \{([^}]*)\}', CSS)
+    z = tb and re.search(r"z-index:\s*(\d+)", tb.group(1))
+    overlay = re.search(r"\.overlay \{[^}]*z-index:\s*(\d+)", CSS)
+    assert z and "position: relative" in tb.group(1) and overlay, \
+        "the glass top bar must be lifted (position + z-index) above the glass cards"
+    assert 0 < int(z.group(1)) < int(overlay.group(1)), \
+        "lifted above the cards, but still under the full-screen overlay"
     # the phone's top row is full: the glass bar's padding must shrink there,
     # or the whole phone page spills sideways (it did, by 31px)
     assert re.search(r'@media \(max-width: 1000px\) \{[^}]*\[data-look\]:not\(\[data-look="none"\]\) '

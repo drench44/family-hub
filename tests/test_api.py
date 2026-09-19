@@ -201,7 +201,7 @@ def test_hub_theme_season_survives(tmp_path, monkeypatch):
 
 
 def test_seasonal_art_revalidates(tmp_path, monkeypatch):
-    """The seasonal SVGs are referenced from inside styles.css, where no ?v=
+    """The seasonal photos are referenced from inside styles.css, where no ?v=
     reaches them, and a photo can be swapped under the same name: they must revalidate
     or phones keep stale art after a release. Other static assets keep their
     existing (?v=-busted) caching."""

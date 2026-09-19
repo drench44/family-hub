@@ -12,9 +12,9 @@ slightly to keep the file small.
 
 | File | Photo | Source | Licence |
 | --- | --- | --- | --- |
-| `fall-aspen-grove.webp` | "Golden Aspens, Mosca Pass Trail", National Park Service, Great Sand Dunes National Park and Preserve | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Golden_Aspens,_Mosca_Pass_Trail_(36725223263).jpg) | Public domain (work of the US federal government) |
+| `fall-aspen-grove.webp` | "Golden Aspens, Mosca Pass Trail", Patrick Myers, National Park Service (Great Sand Dunes National Park and Preserve) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Golden_Aspens,_Mosca_Pass_Trail_(36725223263).jpg) | Public domain (work of the US federal government) |
 | `fall-misty-road.webp` | "Foggy fall road", Bernd Schulz | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Foggy_fall_road_(Unsplash).jpg) (from Unsplash, 2016) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (published under Unsplash's CC0 terms, before its 2017 licence change) |
-| `fall-maple-light.webp` | "Fall Foliage October 28, 2024", National Park Service, Shenandoah National Park | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Fall_Foliage_October_28,_2024.jpg) | Public domain (work of the US federal government) |
+| `fall-maple-light.webp` | "Fall Foliage October 28, 2024", Luca Pfeiffer, National Park Service (Shenandoah National Park) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Fall_Foliage_October_28,_2024.jpg) | Public domain (work of the US federal government) |
 
 ## Shapes
 
