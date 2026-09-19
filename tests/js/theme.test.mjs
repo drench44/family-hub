@@ -347,12 +347,12 @@ test('setSeason(off) takes the look down immediately', () => {
 
 test('setSeasonLook stores the favourite for ITS season and turns seasons on', () => {
   const { root, localStorage, win } = loadTheme();
-  win.setSeasonLook('fall-maple-light');
-  assert.equal(localStorage.getItem('fh.look.fall'), 'fall-maple-light');
+  win.setSeasonLook('fall-maple-sky');
+  assert.equal(localStorage.getItem('fh.look.fall'), 'fall-maple-sky');
   assert.equal(localStorage.getItem('fh.season'), 'on');
   assert.equal(root.getAttribute('data-season'), 'on');
-  assert.equal(win.refreshLook(day(10, 20)), 'fall-maple-light');
-  assert.equal(win.seasonLook('fall'), 'fall-maple-light');
+  assert.equal(win.refreshLook(day(10, 20)), 'fall-maple-sky');
+  assert.equal(win.seasonLook('fall'), 'fall-maple-sky');
 });
 
 test('a stored favourite survives a reload', () => {
@@ -445,7 +445,7 @@ test('picking a look saves "on" as this device\'s own choice, even under a house
   // not undo a look the family deliberately picked on this device
   const { localStorage, win } = loadTheme({ fhTheme: { season: 'on' } });
   assert.equal(localStorage.getItem('fh.season'), null);
-  win.setSeasonLook('fall-maple-light');
+  win.setSeasonLook('fall-maple-sky');
   assert.equal(localStorage.getItem('fh.season'), 'on');
 });
 
@@ -463,8 +463,8 @@ test('setSeason(on) repaints immediately in season, and stays none out of season
 
 test('setSeasonLook repaints immediately with the picked look', () => {
   const { root, win } = loadTheme({ now: day(10, 15) });
-  win.setSeasonLook('fall-maple-light');
-  assert.equal(root.getAttribute('data-look'), 'fall-maple-light');
+  win.setSeasonLook('fall-maple-sky');
+  assert.equal(root.getAttribute('data-look'), 'fall-maple-sky');
   win.setSeasonLook('fall-aspen-grove');
   assert.equal(root.getAttribute('data-look'), 'fall-aspen-grove');
 });
@@ -477,8 +477,8 @@ test('the house stampSeason repaints immediately too (applyHouseTheme runs after
 });
 
 test('first paint derives the look from a stored "on" and today', () => {
-  const { root } = loadTheme({ storage: { 'fh.season': 'on', 'fh.look.fall': 'fall-maple-light' }, now: day(11, 1) });
-  assert.equal(root.getAttribute('data-look'), 'fall-maple-light');
+  const { root } = loadTheme({ storage: { 'fh.season': 'on', 'fh.look.fall': 'fall-maple-sky' }, now: day(11, 1) });
+  assert.equal(root.getAttribute('data-look'), 'fall-maple-sky');
 });
 
 test('refreshLook with a missing or invalid date falls back to now', () => {

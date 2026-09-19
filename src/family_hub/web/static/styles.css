@@ -2691,25 +2691,25 @@ body.integ-off-todos .todo-slot { display: none; }
   --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
 }
 
-/* ---- Maple Light: backlit maple leaves up close (NPS, public domain) ---- */
-:root[data-look="fall-maple-light"][data-theme][data-accent],
-.look-swatch[data-look="fall-maple-light"] {
+/* ---- Maple Sky: a maple canopy against clear blue sky (Aaron Burden, CC0) ---- */
+:root[data-look="fall-maple-sky"][data-theme][data-accent],
+.look-swatch[data-look="fall-maple-sky"] {
   --ground:#20242C; --surface:#1C2027; --surface-2:#262B33; --edge:#3A404A; --edge-soft:#2C3139;
   --ink:#F6F3EF; --dim:#CBC7C2; --faint:#8F8B86;
   --shadow:0 1px 2px rgba(0,0,0,.35), 0 14px 36px rgba(0,0,0,.30);
   --accent:#FF8C4A; --accent-ink:#2A1000; --accent-soft:rgba(255,140,74,.18);
-  --sn-scene:url("seasons/fall-maple-light.webp"); --sn-pos:center 40%;
+  --sn-scene:url("seasons/fall-maple-sky.webp"); --sn-pos:center 25%;
   --sn-wash:linear-gradient(180deg, rgba(10,12,22,.50) 0%, rgba(10,12,22,.28) 40%, rgba(10,12,22,.44) 100%);
   --glass:rgba(20,23,29,.68); --glass-edge:rgba(255,255,255,.10);
   --sn-leaf-1:#F07A2E; --sn-leaf-2:#F5A142; --sn-leaf-3:#D9502A; --sn-leaf-4:#F6C45A;
 }
-:root[data-look="fall-maple-light"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
-:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-maple-light"] {
+:root[data-look="fall-maple-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-maple-sky"] {
   --ground:#E9EEF2; --surface:#FFFFFF; --surface-2:#F3F5F7; --edge:#DCE2E8; --edge-soft:#E8ECF0;
   --ink:#1D2026; --dim:#525862; --faint:#858B95;
   --shadow:0 1px 2px rgba(10,20,40,.08), 0 14px 36px rgba(10,20,40,.14);
   --accent:#CC4F16; --accent-ink:#FFFFFF; --accent-soft:rgba(204,79,22,.12);
-  --sn-scene:url("seasons/fall-maple-light.webp"); --sn-pos:center 40%;
+  --sn-scene:url("seasons/fall-maple-sky.webp"); --sn-pos:center 25%;
   --sn-wash:linear-gradient(180deg, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
   --glass:rgba(255,255,255,.80); --glass-edge:rgba(255,255,255,.55);
   --sn-leaf-1:#F07A2E; --sn-leaf-2:#F5A142; --sn-leaf-3:#D9502A; --sn-leaf-4:#F6C45A;
@@ -2816,8 +2816,8 @@ body.integ-off-todos .todo-slot { display: none; }
 .look-swatch[data-look="fall-aspen-grove"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
 [data-look="fall-misty-road"] .season-mark,
 .look-swatch[data-look="fall-misty-road"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
-[data-look="fall-maple-light"] .season-mark,
-.look-swatch[data-look="fall-maple-light"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-maple-sky"] .season-mark,
+.look-swatch[data-look="fall-maple-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 
 /* While a look paints, it owns the accent: the swatches step back and say why. */
 .look-accent-note { display: none; font-size: 12px; color: var(--faint); }

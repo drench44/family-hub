@@ -37,7 +37,7 @@ at one URL.
   on it as frosted glass, with a few leaves drifting down behind the cards, a
   matching accent, and a small mark beside the wordmark. Fall (Sep 1 to
   Nov 30) offers **Aspen Grove** (the default), **Misty Road** and **Maple
-  Light**, picked per device under **All settings → Seasonal looks** from
+  Sky**, picked per device under **All settings → Seasonal looks** from
   live preview tiles. Light and Soft show the photo bright and airy; Blue,
   Grey and Black show it at dusk. The leaves pause at night and stop for
   reduced motion, and the photos (public domain and CC0) ship inside the app.
