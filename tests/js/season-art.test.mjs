@@ -43,3 +43,19 @@ test('every generated ridge is one closed path in a stretchable viewBox', () => 
     assert.match(svg, /Z"\/><\/svg>\n$/, `${f} closes its path`);
   }
 });
+
+test('every ridge tiles seamlessly: the land line ends at the height it starts', () => {
+  // mask-repeat: repeat-x shows a step at every tile edge otherwise; the
+  // byte-for-byte test would happily lock in a generator that broke this
+  for (const f of readdirSync(committed).filter((n) => /-ridge-\d+\.svg$/.test(n))) {
+    const d = readFileSync(join(committed, f), 'utf8').match(/ d="([^"]+)"/)[1];
+    const land = d.slice(0, d.indexOf(' Z') + 2);   // the hill; trees follow as more subpaths
+    const start = Number(land.match(/^M0 600 L0 (-?\d+)/)[1]);
+    const end = Number(land.match(/L2400 (-?\d+) L2400 600 Z$/)[1]);
+    assert.ok(Math.abs(start - end) <= 1, `${f} starts at y=${start} but ends at y=${end}`);
+    // trees wrapped past an edge stay within one tile either side
+    for (const x of d.matchAll(/[ML](-?\d+) /g)) {
+      assert.ok(Number(x[1]) >= -2400 && Number(x[1]) <= 4800, `${f} has a stray x=${x[1]}`);
+    }
+  }
+});

@@ -1569,7 +1569,9 @@ def test_month_lane_count_matches_css_row_template():
 def _look_ids():
     theme = (STATIC / "theme.js").read_text()
     reg = theme[theme.index("var SEASONS = ["):theme.index("var SEASON_PREFS")]
-    ids = re.findall(r'\{ id: "([a-z]+-[a-z]+)"', reg)
+    # every hyphenated id is a look (season ids are bare words, pinned by
+    # theme.test.mjs "the season registry is well formed")
+    ids = [i for i in re.findall(r'\bid: "([^"]+)"', reg) if "-" in i]
     assert ids, "no look ids found in theme.js SEASONS"
     return ids
 
@@ -1599,6 +1601,27 @@ def test_every_look_has_a_dark_and_a_daytime_palette(look):
         body = _block_after(sel)
         for tok in _LOOK_TOKENS:
             assert re.search(rf"{re.escape(tok)}\s*:", body), f"{sel} never sets {tok}"
+    # dark and day are BOTH (0,4,0) and the dark selector also matches Light and
+    # Soft: the day block wins only by coming later in the file
+    assert CSS.index(day) > CSS.index(dark), f"{look}: the daytime palette must follow the dark one"
+    # a layer the look SHOWS must be coloured by the look, or it silently paints
+    # the neutral :root defaults
+    shown = {m.group(1) for m in re.finditer(
+        rf'\[data-look="{re.escape(look)}"\] body > \.season \.sn-([\w-]+)', CSS)}
+    need = []
+    if "ridge" in shown:
+        need += ["--sn-r3", "--sn-r3b", "--sn-r4", "--sn-r4b"]
+    for n in (3, 4):
+        if f"r{n}" in shown:
+            need += [f"--sn-r{n}", f"--sn-r{n}b"]
+    if "mist" in shown:
+        need.append("--sn-mist")
+    if "leaves" in shown:
+        need += ["--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
+    for sel in (dark, day):
+        body = _block_after(sel)
+        for tok in need:
+            assert re.search(rf"{re.escape(tok)}\s*:", body), f"{look} shows a layer but {sel} never sets {tok}"
     assert f'.look-swatch[data-look="{look}"] {{' in CSS or \
         f'.look-swatch[data-look="{look}"],' in CSS or \
         f'.look-swatch[data-look="{look}"]\n' in CSS, f"{look} preview tile has no palette"
@@ -1654,13 +1677,17 @@ def test_season_motion_stops_for_reduced_motion_and_pauses_at_night():
     override must come AFTER them or it loses the cascade at equal
     specificity (the main reduced-motion block is too early). Night pauses
     the leaves: nobody needs them falling in a dark kitchen."""
-    last_anim = CSS.rindex("animation: sn-")
+    last_anim = max(m.start() for m in re.finditer(r"animation(?:-name)?:\s*[^;]*\bsn-", CSS))
     blocks = [m for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\) \{", CSS)]
     assert blocks and blocks[-1].start() > last_anim, \
         "a reduced-motion block must follow the last seasonal animation rule"
     tail = CSS[blocks[-1].start():]
+    block = tail[:tail.index("\n}")]
     for sel in (".sn-leaf.fall", ".sn-leaf b", "body > .season"):
-        assert sel in tail[:tail.index("\n}")], f"reduced motion must stop {sel}"
+        assert sel in block, f"reduced motion must stop {sel}"
+    assert re.search(r"animation:\s*none", block), "the block must actually switch the animations off"
+    assert re.search(r"\.sn-leaf\.fall \{ top: var\(--y\); \}", block), \
+        "still leaves must rest at their own spots, not stack at the top"
     assert re.search(r"\.is-night \.sn-leaf[^{]*\{[^}]*animation-play-state:\s*paused", CSS)
     # blur on a masked element must sit on its PARENT: filter runs before mask
     assert re.search(r"\.sn-leaf\.near \{ filter: blur", CSS)
@@ -1673,8 +1700,24 @@ def test_season_controls_are_wired_in_the_popover_and_config():
     assert 'class="season-mark"' in index, "the wordmark's seasonal mark"
     assert 'class="look-accent-note"' in index, "the swatches say why they stepped back"
     assert 'class="theme-pop-sep"' in index, "look settings and screen settings are split"
-    # the season row sits with the look controls, above the divider
+    # inside the popover's .theme-ctl (the click route is scoped to it), with
+    # the look controls, above the divider
+    pop = index[index.index('id="theme-pop"'):]
+    ctl = pop[pop.index('class="theme-ctl"'):pop.index("data-open-settings")]
+    assert 'data-season-set="on"' in ctl, "the Season row must sit inside the popover .theme-ctl"
     assert index.index('data-season-set="on"') < index.index('class="theme-pop-sep"') \
         < index.index('data-layout-set="auto"')
     config = (ROOT / "src" / "family_hub" / "config.py").read_text()
     assert re.search(r'"season":\s*\{"on", "off"\}', config), "config.py must accept theme.season"
+
+
+def test_every_season_surface_is_hidden_by_default():
+    """What every default install sees: no look, so no scene, no mark by the
+    wordmark (else an accent-coloured square), no accent note. Each hidden rule
+    pairs with the rule that shows it while a look paints."""
+    show = ':root[data-look]:not([data-look="none"])'
+    for cls in ("season", "season-mark", "look-accent-note"):
+        assert re.search(rf"(?m)^\.{re.escape(cls)} \{{ display: none;", CSS), f".{cls} must default hidden"
+    assert f"{show} body > .season {{" in CSS
+    assert f"{show} .season-mark {{" in CSS
+    assert f"{show} .look-accent-note {{ display: block; }}" in CSS

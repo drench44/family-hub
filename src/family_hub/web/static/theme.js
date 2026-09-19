@@ -193,16 +193,18 @@
   //
   // SEASONS is the one registry: the Settings tiles, the date windows and the
   // allowed look ids all come from it. To add a season, add an entry here, its
-  // token blocks + scene rules in styles.css, and its id to config.py's
-  // SEASON_LOOKS guard list. Order matters: the FIRST season whose window holds
-  // today wins, so a short holiday (Halloween inside fall, say) must be listed
-  // BEFORE the broad season it sits in. A window may wrap the new year
-  // (from Dec 1 to Feb 28 works). Dates are [month, day], both 1-based.
+  // token blocks + scene rules in styles.css (test_static.py fails until every
+  // look has them), and its art in static/seasons/ with a CREDITS.md line.
+  // The server never sees look ids, only on/off. Order matters: the FIRST
+  // season whose window holds today wins, so a short holiday (Halloween
+  // inside fall, say) must be listed BEFORE the broad season it sits in. A
+  // window may wrap the new year (from Dec 1 to Feb 28 works). Dates are
+  // [month, day], both 1-based.
   var SEASONS = [
     { id: "fall", name: "Fall", from: [9, 1], to: [11, 30], looks: [
       { id: "fall-harvest", name: "Harvest", blurb: "Rolling hills at golden hour" },
       { id: "fall-maple", name: "Maple", blurb: "Maple leaves drifting down" },
-      { id: "fall-woodland", name: "Woodland", blurb: "Misty ridges of pine" },
+      { id: "fall-woodland", name: "Woodland", blurb: "Misty ridges of spruce" },
     ] },
   ];
   var SEASON_PREFS = ["on", "off"];
@@ -236,10 +238,14 @@
     for (var i = 0; i < SEASONS.length; i++) if (inWindow(SEASONS[i], date)) return SEASONS[i];
     return null;
   }
-  // The look a season paints on this device: the device's stored favourite if
-  // it is still one of the season's looks, else the season's first look.
+  // This session's picks, held in memory as well as storage: on a kiosk WebView
+  // where setItem throws, a tap must still repaint now (the same "the CURRENT
+  // session is correct" promise writeStored makes for every other pref).
+  var lookPicks = {};
+  // The look a season paints on this device: the device's favourite if it is
+  // still one of the season's looks, else the season's first look.
   function lookFor(season) {
-    var fav = readStored("fh.look." + season.id);
+    var fav = lookPicks[season.id] || readStored("fh.look." + season.id);
     for (var i = 0; i < season.looks.length; i++) if (season.looks[i].id === fav) return fav;
     return season.looks[0].id;
   }
@@ -269,16 +275,17 @@
     refreshLook();
   }
   // Remember a look as this device's favourite for ITS season. Choosing a look
-  // is also a clear "I want seasonal looks", so it turns the season pref on.
+  // is also a clear "I want seasonal looks", so it turns the season pref on AND
+  // saves that as this device's own choice (even when a house default already
+  // stamped "on": otherwise a later house change to "off" would undo the pick).
   // Out-of-season picks are kept and paint once their season comes round.
   function setSeasonLook(lookId) {
     var season = seasonOfLook(lookId);
     if (!season) return;
+    lookPicks[season.id] = lookId;
     writeStored("fh.look." + season.id, lookId);
-    if (root.getAttribute("data-season") !== "on") {
-      writeStored("fh.season", "on");
-      stampSeason("on");
-    }
+    writeStored("fh.season", "on");
+    stampSeason("on");
     refreshLook();
   }
   // The look a season would paint on this device right now (for the Settings

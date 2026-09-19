@@ -27,6 +27,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   regenerates it and compares it with the committed files. The leaf and mark
   shapes come from Twemoji (CC-BY 4.0) and Phosphor Icons (MIT), credited in
   `static/seasons/CREDITS.md`.
+- The seasonal art under `/seasons/` is served `no-cache`, so a phone picks up
+  new art after a release instead of keeping old copies. The stylesheet points
+  at these files directly, where no `?v=` can reach them.
 
 ### Changed
 - Settings is regrouped. **Display** keeps Theme, Accent and Columns, the new
@@ -34,6 +37,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   Layout and Auto-return move to their own **This screen** card, since they
   are about how one device behaves rather than how the hub looks. The gear
   popover gains a Season row and a thin divider between the same two groups.
+- While a seasonal look shows, the Accent swatches dim and ignore taps, with a
+  short note saying the look sets the color. Your accent comes back as it was
+  when the look ends.
 
 ## [1.4.1] — 2026-09-17
 
