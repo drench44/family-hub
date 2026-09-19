@@ -57,9 +57,11 @@ follow [`docs/seasonal-looks.md`](docs/seasonal-looks.md): the owner's bar,
 what failed and why (home-made illustrations were rejected three times; only
 real public-domain photos and art ship), what comparable products do, the
 glass and readability standards, which sources and licences are allowed in
-this public repo, and the step-by-step for a new look. Don't draw scenes in
-code, and look at every look full-size in light and dark before calling it
-done.
+this public repo, the step-by-step for a new look, and the lessons from the
+fall build. Don't draw scenes in code. Show the owner real candidates and
+let them pick. Look at every look × all five themes full size, plus
+seasons-off, night, reduced motion, phone and the open popover, before
+calling it done.
 
 ## Testing the wall layout visually
 
