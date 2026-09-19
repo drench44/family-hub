@@ -33,19 +33,17 @@ at one URL.
   and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
 - **Seasonal looks:** turn **Season** on in the gear menu and the wall follows
-  the calendar with an illustrated scene behind the cards, leaves drifting
-  down, a matching palette and accent, and a small mark beside the wordmark.
-  Every season comes in the same three styles, from calm to lively, picked per
-  device under **All settings → Seasonal looks** from live preview tiles. For
-  fall (Sep 1 to Nov 30) that's **Golden Hills** (Minimal, soft gradient
-  hills), **Aspen Lake** (Scenic, a mountain lake among spruce and golden
-  aspens, the default) and **Pumpkin Farm** (Playful, a storybook farm).
-  Light and Soft get a sunny daytime version; Blue, Grey and Black get a
-  blue-hour evening with a moon and stars. The cards stay solid, the leaves
-  pause at night and stop for reduced motion, and the art ships inside the
-  app (no downloads). More seasons slot into one registry in `theme.js`.
+  the calendar: a real photograph fills the screen and the dashboard floats
+  on it as frosted glass, with a few leaves drifting down behind the cards, a
+  matching accent, and a small mark beside the wordmark. Fall (Sep 1 to
+  Nov 30) offers **Aspen Grove** (the default), **Misty Road** and **Maple
+  Light**, picked per device under **All settings → Seasonal looks** from
+  live preview tiles. Light and Soft show the photo bright and airy; Blue,
+  Grey and Black show it at dusk. The leaves pause at night and stop for
+  reduced motion, and the photos (public domain and CC0) ship inside the app.
+  Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
 
-  ![Fall seasonal looks](docs/seasons.png)
+  ![Fall seasonal looks](docs/seasons.jpg)
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
   hub in **Safari** and use Share → **Add to Home Screen** for a full-screen

@@ -50,6 +50,17 @@ cost this repo weeks of a silently-blank chart (`hourlyTemps`); the doc exists s
 that never repeats. The 5-day forecast strip waits on a `dailyForecast` array the
 feed does not yet emit — it renders only once the feed grows one.
 
+## Seasonal looks — read the standards before adding one
+
+Seasonal and holiday looks (fall today; Halloween, Christmas and more to come)
+follow [`docs/seasonal-looks.md`](docs/seasonal-looks.md): the owner's bar,
+what failed and why (home-made illustrations were rejected three times; only
+real public-domain photos and art ship), what comparable products do, the
+glass and readability standards, which sources and licences are allowed in
+this public repo, and the step-by-step for a new look. Don't draw scenes in
+code, and look at every look full-size in light and dark before calling it
+done.
+
 ## Testing the wall layout visually
 
 The wall is a FIXED-WIDTH desktop layout: `.wrap { width: 1920px }`. It does not

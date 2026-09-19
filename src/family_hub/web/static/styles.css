@@ -44,7 +44,8 @@
   --accent: #0E9BCF; --accent-ink: #FFFFFF; --accent-soft: rgba(14,155,207,.12);
   /* seasonal scene tokens (only painted while a look is active; each look's
      blocks near the end of the file set them — these are neutral defaults) */
-  --sn-scene: none;
+  --sn-scene: none; --sn-pos: center; --sn-wash: linear-gradient(transparent, transparent);
+  --glass: var(--surface); --glass-edge: var(--edge);
   --sn-leaf-1: #F58A2E; --sn-leaf-2: #F7B733; --sn-leaf-3: #EE6446; --sn-leaf-4: #FFD56B;
 }
 :root[data-accent="violet"] { --accent:#7A5AF0; --accent-soft:rgba(122,90,240,.12); }
@@ -2619,112 +2620,157 @@ body.integ-off-todos .todo-slot { display: none; }
 .hub-toast-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ======================== seasonal looks (fall) ========================
-   A seasonal look is an illustrated scene painted BEHIND the wall (drawn by
-   scripts/gen-season-art.mjs into static/seasons/<look>-day.svg / -eve.svg),
-   plus a palette for the cards, an accent and a small mark by the wordmark.
-   The cards stay solid; the scene shows in the top bar, the gutters and the
-   open space under short columns, the way widgets sit on a wallpaper.
-
-   Happy colors on purpose: daytime is blue sky and sunshine, and the evening
-   version (for Blue / Grey / Black) is blue hour with a golden horizon, a moon
-   and stars. Neither leans on red; an ember-red dusk read as "on fire".
+   A seasonal look fills the screen with a real photograph (or public-domain
+   artwork) and floats the wall on top of it as frosted glass, the way iPad
+   widgets sit on a wallpaper: the whole screen feels like the season, and
+   the cards, section titles and top bar stay readable because each one
+   blurs what is behind it. A wash between the photo and the UI keeps the
+   image calm: a light airy one for Light/Soft, a deeper dusk one for
+   Blue/Grey/Black (the same photo, so one file per look). Leaves drift down
+   behind the glass. Standards, sourcing rules and the how-to for new
+   seasons: docs/seasonal-looks.md.
 
    theme.js stamps data-look on <html> ("none" or a look id) before first
    paint; hub.js mounts the .season layer once at startup and builds the
-   Settings preview tiles, which paint the same scene through the same tokens.
-   Each look has TWO palettes: evening (Blue/Grey/Black) and daytime
-   (Light/Soft). The look supplies its own accent, so the Accent swatches step
-   back while it shows.
+   Settings preview tiles, which paint the same photo through the same tokens.
 
    Palette selectors are (0,4,0) so they beat every theme and theme+accent
    block above (max 0,3,0) regardless of order; the daytime block must come
    AFTER the evening one (same specificity, and the evening selector also
    matches Light/Soft). .look-swatch[data-look] is a Settings preview tile:
-   the same tokens scoped to the tile. */
+   the same tokens scoped to the tile. The glass rules use :where() so they
+   stay at the specificity of the plain .card rule they restyle: any section
+   that paints its own card background (today's calendar header, the
+   weather sky) keeps it. */
 
-/* ---- Harvest: a farm with a golden field, a barn and a pumpkin patch ---- */
-:root[data-look="fall-harvest"][data-theme][data-accent],
-.look-swatch[data-look="fall-harvest"] {
-  --ground:#141B30; --surface:#1B2340; --surface-2:#232C4C; --edge:#35416B; --edge-soft:#29325A;
-  --ink:#F5F2EC; --dim:#BCC2D8; --faint:#8089A8;
-  --shadow:0 1px 2px rgba(5,8,20,.45), 0 12px 32px rgba(5,8,25,.45);
-  --accent:#F6A83E; --accent-ink:#241500; --accent-soft:rgba(246,168,62,.16);
-  --sn-scene:url("seasons/fall-harvest-eve.svg");
-  --sn-leaf-1:#E0903A; --sn-leaf-2:#E3B24A; --sn-leaf-3:#D07445; --sn-leaf-4:#F2CF6B;
+/* ---- Aspen Grove: sunlit gold under a blue sky (NPS, public domain) ---- */
+:root[data-look="fall-aspen-grove"][data-theme][data-accent],
+.look-swatch[data-look="fall-aspen-grove"] {
+  --ground:#1A1C16; --surface:#1C1F24; --surface-2:#262A31; --edge:#3A3F48; --edge-soft:#2C3037;
+  --ink:#F7F4EC; --dim:#CFCBC0; --faint:#938F85;
+  --shadow:0 1px 2px rgba(0,0,0,.35), 0 14px 36px rgba(0,0,0,.30);
+  --accent:#F4C542; --accent-ink:#241B00; --accent-soft:rgba(244,197,66,.18);
+  --sn-scene:url("seasons/fall-aspen-grove.webp"); --sn-pos:center 35%;
+  --sn-wash:linear-gradient(180deg, rgba(8,10,20,.52) 0%, rgba(8,10,20,.26) 38%, rgba(8,10,20,.40) 100%);
+  --glass:rgba(20,22,27,.68); --glass-edge:rgba(255,255,255,.10);
+  --sn-leaf-1:#F4C542; --sn-leaf-2:#E8A92E; --sn-leaf-3:#F7D96A; --sn-leaf-4:#D98C2A;
 }
-:root[data-look="fall-harvest"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
-:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-harvest"] {
-  --ground:#EAF5FB; --surface:#FFFFFF; --surface-2:#F2F7FA; --edge:#D9E5EC; --edge-soft:#E7EFF4;
-  --ink:#1D2830; --dim:#51606C; --faint:#8593A0;
-  --shadow:0 1px 2px rgba(20,50,80,.08), 0 10px 28px rgba(20,50,80,.10);
-  --accent:#D9680F; --accent-ink:#FFFFFF; --accent-soft:rgba(217,104,15,.12);
-  --sn-scene:url("seasons/fall-harvest-day.svg");
-  --sn-leaf-1:#F58A2E; --sn-leaf-2:#F7B733; --sn-leaf-3:#F2733C; --sn-leaf-4:#FFD56B;
-}
-
-/* ---- Golden Hills (id fall-maple, Minimal): soft gradient hills ---- */
-:root[data-look="fall-maple"][data-theme][data-accent],
-.look-swatch[data-look="fall-maple"] {
-  --ground:#16193A; --surface:#1E2245; --surface-2:#272C52; --edge:#3A4178; --edge-soft:#2D3363;
-  --ink:#F6F2EE; --dim:#C0C2DC; --faint:#8387AC;
-  --shadow:0 1px 2px rgba(6,6,22,.45), 0 12px 32px rgba(6,6,28,.45);
-  --accent:#FF9A52; --accent-ink:#2A1200; --accent-soft:rgba(255,154,82,.16);
-  --sn-scene:url("seasons/fall-maple-eve.svg");
-  --sn-leaf-1:#D9803A; --sn-leaf-2:#DDA43A; --sn-leaf-3:#CE6A52; --sn-leaf-4:#F7C85E;
-}
-:root[data-look="fall-maple"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
-:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-maple"] {
-  --ground:#EAF5FB; --surface:#FFFFFF; --surface-2:#F4F7F3; --edge:#DDE6DA; --edge-soft:#EAF0E7;
-  --ink:#1F2A22; --dim:#536255; --faint:#87958A;
-  --shadow:0 1px 2px rgba(30,60,30,.08), 0 10px 28px rgba(30,60,30,.10);
-  --accent:#DC5A1E; --accent-ink:#FFFFFF; --accent-soft:rgba(220,90,30,.12);
-  --sn-scene:url("seasons/fall-maple-day.svg");
-  --sn-leaf-1:#F58A2E; --sn-leaf-2:#F7B733; --sn-leaf-3:#EE6446; --sn-leaf-4:#FFD56B;
+:root[data-look="fall-aspen-grove"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-aspen-grove"] {
+  --ground:#EFE3C0; --surface:#FFFFFF; --surface-2:#F5F2EA; --edge:#E4DDCB; --edge-soft:#EEE9DC;
+  --ink:#1F1D17; --dim:#57534A; --faint:#878274;
+  --shadow:0 1px 2px rgba(40,30,0,.08), 0 14px 36px rgba(40,30,0,.14);
+  --accent:#A57508; --accent-ink:#FFFFFF; --accent-soft:rgba(165,117,8,.13);
+  --sn-scene:url("seasons/fall-aspen-grove.webp"); --sn-pos:center 35%;
+  --sn-wash:linear-gradient(180deg, rgba(255,255,255,.24) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.08) 100%);
+  --glass:rgba(255,255,255,.80); --glass-edge:rgba(255,255,255,.55);
+  --sn-leaf-1:#F4C542; --sn-leaf-2:#E8A92E; --sn-leaf-3:#F7D96A; --sn-leaf-4:#D98C2A;
 }
 
-/* ---- Woodland: a mountain lake with spruce and golden aspens ---- */
-:root[data-look="fall-woodland"][data-theme][data-accent],
-.look-swatch[data-look="fall-woodland"] {
-  --ground:#0F1E2A; --surface:#162A37; --surface-2:#1D3443; --edge:#2E4B5E; --edge-soft:#233D4D;
-  --ink:#EEF4F4; --dim:#A9BFC6; --faint:#6F8A94;
-  --shadow:0 1px 2px rgba(2,10,16,.45), 0 12px 32px rgba(2,10,18,.45);
-  --accent:#F2C14E; --accent-ink:#221800; --accent-soft:rgba(242,193,78,.15);
-  --sn-scene:url("seasons/fall-woodland-eve.svg");
-  --sn-leaf-1:#E3B842; --sn-leaf-2:#F2D06A; --sn-leaf-3:#D9A43A; --sn-leaf-4:#F7DE8A;
+/* ---- Misty Road: fog and fallen leaves (Bernd Schulz, CC0) ---- */
+:root[data-look="fall-misty-road"][data-theme][data-accent],
+.look-swatch[data-look="fall-misty-road"] {
+  --ground:#1D1F22; --surface:#1D2024; --surface-2:#272B30; --edge:#3B4047; --edge-soft:#2D3136;
+  --ink:#F6F4F1; --dim:#CCC8C3; --faint:#918C86;
+  --shadow:0 1px 2px rgba(0,0,0,.35), 0 14px 36px rgba(0,0,0,.30);
+  --accent:#F29A5B; --accent-ink:#2A1200; --accent-soft:rgba(242,154,91,.18);
+  --sn-scene:url("seasons/fall-misty-road.webp"); --sn-pos:center 60%;
+  --sn-wash:linear-gradient(180deg, rgba(10,12,20,.58) 0%, rgba(10,12,20,.36) 40%, rgba(10,12,20,.50) 100%);
+  --glass:rgba(22,24,28,.68); --glass-edge:rgba(255,255,255,.10);
+  --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
 }
-:root[data-look="fall-woodland"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
-:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-woodland"] {
-  --ground:#E9F4F8; --surface:#FFFFFF; --surface-2:#F1F6F7; --edge:#D6E4E8; --edge-soft:#E5EEF1;
-  --ink:#172A2E; --dim:#4C6168; --faint:#82969C;
-  --shadow:0 1px 2px rgba(10,50,60,.08), 0 10px 28px rgba(10,50,60,.10);
-  --accent:#0E8074; --accent-ink:#FFFFFF; --accent-soft:rgba(14,128,116,.12);
-  --sn-scene:url("seasons/fall-woodland-day.svg");
-  --sn-leaf-1:#F9C93C; --sn-leaf-2:#FFE27A; --sn-leaf-3:#F2A93B; --sn-leaf-4:#FFD56B;
+:root[data-look="fall-misty-road"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-misty-road"] {
+  --ground:#E8E6E2; --surface:#FFFFFF; --surface-2:#F4F3F1; --edge:#E1DDD7; --edge-soft:#ECE9E5;
+  --ink:#1F1E1C; --dim:#56524D; --faint:#88837C;
+  --shadow:0 1px 2px rgba(30,20,10,.08), 0 14px 36px rgba(30,20,10,.14);
+  --accent:#B6531F; --accent-ink:#FFFFFF; --accent-soft:rgba(182,83,31,.12);
+  --sn-scene:url("seasons/fall-misty-road.webp"); --sn-pos:center 60%;
+  --sn-wash:linear-gradient(180deg, rgba(255,255,255,.18) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
+  --glass:rgba(255,255,255,.80); --glass-edge:rgba(255,255,255,.55);
+  --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
+}
+
+/* ---- Maple Light: backlit maple leaves up close (NPS, public domain) ---- */
+:root[data-look="fall-maple-light"][data-theme][data-accent],
+.look-swatch[data-look="fall-maple-light"] {
+  --ground:#20242C; --surface:#1C2027; --surface-2:#262B33; --edge:#3A404A; --edge-soft:#2C3139;
+  --ink:#F6F3EF; --dim:#CBC7C2; --faint:#8F8B86;
+  --shadow:0 1px 2px rgba(0,0,0,.35), 0 14px 36px rgba(0,0,0,.30);
+  --accent:#FF8C4A; --accent-ink:#2A1000; --accent-soft:rgba(255,140,74,.18);
+  --sn-scene:url("seasons/fall-maple-light.webp"); --sn-pos:center 40%;
+  --sn-wash:linear-gradient(180deg, rgba(10,12,22,.50) 0%, rgba(10,12,22,.28) 40%, rgba(10,12,22,.44) 100%);
+  --glass:rgba(20,23,29,.68); --glass-edge:rgba(255,255,255,.10);
+  --sn-leaf-1:#F07A2E; --sn-leaf-2:#F5A142; --sn-leaf-3:#D9502A; --sn-leaf-4:#F6C45A;
+}
+:root[data-look="fall-maple-light"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-maple-light"] {
+  --ground:#E9EEF2; --surface:#FFFFFF; --surface-2:#F3F5F7; --edge:#DCE2E8; --edge-soft:#E8ECF0;
+  --ink:#1D2026; --dim:#525862; --faint:#858B95;
+  --shadow:0 1px 2px rgba(10,20,40,.08), 0 14px 36px rgba(10,20,40,.14);
+  --accent:#CC4F16; --accent-ink:#FFFFFF; --accent-soft:rgba(204,79,22,.12);
+  --sn-scene:url("seasons/fall-maple-light.webp"); --sn-pos:center 40%;
+  --sn-wash:linear-gradient(180deg, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
+  --glass:rgba(255,255,255,.80); --glass-edge:rgba(255,255,255,.55);
+  --sn-leaf-1:#F07A2E; --sn-leaf-2:#F5A142; --sn-leaf-3:#D9502A; --sn-leaf-4:#F6C45A;
 }
 
 /* ---- the scene ---- */
 /* Behind everything: z-index -1 paints under the page content, and the body's
    own background steps aside so the scene is what shows (html keeps --ground
-   as the canvas backstop). Pointer-events none: it can never eat a tap. The
-   night dim reaches it as a direct child of <body> (.is-night > *).
-   `cover` anchored bottom-centre: the wall sees the whole 16:9 scene, a phone
-   in portrait sees its middle, where the art keeps something worth seeing. */
+   as the canvas backstop, also the colour shown while the photo loads).
+   Pointer-events none: it can never eat a tap. The night dim reaches it as a
+   direct child of <body> (.is-night > *). Layers, top to bottom: the wash,
+   the photo (cover, at the look's focal point), the ground colour. */
 .season { display: none; }
 :root[data-look]:not([data-look="none"]) body { background: transparent; }
 :root[data-look]:not([data-look="none"]) body > .season {
   display: block; position: fixed; inset: 0; z-index: -1;
   pointer-events: none; overflow: hidden;
-  background: var(--ground) var(--sn-scene) center bottom / cover no-repeat;
+  background: var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground);
   animation: sn-arrive 1.2s ease-out both;
 }
 @keyframes sn-arrive { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---- glass: the wall floats on the photo ----
+   Cards, their expand buttons, the section titles and the top bar become
+   frosted glass while a look paints. None of these is position:fixed or
+   sticky (backdrop-filter on those breaks taps on iOS; see CLAUDE.md). At
+   night the dim filter on the page makes .wrap a backdrop root, so the glass
+   shows the photo unblurred through its tint; the wall is dark by then. */
+:where(:root[data-look]:not([data-look="none"])) .card,
+:where(:root[data-look]:not([data-look="none"])) .expand {
+  background: var(--glass); border-color: var(--glass-edge);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);
+}
+/* empty check rings are drawn in --edge, which nearly vanishes on glass over
+   a bright photo; a ticked ring keeps its colour (its rule is more specific) */
+:where(:root[data-look]:not([data-look="none"])) .chore-check,
+:where(:root[data-look]:not([data-look="none"])) .todo-check { border-color: var(--faint); }
+:where(:root[data-look]:not([data-look="none"])) .shead .tick { display: none; }
+:where(:root[data-look]:not([data-look="none"])) .shead h2 {
+  color: var(--ink); background: var(--glass); border: 1px solid var(--glass-edge);
+  padding: 5px 12px; border-radius: 999px;
+  -webkit-backdrop-filter: blur(16px) saturate(1.3); backdrop-filter: blur(16px) saturate(1.3);
+}
+:where(:root[data-look]:not([data-look="none"])) .topbar {
+  background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 16px;
+  margin: 10px 0 6px; padding: 8px 14px;
+  -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);
+}
+@media (max-width: 1000px) {
+  /* the phone's top row is already full (wordmark, mark, live, clock, gear):
+     the glass bar may not widen it, or the whole page spills sideways */
+  :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .topbar { padding: 6px 6px 6px 10px; margin: 8px 0; gap: 10px; }
+}
+
 /* ---- drifting leaves (every fall look, in its own colours) ----
-   Each leaf is two boxes: the outer .sn-leaf span falls straight down at a constant
-   speed, the inner <b> sways side to side and turns, eased, so the path reads
-   as a leaf rocking on the air instead of a zig-zag. Transform/opacity only
-   (compositor work, fine on the wall's modest hardware). The two big blurred
-   leaves are the out-of-focus foreground; they only sway. Placement and speed
-   per leaf live in the nth-child rules so the markup stays bare. */
+   Each leaf is two boxes: the outer .sn-leaf span falls straight down at a
+   constant speed, the inner <b> sways side to side and turns, eased, so the
+   path reads as a leaf rocking on the air instead of a zig-zag. Transform
+   only (compositor work, fine on the wall's modest hardware). They fall
+   behind the glass, so a leaf passing behind a card blurs softly. Placement
+   and speed per leaf live in the nth-child rules so the markup stays bare. */
 .sn-leaves { display: none; position: absolute; inset: 0; }
 :root[data-look^="fall-"] body > .season .sn-leaves, .look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
 .sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); }
@@ -2733,32 +2779,23 @@ body.integ-off-todos .todo-slot { display: none; }
   background: linear-gradient(140deg, var(--c1), var(--c2));
   -webkit-mask: url("seasons/leaf-maple.svg") center / contain no-repeat;
   mask: url("seasons/leaf-maple.svg") center / contain no-repeat;
-  opacity: var(--o, .8);
+  opacity: var(--o, .85);
 }
 .sn-leaf.slender b { -webkit-mask-image: url("seasons/leaf-slender.svg"); mask-image: url("seasons/leaf-slender.svg"); }
 .sn-leaf.fall { top: 0; animation: sn-fall var(--d) linear var(--dl) infinite; }
 .sn-leaf.fall b { animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
-/* The two big soft leaves up close. Blur on the OUTER box: filter runs before
-   mask on one element, so blurring the masked <b> itself would leave its edge
-   crisp. And the sway moves that same blurred box, never its content: moving
-   the inner <b> would make the browser re-blur every frame, all day, on the
-   wall's small GPU; moving the filtered box just slides an already-blurred
-   layer. */
-.sn-leaf.near { filter: blur(10px); animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
 @keyframes sn-fall { from { transform: translate3d(0, -12vh, 0); } to { transform: translate3d(0, 112vh, 0); } }
 @keyframes sn-sway {
   from { transform: translate3d(calc(var(--amp, 26px) * -1), 0, 0) rotate(var(--r0, -18deg)); }
   to   { transform: translate3d(var(--amp, 26px), 0, 0) rotate(var(--r1, 32deg)); }
 }
-/* six falling (three near-sized, three far and faint) + two soft foreground */
+/* six falling: three near-sized, three far and faint */
 .sn-leaf:nth-child(1) { --x: 7%;  --y: 22%; --s: 30px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-3); --d: 34s; --dl: -4s; }
 .sn-leaf:nth-child(2) { --x: 31%; --y: 64%; --s: 24px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-1); --d: 41s; --dl: -19s; --sw: 6.5s; --r1: 48deg; }
 .sn-leaf:nth-child(3) { --x: 58%; --y: 38%; --s: 34px; --c1: var(--sn-leaf-4); --c2: var(--sn-leaf-2); --d: 37s; --dl: -27s; --amp: 34px; }
 .sn-leaf:nth-child(4) { --x: 83%; --y: 71%; --s: 26px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-2); --d: 45s; --dl: -11s; --sw: 7s; }
-.sn-leaf:nth-child(5) { --x: 45%; --y: 12%; --s: 15px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 58s; --dl: -33s; --o: .5; --amp: 16px; }
-.sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 14px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 63s; --dl: -48s; --o: .45; --amp: 14px; }
-.sn-leaf:nth-child(7) { --x: -3%; --y: 70%; --s: 180px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-3); --o: .34; --sw: 9s; --amp: 8px; --r0: -8deg; --r1: 6deg; --dl: -3s; }
-.sn-leaf:nth-child(8) { --x: 60%; --y: 80%; --s: 130px; --c1: var(--sn-leaf-4); --c2: var(--sn-leaf-2); --o: .26; --sw: 11s; --amp: 8px; --r0: 150deg; --r1: 164deg; --dl: -7s; }
+.sn-leaf:nth-child(5) { --x: 45%; --y: 12%; --s: 15px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 58s; --dl: -33s; --o: .55; --amp: 16px; }
+.sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 14px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 63s; --dl: -48s; --o: .5; --amp: 14px; }
 /* A wall left on overnight doesn't need leaves falling in a dark kitchen. */
 .is-night .sn-leaf, .is-night .sn-leaf b { animation-play-state: paused; }
 
@@ -2769,12 +2806,12 @@ body.integ-off-todos .todo-slot { display: none; }
   background: var(--accent);
   -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat;
 }
-[data-look="fall-harvest"] .season-mark,
-.look-swatch[data-look="fall-harvest"] .look-mark { --mark: url("seasons/mark-grains.svg"); }
-[data-look="fall-maple"] .season-mark,
-.look-swatch[data-look="fall-maple"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
-[data-look="fall-woodland"] .season-mark,
-.look-swatch[data-look="fall-woodland"] .look-mark { --mark: url("seasons/mark-evergreen.svg"); }
+[data-look="fall-aspen-grove"] .season-mark,
+.look-swatch[data-look="fall-aspen-grove"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-misty-road"] .season-mark,
+.look-swatch[data-look="fall-misty-road"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-maple-light"] .season-mark,
+.look-swatch[data-look="fall-maple-light"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 
 /* While a look paints, it owns the accent: the swatches step back and say why. */
 .look-accent-note { display: none; font-size: 12px; color: var(--faint); }
@@ -2797,28 +2834,27 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 .look-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .look-tile.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-/* the preview: the real scene in miniature, painted by the look's own tokens */
+/* the preview: the real photo in miniature, painted by the look's own tokens */
 .look-swatch { position: relative; height: 128px; overflow: hidden; isolation: isolate;
-  background: var(--ground) var(--sn-scene) center bottom / cover no-repeat; }
+  background: var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground); }
 .look-swatch .season { display: block; position: absolute; inset: 0; z-index: 0; animation: none; background: none; }
 .look-swatch .sn-leaf.fall { top: var(--y); animation: none; }
 .look-swatch .sn-leaf b { animation: none; }
 .look-swatch .sn-leaf { --s: 12px; }
-.look-swatch .sn-leaf.near { --s: 40px; }
-/* a tiny card floating on the scene, so the preview shows how the wall reads */
+/* a tiny glass card floating on the photo, so the preview shows how the wall reads */
 .look-card { position: absolute; z-index: 1; left: 12px; top: 12px; width: 58%;
-  padding: 8px 10px; border-radius: 9px; background: var(--surface); border: 1px solid var(--edge);
-  box-shadow: var(--shadow); display: flex; align-items: center; gap: 7px; }
+  padding: 8px 10px; border-radius: 9px; background: var(--glass); border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  display: flex; align-items: center; gap: 7px; }
 .look-mark { flex: none; width: 13px; height: 13px; background: var(--accent);
   -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; }
 .look-card-line { height: 6px; border-radius: 3px; background: var(--dim); opacity: .55; flex: 1; }
 .look-card-line.short { flex: .5; background: var(--accent); opacity: 1; }
 .look-label { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 2px; }
-.look-name { font-size: 14px; font-weight: 650; color: var(--ink); display: flex; align-items: center; gap: 8px; }
-/* where the look sits on the calm-to-lively spectrum */
-.look-style { font-size: 11px; font-weight: 600; color: var(--dim); background: var(--edge-soft);
-  padding: 1px 7px; border-radius: 999px; }
-.look-blurb { font-size: 12px; color: var(--faint); }
+.look-name { font-size: 14px; font-weight: 650; color: var(--ink); }
+.look-blurb { font-size: 12px; color: var(--dim); }
+/* who made the photo or artwork (full attribution in static/seasons/CREDITS.md) */
+.look-credit { font-size: 11px; color: var(--faint); margin-top: 2px; }
 .settings-sub { font-size: 12.5px; color: var(--faint); margin-top: -4px; }
 /* nowrap matters: a WRAPPING column flex box sizes its height as if the tile
    grid were one tile wide, leaving a tall empty gap under the tiles */
@@ -2827,14 +2863,11 @@ body.integ-off-todos .todo-slot { display: none; }
 :root:not([data-season="on"]) .look-tile.on { box-shadow: none; }
 /* the gear popover: a hairline between "how the hub looks" and "how this screen behaves" */
 .theme-pop .theme-pop-sep { align-self: stretch; height: 1px; background: var(--edge-soft); margin: 16px 0 14px; }
-/* Section titles sit on the scene, not on a card: while a look paints, give
-   them full ink so they hold their contrast over the landscape. */
-:root[data-look]:not([data-look="none"]) .shead h2 { color: var(--ink); }
 /* ---- seasonal looks, reduced motion ----
    Last in the file on purpose: these must beat the animated leaf rules above
    at equal specificity. The scene still shows, just still: no arrival fade,
    no falling, no sway, and each falling leaf rests at its own spot. */
 @media (prefers-reduced-motion: reduce) {
-  :root[data-look]:not([data-look="none"]) body > .season, .sn-leaf, .sn-leaf.fall, .sn-leaf.near, .sn-leaf b, .sn-leaf.fall b { animation: none; }
+  :root[data-look]:not([data-look="none"]) body > .season, .sn-leaf, .sn-leaf.fall, .sn-leaf b, .sn-leaf.fall b { animation: none; }
   .sn-leaf.fall { top: var(--y); }
 }

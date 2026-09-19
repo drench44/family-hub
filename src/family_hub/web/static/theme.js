@@ -184,8 +184,11 @@
   window.stampIdleReturn = stampIdleReturnIf;
 
   // ---- seasonal looks: data-season (the choice) + data-look (what paints) ----
-  // A seasonal look is a whole scene (landscape, palette, accent, a small mark
-  // by the wordmark) that follows the calendar. Two prefs drive it:
+  // A seasonal look is a real photograph (or public-domain artwork) filling
+  // the screen behind glass cards, with a matching accent, leaves drifting
+  // down and a small mark by the wordmark. It follows the calendar. The design
+  // standards and sourcing rules live in docs/seasonal-looks.md; read that
+  // before adding a look. Two prefs drive it:
   //   fh.season          on | off   (house default: FH_THEME.season)
   //   fh.look.<season>   which of that season's looks this device likes
   // and one derived attribute, data-look, names the look actually painted
@@ -201,14 +204,14 @@
   // window may wrap the new year (from Dec 1 to Feb 28 works). Dates are
   // [month, day], both 1-based.
   var SEASONS = [
-    // Every season offers the same spectrum, listed calm to lively: Minimal,
-    // Scenic, Playful. `default: true` marks the look a device gets before it
-    // picks one (the middle of the spectrum). Ids are storage keys: renaming a
-    // look is free, changing its id resets that choice on every device.
+    // `default: true` marks the look a device gets before it picks one.
+    // `credit` is shown on the Settings tile (full attribution lives in
+    // static/seasons/CREDITS.md). Ids are storage keys and image file names:
+    // renaming a look is free, changing its id resets that choice everywhere.
     { id: "fall", name: "Fall", from: [9, 1], to: [11, 30], looks: [
-      { id: "fall-maple", name: "Golden Hills", style: "Minimal", blurb: "Soft hills and drifting leaves" },
-      { id: "fall-woodland", name: "Aspen Lake", style: "Scenic", blurb: "Mountains, spruce and golden aspens", default: true },
-      { id: "fall-harvest", name: "Pumpkin Farm", style: "Playful", blurb: "A storybook farm with a pumpkin patch" },
+      { id: "fall-aspen-grove", name: "Aspen Grove", blurb: "Sunlit gold under a blue sky", credit: "Photo by NPS", default: true },
+      { id: "fall-misty-road", name: "Misty Road", blurb: "A quiet road through fog and fallen leaves", credit: "Photo by Bernd Schulz" },
+      { id: "fall-maple-light", name: "Maple Light", blurb: "Backlit maple leaves up close", credit: "Photo by NPS" },
     ] },
   ];
   var SEASON_PREFS = ["on", "off"];

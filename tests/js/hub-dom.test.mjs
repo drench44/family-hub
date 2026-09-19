@@ -7012,7 +7012,7 @@ test('self-heal: the settle timer, not the wake instant, drives the decision', (
 // sandbox, the way the house-theme tests stub stampLayout.
 const FALL = [{ id: 'fall', name: 'Fall', from: [9, 1], to: [11, 30], looks: [
   { id: 'fall-harvest', name: 'Harvest', blurb: 'Rolling hills' },
-  { id: 'fall-maple', name: 'Maple', blurb: 'Leaves <drifting>' },
+  { id: 'fall-maple', name: 'Maple', blurb: 'Leaves <drifting>', credit: 'Photo by <NPS>' },
 ] }];
 
 function seasonHub() {
@@ -7028,23 +7028,23 @@ function seasonHub() {
   return { ...env, calls };
 }
 
-test('seasonSceneHtml: balanced spans, the leaf layer, six falling and two near leaves', () => {
+test('seasonSceneHtml: balanced spans, the leaf layer, six falling leaves', () => {
   const { sandbox } = newHub();
   const html = sandbox.seasonSceneHtml();
   const opens = (html.match(/<span\b/g) || []).length;
   const closes = (html.match(/<\/span>/g) || []).length;
   assert.equal(opens, closes, 'every span closes (a stray one would re-parent the next tile)');
   assert.match(html, /^<span class="season" aria-hidden="true">/, 'hidden from assistive tech');
-  // the illustration is the .season background (the look's --sn-scene); the
+  // the photo is the .season background (the look's --sn-scene); the
   // markup only carries the leaf layer
   assert.match(html, /class="sn-leaves"/);
   assert.doesNotMatch(html, /sn-ridge|sn-glow|sn-grain/, 'no leftovers from the old layered scene');
   assert.equal((html.match(/class="sn-leaf fall/g) || []).length, 6);
-  assert.equal((html.match(/class="sn-leaf near"/g) || []).length, 2);
+  assert.doesNotMatch(html, /sn-leaf near/, 'no blurred foreground leaves: over a photo they read as smudges');
   // the nth-child placement rules count leaves; any other child in .sn-leaves
   // would shift every leaf's position and speed
   const leaves = html.slice(html.indexOf('sn-leaves'));
-  assert.equal((leaves.match(/<span class="sn-leaf/g) || []).length, 8);
+  assert.equal((leaves.match(/<span class="sn-leaf/g) || []).length, 6);
   assert.doesNotMatch(html, /<div/, 'spans only: the same markup sits inside a <button> tile');
 });
 
@@ -7078,6 +7078,8 @@ test('renderSettingsFull: a Seasonal looks card with an Off/On switch and a prev
   assert.match(html, /Sep 1 to Nov 30/, 'the season says when it shows');
   assert.match(html, /In season/, 'the current season is marked');
   assert.match(html, /Leaves &lt;drifting&gt;/, 'registry strings are escaped');
+  assert.match(html, /class="look-credit">Photo by &lt;NPS&gt;</, 'the tile credits the photo, escaped');
+  assert.equal((html.match(/class="look-credit"/g) || []).length, 1, 'no credit line for a look without one');
   // string-built markup: balanced, one tile + one scene per look, each a toggle
   const count = (re) => (html.match(re) || []).length;
   assert.equal(count(/<div\b/g), count(/<\/div>/g), 'balanced divs across the three regrouped cards');
