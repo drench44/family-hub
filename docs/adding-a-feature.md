@@ -187,6 +187,16 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       so one command busts every asset at once (a `test_static.py` guard fails
       any drift). This replaced the old per-asset manual bump that let two
       branches mint the same `v78` and ship stale caches.
+- [ ] Assets referenced from INSIDE a stylesheet or script (`url(...)` in
+      styles.css, an image path built in hub.js) get no `?v=`. If they can
+      change under the same name, serve them `no-cache` from the
+      `html_no_cache` middleware in app.py and add a test. (The seasonal
+      look art under `/seasons/` is the first case, and regenerates in place.)
+- [ ] New third-party art or code: record source, changes and licence in a
+      CREDITS file next to it, including the full notice when the licence
+      asks for it (MIT does), and run the full Python suite AFTER committing:
+      `test_no_house_data` only scans tracked files, and dense SVG path data
+      can look like an IP address to it.
 - [ ] Because the wall's phone clients cache assets aggressively, treat a
       deploy as a release (at least a `patch`) so `?v=` moves and phones pick
       up the new bytes — the wall itself already auto-reloads on the build hash.

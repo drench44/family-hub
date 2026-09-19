@@ -7077,6 +7077,15 @@ test('renderSettingsFull: a Seasonal looks card with an Off/On switch and a prev
   assert.match(html, /Sep 1 to Nov 30/, 'the season says when it shows');
   assert.match(html, /In season/, 'the current season is marked');
   assert.match(html, /Leaves &lt;drifting&gt;/, 'registry strings are escaped');
+  // string-built markup: balanced, one tile + one scene per look, each a toggle
+  const count = (re) => (html.match(re) || []).length;
+  assert.equal(count(/<div\b/g), count(/<\/div>/g), 'balanced divs across the three regrouped cards');
+  assert.equal(count(/<button\b/g), count(/<\/button>/g), 'balanced buttons');
+  assert.equal(count(/<span\b/g), count(/<\/span>/g), 'balanced spans');
+  assert.equal(count(/class="look-tile"/g), 2, 'one tile per registry look');
+  assert.equal(count(/class="look-swatch"/g), 2, 'one preview per tile');
+  assert.equal(count(/class="season"/g), 2, 'one scene per preview');
+  assert.equal(count(/aria-pressed=/g), 2, 'every tile is a toggle button');
   assert.doesNotMatch(html, /<drifting>/);
   // the Settings card and the popover both carry the accent note
   assert.match(html, /class="look-accent-note"/);
@@ -7097,6 +7106,18 @@ test('reflectThemeControls marks the season switch and each season\'s picked loo
   assert.equal(maple.getAttribute('aria-pressed'), 'true');
   assert.ok(!harvest.classList.contains('on'));
   assert.equal(harvest.getAttribute('aria-pressed'), 'false');
+});
+
+test('with seasons off the favourite tile keeps its mark but never claims aria-pressed', () => {
+  const { document, sandbox } = seasonHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.setAttribute('data-season', 'off');
+  sandbox.renderSettingsFull();
+  const maple = host.querySelector('[data-look-pick="fall-maple"]');
+  assert.ok(maple.classList.contains('on'), 'still shows which look this season will use');
+  assert.equal(maple.getAttribute('aria-pressed'), 'false', 'nothing paints, so nothing is pressed');
 });
 
 test('reflectThemeControls: an unstamped season reflects as Off, never a blank switch', () => {
@@ -7125,9 +7146,21 @@ test('tapping the season switch and a look tile calls theme.js\'s setters', () =
     node.closest = (s) => (s.includes(`[${attr}]`) ? node : null);
     (docListeners.click || []).forEach((fn) => fn({ target: node }));
   };
+  // stateful stand-ins for theme.js, so the handler's re-reflect is observable
+  let fav = 'fall-maple';
+  sandbox.setSeason = (v) => { calls.push(['setSeason', v]); document.documentElement.setAttribute('data-season', v); };
+  sandbox.setSeasonLook = (v) => { calls.push(['setSeasonLook', v]); fav = v; document.documentElement.setAttribute('data-season', 'on'); };
+  sandbox.seasonLook = () => fav;
+  const isOn = (sel) => host.querySelector(sel).classList.contains('on');
+
   tap('[data-season-set="on"]');
+  assert.ok(isOn('[data-season-set="on"]') && !isOn('[data-season-set="off"]'),
+    'the switch reflects the tap at once');
   tap('[data-look-pick="fall-harvest"]');
   assert.deepEqual(calls, [['setSeason', 'on'], ['setSeasonLook', 'fall-harvest']]);
+  assert.ok(isOn('[data-look-pick="fall-harvest"]') && !isOn('[data-look-pick="fall-maple"]'),
+    'the picked tile takes the mark from the old favourite');
+  assert.equal(host.querySelector('[data-look-pick="fall-harvest"]').getAttribute('aria-pressed'), 'true');
 });
 
 test('applyHouseTheme stamps the house season on a fresh device only', () => {
@@ -7145,17 +7178,42 @@ test('applyHouseTheme stamps the house season on a fresh device only', () => {
   assert.deepEqual(stamped2, [], 'a device that chose Off keeps it');
 });
 
-test('tickClock re-derives the look once per calendar day, not every second', () => {
+test('tickClock re-derives the look once per calendar date: midnight yes, a new hour no', () => {
   const { sandbox } = newHub();
   const seen = [];
-  sandbox.refreshLook = (d) => seen.push(d.getDate());
-  vm.runInContext('lookCheckedDay = null;', sandbox);
-  sandbox.tickClock();
-  sandbox.tickClock();
-  assert.equal(seen.length, 1, 'same day: one refresh');
-  vm.runInContext('lookCheckedDay = -1;', sandbox);   // as if the date just turned
-  sandbox.tickClock();
-  assert.equal(seen.length, 2, 'a new day refreshes again');
+  sandbox.refreshLook = (d) => seen.push(d);
+  // drive tickClock's own new Date() through a settable clock
+  vm.runInContext(
+    'globalThis.__RealDate = Date; globalThis.__now = 0;'
+    + 'Date = class extends __RealDate { constructor(...a) { if (a.length) super(...a); else super(__now); } };'
+    + 'lookCheckedDay = null;', sandbox);
+  const at = (y, m, d, hh, mm, ss) => {
+    vm.runInContext(`__now = new __RealDate(${y}, ${m - 1}, ${d}, ${hh}, ${mm}, ${ss}).getTime();`, sandbox);
+    sandbox.tickClock();
+  };
+  try {
+    at(2026, 10, 14, 9, 0, 0);
+    at(2026, 10, 14, 13, 30, 0);       // later the same day
+    at(2026, 10, 14, 23, 59, 59);
+    assert.equal(seen.length, 1, 'one refresh for the whole day');
+    at(2026, 10, 15, 0, 0, 0);         // midnight
+    assert.equal(seen.length, 2, 'the date turning refreshes');
+    assert.equal(seen[1].getDate(), 15, 'refreshLook gets the tick\'s own Date');
+    at(2026, 11, 15, 12, 0, 0);        // asleep a month: same day-of-month
+    assert.equal(seen.length, 3, 'a month later on the same day-of-month still refreshes');
+  } finally {
+    vm.runInContext('Date = globalThis.__RealDate;', sandbox);
+  }
+});
+test('the In season badge only shows while the season is on the calendar', () => {
+  const { document, sandbox } = seasonHub();
+  sandbox.activeSeason = () => null;   // e.g. July
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.renderSettingsFull();
+  assert.doesNotMatch(host.innerHTML, /In season/);
+  assert.match(host.innerHTML, /Sep 1 to Nov 30/, 'the dates still say when it will show');
 });
 
 test('hub.js survives theme.js missing: no registry, no setters, no throw', () => {
@@ -7167,4 +7225,23 @@ test('hub.js survives theme.js missing: no registry, no setters, no throw', () =
   assert.match(host.innerHTML, /<h2>Seasonal looks<\/h2>/);
   assert.doesNotMatch(host.innerHTML, /data-look-pick=/, 'no registry, no tiles');
   sandbox.applyHouseTheme({ season: 'on' });   // no stampSeason defined: must not throw
+});
+
+test('an accent tap is ignored while a seasonal look owns the color, and works again after', () => {
+  const { document, sandbox, docListeners } = newHub();
+  const set = [];
+  sandbox.setAccent = (c) => set.push(c);
+  const pop = document.createElement('div');
+  pop.innerHTML = '<div class="theme-ctl"><button class="swatch" data-c="violet"></button></div>';
+  pop._id = 'theme-pop';
+  document.body.appendChild(pop);
+  const sw = pop.querySelector('[data-c="violet"]');
+  sw.closest = (s) => (s.includes('[data-c]') ? sw : null);
+  const tap = () => (docListeners.click || []).forEach((fn) => fn({ target: sw }));
+  document.documentElement.setAttribute('data-look', 'fall-maple');
+  tap();
+  assert.deepEqual(set, [], 'no hidden accent change saved under a look');
+  document.documentElement.setAttribute('data-look', 'none');
+  tap();
+  assert.deepEqual(set, ['violet']);
 });

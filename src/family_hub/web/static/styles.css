@@ -2780,7 +2780,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-woodland"] body > .season .sn-r3, .look-swatch[data-look="fall-woodland"] .sn-r3 { height: 30%; -webkit-mask-image: url("seasons/woodland-ridge-3.svg"); mask-image: url("seasons/woodland-ridge-3.svg"); -webkit-mask-position: 80% 100%; mask-position: 80% 100%; }
 
 /* ---- drifting leaves (Maple) ----
-   Each leaf is two boxes: the outer <i> falls straight down at a constant
+   Each leaf is two boxes: the outer .sn-leaf span falls straight down at a constant
    speed, the inner <b> sways side to side and turns, eased, so the path reads
    as a leaf rocking on the air instead of a zig-zag. Transform/opacity only
    (compositor work, fine on the wall's modest hardware). The two big blurred
@@ -2874,7 +2874,8 @@ body.integ-off-todos .todo-slot { display: none; }
 .look-label { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 2px; }
 .look-name { font-size: 14px; font-weight: 650; color: var(--ink); }
 .look-blurb { font-size: 12px; color: var(--faint); }
-.settings-sub { font-size: 12.5px; color: var(--faint); margin-top: -4px; }/* nowrap matters: a WRAPPING column flex box sizes its height as if the tile
+.settings-sub { font-size: 12.5px; color: var(--faint); margin-top: -4px; }
+/* nowrap matters: a WRAPPING column flex box sizes its height as if the tile
    grid were one tile wide, leaving a tall empty gap under the tiles */
 .theme-ctl.stack { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 16px; }
 .theme-ctl.stack .seg { align-self: flex-start; }

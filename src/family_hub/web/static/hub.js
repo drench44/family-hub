@@ -74,9 +74,11 @@ function tickClock() {
     `${h12}:${mm}:${ss}${hh < 12 ? 'am' : 'pm'}`;
   document.body.classList.toggle('is-night', nightClass(hh) === 'is-night');
   // A wall runs for weeks: re-derive the seasonal look when the date turns, so
-  // fall arrives (and leaves) at midnight with no reload.
-  if (d.getDate() !== lookCheckedDay) {
-    lookCheckedDay = d.getDate();
+  // fall arrives (and leaves) at midnight with no reload. Keyed on the FULL
+  // date: a wall asleep from Aug 20 to Sep 20 has the same day-of-month.
+  const dayKey = d.toDateString();
+  if (dayKey !== lookCheckedDay) {
+    lookCheckedDay = dayKey;
     if (typeof refreshLook === 'function') refreshLook(d);
   }
 }
@@ -3821,10 +3823,13 @@ function reflectThemeControls() {
   document.querySelectorAll('.theme-ctl').forEach((ctl) => {
     ctl.querySelectorAll('[data-season-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.seasonSet === season));
+    // .on marks each season's favourite either way (the CSS softens it while
+    // seasons are off); aria-pressed only claims "pressed" while seasons are on
+    // (the favourite then paints whenever its season is on the calendar)
     ctl.querySelectorAll('[data-look-pick]').forEach((b) => {
       const on = picked.has(b.dataset.lookPick);
       b.classList.toggle('on', on);
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.setAttribute('aria-pressed', on && season === 'on' ? 'true' : 'false');
     });
     ctl.querySelectorAll('[data-theme-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.themeSet === mode));
@@ -4298,7 +4303,14 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('.theme-ctl [data-theme-set]');
   if (t) { setTheme(t.dataset.themeSet); reflectThemeControls(); return; }
   const a = e.target.closest('.theme-ctl [data-c]');
-  if (a) { setAccent(a.dataset.c); reflectThemeControls(); return; }
+  if (a) {
+    // While a seasonal look paints it owns the accent: the swatches are dimmed
+    // and pointer-dead in CSS, and this stops a keyboard press from saving a
+    // change nobody can see (the note under the swatches says why).
+    const look = document.documentElement.getAttribute('data-look');
+    if (look && look !== 'none') return;
+    setAccent(a.dataset.c); reflectThemeControls(); return;
+  }
   const c = e.target.closest('.theme-ctl [data-cols-set]');
   if (c) { setColumns(c.dataset.colsSet); reflectThemeControls(); return; }
   // Layout (Auto/Desktop): scoped to '.theme-ctl [...]' like the controls above,
