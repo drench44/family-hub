@@ -34,13 +34,14 @@ at one URL.
   separation, set from the wall itself or any phone and remembered per device.
 - **Seasonal looks:** turn **Season** on in the gear menu and the wall follows
   the calendar: a real photograph fills the screen and the dashboard floats
-  on it as frosted glass, with a few leaves drifting down behind the cards, a
-  matching accent, and a small mark beside the wordmark. Fall (Sep 1 to
+  on it as frosted glass in your theme's colours, leaves fall at two depths
+  (over the cards and softly behind them), and a matching accent and a small
+  mark sit beside the wordmark. Fall (Sep 1 to
   Nov 30) offers **Aspen Grove** (the default), **Misty Road** and **Maple
   Sky**, picked per device under **All settings → Seasonal looks** from
-  live preview tiles. Light and Soft show the photo bright and airy; Blue,
-  Grey and Black show it at dusk. The leaves pause at night and stop for
-  reduced motion, and the photos (public domain and CC0) ship inside the app.
+  live preview tiles. Each of the five themes keeps its own glass: Light and
+  Soft show the photo bright and airy, Blue, Grey and Black at dusk. The
+  leaves rest at night and for reduced motion, and the photos (public domain and CC0) ship inside the app.
   Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
 
   ![Fall seasonal looks](docs/seasons.jpg)

@@ -14,6 +14,8 @@ before adding Halloween, Christmas, winter, spring, or anything else.
 **What's next, in the owner's order:** Halloween, then Thanksgiving, then
 Christmas. The first two sit inside fall's Sep 1 to Nov 30 window, so list
 each one in `SEASONS` before fall, since the first matching window wins.
+Windows are month/day and inclusive; a window ending [2, 28] leaves out
+Feb 29, so a winter look should end on [2, 29].
 Each gets its own photos, falling shapes (leaves for fall; think bats or
 candlelight for Halloween, snow for Christmas, never cartoon props) and a
 matching accent.
@@ -123,7 +125,7 @@ Surveyed before settling on this design (2026-09):
   licensed cartoon characters) is exactly what we avoid.
 
 Patterns we copied: real photos, a readability layer between the art and the
-UI, day and evening variants of one image, automatic by date with a manual
+UI, day and evening moods of one image (a light and a dusk wash per theme), automatic by date with a manual
 pick from thumbnails. Pitfall we weigh: animation over the UI. Our leaves
 started behind the glass and nobody could see them, so they now drift over
 the cards, kept few, small and slow (see Motion below).
@@ -171,20 +173,27 @@ the cards, kept few, small and slow (see Motion below).
 - Cards stay in the theme's own colours. The photo carries the season.
 
 **Motion**
-- Only the drifting leaves (or, later, snow): six shapes, 22 to 44px,
-  opaque, transform only, paused at night, still under reduced motion.
+- Only falling shapes (leaves now; snow or the like later), transform only.
 - **Two depths** (the owner's idea): six near leaves (22 to 44px, shadowed)
   drift over the cards, and six far leaves (16 to 24px, slower, no shadow)
   fall inside the photo layer, behind the glass, so a card they pass behind
-  blurs them. Size, speed and blur together read as depth. Under reduced
-  motion the far ones rest behind the glass and the near layer is hidden.
+  blurs them. Size, speed and blur together read as depth.
+- **Night:** the near layer is hidden (the night dim makes `.wrap` its own
+  stacking layer, which would put the top bar and gear menu under the
+  leaves) and the far ones pause. **Reduced motion:** the near layer is
+  hidden (still leaves would rest on the same words) and the far ones rest
+  behind the glass.
 - The near leaves drift **over the cards** in their own layer (`.season-fx`, last in
   `<body>`). Behind the glass they were nearly invisible ("the leaves
   falling are a bit hard to see"), and the same gold as the photo hid them
   further. The layer never takes a tap, stays under the top bar and every
   menu and overlay, and stops above the phone's tab bar. Keep it to a
   handful of slow shapes, so it reads as weather, not as noise over text.
-- Each leaf gets a small soft drop shadow so it lifts off a photo of the
+- **Watch the far layer on the wall.** Anything moving behind a glass card
+  makes that card re-blur while it moves. The cost couldn't be measured off
+  the wall itself, so check it there: if the wall stutters with a look on,
+  pause or drop the far layer on wide screens first.
+- Each near leaf gets a small soft drop shadow so it lifts off a photo of the
   same colour. Never blur a moving layer: a blurred moving element makes the
   wall's small GPU (an i3 iGPU) re-blur it every frame.
 
@@ -256,7 +265,9 @@ CC0), Shenandoah NPS rolling hills.
 5. **Style it** in `styles.css`. Copy an existing look's two blocks: the
    dark-theme block first (photo `--sn-scene`, focal point `--sn-pos`, leaf
    colours, accent), then the light-theme block (just the deeper accent).
-   Add the `.season-mark` rule. Don't touch the glass, wash or any surface
+   Add the `.season-mark` rule. The leaf layers only switch on for
+   `data-look^="fall-"`: a new season with falling shapes needs its prefix
+   added to those selectors (and its own shape). Don't touch the glass, wash or any surface
    colour: those belong to the theme. `test_static.py` fails until every look
    token is there, and if a look sets a theme's token.
 6. **Check it with your own eyes**, on the demo (`DEMO=1`), at full size:

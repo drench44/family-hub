@@ -3796,8 +3796,11 @@ function applyHouseTheme(theme) {
   // when configured, so these no-op on a default install).
   if (theme.layout && noOverride('fh.layout')) stampLayout(theme.layout);
   if (theme.idleReturn && noOverride('fh.idleReturn')) stampIdleReturn(theme.idleReturn);
-  // seasonal looks on/off: same fresh-device-only house default
-  if (theme.season && noOverride('fh.season') && typeof stampSeason === 'function') stampSeason(theme.season);
+  // seasonal looks on/off: same fresh-device-only house default. "Fresh" also
+  // means nobody chose this session: on a kiosk where storage refuses writes
+  // the key stays empty, and the next poll would undo a tap.
+  const seasonChosen = typeof seasonChoiceMade === 'function' && seasonChoiceMade();
+  if (theme.season && noOverride('fh.season') && !seasonChosen && typeof stampSeason === 'function') stampSeason(theme.season);
   reflectThemeControls();
 }
 
@@ -3820,6 +3823,14 @@ function reflectThemeControls() {
   const season = el.getAttribute('data-season') === 'on' ? 'on' : 'off';
   // each season's chosen look (what it paints on this device when in season)
   const picked = new Set(seasonList().map((s) => pickedLook(s.id)));
+  // Season on but nothing in season: say when the next one starts, or the
+  // switch looks broken (On, and nothing changes).
+  const upcoming = season === 'on' && typeof activeSeason === 'function' && !activeSeason()
+    && typeof nextSeason === 'function' ? nextSeason() : null;
+  document.querySelectorAll('.season-idle-note').forEach((n) => {
+    n.hidden = !upcoming;
+    n.textContent = upcoming ? `Nothing is in season today. ${upcoming.name} starts ${seasonWindowText(upcoming).split(' to ')[0]}.` : '';
+  });
   document.querySelectorAll('.theme-ctl').forEach((ctl) => {
     ctl.querySelectorAll('[data-season-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.seasonSet === season));
@@ -3931,6 +3942,7 @@ function seasonalCardHtml() {
     + '<button type="button" data-season-set="on">On</button>'
     + '</div>'
     + '<div class="settings-sub">On follows the calendar. Pick the photo you like for each season. Light and Soft show it bright; the darker themes show it at dusk.</div>'
+    + '<div class="season-idle-note" hidden></div>'
     + '</div>'
     + `<div class="look-picker">${groups}</div>`;
 }

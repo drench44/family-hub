@@ -1,7 +1,7 @@
 # Seasonal look artwork
 
-Every file in this folder is public domain, CC0, or made for this project,
-and ships inside the app, so the wall never loads art from the internet.
+Every file in this folder is public domain, CC0, or under a permissive
+licence credited below (CC-BY 4.0, MIT), and ships inside the app, so the wall never loads art from the internet.
 Sourcing rules and how to add more: [`docs/seasonal-looks.md`](../../../../../docs/seasonal-looks.md).
 
 ## Photos

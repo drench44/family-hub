@@ -432,12 +432,37 @@ test('the season registry is well formed', () => {
 });
 
 test('a look pick repaints NOW even when storage refuses the write (kiosk WebView)', () => {
+  // a NON-default look: with the default, a lost write would fall back to the
+  // same answer and this test would pass without the in-memory fix
   const { root, win, localStorage } = loadTheme({ storage: { 'fh.season': 'on' } });
   localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
-  win.setSeasonLook('fall-aspen-grove');
-  assert.equal(win.refreshLook(day(10, 2)), 'fall-aspen-grove', 'held in memory for this session');
-  assert.equal(root.getAttribute('data-look'), 'fall-aspen-grove');
-  assert.equal(win.seasonLook('fall'), 'fall-aspen-grove', 'the tile marks what paints');
+  win.setSeasonLook('fall-maple-sky');
+  assert.equal(win.refreshLook(day(10, 2)), 'fall-maple-sky', 'held in memory for this session');
+  assert.equal(root.getAttribute('data-look'), 'fall-maple-sky');
+  assert.equal(win.seasonLook('fall'), 'fall-maple-sky', 'the tile marks what paints');
+});
+
+test('seasonChoiceMade: false until someone on this device picks, then true', () => {
+  const { win, localStorage } = loadTheme();
+  localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+  assert.equal(win.seasonChoiceMade(), false);
+  win.setSeason('on');
+  assert.equal(win.seasonChoiceMade(), true, 'remembered even though storage refused the write');
+  const other = loadTheme();
+  other.win.setSeasonLook('fall-misty-road');
+  assert.equal(other.win.seasonChoiceMade(), true);
+  const house = loadTheme();
+  house.win.stampSeason('on');
+  assert.equal(house.win.seasonChoiceMade(), false, 'a house default is not a choice');
+});
+
+test('nextSeason names the season that opens soonest, wrapping the year', () => {
+  const { win } = loadTheme();
+  assert.equal(win.nextSeason(day(1, 15)).id, 'fall');
+  assert.equal(win.nextSeason(day(12, 20)).id, 'fall', 'after fall ends, next fall');
+  win.FH_SEASONS.push({ id: 'winter', name: 'Winter', from: [12, 1], to: [2, 28], looks: [{ id: 'winter-snow', name: 'Snow' }] });
+  assert.equal(win.nextSeason(day(11, 30)).id, 'winter');
+  assert.equal(win.nextSeason(day(3, 1)).id, 'fall');
 });
 
 test('picking a look saves "on" as this device\'s own choice, even under a house "on"', () => {
