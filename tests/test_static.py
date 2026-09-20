@@ -1581,8 +1581,15 @@ def _look_ids():
 # and the wash) stays the THEME's, so Light, Soft, Blue, Grey and Black each
 # keep their own character with a season on ("they should still work with
 # the seasons on": an early version gave all three dark themes one charcoal).
-_LOOK_TOKENS = ["--accent", "--accent-ink", "--accent-soft", "--sn-scene", "--sn-pos",
-                "--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
+_LOOK_TOKENS = ["--accent", "--accent-ink", "--accent-soft", "--sn-scene", "--sn-pos"]
+# Each season's moving things are coloured once for the whole season, on its
+# own block: fall's leaves are per-look (they were picked out of each photo),
+# Halloween's bats, spiders and webs are one palette for all five looks.
+_SEASON_SHAPE_TOKENS = {
+    "fall-": ["--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"],
+    "halloween-": ["--sn-bat", "--sn-bat-glow", "--sn-spider", "--sn-spider-glow",
+                   "--sn-web", "--sn-haze"],
+}
 _THEME_OWNED = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                 "--ink", "--dim", "--faint", "--shadow", "--glass", "--glass-edge", "--sn-wash"]
 
@@ -1604,6 +1611,16 @@ def test_every_look_sets_its_photo_and_accent_and_leaves_the_theme_alone(look):
     body = _block_after(eve)
     for tok in _LOOK_TOKENS:
         assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
+    prefix = next(pre for pre in _SEASON_SHAPE_TOKENS if look.startswith(pre))
+    shapes = _SEASON_SHAPE_TOKENS[prefix]
+    if prefix == "fall-":
+        for tok in shapes:
+            assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
+    else:
+        block = _block_after(f':root[data-look^="{prefix}"]')
+        for tok in shapes:
+            assert re.search(rf"{re.escape(tok)}\s*:", block), \
+                f'the [data-look^="{prefix}"] block never sets {tok}'
     assert f'--sn-scene:url("seasons/{look}.webp")' in body, f"{eve} must paint seasons/{look}.webp"
     for sel in (eve, day):
         blk = _block_after(sel)
@@ -1674,7 +1691,9 @@ def test_every_look_ships_a_light_clean_photo_and_a_mark(look):
     width = int.from_bytes(frame[6:8], "little") & 0x3FFF
     assert width >= 2560, f"{photo.name} is {width}px wide; re-run prep-season-photo.py at 2560 (no softening)"
     assert not {b"EXIF", b"XMP "} & set(chunks), f"{photo.name} still carries metadata {chunks}"
-    assert re.search(rf'\[data-look="{re.escape(look)}"\] \.season-mark[^{{]*\{{[^}}]*--mark:', CSS), \
+    season_mark = rf'\[data-look\^="{re.escape(look.split("-")[0])}-"\] \.season-mark'
+    assert re.search(rf'\[data-look="{re.escape(look)}"\] \.season-mark[^{{]*\{{[^}}]*--mark:', CSS) or \
+        re.search(season_mark + r'[^{]*\{[^}]*--mark:', CSS), \
         f"{look} has no seasonal mark"
 
 
@@ -1682,7 +1701,8 @@ def test_the_scene_and_its_preview_paint_the_look_token():
     """The wall layer and the Settings preview both paint the wash over the
     photo at its focal point, so a preview always shows what the wall will."""
     for sel in (r"body > \.season", r"\.look-swatch"):
-        assert re.search(sel + r" \{[^}]*background:\s*var\(--sn-wash\),\s*var\(--sn-scene\) var\(--sn-pos\) / cover", CSS), \
+        assert re.search(sel + r" \{[^}]*background:\s*(?:var\(--sn-haze[^)]*\)[^;]*?,\s*)?"
+                         r"var\(--sn-wash\),\s*var\(--sn-scene\) var\(--sn-pos\) / cover", CSS), \
             f"{sel} must paint var(--sn-wash) over var(--sn-scene) at var(--sn-pos)"
 
 
@@ -1744,8 +1764,8 @@ def test_season_scene_sits_behind_and_never_takes_a_tap():
     assert re.search(r':root\[data-look\]:not\(\[data-look="none"\]\) body \{ background: transparent; \}', CSS), \
         "the body must step aside or its background hides the scene"
     hub = (STATIC / "hub.js").read_text()
-    assert "insertAdjacentHTML('afterbegin', `<span class=\"season\" aria-hidden=\"true\">${seasonLeavesHtml('back')}" in hub, \
-        "the photo (with the far leaves) mounts FIRST in <body> (under everything, a direct child for the night dim)"
+    assert "insertAdjacentHTML('afterbegin', `<span class=\"season\" aria-hidden=\"true\">${seasonFxHtml('back')}" in hub, \
+        "the photo (with the far layer) mounts FIRST in <body> (under everything, a direct child for the night dim)"
     # The leaves are their own layer, LAST in <body>, over the cards: behind
     # the glass they were nearly invisible. It must never take a tap, must stay
     # under the top bar (z 30) and every overlay (z 50+), and is not glass.
@@ -1854,7 +1874,7 @@ def test_reduced_motion_stops_every_seasonal_animation_by_its_exact_selector():
     assert animated, "found no seasonal animations to check"
     missing = [s for s in animated if s not in stopped]
     assert not missing, f"reduced motion does not stop: {missing}"
-    show = ':root[data-look^="fall-"] body > .season-fx'
+    show = ':root[data-look]:not([data-look="none"]) body > .season-fx'
     assert any(show in s for sels, body, _ in _rules() for s in sels), "the near-leaf show rule moved"
     assert show in hidden, "reduced motion must hide the near leaves with the SAME selector that shows them"
 
@@ -1865,7 +1885,10 @@ def test_night_hides_the_near_leaves_and_pauses_the_far_ones():
     The far leaves pause; both the fall and the sway must stop. Night glass
     goes solid on <body> (where hub.js puts is-night)."""
     assert re.search(r'(?m)^:root\[data-look\]:not\(\[data-look="none"\]\) body\.is-night > \.season-fx \{ display: none; \}', CSS)
-    assert re.search(r"(?m)^\.is-night \.sn-leaf, \.is-night \.sn-leaf b \{ animation-play-state: paused; \}", CSS)
+    assert re.search(r"(?m)^\.is-night \.sn-leaf, \.is-night \.sn-leaf b,\n"
+                     r"\.is-night \.sn-bat, \.is-night \.sn-bat i, \.is-night \.sn-bat b "
+                     r"\{ animation-play-state: paused; \}", CSS), \
+        "night must pause the far layer of BOTH seasons (leaves and bats)"
     assert re.search(r"(?m)^\.is-night \{ --glass: color-mix\(in srgb, var\(--surface\) 9\d%", CSS)
 
 
@@ -1908,3 +1931,74 @@ def test_phone_top_row_and_leaf_layer_fit_the_phone():
     assert re.search(re.escape(f"{scope} .wordmark {{") + r"[^}]*min-width: 0;[^}]*text-overflow: ellipsis", phone)
     assert f"{scope} .topbar {{ padding: 6px 6px 6px 10px;" in phone
     assert re.search(r'body > \.season-fx \{ bottom: calc\(64px \+ env\(safe-area-inset-bottom, 0px\)\); \}', CSS)
+
+
+def _png_size(path):
+    """(width, height) from a PNG's IHDR, no image library needed."""
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", f"{path.name} is not a PNG"
+    assert data[12:16] == b"IHDR", f"{path.name}: no IHDR"
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
+def test_halloween_sprite_sheets_match_the_frames_the_css_steps_through():
+    """The bat's wingbeat and the spider's walk are real drawn frames in one
+    row (see seasons/CREDITS.md), stepped through by CSS. Three numbers have
+    to agree or the animation tears: the frame count in steps(), the
+    mask-size percentage that shows exactly one frame, and the number of
+    cells actually in the file. The cell's shape must also match the box it
+    paints into, or every frame is stretched."""
+    for sheet, rule, box in (
+        ("bat-flap.png", r"\.sn-bat b \{([^}]*)\}", (1.0, 0.83)),
+        ("spider-walk.png", r"\.sn-crawl \{([^}]*)\}", (58.0, 76.0)),
+    ):
+        css_mask = re.search(rf'[^{{}}]*\{{[^}}]*mask: url\("seasons/{sheet}"\) 0 0 / (\d+)% 100%', CSS)
+        assert css_mask, f"nothing paints seasons/{sheet} as a sprite sheet"
+        frames = int(css_mask.group(1)) // 100
+        steps = {int(m) for m in re.findall(r"steps\((\d+)[,)]", CSS[CSS.index("Halloween's creatures"):])}
+        assert frames in steps, f"{sheet}: mask-size says {frames} frames, but no steps({frames}) drives it"
+        w, h = _png_size(STATIC / "seasons" / sheet)
+        assert w % frames == 0, f"{sheet} is {w}px wide, not a whole number of {frames} frames"
+        cell = (w / frames) / h
+        assert abs(cell - box[0] / box[1]) < 0.12, \
+            f"{sheet}'s frames are {cell:.2f} wide per tall; its box is {box[0] / box[1]:.2f}, so frames stretch"
+        assert re.search(rf"@keyframes sn-\w+ \{{ from \{{[^}}]*mask-position: 0 0;[^}}]*\}} "
+                         rf"to \{{[^}}]*mask-position: [\d.]+% 0;", CSS), \
+            "a sprite sheet is stepped by animating mask-position"
+
+
+def test_halloween_creatures_are_sized_off_one_scale_so_a_phone_can_shrink_them():
+    """Wall-sized bats, spiders and webs swamped a 390px phone (one web
+    covered the whole first card). Every creature is sized through --sn-k, and
+    the phone block sets it below 1, scoped so a forced-Desktop TV keeps the
+    wall's sizes."""
+    for sel in (r"\.sn-bat \{", r"\.sn-crawl \{", r"\.sn-dangle \{", r"\.sn-web \{"):
+        m = re.search(sel + r"([^}]*)\}", CSS)
+        assert m and "var(--sn-k, 1)" in m.group(1), f"{sel} must size itself through --sn-k"
+    phone = re.search(r'@media \(max-width: 1000px\) \{[^{}]*:root:not\(\[data-layout="desktop"\]\)'
+                      r'\[data-look\^="halloween-"\] \{ --sn-k: (0?\.\d+); \}', CSS)
+    assert phone, "the phone block must shrink the creatures with --sn-k"
+    assert 0 < float(phone.group(1)) < 1
+
+
+def test_the_crawling_spider_is_parked_until_hub_js_walks_it():
+    """hub.js walks the crawler (CSS could not keep its legs in step with its
+    body). Two things must hold whatever hub.js does: it starts off-screen, so
+    a browser without element.animate never shows a spider frozen in the
+    corner, and its legs only cycle while it carries the .walking class."""
+    m = re.search(r"\.sn-crawl \{([^}]*)\}", CSS)
+    assert m and re.search(r"transform: translate3d\(-\d+px, -\d+px, 0\)", m.group(1)), \
+        "the crawler must be parked off-screen by default"
+    legs = re.search(r"\.sn-crawl\.walking b, \.sn-dangle\.walking b \{([^}]*)\}", CSS)
+    assert legs and "animation: sn-walk" in legs.group(1), \
+        "the walk cycle must hang off .walking, or the legs walk on the spot"
+    hub = (STATIC / "hub.js").read_text()
+    for fn in ("function spiderWalk()", "function spiderDrop()"):
+        assert fn in hub, f"hub.js must define {fn}"
+    assert "spiderWalk();" in hub and "spiderDrop();" in hub, "both spiders must be started"
+    # they must stand down when the layer is hidden: no look, night, reduced
+    # motion, or a background tab
+    motion = hub[hub.index("function snMotion("):hub.index("async function spiderWalk()")]
+    assert "typeof el.animate !== 'function'" in motion, "must bail without the Web Animations API"
+    assert "document.hidden" in motion and "display) !== 'none'" in motion.replace("display !== 'none'", "display) !== 'none'"), \
+        "showing() must check the hidden tab AND the layer's display"
