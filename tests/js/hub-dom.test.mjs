@@ -7065,6 +7065,103 @@ test('mountSeasonScene: photo + far leaves first in <body>, near leaves last (ov
   assert.equal(fx[0], 'beforeend', 'the near leaves come after the wall, so they drift over the cards');
   assert.match(fx[1], /^<span class="season-fx" aria-hidden="true"><span class="sn-leaves front">/);
   assert.equal((fx[1].match(/class="sn-leaf fall/g) || []).length, 6);
+  // both layers also carry Halloween's creatures; CSS shows only the set
+  // that belongs to the look being painted
+  assert.match(photo[1], /<span class="sn-haunt back">/, 'the far layer carries the webs and far bats');
+  assert.equal((photo[1].match(/class="sn-web"/g) || []).length, 2, 'two corner webs');
+  assert.match(fx[1], /<span class="sn-haunt front">/);
+  assert.equal((fx[1].match(/class="sn-web"/g) || []).length, 0, 'the webs stay behind the glass');
+  assert.match(fx[1], /<span class="sn-dangle"><i><b><\/b><\/i><\/span>/,
+    'the thread and the spider hang inside one box, so they swing together');
+  assert.match(fx[1], /<span class="sn-crawl"><b><\/b><\/span>/);
+});
+
+test('seasonHauntHtml: the creatures each layer carries, spans only, balanced', () => {
+  const { sandbox } = newHub();
+  for (const depth of ['front', 'back']) {
+    const html = sandbox.seasonHauntHtml(depth);
+    assert.equal((html.match(/<span\b/g) || []).length, (html.match(/<\/span>/g) || []).length,
+      `${depth}: every span closes`);
+    assert.doesNotMatch(html, /<div/, 'spans only: the same markup sits inside a <button> tile');
+    assert.match(html, new RegExp(`^<span class="sn-haunt ${depth}">`));
+  }
+  const front = sandbox.seasonHauntHtml('front');
+  const back = sandbox.seasonHauntHtml('back');
+  // the nth-child rules place every bat: the count is load-bearing
+  assert.equal((front.match(/class="sn-bat"/g) || []).length, 4, 'four bats cross in front');
+  assert.equal((back.match(/class="sn-bat"/g) || []).length, 3, 'three smaller bats fly behind the glass');
+  assert.equal((front.match(/class="sn-dangle"/g) || []).length, 1);
+  assert.equal((front.match(/class="sn-crawl"/g) || []).length, 1);
+  assert.equal((back.match(/sn-dangle|sn-crawl/g) || []).length, 0, 'the spiders belong over the cards');
+  assert.match(front, /<span class="sn-bat"><i><b><\/b><\/i><\/span>/, 'a bat is travel, bob and wingbeat');
+});
+
+test('the spiders stand down when they cannot run, and park off screen', async () => {
+  // A browser with no element.animate (and the fake DOM here) must not throw
+  // and must not leave a spider stranded mid-screen.
+  const { document, sandbox } = newHub();
+  const layer = document.createElement('span');
+  layer._className = 'season-fx';
+  const haunt = document.createElement('span');
+  haunt._className = 'sn-haunt front';
+  const crawl = document.createElement('span');
+  crawl._className = 'sn-crawl';
+  haunt.appendChild(crawl);
+  layer.appendChild(haunt);
+  document.body.appendChild(layer);
+  crawl.parentElement = haunt;
+  haunt.parentElement = layer;
+  layer.clientWidth = 1920;
+  layer.clientHeight = 1080;
+  document.querySelector = (sel) => (sel.includes('sn-crawl') || sel.includes('sn-dangle') ? crawl : null);
+  // the layer is mounted, sized and on screen, so the only thing that can
+  // stand them down is the missing element.animate
+  sandbox.getComputedStyle = () => ({ display: 'block' });
+  document.hidden = false;
+  assert.equal(typeof crawl.animate, 'undefined', 'this fake element has no Web Animations API');
+  await sandbox.spiderWalk();
+  await sandbox.spiderDrop();
+  assert.ok(!crawl.style.transform || /-\d+px/.test(crawl.style.transform),
+    'with no Web Animations API the crawler stays parked off screen');
+  assert.ok(!(crawl.className || '').includes('walking'), 'and its legs are still');
+});
+
+test('a hidden layer (no look, night, reduced motion) keeps the spiders still', () => {
+  // element.animate exists here, so the only thing standing them down is
+  // the layer being display:none: no look painted, night, or reduced
+  // motion. They must wait instead of walking over a wall with no season.
+  const { document, sandbox } = newHub();
+  const layer = document.createElement('span');
+  layer._className = 'season-fx';
+  const haunt = document.createElement('span');
+  haunt._className = 'sn-haunt front';
+  const crawl = document.createElement('span');
+  crawl._className = 'sn-crawl';
+  const moves = [];
+  crawl.animate = (frames, opts) => {
+    moves.push([frames, opts]);
+    return { finished: Promise.resolve(), cancel() {} };
+  };
+  haunt.appendChild(crawl);
+  layer.appendChild(haunt);
+  document.body.appendChild(layer);
+  crawl.parentElement = haunt;
+  haunt.parentElement = layer;
+  layer.clientWidth = 1920;
+  layer.clientHeight = 1080;
+  document.querySelector = (sel) => (sel.includes('sn-crawl') || sel.includes('sn-dangle') ? crawl : null);
+  sandbox.getComputedStyle = () => ({ display: 'none' });
+  document.hidden = false;
+  sandbox.spiderWalk();
+  sandbox.spiderDrop();
+  assert.equal(moves.length, 0, 'nothing moves while the layer is hidden');
+  assert.ok(!(crawl.className || '').includes('walking'), 'and no legs cycle');
+  // ...and the same when the layer shows but the tab is in the background
+  sandbox.getComputedStyle = () => ({ display: 'block' });
+  document.hidden = true;
+  sandbox.spiderWalk();
+  sandbox.spiderDrop();
+  assert.equal(moves.length, 0, 'nothing moves while the tab is hidden either');
 });
 
 test('renderSettingsFull: a Seasonal looks card with an Off/On switch and a preview tile per look', () => {
