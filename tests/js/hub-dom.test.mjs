@@ -7151,19 +7151,60 @@ test('with no element.animate the spiders show nothing at all', async () => {
   assert.ok(!el.classList.contains('walking'), 'and no legs cycle');
 });
 
-test('a move that fails leaves the spider still, not frozen with its legs cycling', async () => {
+test('a move that fails never leaves the legs cycling, and the walk carries on', async () => {
   // The failure this exists for: one rejected animation used to unwind the
   // whole loop with .walking still on, so a spider sat at one spot on the
   // wall with seven legs cycling at 3Hz until the next reload.
   const { document, sandbox } = newHub();
-  const { el, moves } = spiderStage(sandbox, document, { reject: true });
+  const stage = spiderStage(sandbox, document, {});
+  let fires = 0;
+  sandbox.setTimeout = (fn) => { if (fires++ < 400) Promise.resolve().then(fn); return fires; };
+  const moves = [];
+  stage.el.animate = () => {
+    moves.push(1);
+    if (moves.length >= 6) stage.el.checkVisibility = () => false; // then it parks
+    return { finished: Promise.reject(new Error('AbortError')), cancel() {} };
+  };
   sandbox.spiderWalk();
-  await settle();
-  assert.ok(moves.length > 0, 'it did try to move');
-  assert.ok(!el.classList.contains('walking'),
-    'a failed move must stop the legs (the finally), or they cycle under a still body');
-  assert.match(el.style.transform, /^translate3d\(-?\d+(\.\d+)?px, -?\d+(\.\d+)?px, 0\) rotate\(/,
-    'and it is left at a known place, not wherever the animation died');
+  await settle(300);
+  assert.ok(moves.length >= 4, `the walk must survive a failed move (got ${moves.length})`);
+  assert.ok(!stage.el.classList.contains('walking'),
+    'and once it stops, the legs stop with it (the finally)');
+  assert.match(stage.el.style.transform, /^translate3d\(-?\d+(\.\d+)?px, -?\d+(\.\d+)?px, 0\) rotate\(/,
+    'it is left at a known place, not wherever the animation died');
+});
+
+test('one move: a rejected animation is caught, and the spider still lands', async () => {
+  // Straight at snMotion.go, with real timers, so the rejection wins its
+  // race and the catch actually runs (with the fake clock the deadline won
+  // and this path was never executed).
+  const { document, sandbox } = newHub();
+  const { el } = spiderStage(sandbox, document, {});
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms); // real time: the deadline must be able to lose
+  el.animate = () => ({ finished: Promise.reject(new Error('AbortError')), cancel() {} });
+  const m = sandbox.snMotion(el);
+  el.classList.add('walking');
+  await m.go({ x: 40, y: 50, deg: 12 }, 30, 'linear'); // must not throw
+  assert.equal(el.style.transform, 'translate3d(40px, 50px, 0) rotate(12deg)',
+    'a failed move still leaves it where the move was going');
+  assert.deepEqual({ ...m.at() }, { x: 40, y: 50, deg: 12 }, 'and the walker agrees where that is');
+});
+
+test('one move: an animation that never settles gives up on a deadline', async () => {
+  // A stalled document timeline leaves `finished` pending for good. Without
+  // a deadline the walk parks inside the await forever and the spider is
+  // frozen for the rest of the month.
+  const { document, sandbox } = newHub();
+  const { el } = spiderStage(sandbox, document, {});
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms); // real time: the deadline must be able to win
+  let cancelled = 0;
+  el.animate = () => ({ finished: new Promise(() => {}), cancel() { cancelled++; } });
+  const m = sandbox.snMotion(el);
+  const started = Date.now();
+  await m.go({ x: 7, y: 9, deg: 0 }, 20, 'linear');
+  assert.ok(Date.now() - started < 3000, 'it must not wait on a promise that never settles');
+  assert.equal(el.style.transform, 'translate3d(7px, 9px, 0) rotate(0deg)');
+  assert.equal(cancelled, 1, 'and the stalled animation is released');
 });
 
 test('nothing to look at means nothing moves: no look painted, or a hidden tab', async () => {
