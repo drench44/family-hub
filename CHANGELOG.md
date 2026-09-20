@@ -10,6 +10,37 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-19
+
+### Added
+- Halloween seasonal looks, October 1 to 31 (inside fall, which keeps the
+  rest of its window). Five photographs — **Lantern Night** (the default),
+  **Witching Hour**, **Haunted Pines**, **Moonrise** and **Bare Branches** —
+  each with its own accent (pumpkin orange, violet, neon green, amber) and a
+  purple-and-green haze over the photo. Bats cross the sky on a real drawn
+  wingbeat, one spider lets itself down on its thread and climbs back, another
+  lives on the glass and wanders it all day, and fine webs hang in two
+  corners. Nothing moves at night or for reduced motion, nothing can take a
+  tap, and everything shrinks on a phone.
+
+### Fixed
+- A seasonal creature driven from JavaScript can no longer be left frozen
+  on the wall with its legs still moving: every move now stops cleanly
+  however it ends, and the spiders stand down the moment their layer goes
+  (no look painted, night, reduced motion, or a background tab).
+- The bats' wingbeat is drawn by the graphics chip rather than repainted
+  every frame, which matters on the wall's small integrated graphics.
+- On a phone in October, the Settings preview tiles showed no cobwebs: the
+  wall's own placement was reaching inside the tiles.
+
+### Changed
+- Seasonal glass is more transparent in every theme (Light 80 to 66% opacity,
+  Soft 82 to 68, Blue 70 to 56, Grey 68 to 54, Black 76 to 62), with a little
+  more blur (22px to 26px) so small text stays clean, and a touch more
+  contrast in the card edges to hold the empty checkbox rings: more of the
+  photograph shows through. Affects fall as well as Halloween. With **Season** off the
+  wall is unchanged.
+
 ## [1.5.0] — 2026-09-19
 
 ### Added

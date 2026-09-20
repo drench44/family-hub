@@ -52,14 +52,18 @@ feed does not yet emit — it renders only once the feed grows one.
 
 ## Seasonal looks — read the standards before adding one
 
-Seasonal and holiday looks (fall today; Halloween, Christmas and more to come)
+Seasonal and holiday looks (fall and Halloween today; Thanksgiving and
+Christmas to come)
 follow [`docs/seasonal-looks.md`](docs/seasonal-looks.md): the owner's bar,
 what failed and why (home-made illustrations were rejected three times; only
 real public-domain photos and art ship), what comparable products do, the
 glass and readability standards, which sources and licences are allowed in
 this public repo, the step-by-step for a new look, and the lessons from the
-fall build. Don't draw scenes in code. Show the owner real candidates and
-let them pick. Look at every look × all five themes full size, plus
+fall and Halloween builds. Don't draw scenes in code, and don't fake an
+animation by squashing one shape — use art that already holds the motion
+(drawn frames stepped through a sprite sheet), and walk anything whose limbs
+must keep time with its body from `hub.js` (`snMotion`). Show the owner real
+candidates and let them pick. Look at every look × all five themes full size, plus
 seasons-off, night, reduced motion, phone and the open popover, before
 calling it done.
 

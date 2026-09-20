@@ -11,13 +11,14 @@ This document is the standard every look is held to. It exists because the
 first three attempts at fall missed, for reasons worth not repeating. Read it
 before adding Halloween, Christmas, winter, spring, or anything else.
 
-**What's next, in the owner's order:** Halloween, then Thanksgiving, then
-Christmas. The first two sit inside fall's Sep 1 to Nov 30 window, so list
-each one in `SEASONS` before fall, since the first matching window wins.
+**Shipped so far:** fall (Sep 1 to Nov 30, three looks) and Halloween (Oct 1
+to Oct 31, five looks). **What's next, in the owner's order:** Thanksgiving,
+then Christmas. Thanksgiving sits inside fall's Sep 1 to Nov 30 window, so
+list it in `SEASONS` before fall, since the first matching window wins.
 Windows are month/day and inclusive; a window ending [2, 28] leaves out
 Feb 29, so a winter look should end on [2, 29].
-Each gets its own photos, falling shapes (leaves for fall; think bats or
-candlelight for Halloween, snow for Christmas, never cartoon props) and a
+Each gets its own photos, its own moving things (leaves for fall, bats and
+spiders for Halloween, snow for Christmas, never cartoon props) and a
 matching accent.
 
 ---
@@ -29,7 +30,12 @@ The owner's words, which are the spec:
 - "nice and appealing, pleasing to look at, where you get that holiday or
   seasonal feel, not cheap or cheesy"
 - "Apple or Google design standards"
-- "keep it happy colors"
+- "keep it happy colors" — with one exception the owner asked for by name:
+  **Halloween is allowed to be spooky.** "all the halloween colors, the
+  purples, neon green, orange, black... spider webs, spiders crawling on the
+  screen, bats flying, spooky and really feels like halloween". Dark and
+  moonlit is right for that season; gory never is, and the bar against cheap
+  and cheesy still holds.
 - "just want it to feel like you are immersed in that holiday or season fully"
 - "keep the menu system clean and organized"
 
@@ -105,6 +111,95 @@ a bug. Read them before the next season.
   reads tracked files (it once read packed SVG path numbers as an IP
   address).
 
+### Lessons from the Halloween build
+
+**Motion has to be real**
+- **Never fake an animation by squashing one shape.** The first bats were a
+  single silhouette scaled on the Y axis to suggest a wingbeat, and the
+  spiders slid along a CSS path. The owner's verdict: "can you make the
+  crawling and flying animations better? maybe use something that already has
+  that". Both now step through **drawn frames**: Google's animated Noto bat
+  (15 of its 30 wingbeat frames) and the Bug.js spider (7 walking poses).
+  Look for art that already contains the motion before animating anything
+  yourself.
+- **Strip a cartoon to its silhouette and it becomes a shape.** The Noto bat
+  has a face and brown fur. Keeping only its alpha channel, painted in the
+  look's colour, leaves a clean bat in flight with none of the emoji styling,
+  and it goes through the same mask pipeline as every other shape.
+- **Legs that move while the body is still look broken.** CSS cannot pause a
+  step cycle in time with a keyframed path, so the crawling spider is walked
+  from `hub.js` (`spiderWalk`): a turn, a dart, a pause, and the
+  `.walking` class (the leg cycle) only while it is actually moving. The
+  same applies to the one on the thread (`spiderDrop`), which drops in
+  jerks, bounces and climbs back.
+- **A resident beats a visitor.** The crawler first crossed the screen and
+  left for 30 to 90 seconds: "too much time w/out a spider still". It now
+  never leaves — short random hops, rests of a few seconds, the odd turn on
+  the spot — and reads as something living on the glass. Visitors (the
+  spider on its thread) are the exception, not the rule.
+- **Ask for the count, don't guess it.** Five bats in front was "a tad less
+  bat"; four is right. Sizes too: the crawler went up by a quarter on
+  request. Ship the numbers where they are easy to change, and change them
+  when asked rather than defending them.
+
+**Readability and the glass**
+- **The owner will want to see more of the photo than you think.** "make
+  things more transparent so you can see more", for fall as well. Every
+  theme's glass dropped about 14 points of opacity (Light 80 to 66, Soft 82
+  to 68, Blue 70 to 56, Grey 68 to 54, Black 76 to 62) and the blur went from
+  22px to 26px to keep small text clean. Check the empty checkbox rings and
+  the struck-through calendar lines after any such change: they go first.
+- **Wall sizes swamp a phone.** A 620px web covered the whole first card at
+  390px. Every creature is now sized through one `--sn-k` factor that the
+  phone block halves, scoped so a forced-Desktop TV keeps the wall's sizes.
+- **Preview tiles need their own sizes too.** The same webs and bats at wall
+  scale filled a 128px tile.
+
+**What the review caught, and the rules that came out of it**
+- **Anything driven from JS must survive its own failures.** One rejected
+  animation used to unwind the whole loop with the `.walking` class still
+  on, leaving a spider frozen on the wall with its legs cycling until the
+  next reload — and it reads as decoration, so nobody would report it. Every
+  move now ends in a `finally` that stops the legs and fixes the position,
+  races the animation against a deadline (a stalled timeline never settles),
+  and logs rather than dying quietly.
+- **Ask what a guard means, not where it sits.** The stand-down check walked
+  two fixed levels up the tree and read `display` there. Adding one wrapper
+  to the markup would have inverted it silently — spiders wandering a
+  night-dimmed wall. It now asks the element itself
+  (`checkVisibility()`), plus `data-look` and the tab's own visibility.
+- **Animate what the compositor can animate.** Stepping a sprite by its
+  `mask-position` repaints on the main thread every frame; seven shadowed
+  bats doing that all day is real work for the wall's i3. The strip now
+  slides behind a window with `transform`, which looks identical and costs
+  almost nothing.
+- **A test that never runs the code proves nothing.** A reviewer put
+  `throw` on the first line of both spider movers and the whole suite
+  stayed green: the fake DOM had bailed long before. The motion is now driven
+  through a recording `animate()`, which pins the leg cycle to the walking
+  speed, the turn to the short way round, the clamp that keeps the whole
+  drawing on screen, and that every finished animation is released.
+- **Specificity decides who owns a rule.** The phone's web offsets (0,4,0)
+  beat the Settings tile's own (0,3,0), so on a phone in October the preview
+  tiles showed no webs at all. Every placement now says whether it means the
+  wall (`body > .season`) or a tile (`.look-swatch`), and a guard fails
+  on any that doesn't.
+- **A tile is a preview, not a small wall.** `--sn-k` (the phone's shrink)
+  inherits, so the same tile drew at half size in October and full size in
+  September. Tiles opt out.
+
+**Things that would have shipped broken**
+- **A sprite sheet has three numbers that must agree:** the frame count in
+  `steps()`, the `mask-size` percentage that shows exactly one frame, and
+  the cells actually in the file — plus the cell's shape must match the box
+  it paints into. A guard pins all four.
+- **Walk up the DOM defensively.** `el.parentElement.parentElement` threw in
+  a fake-DOM test when the markup moved; it now bails instead, and the
+  spiders stand down rather than crashing the page.
+- **The stale-CSS trap bit again.** Night mode looked broken (creatures on
+  top of the gear menu) purely because the browser had cached the old
+  stylesheet. Clear the cache before believing any seasonal bug.
+
 ## 3. What other products do
 
 Surveyed before settling on this design (2026-09):
@@ -173,7 +268,17 @@ the cards, kept few, small and slow (see Motion below).
 - Cards stay in the theme's own colours. The photo carries the season.
 
 **Motion**
-- Only falling shapes (leaves now; snow or the like later), transform only.
+- Transform and opacity only, whatever moves.
+- **Two ways to move something, and they are not interchangeable.**
+  *CSS keyframes* suit anything that travels a fixed path on a loop: the
+  leaves, the bats crossing the sky, the corner webs (which never move at
+  all). *A sprite sheet stepped by `mask-position`* gives real drawn frames
+  (a wingbeat, a walk cycle). *A small JS walker* (`hub.js`'s `snMotion`)
+  is for anything whose limbs must keep time with its body, or whose path
+  should look unplanned: each move is one Web Animation, so the compositor
+  still draws the frames. A JS-walked creature must stand down whenever its
+  layer is hidden (no look, night, reduced motion, a background tab) and park
+  off-screen, so a browser without `element.animate` shows nothing at all.
 - **Two depths** (the owner's idea): six near leaves (22 to 44px, shadowed)
   drift over the cards, and six far leaves (16 to 24px, slower, no shadow)
   fall inside the photo layer, behind the glass, so a card they pass behind
@@ -221,7 +326,13 @@ This repo is public and MIT licensed, so every file must be redistributable.
   Van Gogh, the Hudson River School.
 - **Unsplash photos uploaded before June 2017** (CC0 at the time), which
   Commons mirrors as "(Unsplash)" files.
-- **Icons:** Phosphor (MIT) and Twemoji (CC-BY 4.0), credited.
+- **Icons and shapes:** Phosphor (MIT), Twemoji (CC-BY 4.0), and
+  public-domain or CC0 drawings from Wikimedia Commons, credited.
+- **Animation frames:** Noto Animated Emoji (CC-BY 4.0, Google) and the
+  Bug.js spider sprite (MIT-style; the original Screen Bug is WTFPL). Both
+  ship here as silhouettes: alpha only, so the look paints them. Game-icons
+  (CC-BY 3.0) is fine too. OpenGameArt has CC0 sprite sheets, but most are
+  pixel art and read as cheap on a 1920px wall.
 
 **Avoid**
 - Freepik and Vecteezy: their free licences forbid redistributing the file.
@@ -230,6 +341,9 @@ This repo is public and MIT licensed, so every file must be redistributable.
   for a public repo, so don't use them.
 - Kawase Hasui and other 1920s–30s Japanese prints: US copyright was likely
   restored under URAA and may still apply.
+- **LottieFiles' "simple licence"** animations: free to use, but the terms
+  forbid redistributing them in a competing library, the same grey area as
+  today's Unsplash. Google's Noto animations are CC-BY and fine.
 - Anything share-alike (CC-BY-SA) or non-commercial (NC).
 
 Every file in `static/seasons/` gets a row in `static/seasons/CREDITS.md`:
@@ -265,10 +379,15 @@ CC0), Shenandoah NPS rolling hills.
 5. **Style it** in `styles.css`. Copy an existing look's two blocks: the
    dark-theme block first (photo `--sn-scene`, focal point `--sn-pos`, leaf
    colours, accent), then the light-theme block (just the deeper accent).
-   Add the `.season-mark` rule. The leaf layers only switch on for
-   `data-look^="fall-"`: a new season with falling shapes needs its prefix
-   added to those selectors (and its own shape). Don't touch the glass, wash or any surface
-   colour: those belong to the theme. `test_static.py` fails until every look
+   Add the `.season-mark` rule (one per look, or one for the whole season by
+   prefix, as Halloween does). Each season's moving things are shown by its
+   own prefix: `data-look^="fall-"` shows `.sn-leaves`,
+   `data-look^="halloween-"` shows `.sn-haunt`. A new season needs its own
+   set, shown the same way, coloured by tokens set once on a
+   `:root[data-look^="<season>-"]` block, and added to
+   `seasonFxHtml` in hub.js so both layers carry it. Size anything new
+   through `var(--sn-k, 1)` so the phone block can shrink it. Don't touch
+   the glass, wash or any surface colour: those belong to the theme. `test_static.py` fails until every look
    token is there, and if a look sets a theme's token.
 6. **Check it with your own eyes**, on the demo (`DEMO=1`), at full size:
    - every look × all five themes (Light, Soft, Blue, Grey, Black) at
@@ -291,9 +410,12 @@ CC0), Shenandoah NPS rolling hills.
 - `theme.js` owns the registry, the prefs (`fh.season`, `fh.look.<season>`)
   and the derived `data-look` attribute on `<html>`. It stamps them before
   first paint, and `tickClock` in hub.js re-derives them when the date turns.
-- `hub.js` mounts two layers: `.season` (the photo) as the first child of
-  `<body>`, and `.season-fx` (the leaves) as the last. It builds the Settings
-  tiles from the same leaf markup.
+- `hub.js` mounts two layers: `.season` (the photo, the far leaves, the webs
+  and the far bats) as the first child of `<body>`, and `.season-fx` (the
+  near leaves, the near bats and the two spiders) as the last. It builds the
+  Settings tiles from the same markup. `spiderWalk` and `spiderDrop` walk
+  the two spiders through `snMotion`, which also decides when they stand
+  down (no look, night, reduced motion, a background tab).
 - `styles.css` sets the tokens. The theme owns `--glass`, `--glass-edge`,
   `--sn-wash` and the palette; each look owns the rest:
 
@@ -301,7 +423,10 @@ CC0), Shenandoah NPS rolling hills.
   | --- | --- | --- |
   | `--sn-scene` | the photo | look |
   | `--sn-pos` | where the photo is anchored | look |
-  | `--sn-leaf-1`…`4` | the leaf colours | look |
+  | `--sn-leaf-1`…`4` | the leaf colours (fall) | look |
+  | `--sn-bat`, `--sn-spider`, `--sn-web`, their glows | the creature colours (Halloween) | season block |
+  | `--sn-haze` | coloured light over the photo, under the wash | look or season block |
+  | `--sn-k` | one scale for every creature (the phone halves it) | theme-wide, per breakpoint |
   | `--accent`, `--accent-ink`, `--accent-soft` | the accent, matched to the photo | look (light- and dark-theme tones) |
   | `--sn-wash` | the gradient over the photo | theme |
   | `--glass`, `--glass-edge` | the frosted cards | theme |
