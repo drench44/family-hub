@@ -7233,7 +7233,29 @@ test('the crawler walks: legs tied to its pace, turns the short way, stays on sc
     const delta = Math.abs(xy(moves[i]).deg - xy(moves[i - 1]).deg);
     assert.ok(delta <= 180.001, `turned ${delta.toFixed(0)}deg the long way round`);
   }
+  // ...and the pace is drawn fresh each time, so the cycle time varies: a
+  // fixed cycle is exactly the skating the class exists to prevent
+  const cycles = new Set(moves.map((m) => m.walkMs));
+  assert.ok(cycles.size >= 2, `the leg cycle never changed (${[...cycles].join()}), so it is not tied to the pace`);
   assert.ok(!el.classList.contains('walking'), 'and it ends up still');
+});
+
+test('the crawler keeps its whole self on screen even when it wants to go far', async () => {
+  // every hop as long as the code allows, in every direction: the layer
+  // clips, so a spider walked past the edge comes back sliced
+  const { document, sandbox } = newHub();
+  const { moves } = walkRecorder(sandbox, document, { stopAfter: 40 });
+  let i = 0;
+  sandbox.Math = Object.create(Math);
+  sandbox.Math.random = () => [0.99, 0.01, 0.5, 0.75][i++ % 4];
+  sandbox.spiderWalk();
+  await settle(500);
+  assert.ok(moves.length >= 8, 'it moved');
+  for (const m of moves) {
+    const to = xy(m);
+    assert.ok(to.x >= 0 && to.x <= 1920 - 40, `x ${to.x.toFixed(0)} leaves the layer`);
+    assert.ok(to.y >= 0 && to.y <= 1080 - 50, `y ${to.y.toFixed(0)} leaves the layer`);
+  }
 });
 
 test('the crawler stops walking the moment its layer goes', async () => {
