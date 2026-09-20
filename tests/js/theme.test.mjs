@@ -418,11 +418,36 @@ test('Halloween owns October from inside fall, and fall keeps the rest', () => {
   assert.equal(win.activeSeason(day(10, 1)), 'halloween');
   assert.equal(win.activeSeason(day(10, 31)), 'halloween');
   assert.equal(win.activeSeason(day(11, 1)), 'fall');
-  assert.match(win.refreshLook(day(10, 15)), /^halloween-/);
-  assert.match(win.refreshLook(day(11, 15)), /^fall-/);
+  assert.equal(win.refreshLook(day(10, 15)), 'halloween-two-lanterns',
+    'the marked default is what a fresh device paints all October');
+  assert.equal(win.refreshLook(day(11, 15)), 'fall-aspen-grove');
   const ids = win.FH_SEASONS.map((season) => season.id);
   assert.ok(ids.indexOf('halloween') < ids.indexOf('fall'),
     'a short holiday must be listed before the season it sits inside');
+});
+
+test('a season inside another season is always listed first', () => {
+  // The rule the registry comment promises, checked against whatever is
+  // actually registered rather than against today's two: the first matching
+  // window wins, so a holiday inside a broad season must come before it or
+  // it can never paint. Thanksgiving inside fall is next.
+  const { win } = loadTheme();
+  const span = (s2) => {
+    const from = s2.from[0] * 100 + s2.from[1];
+    const to = s2.to[0] * 100 + s2.to[1];
+    return { from, to, wraps: to < from };
+  };
+  const seasons = win.FH_SEASONS.map((s2, i) => ({ id: s2.id, i, ...span(s2) }));
+  for (const a of seasons) {
+    for (const b of seasons) {
+      if (a === b || a.wraps || b.wraps) continue;
+      const aInsideB = a.from >= b.from && a.to <= b.to;
+      if (aInsideB) {
+        assert.ok(a.i < b.i,
+          `${a.id}'s window sits inside ${b.id}'s, so it must be listed first or it never paints`);
+      }
+    }
+  }
 });
 
 test('the season registry is well formed', () => {

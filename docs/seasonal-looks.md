@@ -155,6 +155,39 @@ a bug. Read them before the next season.
 - **Preview tiles need their own sizes too.** The same webs and bats at wall
   scale filled a 128px tile.
 
+**What the review caught, and the rules that came out of it**
+- **Anything driven from JS must survive its own failures.** One rejected
+  animation used to unwind the whole loop with the `.walking` class still
+  on, leaving a spider frozen on the wall with its legs cycling until the
+  next reload — and it reads as decoration, so nobody would report it. Every
+  move now ends in a `finally` that stops the legs and fixes the position,
+  races the animation against a deadline (a stalled timeline never settles),
+  and logs rather than dying quietly.
+- **Ask what a guard means, not where it sits.** The stand-down check walked
+  two fixed levels up the tree and read `display` there. Adding one wrapper
+  to the markup would have inverted it silently — spiders wandering a
+  night-dimmed wall. It now asks the element itself
+  (`checkVisibility()`), plus `data-look` and the tab's own visibility.
+- **Animate what the compositor can animate.** Stepping a sprite by its
+  `mask-position` repaints on the main thread every frame; seven shadowed
+  bats doing that all day is real work for the wall's i3. The strip now
+  slides behind a window with `transform`, which looks identical and costs
+  almost nothing.
+- **A test that never runs the code proves nothing.** A reviewer put
+  `throw` on the first line of both spider movers and the whole suite
+  stayed green: the fake DOM had bailed long before. The motion is now driven
+  through a recording `animate()`, which pins the leg cycle to the walking
+  speed, the turn to the short way round, the clamp that keeps the whole
+  drawing on screen, and that every finished animation is released.
+- **Specificity decides who owns a rule.** The phone's web offsets (0,4,0)
+  beat the Settings tile's own (0,3,0), so on a phone in October the preview
+  tiles showed no webs at all. Every placement now says whether it means the
+  wall (`body > .season`) or a tile (`.look-swatch`), and a guard fails
+  on any that doesn't.
+- **A tile is a preview, not a small wall.** `--sn-k` (the phone's shrink)
+  inherits, so the same tile drew at half size in October and full size in
+  September. Tiles opt out.
+
 **Things that would have shipped broken**
 - **A sprite sheet has three numbers that must agree:** the frame count in
   `steps()`, the `mask-size` percentage that shows exactly one frame, and

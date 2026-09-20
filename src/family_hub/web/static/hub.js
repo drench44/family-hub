@@ -3953,28 +3953,61 @@ function mountSeasonScene() {
 const SPIDER_SPEED = [50, 100];
 const SPIDER_STRIDE = 32;
 const SPIDER_DROP_SPEED = [130, 260];
+// How long a spider waits before looking again while it has nothing to do.
+// Halloween paints 31 days a year, so this is the state they are in almost
+// always: keep the beat slow and the check cheap (an attribute read before
+// any layout question).
+const SPIDER_IDLE_MS = 30000;
 const snSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const snRnd = (a, b) => a + Math.random() * (b - a);
 
-// Shared by both spiders: where it is, whether its layer is on screen at all,
-// and one move. Returns null when the creature or the API is missing, which
-// covers the fake-DOM tests and any browser without element.animate.
+// Shared by both spiders: where it is, whether it should be moving at all,
+// and one move. Returns null when the creature or the Web Animations API is
+// missing, which covers the fake-DOM tests and any browser without
+// element.animate; the CSS park (off-screen) is then what shows.
 function snMotion(el) {
-  if (!el || typeof el.animate !== 'function' || typeof getComputedStyle !== 'function') return null;
-  // .sn-haunt > .season-fx. Missing means the markup moved: stand down
-  // rather than throw on the way up the tree.
-  const layer = el.parentElement && el.parentElement.parentElement;
-  if (!layer) return null;
+  if (!el || typeof el.animate !== 'function') {
+    console.warn('season: no spider to walk (missing element or element.animate); none will show');
+    return null;
+  }
   const place = (p) => `translate3d(${p.x}px, ${p.y}px, 0) rotate(${p.deg || 0}deg)`;
-  let at = { x: 0, y: 0, deg: 0 };
-  return {
-    layer,
+  const parked = { x: -120, y: -120, deg: 0 };
+  let at = { ...parked };
+  const box = () => {
+    // the layer it lives in, whatever the nesting: never walk a screen it
+    // cannot be seen on
+    const layer = el.closest ? el.closest('.season-fx') : null;
+    return layer || el.parentElement;
+  };
+  const motion = {
     at: () => at,
-    // no look, night and reduced motion all hide the layer; then it waits
-    showing: () => !document.hidden
-      && getComputedStyle(layer).display !== 'none'
-      && getComputedStyle(el.parentElement).display !== 'none',
-    park(p) {
+    bounds() {
+      const layer = box();
+      return { w: (layer && layer.clientWidth) || 0, h: (layer && layer.clientHeight) || 0 };
+    },
+    // Is this creature actually on a visible screen? checkVisibility answers
+    // it in one call whatever hides it — no look painted, the night rule, the
+    // reduced-motion rule, an ancestor's display — instead of walking a fixed
+    // number of levels up the tree and reading display there (that guard
+    // inverted silently the moment the markup gained a level). The
+    // getComputedStyle path is the fallback for older browsers.
+    showing() {
+      if (document.hidden) return false;
+      const look = document.documentElement.getAttribute('data-look');
+      if (!look || look === 'none') return false;
+      if (typeof el.checkVisibility === 'function') return el.checkVisibility();
+      if (typeof getComputedStyle !== 'function') return false;
+      for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+        if (getComputedStyle(node).display === 'none') return false;
+      }
+      return true;
+    },
+    park() {
+      at = { ...parked };
+      motion.still();
+      el.style.transform = place(at);
+    },
+    place(p) {
       at = { x: p.x, y: p.y, deg: p.deg || 0 };
       el.style.transform = place(at);
     },
@@ -3983,23 +4016,38 @@ function snMotion(el) {
       el.classList.add('walking');
     },
     still() { el.classList.remove('walking'); },
+    // One move. Whatever happens — the animation rejects (cancelled), the
+    // duration is refused, or the document timeline stops advancing so
+    // `finished` never settles — the creature ends up at the target with its
+    // legs still, and the caller's loop lives on. Without this a single
+    // rejection left a spider frozen mid-screen with its legs cycling
+    // forever, which reads as decoration rather than a fault.
     async go(to, ms, easing) {
       const target = { x: to.x, y: to.y, deg: to.deg === undefined ? at.deg : to.deg };
-      const a = el.animate([{ transform: place(at) }, { transform: place(target) }], { duration: ms, easing });
-      await a.finished;
-      at = target;
-      el.style.transform = place(at);
-      a.cancel();
+      let anim = null;
+      try {
+        anim = el.animate([{ transform: place(at) }, { transform: place(target) }],
+          { duration: Math.max(1, Math.round(ms)), easing });
+        // a stalled timeline (occluded window, a compositor hiccup) leaves
+        // `finished` pending for good: take the deadline and move on
+        await Promise.race([anim.finished, snSleep(Math.round(ms) + 500)]);
+      } catch (e) {
+        console.warn('season: a spider move was cut short; it carries on from where it should be', e);
+      } finally {
+        if (anim) { try { anim.cancel(); } catch (e2) { /* already gone */ } }
+        at = target;
+        el.style.transform = place(at);
+      }
     },
   };
+  return motion;
 }
 
-// The resident crawler: it never really leaves.
+// The resident crawler: while Halloween paints, it never really leaves.
 async function spiderWalk() {
   const el = document.querySelector('.season-fx .sn-crawl');
   const m = snMotion(el);
   if (!m) return;
-  const bounds = () => ({ w: m.layer.clientWidth, h: m.layer.clientHeight });
   // turn to face a spot, then walk to it at its own pace
   const dartTo = async (to) => {
     const from = m.at();
@@ -4008,84 +4056,115 @@ async function spiderWalk() {
     // the drawing faces up; turn the short way round towards the spot
     let deg = Math.atan2(dy, dx) * 180 / Math.PI + 90;
     deg = from.deg + ((((deg - from.deg) % 360) + 540) % 360) - 180;
-    m.step(speed);
-    await m.go({ x: from.x, y: from.y, deg }, Math.min(600, 120 + Math.abs(deg - from.deg) * 4), 'ease-in-out');
-    await m.go({ x: to.x, y: to.y, deg }, Math.hypot(dx, dy) / speed * 1000, 'cubic-bezier(.3, 0, .35, 1)');
-    m.still();
+    try {
+      m.step(speed);
+      await m.go({ x: from.x, y: from.y, deg }, Math.min(600, 120 + Math.abs(deg - from.deg) * 4), 'ease-in-out');
+      await m.go({ x: to.x, y: to.y, deg }, Math.hypot(dx, dy) / speed * 1000, 'cubic-bezier(.3, 0, .35, 1)');
+    } finally {
+      m.still(); // legs never keep cycling under a body that has stopped
+    }
   };
-  const first = bounds();
-  m.park({ x: snRnd(first.w * 0.2, first.w * 0.8) || 200, y: snRnd(first.h * 0.3, first.h * 0.8) || 300, deg: snRnd(0, 360) });
+  m.park();
+  let placed = false;
   for (;;) {
-    if (!m.showing()) { await snSleep(5000); continue; }
-    const size = bounds();
-    if (!size.w || !size.h) { await snSleep(5000); continue; }
+    if (!m.showing()) {
+      if (placed) { m.park(); placed = false; }
+      await snSleep(SPIDER_IDLE_MS);
+      continue;
+    }
+    const size = m.bounds();
+    if (!size.w || !size.h) { await snSleep(SPIDER_IDLE_MS); continue; }
+    // keep the whole drawing on screen, whatever size the look paints it at
+    // (the phone halves it): the layer clips, and a sliced spider looks broken
+    const pad = { x: (el.offsetWidth || 58) * 0.8, y: (el.offsetHeight || 76) * 0.8 };
+    if (!placed) {
+      m.place({ x: snRnd(pad.x, size.w - pad.x), y: snRnd(pad.y, size.h - pad.y), deg: snRnd(0, 360) });
+      placed = true;
+    }
     const here = m.at();
     // mostly a short hop, so it reads as a spider going about its business
     // on the glass rather than something crossing the screen
     const reach = Math.random() < 0.8 ? snRnd(60, 260) : snRnd(260, 700);
     const dir = snRnd(0, Math.PI * 2);
     await dartTo({
-      x: Math.min(size.w - 40, Math.max(10, here.x + Math.cos(dir) * reach)),
-      y: Math.min(size.h - 50, Math.max(10, here.y + Math.sin(dir) * reach)),
+      x: Math.min(size.w - pad.x, Math.max(pad.x, here.x + Math.cos(dir) * reach)),
+      y: Math.min(size.h - pad.y, Math.max(pad.y, here.y + Math.sin(dir) * reach)),
     });
     // a pause: mostly a short freeze, now and then a longer sit. Never long
     // enough to read as gone: this spider is meant to be a resident.
     await snSleep(Math.random() < 0.2 ? snRnd(2500, 5000) : snRnd(300, 1600));
     // ...and sometimes a turn on the spot before it picks a new direction
-    if (Math.random() < 0.3) {
-      m.step(snRnd(SPIDER_SPEED[0], SPIDER_SPEED[1]));
-      await m.go({ ...m.at(), deg: m.at().deg + snRnd(-80, 80) }, snRnd(240, 520), 'ease-in-out');
-      m.still();
+    if (Math.random() < 0.3 && m.showing()) {
+      try {
+        m.step(snRnd(SPIDER_SPEED[0], SPIDER_SPEED[1]));
+        await m.go({ ...m.at(), deg: m.at().deg + snRnd(-80, 80) }, snRnd(240, 520), 'ease-in-out');
+      } finally {
+        m.still();
+      }
       await snSleep(snRnd(300, 1800));
     }
   }
 }
 
-// The visitor on the thread: down in jerks, a hang, then back up.
+// The visitor on the thread: down in jerks, a hang, then back up. It checks
+// between every move, so a look going away (or night falling) mid-visit takes
+// it off the screen rather than leaving it hanging over a dimmed wall.
 async function spiderDrop() {
   const el = document.querySelector('.season-fx .sn-dangle');
   const m = snMotion(el);
   if (!m) return;
-  const PARKED = -160;
-  const lower = async (to, from) => {
+  const lower = async (to) => {
+    const from = m.at();
     const speed = snRnd(SPIDER_DROP_SPEED[0], SPIDER_DROP_SPEED[1]);
-    m.step(speed * 0.5); // the legs work slower than the silk pays out
-    await m.go({ x: 0, y: to }, Math.abs(to - from) / speed * 1000, 'cubic-bezier(.4, 0, .5, 1)');
-    m.still();
+    try {
+      m.step(speed * 0.5); // the legs work slower than the silk pays out
+      await m.go({ x: 0, y: to }, Math.abs(to - from.y) / speed * 1000, 'cubic-bezier(.4, 0, .5, 1)');
+    } finally {
+      m.still();
+    }
   };
-  m.park({ x: 0, y: PARKED });
+  const leave = () => {
+    el.classList.remove('visiting');
+    m.park();
+  };
+  leave();
   for (;;) {
-    if (!m.showing()) { await snSleep(5000); continue; }
-    const h = m.layer.clientHeight, w = m.layer.clientWidth;
-    if (!h || !w) { await snSleep(5000); continue; }
+    if (!m.showing()) { leave(); await snSleep(SPIDER_IDLE_MS); continue; }
+    const { w, h } = m.bounds();
+    if (!w || !h) { await snSleep(SPIDER_IDLE_MS); continue; }
     await snSleep(snRnd(40000, 110000));
-    if (!m.showing()) continue;
+    if (!m.showing()) { leave(); continue; }
     // a fresh spot along the top each visit
     el.style.left = `${Math.round(snRnd(w * 0.2, w * 0.8))}px`;
-    m.park({ x: 0, y: PARKED });
+    el.classList.add('visiting'); // the thread only sways while one is out
+    m.place({ x: 0, y: -160 });
     const end = snRnd(h * 0.22, h * 0.55);
-    let y = PARKED;
-    for (let i = 0, n = 2 + Math.floor(Math.random() * 3); i < n; i++) {
+    let y = -160;
+    for (let i = 0, n = 2 + Math.floor(Math.random() * 3); i < n && m.showing(); i++) {
       const next = i === n - 1 ? end : y + (end - y) * snRnd(0.35, 0.7);
-      await lower(next, y);
+      await lower(next);
       y = next;
       await snSleep(snRnd(400, 2000));
       // a bounce on the silk, legs gathering
-      if (Math.random() < 0.5) {
-        m.step(snRnd(30, 60));
-        await m.go({ x: 0, y: y - snRnd(8, 26) }, snRnd(300, 600), 'ease-out');
-        await m.go({ x: 0, y }, snRnd(400, 800), 'ease-in-out');
-        m.still();
+      if (Math.random() < 0.5 && m.showing()) {
+        try {
+          m.step(snRnd(30, 60));
+          await m.go({ x: 0, y: y - snRnd(8, 26) }, snRnd(300, 600), 'ease-out');
+          await m.go({ x: 0, y }, snRnd(400, 800), 'ease-in-out');
+        } finally {
+          m.still();
+        }
       }
     }
     await snSleep(snRnd(4000, 14000));
     // and back up, hand over hand
-    while (y > PARKED) {
-      const next = Math.max(PARKED, y - snRnd(h * 0.12, h * 0.3));
-      await lower(next, y);
+    while (y > -160 && m.showing()) {
+      const next = Math.max(-160, y - snRnd(h * 0.12, h * 0.3));
+      await lower(next);
       y = next;
-      if (y > PARKED) await snSleep(snRnd(200, 900));
+      if (y > -160) await snSleep(snRnd(200, 900));
     }
+    leave();
   }
 }
 
@@ -4837,8 +4916,12 @@ function paintViewportDiag() {
 }
 
 mountSeasonScene();
-spiderWalk();
-spiderDrop();
+// once only: two loops on one element would fight over its transform
+if (!window.__fhSpiders) {
+  window.__fhSpiders = true;
+  spiderWalk();
+  spiderDrop();
+}
 tickClock();
 setInterval(tickClock, 1000);
 poll().then(probeCamera);

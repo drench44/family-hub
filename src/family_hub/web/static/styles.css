@@ -2909,7 +2909,8 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-leaves.back .sn-leaf:nth-child(6) { --x: 88%; --y: 50%; --s: 18px; --d: 58s; --dl: -50s; --amp: 14px; --o: .8; }
 /* A wall left on overnight doesn't need leaves falling in a dark kitchen. */
 .is-night .sn-leaf, .is-night .sn-leaf b,
-.is-night .sn-bat, .is-night .sn-bat i, .is-night .sn-bat b { animation-play-state: paused; }
+.is-night .sn-bat, .is-night .sn-bat i, .is-night .sn-bat b,
+.is-night .sn-dangle i { animation-play-state: paused; }
 /* ...and the near layer goes away: the night dim turns .wrap into its own
    stacking layer, which would put the top bar and the open gear menu UNDER
    the leaves. The far leaves stay, still, behind the glass. */
@@ -2921,7 +2922,8 @@ body.integ-off-todos .todo-slot { display: none; }
    itself down on a thread from under the top bar and climbing back, and a
    spider crawling across the glass in short darts with pauses, the way real
    ones move. Behind the glass (.season): two corner webs and three small,
-   far bats. Shapes come from static/seasons/ (bat.svg, spider.svg,
+   far bats. Shapes come from static/seasons/ (bat.svg for the
+   mark, bat-flap.png and spider-walk.png for the drawn frames,
    spider-web.svg; see CREDITS.md), painted as masks in the look's colours.
    Transforms and opacity only; the glow is a small drop-shadow on small
    boxes, like the leaves' shadow. */
@@ -2931,17 +2933,20 @@ body.integ-off-todos .todo-slot { display: none; }
 .look-swatch[data-look^="halloween-"] .sn-haunt { display: block; }
 
 /* a bat: the span crosses the screen and waits off it, <i> rises and dips,
-   <b> beats its wings (a squash of the open-winged silhouette reads as a
-   wingbeat at this size) */
+   <b> is a window onto a strip of 15 drawn wingbeat frames that steps sideways
+   behind it (transform, so the compositor does it; animating the mask's own
+   position instead repainted every frame on the main thread) */
 .sn-bat { position: absolute; left: 0; top: var(--y); width: calc(var(--s) * var(--sn-k, 1)); height: calc(var(--s) * .83 * var(--sn-k, 1));
   animation: sn-bat-ltr var(--d) linear var(--dl) infinite;
   filter: drop-shadow(0 0 4px var(--sn-bat-glow)) drop-shadow(0 2px 3px rgba(0,0,0,.45)); }
 .sn-bat i { display: block; width: 100%; height: 100%;
   animation: sn-bat-bob var(--bob, 2.4s) ease-in-out var(--dl) infinite alternate; }
-.sn-bat b { display: block; width: 100%; height: 100%; background: var(--sn-bat);
-  -webkit-mask: url("seasons/bat-flap.png") 0 0 / 1500% 100% no-repeat; mask: url("seasons/bat-flap.png") 0 0 / 1500% 100% no-repeat;
-  animation: sn-bat-flap var(--flap, .5s) steps(15, jump-none) infinite; }
-.sn-bat.rtl { animation-name: sn-bat-rtl; }
+.sn-bat b { display: block; width: 100%; height: 100%; overflow: hidden; }
+.sn-bat b::before {
+  content: ""; display: block; width: 1500%; height: 100%; background: var(--sn-bat);
+  -webkit-mask: url("seasons/bat-flap.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/bat-flap.png") 0 0 / 100% 100% no-repeat;
+  animation: sn-bat-flap var(--flap, .5s) steps(15, jump-none) infinite;
+}
 /* a crossing is not a straight line: the bat lifts, dips and banks its way
    over, then waits off-screen for the rest of the cycle */
 @keyframes sn-bat-ltr {
@@ -2961,11 +2966,10 @@ body.integ-off-todos .todo-slot { display: none; }
   32%, 100% { transform: translate3d(-14vw, var(--rise, -9vh), 0) rotate(5deg); }
 }
 @keyframes sn-bat-bob { from { transform: translate3d(0, -18px, 0); } to { transform: translate3d(0, 18px, 0); } }
-@keyframes sn-bat-flap { from { -webkit-mask-position: 0 0; mask-position: 0 0; } to { -webkit-mask-position: 100% 0; mask-position: 100% 0; } }
+@keyframes sn-bat-flap { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-93.3333%, 0, 0); } }
 .sn-haunt.front .sn-bat:nth-child(1) { --y: 16%; --s: 84px; --d: 28s; --dl: -4s; }
 .sn-haunt.front .sn-bat:nth-child(2) { --y: 22%; --s: 62px; --d: 28s; --dl: -4.9s; --rise: -4vh; --bob: 2s; --flap: .19s; }
-.sn-haunt.front .sn-bat:nth-child(3) { --y: 46%; --s: 72px; --d: 37s; --dl: -24s; --rise: -18vh; --bob: 2.8s; }
-.sn-haunt.front .sn-bat:nth-child(3) { animation-name: sn-bat-rtl; }
+.sn-haunt.front .sn-bat:nth-child(3) { --y: 46%; --s: 72px; --d: 37s; --dl: -24s; --rise: -18vh; --bob: 2.8s; animation-name: sn-bat-rtl; }
 .sn-haunt.front .sn-bat:nth-child(4) { --y: 33%; --s: 40px; --d: 31s; --dl: -13s; --rise: 4vh; --bob: 3.2s; --flap: .56s; }
 .sn-haunt.back .sn-bat { filter: none; opacity: .85; }
 .sn-haunt.back .sn-bat:nth-child(3) { --y: 30%; --s: 30px; --d: 46s; --dl: -12s; --rise: -6vh; --flap: .28s; }
@@ -2978,31 +2982,34 @@ body.integ-off-todos .todo-slot { display: none; }
    with the spider instead of staying stiff while it sways. */
 .sn-dangle { position: absolute; left: 60%; top: 0; width: calc(34px * var(--sn-k, 1)); height: calc(44px * var(--sn-k, 1));
   transform: translate3d(0, -160px, 0); }
-.sn-dangle i { display: block; width: 100%; height: 100%; position: relative;
-  transform-origin: 50% -90vh; animation: sn-dangle-sway 4.2s ease-in-out infinite alternate; }
+.sn-dangle i { display: block; width: 100%; height: 100%; position: relative; transform-origin: 50% -90vh; }
+.sn-dangle.visiting i { animation: sn-dangle-sway 4.2s ease-in-out infinite alternate; }
 .sn-dangle i::before { content: ""; position: absolute; left: 50%; bottom: 58%; margin-left: -.5px;
   width: 1px; height: 100vh; background: var(--sn-web); }
-.sn-dangle b { display: block; width: 100%; height: 100%; background: var(--sn-spider);
-  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat;
-  filter: drop-shadow(0 0 4px var(--sn-spider-glow)); }
+
 @keyframes sn-dangle-sway { from { transform: rotate(-1.1deg); } to { transform: rotate(1.1deg); } }
 /* a spider crawling over the glass. hub.js walks it (spiderWalk): a turn,
    a dart, a pause, and its legs cycle through the seven drawn poses only
-   while it is moving, so it never walks on the spot. It parks off-screen
-   between crossings and whenever this layer is hidden. */
+   while it is moving, so it never walks on the spot. While Halloween paints
+   it stays on the screen and wanders; when the layer is hidden (no look,
+   night, reduced motion) hub.js parks it off-screen, and the transform below
+   is where it waits until then. */
 .sn-crawl { position: absolute; left: 0; top: 0; width: calc(58px * var(--sn-k, 1)); height: calc(76px * var(--sn-k, 1));
   transform: translate3d(-80px, -80px, 0); }
-.sn-crawl b { display: block; width: 100%; height: 100%; background: var(--sn-spider);
-  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat;
+.sn-crawl b, .sn-dangle b { display: block; width: 100%; height: 100%; overflow: hidden;
   filter: drop-shadow(0 0 4px var(--sn-spider-glow)); }
-.sn-crawl.walking b, .sn-dangle.walking b { animation: sn-walk var(--walk-ms, 520ms) steps(7) infinite; }
-@keyframes sn-walk { from { -webkit-mask-position: 0 0; mask-position: 0 0; } to { -webkit-mask-position: 116.67% 0; mask-position: 116.67% 0; } }
+.sn-crawl b::before, .sn-dangle b::before {
+  content: ""; display: block; width: 700%; height: 100%; background: var(--sn-spider);
+  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat;
+}
+.sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: sn-walk var(--walk-ms, 520ms) steps(7) infinite; }
+@keyframes sn-walk { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-100%, 0, 0); } }
 @media (max-width: 1000px) {
   /* a phone screen is a fifth of the wall’s width: at wall size one web
      covered the whole first card */
   :root:not([data-layout="desktop"])[data-look^="halloween-"] { --sn-k: .5; }
-  :root:not([data-layout="desktop"]) .sn-web:nth-child(1) { left: -110px; top: -120px; }
-  :root:not([data-layout="desktop"]) .sn-web:nth-child(2) { right: -96px; bottom: -92px; }
+  :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(1) { left: -110px; top: -120px; }
+  :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(2) { right: -96px; bottom: -92px; }
 }
 
 /* corner webs, behind the glass: a card over one blurs it to a silver haze,
@@ -3010,10 +3017,13 @@ body.integ-off-todos .todo-slot { display: none; }
    its stroke width when scaled). */
 .sn-web { position: absolute; width: calc(var(--s) * var(--sn-k, 1)); height: calc(var(--s) * var(--sn-k, 1)); background: var(--sn-web);
   -webkit-mask: url("seasons/spider-web.svg") center / contain no-repeat; mask: url("seasons/spider-web.svg") center / contain no-repeat; }
-.sn-web:nth-child(1) { --s: 620px; left: -250px; top: -270px; transform: rotate(9deg); }
-.sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px; transform: rotate(-16deg); }
+body > .season .sn-web:nth-child(1) { --s: 620px; left: -250px; top: -270px; transform: rotate(9deg); }
+body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px; transform: rotate(-16deg); }
 
-/* the Settings preview: everything still, scaled to the tile */
+/* the Settings preview: everything still, scaled to the tile. --sn-k is the
+   wall's phone shrink; a tile sets its own sizes, so it opts out (else the
+   same tile drew at half size in October and full size in September). */
+.look-swatch { --sn-k: 1; }
 .look-swatch .sn-bat { animation: none; transform: translate3d(var(--tx), 0, 0); }
 .look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
@@ -3105,7 +3115,7 @@ body.integ-off-todos .todo-slot { display: none; }
 @media (prefers-reduced-motion: reduce) {
   :root[data-look]:not([data-look="none"]) body > .season, .sn-leaf, .sn-leaf.fall, .sn-leaf b, .sn-leaf.fall b { animation: none; }
   .sn-leaf.fall { top: var(--y); }
-  .sn-bat, .sn-bat i, .sn-bat b, .sn-dangle i, .sn-crawl.walking b, .sn-dangle.walking b { animation: none; }
+  .sn-bat, .sn-bat i, .sn-bat b::before, .sn-dangle.visiting i, .sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-bat { display: none; }
   :root[data-look]:not([data-look="none"]) body > .season-fx { display: none; }
 }
