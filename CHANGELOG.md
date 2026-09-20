@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-19
+
 ### Added
 - Halloween seasonal looks, October 1 to 31 (inside fall, which keeps the
   rest of its window). Five photographs — **Lantern Night** (the default),
