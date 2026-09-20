@@ -1885,10 +1885,16 @@ def test_night_hides_the_near_leaves_and_pauses_the_far_ones():
     The far leaves pause; both the fall and the sway must stop. Night glass
     goes solid on <body> (where hub.js puts is-night)."""
     assert re.search(r'(?m)^:root\[data-look\]:not\(\[data-look="none"\]\) body\.is-night > \.season-fx \{ display: none; \}', CSS)
-    assert re.search(r"(?m)^\.is-night \.sn-leaf, \.is-night \.sn-leaf b,\n"
-                     r"\.is-night \.sn-bat, \.is-night \.sn-bat i, \.is-night \.sn-bat b "
-                     r"\{ animation-play-state: paused; \}", CSS), \
-        "night must pause the far layer of BOTH seasons (leaves and bats)"
+    # every moving thing the far layer keeps at night must be named in a
+    # paused rule. The selectors are collected rather than matched as one
+    # exact line, so re-wrapping that declaration is not a false failure.
+    paused = set()
+    for sels, body, _ in _rules():
+        if "animation-play-state: paused" in body:
+            paused |= {sel.strip() for sel in sels}
+    for sel in (".is-night .sn-leaf", ".is-night .sn-leaf b", ".is-night .sn-bat",
+                ".is-night .sn-bat i", ".is-night .sn-bat b", ".is-night .sn-dangle i"):
+        assert sel in paused, f"night must pause {sel}: a hidden animation still ticks"
     assert re.search(r"(?m)^\.is-night \{ --glass: color-mix\(in srgb, var\(--surface\) 9\d%", CSS)
 
 
@@ -1943,28 +1949,33 @@ def _png_size(path):
 
 def test_halloween_sprite_sheets_match_the_frames_the_css_steps_through():
     """The bat's wingbeat and the spider's walk are real drawn frames in one
-    row (see seasons/CREDITS.md), stepped through by CSS. Three numbers have
-    to agree or the animation tears: the frame count in steps(), the
-    mask-size percentage that shows exactly one frame, and the number of
-    cells actually in the file. The cell's shape must also match the box it
-    paints into, or every frame is stretched."""
-    for sheet, rule, box in (
-        ("bat-flap.png", r"\.sn-bat b \{([^}]*)\}", (1.0, 0.83)),
-        ("spider-walk.png", r"\.sn-crawl \{([^}]*)\}", (58.0, 76.0)),
-    ):
-        css_mask = re.search(rf'[^{{}}]*\{{[^}}]*mask: url\("seasons/{sheet}"\) 0 0 / (\d+)% 100%', CSS)
-        assert css_mask, f"nothing paints seasons/{sheet} as a sprite sheet"
-        frames = int(css_mask.group(1)) // 100
-        steps = {int(m) for m in re.findall(r"steps\((\d+)[,)]", CSS[CSS.index("Halloween's creatures"):])}
-        assert frames in steps, f"{sheet}: mask-size says {frames} frames, but no steps({frames}) drives it"
+    row (see seasons/CREDITS.md). Each is a strip as wide as its frame count,
+    sliding behind a one-frame window. Three numbers have to agree or the
+    animation tears: the strip's width, the frame count in steps(), and the
+    cells actually in the file — and the cell's shape must match the window
+    it slides behind, or every frame is stretched.
+
+    The strip is moved with transform, never with the mask's own position:
+    mask-position is not a compositable property, so animating it repaints
+    seven shadowed bats on the main thread every frame, all day, on a wall
+    driven by an i3's integrated graphics."""
+    for sheet, window in (("bat-flap.png", (1.0, 0.83)), ("spider-walk.png", (58.0, 76.0))):
+        strip = re.search(rf'::before \{{[^}}]*width: (\d+)%;[^}}]*mask: url\("seasons/{sheet}"\) 0 0 / 100% 100%', CSS)
+        assert strip, f"seasons/{sheet} must be painted on a ::before strip, stepped by transform"
+        frames = int(strip.group(1)) // 100
+        haunt = CSS[CSS.index("Halloween's creatures"):]
+        steps = {int(m) for m in re.findall(r"steps\((\d+)[,)]", haunt)}
+        assert frames in steps, f"{sheet}: the strip holds {frames} frames, but no steps({frames}) drives it"
         w, h = _png_size(STATIC / "seasons" / sheet)
         assert w % frames == 0, f"{sheet} is {w}px wide, not a whole number of {frames} frames"
         cell = (w / frames) / h
-        assert abs(cell - box[0] / box[1]) < 0.12, \
-            f"{sheet}'s frames are {cell:.2f} wide per tall; its box is {box[0] / box[1]:.2f}, so frames stretch"
-        assert re.search(rf"@keyframes sn-\w+ \{{ from \{{[^}}]*mask-position: 0 0;[^}}]*\}} "
-                         rf"to \{{[^}}]*mask-position: [\d.]+% 0;", CSS), \
-            "a sprite sheet is stepped by animating mask-position"
+        assert abs(cell - window[0] / window[1]) < 0.12, \
+            f"{sheet}'s frames are {cell:.2f} wide per tall; its window is {window[0] / window[1]:.2f}, so frames stretch"
+    for name in ("sn-bat-flap", "sn-walk"):
+        kf = re.search(rf"@keyframes {name} \{{([^}}]*)\}}", CSS)
+        assert kf, f"no @keyframes {name}"
+        assert "transform: translate3d(" in kf.group(1) and "mask-position" not in kf.group(1), \
+            f"{name} must step the strip with transform (mask-position repaints every frame)"
 
 
 def test_halloween_creatures_are_sized_off_one_scale_so_a_phone_can_shrink_them():
@@ -1989,7 +2000,7 @@ def test_the_crawling_spider_is_parked_until_hub_js_walks_it():
     m = re.search(r"\.sn-crawl \{([^}]*)\}", CSS)
     assert m and re.search(r"transform: translate3d\(-\d+px, -\d+px, 0\)", m.group(1)), \
         "the crawler must be parked off-screen by default"
-    legs = re.search(r"\.sn-crawl\.walking b, \.sn-dangle\.walking b \{([^}]*)\}", CSS)
+    legs = re.search(r"\.sn-crawl\.walking b::before, \.sn-dangle\.walking b::before \{([^}]*)\}", CSS)
     assert legs and "animation: sn-walk" in legs.group(1), \
         "the walk cycle must hang off .walking, or the legs walk on the spot"
     hub = (STATIC / "hub.js").read_text()
@@ -2000,5 +2011,115 @@ def test_the_crawling_spider_is_parked_until_hub_js_walks_it():
     # motion, or a background tab
     motion = hub[hub.index("function snMotion("):hub.index("async function spiderWalk()")]
     assert "typeof el.animate !== 'function'" in motion, "must bail without the Web Animations API"
-    assert "document.hidden" in motion and "display) !== 'none'" in motion.replace("display !== 'none'", "display) !== 'none'"), \
-        "showing() must check the hidden tab AND the layer's display"
+    # what "should it be moving?" means, not how deep the markup happens to
+    # be: an earlier version walked two fixed levels up the tree and read
+    # display there, which silently inverted the moment the markup gained a
+    # level (a spider would then walk over a night-dimmed wall)
+    assert "document.hidden" in motion, "a background tab must stand them down"
+    assert 'getAttribute(\'data-look\')' in motion, "no look painted must stand them down"
+    assert "checkVisibility" in motion, "visibility must be asked of the element, not inferred from nesting"
+    # one move must never leave a spider frozen with its legs cycling: the
+    # animation is raced against a deadline and the legs stop in a finally
+    go = motion[motion.index("async go("):]
+    assert "try {" in go and "finally {" in go, "a move must clean up after itself whatever happens"
+    assert "Promise.race" in go, "a timeline that stops advancing must not hang the loop for good"
+    walk = hub[hub.index("async function spiderWalk()"):hub.index("async function spiderDrop()")]
+    assert walk.count("m.still();") >= 1 and "finally {" in walk, \
+        "the legs stop in a finally, or a failed move leaves them cycling under a still body"
+
+
+def test_the_creature_layer_belongs_to_halloween_alone():
+    """The webs, bats and spiders show for a halloween-* look and for nothing
+    else. The layer that carries them is now shown for EVERY season (the
+    leaves' old fall-only rule was widened), so this prefix is the only thing
+    keeping bats off the fall photos."""
+    shown = {s for sels, body, _ in _rules() if "display: block" in body for s in sels}
+    for sel in (':root[data-look^="halloween-"] body > .season .sn-haunt',
+                ':root[data-look^="halloween-"] body > .season-fx .sn-haunt',
+                '.look-swatch[data-look^="halloween-"] .sn-haunt'):
+        assert sel in shown, f"{sel} is never shown"
+    for sels, body, _ in _rules():
+        if "display: block" not in body:
+            continue
+        for sel in sels:
+            if ".sn-haunt" in sel:
+                assert 'halloween-' in sel, f"{sel} would show the creatures outside Halloween"
+
+
+def test_the_back_layer_order_matches_the_rules_that_place_it():
+    """The far layer is addressed by position: webs first, then bats. hub.js
+    emits them in that order and styles.css numbers them to match; swapping
+    either leaves the webs with no size and the bats with no lane."""
+    hub = (STATIC / "hub.js").read_text()
+    back = hub[hub.index("if (depth === 'back')"):hub.index("return '<span class=\"sn-haunt front\">")]
+    order = re.findall(r"sn-web|bat \+ bat|\bbat\b", back)
+    assert back.count('class="sn-web"') == 2, "two webs open the back layer"
+    assert back.index('class="sn-web"') < back.index("bat"), "the webs come first, as the rules assume"
+    webs = {int(m) for m in re.findall(r"\.sn-web:nth-child\((\d)\)", CSS)}
+    bats = {int(m) for m in re.findall(r"\.sn-haunt\.back \.sn-bat:nth-child\((\d)\)", CSS)}
+    assert webs == {1, 2}, f"the webs are children 1 and 2, not {sorted(webs)}"
+    assert bats == {3, 4, 5}, f"the far bats follow the webs, not {sorted(bats)}"
+    assert back.count(" + bat") == 3, "three far bats, one per rule"
+    assert order  # the markup was read, not an empty slice
+
+
+def test_every_creature_token_a_season_declares_is_actually_used():
+    """A token declared and never referenced paints nothing: a typo in the
+    reference (var(--sn-bat-nope)) leaves the bats invisible and every other
+    guard still green."""
+    for prefix, tokens in _SEASON_SHAPE_TOKENS.items():
+        if prefix == "fall-":
+            continue
+        for tok in tokens:
+            assert re.search(rf"var\({re.escape(tok)}[,)]", CSS), \
+                f"{tok} is declared for {prefix} but nothing paints with it"
+
+
+def test_the_dangling_spider_hangs_from_a_visible_thread():
+    """The thread is the whole illusion: a hairline in the web colour running
+    from the spider up past the top of the screen, INSIDE the box that sways,
+    so thread and spider lean together (they did not, at first)."""
+    thread = re.search(r"\.sn-dangle i::before \{([^}]*)\}", CSS)
+    assert thread, "the dangling spider has no thread"
+    body = thread.group(1)
+    assert "width: 1px" in body, "the thread is a hairline"
+    assert "height: 100vh" in body, "it must reach past the top of the screen at any drop"
+    assert "var(--sn-web)" in body, "it is drawn in the look's own web colour"
+    sway = re.search(r"\.sn-dangle\.visiting i \{([^}]*)\}", CSS)
+    assert sway and "sn-dangle-sway" in sway.group(1), \
+        "the sway belongs to the box that holds BOTH the thread and the spider"
+
+
+def test_reduced_motion_takes_the_far_bats_but_keeps_the_webs():
+    """Still bats read as dropped at the left edge, so they go. The webs
+    never moved, so they stay: a Halloween look with no webs at all is not
+    what reduced motion is for."""
+    _, _, hidden = _last_reduced_motion_selectors()
+    assert ':root[data-look]:not([data-look="none"]) body > .season .sn-bat' in hidden, \
+        "reduced motion must hide the far bats"
+    assert not any(".sn-web" in sel for sel in hidden), \
+        "the webs do not move; reduced motion must keep them"
+
+
+def test_the_preview_tile_paints_halloween_and_holds_still():
+    """A Settings tile is a live preview at 128px. It needs the season's own
+    creature colours, everything still, and its own sizes — and no wall rule
+    may reach inside it (the phone's web offsets did, and pushed both webs
+    off the tile)."""
+    swatch = _block_after('.look-swatch[data-look^="halloween-"]')
+    for tok in _SEASON_SHAPE_TOKENS["halloween-"]:
+        assert re.search(rf"{re.escape(tok)}\s*:", swatch), f"a preview tile never sets {tok}"
+    still = re.search(r"\.look-swatch \.sn-bat \{([^}]*)\}", CSS)
+    assert still and "animation: none" in still.group(1), "preview bats must hold still in the tile"
+    assert re.search(r"\.look-swatch \{[^}]*--sn-k: 1;", CSS), \
+        "a tile keeps wall scale: --sn-k is the phone's shrink for the wall, not for a 128px tile"
+    # every rule that places a web is either the tile's own or scoped to the
+    # wall layer, so the two can never fight
+    for sels, body, _ in _rules():
+        if not re.search(r"(left|right|top|bottom):", body):
+            continue
+        for sel in sels:
+            if ".sn-web" not in sel:
+                continue
+            assert ".look-swatch" in sel or "body > .season" in sel, \
+                f"{sel} places a web without saying whether it means the wall or a tile"
