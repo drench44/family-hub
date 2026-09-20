@@ -38,13 +38,18 @@ at one URL.
   (over the cards and softly behind them), and a matching accent and a small
   mark sit beside the wordmark. Fall (Sep 1 to
   Nov 30) offers **Aspen Grove** (the default), **Misty Road** and **Maple
-  Sky**, picked per device under **All settings → Seasonal looks** from
+  Sky**, and **Halloween** takes October with **Lantern Night** (the
+  default), **Witching Hour**, **Haunted Pines**, **Moonrise** and **Bare
+  Branches** — bats cross the sky, a spider lets itself down on its thread,
+  another lives on the glass, and webs hang in the corners. Each look is
+  picked per device under **All settings → Seasonal looks** from
   live preview tiles. Each of the five themes keeps its own glass: Light and
-  Soft show the photo bright and airy, Blue, Grey and Black at dusk. The
-  leaves rest at night and for reduced motion, and the photos (public domain and CC0) ship inside the app.
+  Soft show the photo bright and airy, Blue, Grey and Black at dusk. Nothing
+  moves at night or for reduced motion, and the art (public domain, CC0,
+  CC-BY and MIT) ships inside the app.
   Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
 
-  ![Fall seasonal looks](docs/seasons.jpg)
+  ![Seasonal looks: fall and Halloween](docs/seasons.jpg)
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
   hub in **Safari** and use Share → **Add to Home Screen** for a full-screen
@@ -442,5 +447,7 @@ to exercise it.
 
 MIT.
 
-The seasonal look artwork credits (Twemoji, CC-BY 4.0; Phosphor Icons, MIT) are in
+The seasonal look artwork credits (photographs in the public domain or CC0;
+Twemoji and Noto Animated Emoji, CC-BY 4.0; Phosphor Icons and the Bug.js
+spider, MIT) are in
 [`src/family_hub/web/static/seasons/CREDITS.md`](src/family_hub/web/static/seasons/CREDITS.md).

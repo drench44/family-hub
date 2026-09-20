@@ -7065,6 +7065,272 @@ test('mountSeasonScene: photo + far leaves first in <body>, near leaves last (ov
   assert.equal(fx[0], 'beforeend', 'the near leaves come after the wall, so they drift over the cards');
   assert.match(fx[1], /^<span class="season-fx" aria-hidden="true"><span class="sn-leaves front">/);
   assert.equal((fx[1].match(/class="sn-leaf fall/g) || []).length, 6);
+  // both layers also carry Halloween's creatures; CSS shows only the set
+  // that belongs to the look being painted
+  assert.match(photo[1], /<span class="sn-haunt back">/, 'the far layer carries the webs and far bats');
+  assert.equal((photo[1].match(/class="sn-web"/g) || []).length, 2, 'two corner webs');
+  assert.match(fx[1], /<span class="sn-haunt front">/);
+  assert.equal((fx[1].match(/class="sn-web"/g) || []).length, 0, 'the webs stay behind the glass');
+  assert.match(fx[1], /<span class="sn-dangle"><i><b><\/b><\/i><\/span>/,
+    'the thread and the spider hang inside one box, so they swing together');
+  assert.match(fx[1], /<span class="sn-crawl"><b><\/b><\/span>/);
+});
+
+test('seasonHauntHtml: the creatures each layer carries, spans only, balanced', () => {
+  const { sandbox } = newHub();
+  for (const depth of ['front', 'back']) {
+    const html = sandbox.seasonHauntHtml(depth);
+    assert.equal((html.match(/<span\b/g) || []).length, (html.match(/<\/span>/g) || []).length,
+      `${depth}: every span closes`);
+    assert.doesNotMatch(html, /<div/, 'spans only: the same markup sits inside a <button> tile');
+    assert.match(html, new RegExp(`^<span class="sn-haunt ${depth}">`));
+  }
+  const front = sandbox.seasonHauntHtml('front');
+  const back = sandbox.seasonHauntHtml('back');
+  // the nth-child rules place every bat: the count is load-bearing
+  assert.equal((front.match(/class="sn-bat"/g) || []).length, 4, 'four bats cross in front');
+  assert.equal((back.match(/class="sn-bat"/g) || []).length, 3, 'three smaller bats fly behind the glass');
+  assert.equal((front.match(/class="sn-dangle"/g) || []).length, 1);
+  assert.equal((front.match(/class="sn-crawl"/g) || []).length, 1);
+  assert.equal((back.match(/sn-dangle|sn-crawl/g) || []).length, 0, 'the spiders belong over the cards');
+  assert.match(front, /<span class="sn-bat"><i><b><\/b><\/i><\/span>/, 'a bat is travel, bob and wingbeat');
+});
+
+// ---- the two JS-walked spiders ----
+// A fake creature: one <span class="sn-crawl"> inside .sn-haunt inside
+// .season-fx, a sized layer, and whatever animate() the test wants.
+function spiderStage(sandbox, document, opts = {}) {
+  const layer = document.createElement('span');
+  layer._className = 'season-fx';
+  const haunt = document.createElement('span');
+  haunt._className = 'sn-haunt front';
+  const el = document.createElement('span');
+  el._className = 'sn-crawl';
+  haunt.appendChild(el);
+  layer.appendChild(haunt);
+  document.body.appendChild(layer);
+  el.parentElement = haunt;
+  haunt.parentElement = layer;
+  layer.clientWidth = 1920;
+  layer.clientHeight = 1080;
+  el.offsetWidth = 58;
+  el.offsetHeight = 76;
+  el.closest = (sel) => (sel === '.season-fx' ? layer : null);
+  const props = {};
+  el.style = {
+    transform: '',
+    left: '',
+    setProperty(k, v) { props[k] = String(v); },
+    getPropertyValue(k) { return props[k] || ''; },
+  };
+  el.checkVisibility = () => opts.visible !== false;
+  const moves = [];
+  if (opts.animate !== false) {
+    el.animate = (frames, o) => {
+      moves.push(o);
+      return { finished: opts.reject ? Promise.reject(new Error('AbortError')) : Promise.resolve(), cancel() {} };
+    };
+  }
+  document.documentElement.setAttribute('data-look', opts.look || 'halloween-two-lanterns');
+  document.hidden = Boolean(opts.hiddenTab);
+  document.querySelector = (sel) => (sel.includes('sn-crawl') || sel.includes('sn-dangle') ? el : null);
+  sandbox.getComputedStyle = () => ({ display: 'block' });
+  return { el, layer, moves };
+}
+
+const settle = async (times = 12) => { for (let i = 0; i < times; i++) await Promise.resolve(); };
+
+test('with no element.animate the spiders show nothing at all', async () => {
+  // A browser without the Web Animations API must leave the CSS park in
+  // place — never a spider stranded mid-screen.
+  const { document, sandbox } = newHub();
+  const { el } = spiderStage(sandbox, document, { animate: false });
+  await sandbox.spiderWalk();
+  await sandbox.spiderDrop();
+  assert.equal(el.style.transform || '', '', 'nothing is positioned: the CSS park stands');
+  assert.ok(!el.classList.contains('walking'), 'and no legs cycle');
+});
+
+test('a move that fails never leaves the legs cycling, and the walk carries on', async () => {
+  // The failure this exists for: one rejected animation used to unwind the
+  // whole loop with .walking still on, so a spider sat at one spot on the
+  // wall with seven legs cycling at 3Hz until the next reload.
+  const { document, sandbox } = newHub();
+  const stage = spiderStage(sandbox, document, {});
+  let fires = 0;
+  sandbox.setTimeout = (fn) => { if (fires++ < 400) Promise.resolve().then(fn); return fires; };
+  const moves = [];
+  stage.el.animate = () => {
+    moves.push(1);
+    if (moves.length >= 6) stage.el.checkVisibility = () => false; // then it parks
+    return { finished: Promise.reject(new Error('AbortError')), cancel() {} };
+  };
+  sandbox.spiderWalk();
+  await settle(300);
+  assert.ok(moves.length >= 4, `the walk must survive a failed move (got ${moves.length})`);
+  assert.ok(!stage.el.classList.contains('walking'),
+    'and once it stops, the legs stop with it (the finally)');
+  assert.match(stage.el.style.transform, /^translate3d\(-?\d+(\.\d+)?px, -?\d+(\.\d+)?px, 0\) rotate\(/,
+    'it is left at a known place, not wherever the animation died');
+});
+
+test('one move: a rejected animation is caught, and the spider still lands', async () => {
+  // Straight at snMotion.go, with real timers, so the rejection wins its
+  // race and the catch actually runs (with the fake clock the deadline won
+  // and this path was never executed).
+  const { document, sandbox } = newHub();
+  const { el } = spiderStage(sandbox, document, {});
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms); // real time: the deadline must be able to lose
+  el.animate = () => ({ finished: Promise.reject(new Error('AbortError')), cancel() {} });
+  const m = sandbox.snMotion(el);
+  el.classList.add('walking');
+  await m.go({ x: 40, y: 50, deg: 12 }, 30, 'linear'); // must not throw
+  assert.equal(el.style.transform, 'translate3d(40px, 50px, 0) rotate(12deg)',
+    'a failed move still leaves it where the move was going');
+  assert.deepEqual({ ...m.at() }, { x: 40, y: 50, deg: 12 }, 'and the walker agrees where that is');
+});
+
+test('one move: an animation that never settles gives up on a deadline', async () => {
+  // A stalled document timeline leaves `finished` pending for good. Without
+  // a deadline the walk parks inside the await forever and the spider is
+  // frozen for the rest of the month.
+  const { document, sandbox } = newHub();
+  const { el } = spiderStage(sandbox, document, {});
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms); // real time: the deadline must be able to win
+  let cancelled = 0;
+  el.animate = () => ({ finished: new Promise(() => {}), cancel() { cancelled++; } });
+  const m = sandbox.snMotion(el);
+  const started = Date.now();
+  await m.go({ x: 7, y: 9, deg: 0 }, 20, 'linear');
+  assert.ok(Date.now() - started < 3000, 'it must not wait on a promise that never settles');
+  assert.equal(el.style.transform, 'translate3d(7px, 9px, 0) rotate(0deg)');
+  assert.equal(cancelled, 1, 'and the stalled animation is released');
+});
+
+test('nothing to look at means nothing moves: no look painted, or a hidden tab', async () => {
+  // checkVisibility covers night and reduced motion (both hide the layer in
+  // CSS); data-look covers "no season painted" and a hidden tab covers a
+  // backgrounded wall. None of them may walk a spider.
+  for (const opts of [{ visible: false }, { look: 'none' }, { hiddenTab: true }]) {
+    const { document, sandbox } = newHub();
+    const { el, moves } = spiderStage(sandbox, document, opts);
+    sandbox.spiderWalk();
+    sandbox.spiderDrop();
+    await settle();
+    assert.equal(moves.length, 0, `nothing moves for ${JSON.stringify(opts)}`);
+    assert.ok(!el.classList.contains('walking'), 'and no legs cycle');
+    assert.match(el.style.transform || 'translate3d(-120px, -120px, 0) rotate(0deg)',
+      /translate3d\(-\d+px, -\d+px, 0\)/, 'it waits off the top-left corner');
+  }
+});
+
+// Drive the real walk: a recording animate() that resolves at once, a
+// layer that is visible, and a stop after N moves so the endless loop ends.
+function walkRecorder(sandbox, document, opts = {}) {
+  const stage = spiderStage(sandbox, document, opts);
+  // the walker sleeps between moves; let those sleeps resolve at once so a
+  // whole tour runs inside the test, with a cap so nothing can spin
+  let fires = 0;
+  sandbox.setTimeout = (fn) => { if (fires++ < 400) Promise.resolve().then(fn); return fires; };
+  const moves = [];
+  stage.el.animate = (frames, o) => {
+    moves.push({ frames, opts: o, walkMs: stage.el.style.getPropertyValue('--walk-ms'), walking: stage.el.classList.contains('walking') });
+    let cancelled = 0;
+    const handle = { finished: Promise.resolve(), cancel() { cancelled++; handle.cancelled = cancelled; } };
+    if (moves.length >= (opts.stopAfter || 8)) stage.el.checkVisibility = () => false;
+    return handle;
+  };
+  return { ...stage, moves };
+}
+
+const xy = (m) => {
+  const t = m.frames[1].transform.match(/translate3d\((-?[\d.]+)px, (-?[\d.]+)px, 0\) rotate\((-?[\d.]+)deg\)/);
+  assert.ok(t, `unreadable transform: ${m.frames[1].transform}`);
+  return { x: +t[1], y: +t[2], deg: +t[3] };
+};
+
+test('the crawler walks: legs tied to its pace, turns the short way, stays on screen', async () => {
+  const { document, sandbox } = newHub();
+  const { el, moves } = walkRecorder(sandbox, document, { stopAfter: 24 });
+  sandbox.spiderWalk();
+  await settle(400);
+  assert.ok(moves.length >= 6, `the loop must actually move it (got ${moves.length})`);
+
+  for (const m of moves) {
+    assert.ok(m.walking, 'every move happens with the legs cycling');
+    // one step covers about a stride, so the cycle time follows the speed:
+    // stride 32px at 50-100px/s is 320-640ms. A fixed cycle is the skating
+    // the .walking class exists to prevent.
+    const ms = parseInt(m.walkMs, 10);
+    assert.ok(ms >= 300 && ms <= 660, `leg cycle ${ms}ms is not tied to the speed`);
+    const to = xy(m);
+    // the layer clips: a sliced spider looks broken, so it keeps its whole
+    // 58x76 box inside a 1920x1080 layer
+    assert.ok(to.x >= 0 && to.x <= 1920 - 40, `x ${to.x} leaves the layer`);
+    assert.ok(to.y >= 0 && to.y <= 1080 - 50, `y ${to.y} leaves the layer`);
+  }
+  // a turn is always the short way round: never more than half a circle
+  for (let i = 1; i < moves.length; i++) {
+    const delta = Math.abs(xy(moves[i]).deg - xy(moves[i - 1]).deg);
+    assert.ok(delta <= 180.001, `turned ${delta.toFixed(0)}deg the long way round`);
+  }
+  // ...and the pace is drawn fresh each time, so the cycle time varies: a
+  // fixed cycle is exactly the skating the class exists to prevent
+  const cycles = new Set(moves.map((m) => m.walkMs));
+  assert.ok(cycles.size >= 2, `the leg cycle never changed (${[...cycles].join()}), so it is not tied to the pace`);
+  assert.ok(!el.classList.contains('walking'), 'and it ends up still');
+});
+
+test('the crawler keeps its whole self on screen even when it wants to go far', async () => {
+  // every hop as long as the code allows, in every direction: the layer
+  // clips, so a spider walked past the edge comes back sliced
+  const { document, sandbox } = newHub();
+  const { moves } = walkRecorder(sandbox, document, { stopAfter: 40 });
+  let i = 0;
+  sandbox.Math = Object.create(Math);
+  sandbox.Math.random = () => [0.99, 0.01, 0.5, 0.75][i++ % 4];
+  sandbox.spiderWalk();
+  await settle(500);
+  assert.ok(moves.length >= 8, 'it moved');
+  for (const m of moves) {
+    const to = xy(m);
+    assert.ok(to.x >= 0 && to.x <= 1920 - 40, `x ${to.x.toFixed(0)} leaves the layer`);
+    assert.ok(to.y >= 0 && to.y <= 1080 - 50, `y ${to.y.toFixed(0)} leaves the layer`);
+  }
+});
+
+test('the crawler stops walking the moment its layer goes', async () => {
+  // night, reduced motion or the look going away all hide the layer; the
+  // walker must notice between moves rather than finishing a tour of a
+  // dimmed wall
+  const { document, sandbox } = newHub();
+  const { el, moves } = walkRecorder(sandbox, document, { stopAfter: 3 });
+  sandbox.spiderWalk();
+  await settle(400);
+  const seen = moves.length;
+  await settle(200);
+  assert.equal(moves.length, seen, 'no further moves once the layer is hidden');
+  assert.ok(!el.classList.contains('walking'));
+  assert.match(el.style.transform, /translate3d\(-\d+px, -\d+px, 0\)/, 'it parks off-screen');
+});
+
+test('each finished move is cancelled, so a wall running for months keeps none', async () => {
+  const { document, sandbox } = newHub();
+  const kept = [];
+  const stage = spiderStage(sandbox, document, {});
+  let fires = 0;
+  sandbox.setTimeout = (fn) => { if (fires++ < 400) Promise.resolve().then(fn); return fires; };
+  let n = 0;
+  stage.el.animate = () => {
+    const h = { finished: Promise.resolve(), cancelled: false, cancel() { h.cancelled = true; } };
+    kept.push(h);
+    if (++n >= 6) stage.el.checkVisibility = () => false;
+    return h;
+  };
+  sandbox.spiderWalk();
+  await settle(400);
+  assert.ok(kept.length >= 4, 'it moved');
+  assert.ok(kept.every((h) => h.cancelled), 'every animation is released when its move ends');
 });
 
 test('renderSettingsFull: a Seasonal looks card with an Off/On switch and a preview tile per look', () => {

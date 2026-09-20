@@ -47,7 +47,7 @@
   --sn-scene: none; --sn-pos: center;
   /* Light's glass and wash (other themes set their own near the end) */
   --sn-wash: linear-gradient(180deg, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
-  --glass: rgba(255,255,255,.80); --glass-edge: rgba(255,255,255,.55);
+  --glass: rgba(255,255,255,.66); --glass-edge: rgba(255,255,255,.50);
   --sn-leaf-1: #F58A2E; --sn-leaf-2: #F7B733; --sn-leaf-3: #EE6446; --sn-leaf-4: #FFD56B;
 }
 :root[data-accent="violet"] { --accent:#7A5AF0; --accent-soft:rgba(122,90,240,.12); }
@@ -2656,19 +2656,19 @@ body.integ-off-todos .todo-slot { display: none; }
    between the photo and the wall. Light themes get an airy veil, dark themes
    a dusk that deepens from Blue to Black. Light is the bare :root default. */
 :root[data-theme="soft"] {
-  --glass:rgba(247,243,235,.82); --glass-edge:rgba(255,251,242,.55);
+  --glass:rgba(247,243,235,.68); --glass-edge:rgba(255,251,242,.50);
   --sn-wash:linear-gradient(180deg, rgba(250,242,226,.30) 0%, rgba(250,242,226,.04) 36%, rgba(250,242,226,.12) 100%);
 }
 :root[data-theme="dark"] {
-  --glass:rgba(18,25,40,.70); --glass-edge:rgba(150,180,240,.14);
+  --glass:rgba(18,25,40,.56); --glass-edge:rgba(150,180,240,.16);
   --sn-wash:linear-gradient(180deg, rgba(6,14,34,.56) 0%, rgba(6,14,34,.30) 40%, rgba(6,14,34,.46) 100%);
 }
 :root[data-theme="grey"] {
-  --glass:rgba(31,31,33,.68); --glass-edge:rgba(255,255,255,.10);
+  --glass:rgba(31,31,33,.54); --glass-edge:rgba(255,255,255,.12);
   --sn-wash:linear-gradient(180deg, rgba(12,12,14,.52) 0%, rgba(12,12,14,.28) 40%, rgba(12,12,14,.42) 100%);
 }
 :root[data-theme="black"] {
-  --glass:rgba(8,8,10,.76); --glass-edge:rgba(255,255,255,.08);
+  --glass:rgba(8,8,10,.62); --glass-edge:rgba(255,255,255,.10);
   --sn-wash:linear-gradient(180deg, rgba(0,0,0,.66) 0%, rgba(0,0,0,.42) 40%, rgba(0,0,0,.58) 100%);
 }
 
@@ -2708,6 +2708,77 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#CC4F16; --accent-ink:#FFFFFF; --accent-soft:rgba(204,79,22,.12);
 }
 
+/* ---- Halloween: shared by every halloween-* look ----
+   Bats and spiders are near-black with a coloured rim (a purple glow on the
+   bats, a green one on the spiders) so they read on a night photo and on
+   dark glass alike; the webs are silver-lilac hairlines. The haze is the
+   look's own light: purple spilling from the top corners and a green mist
+   low on the right, over the photo and the theme's wash. */
+:root[data-look^="halloween-"],
+.look-swatch[data-look^="halloween-"] {
+  --sn-bat:#140A1E; --sn-bat-glow:rgba(168,110,255,.38);
+  --sn-spider:#0E0B12; --sn-spider-glow:rgba(150,255,90,.42);
+  --sn-web:rgba(232,222,255,.62);
+  --sn-haze:radial-gradient(55% 60% at 0% 0%, rgba(124,58,237,.34), transparent 70%),
+    radial-gradient(45% 55% at 100% 0%, rgba(168,85,247,.22), transparent 70%),
+    radial-gradient(50% 45% at 100% 100%, rgba(74,222,128,.16), transparent 72%);
+}
+
+/* ---- Lantern Night: two carved pumpkins in the dark (Beth Teutschmann, CC0) ---- */
+:root[data-look="halloween-two-lanterns"][data-theme][data-accent],
+.look-swatch[data-look="halloween-two-lanterns"] {
+  --accent:#FF8A2A; --accent-ink:#2A1000; --accent-soft:rgba(255,138,42,.18);
+  --sn-scene:url("seasons/halloween-two-lanterns.webp"); --sn-pos:35% 50%;
+}
+:root[data-look="halloween-two-lanterns"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-two-lanterns"] {
+  --accent:#C2530A; --accent-ink:#FFFFFF; --accent-soft:rgba(194,83,10,.13);
+}
+
+/* ---- Witching Hour: the Milky Way over a violet horizon (Vincentiu Solomon, CC0) ---- */
+:root[data-look="halloween-purple-sky"][data-theme][data-accent],
+.look-swatch[data-look="halloween-purple-sky"] {
+  --accent:#C29BFF; --accent-ink:#1E0B3A; --accent-soft:rgba(194,155,255,.18);
+  --sn-scene:url("seasons/halloween-purple-sky.webp"); --sn-pos:center 55%;
+}
+:root[data-look="halloween-purple-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-purple-sky"] {
+  --accent:#7C3AED; --accent-ink:#FFFFFF; --accent-soft:rgba(124,58,237,.13);
+}
+
+/* ---- Haunted Pines: black pines under a purple sky (Ryan Hutton, CC0) ---- */
+:root[data-look="halloween-purple-pines"][data-theme][data-accent],
+.look-swatch[data-look="halloween-purple-pines"] {
+  --accent:#9BFF5C; --accent-ink:#0D2A00; --accent-soft:rgba(155,255,92,.18);
+  --sn-scene:url("seasons/halloween-purple-pines.webp"); --sn-pos:center 60%;
+}
+:root[data-look="halloween-purple-pines"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-purple-pines"] {
+  --accent:#2F8F16; --accent-ink:#FFFFFF; --accent-soft:rgba(47,143,22,.13);
+}
+
+/* ---- Moonrise: a full moon through the trees (NPS, public domain) ---- */
+:root[data-look="halloween-moonrise"][data-theme][data-accent],
+.look-swatch[data-look="halloween-moonrise"] {
+  --accent:#FFB05C; --accent-ink:#2A1400; --accent-soft:rgba(255,176,92,.18);
+  --sn-scene:url("seasons/halloween-moonrise.webp"); --sn-pos:60% 88%;
+}
+:root[data-look="halloween-moonrise"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-moonrise"] {
+  --accent:#A85A12; --accent-ink:#FFFFFF; --accent-soft:rgba(168,90,18,.13);
+}
+
+/* ---- Bare Branches: a stand of bare trees at deep dusk (Vladimir Agafonkin, CC0) ---- */
+:root[data-look="halloween-branches"][data-theme][data-accent],
+.look-swatch[data-look="halloween-branches"] {
+  --accent:#C08CFF; --accent-ink:#1B0A33; --accent-soft:rgba(192,140,255,.18);
+  --sn-scene:url("seasons/halloween-branches.webp"); --sn-pos:center 55%;
+}
+:root[data-look="halloween-branches"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-branches"] {
+  --accent:#6D28D9; --accent-ink:#FFFFFF; --accent-soft:rgba(109,40,217,.13);
+}
+
 /* ---- the scene ---- */
 /* Behind everything: z-index -1 paints under the page content, and the body's
    own background steps aside so the scene is what shows (html keeps --ground
@@ -2720,7 +2791,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look]:not([data-look="none"]) body > .season {
   display: block; position: fixed; inset: 0; z-index: -1;
   pointer-events: none; overflow: hidden;
-  background: var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground);
+  background: var(--sn-haze, linear-gradient(transparent, transparent)), var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground);
   animation: sn-arrive 1.2s ease-out both;
 }
 @keyframes sn-arrive { from { opacity: 0; } to { opacity: 1; } }
@@ -2735,7 +2806,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :where(:root[data-look]:not([data-look="none"]) .wrap) .card,
 :where(:root[data-look]:not([data-look="none"]) .wrap) .expand {
   background: var(--glass); border-color: var(--glass-edge);
-  -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(26px) saturate(1.4); backdrop-filter: blur(26px) saturate(1.4);
 }
 /* At night the dim filter on the page's children makes .wrap a backdrop root,
    so the glass stops blurring and the photo showed through sharp and busy.
@@ -2750,7 +2821,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :where(:root[data-look]:not([data-look="none"]) .wrap) .shead h2 {
   color: var(--ink); background: var(--glass); border: 1px solid var(--glass-edge);
   padding: 5px 12px; border-radius: 999px;
-  -webkit-backdrop-filter: blur(16px) saturate(1.3); backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.35); backdrop-filter: blur(20px) saturate(1.35);
 }
 /* z-index: backdrop-filter makes the bar its own stacking context, which traps
    the gear popover (z-index 60) inside it; without lifting the bar, the glass
@@ -2759,7 +2830,7 @@ body.integ-off-todos .todo-slot { display: none; }
   position: relative; z-index: 30;
   background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 16px;
   margin: 10px 0 6px; padding: 8px 14px;
-  -webkit-backdrop-filter: blur(22px) saturate(1.35); backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(26px) saturate(1.4); backdrop-filter: blur(26px) saturate(1.4);
 }
 @media (max-width: 1000px) {
   /* the phone's top row is already full (wordmark, mark, live, clock, gear):
@@ -2787,13 +2858,13 @@ body.integ-off-todos .todo-slot { display: none; }
    layer re-blurs every frame on the wall's small GPU). Placement and speed per
    leaf live in the nth-child rules so the markup stays bare. */
 .season-fx { display: none; }
-:root[data-look^="fall-"] body > .season-fx {
+:root[data-look]:not([data-look="none"]) body > .season-fx {
   display: block; position: fixed; inset: 0; z-index: 20;
   pointer-events: none; overflow: hidden;
 }
 @media (max-width: 1000px) {
   /* the tab bar is 64px plus the iPhone home-indicator inset (home-screen app) */
-  :root:not([data-layout="desktop"])[data-look^="fall-"] body > .season-fx { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+  :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) body > .season-fx { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
 }
 .sn-leaves { display: none; position: absolute; inset: 0; }
 :root[data-look^="fall-"] body > .season-fx .sn-leaves,
@@ -2837,11 +2908,129 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-leaves.back .sn-leaf:nth-child(5) { --x: 11%; --y: 70%; --s: 16px; --d: 60s; --dl: -22s; --amp: 12px; --o: .8; }
 .sn-leaves.back .sn-leaf:nth-child(6) { --x: 88%; --y: 50%; --s: 18px; --d: 58s; --dl: -50s; --amp: 14px; --o: .8; }
 /* A wall left on overnight doesn't need leaves falling in a dark kitchen. */
-.is-night .sn-leaf, .is-night .sn-leaf b { animation-play-state: paused; }
+.is-night .sn-leaf, .is-night .sn-leaf b,
+.is-night .sn-bat, .is-night .sn-bat i, .is-night .sn-bat b,
+.is-night .sn-dangle i { animation-play-state: paused; }
 /* ...and the near layer goes away: the night dim turns .wrap into its own
    stacking layer, which would put the top bar and the open gear menu UNDER
    the leaves. The far leaves stay, still, behind the glass. */
 :root[data-look]:not([data-look="none"]) body.is-night > .season-fx { display: none; }
+
+/* ---- Halloween's creatures (every halloween-* look) ----
+   The same two layers as the leaves. Over the cards (.season-fx): a pair of
+   bats and a lone bat crossing the sky now and then, a spider letting
+   itself down on a thread from under the top bar and climbing back, and a
+   spider crawling across the glass in short darts with pauses, the way real
+   ones move. Behind the glass (.season): two corner webs and three small,
+   far bats. Shapes come from static/seasons/ (bat.svg for the
+   mark, bat-flap.png and spider-walk.png for the drawn frames,
+   spider-web.svg; see CREDITS.md), painted as masks in the look's colours.
+   Transforms and opacity only; the glow is a small drop-shadow on small
+   boxes, like the leaves' shadow. */
+.sn-haunt { display: none; position: absolute; inset: 0; }
+:root[data-look^="halloween-"] body > .season-fx .sn-haunt,
+:root[data-look^="halloween-"] body > .season .sn-haunt,
+.look-swatch[data-look^="halloween-"] .sn-haunt { display: block; }
+
+/* a bat: the span crosses the screen and waits off it, <i> rises and dips,
+   <b> is a window onto a strip of 15 drawn wingbeat frames that steps sideways
+   behind it (transform, so the compositor does it; animating the mask's own
+   position instead repainted every frame on the main thread) */
+.sn-bat { position: absolute; left: 0; top: var(--y); width: calc(var(--s) * var(--sn-k, 1)); height: calc(var(--s) * .83 * var(--sn-k, 1));
+  animation: sn-bat-ltr var(--d) linear var(--dl) infinite;
+  filter: drop-shadow(0 0 4px var(--sn-bat-glow)) drop-shadow(0 2px 3px rgba(0,0,0,.45)); }
+.sn-bat i { display: block; width: 100%; height: 100%;
+  animation: sn-bat-bob var(--bob, 2.4s) ease-in-out var(--dl) infinite alternate; }
+.sn-bat b { display: block; width: 100%; height: 100%; overflow: hidden; }
+.sn-bat b::before {
+  content: ""; display: block; width: 1500%; height: 100%; background: var(--sn-bat);
+  -webkit-mask: url("seasons/bat-flap.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/bat-flap.png") 0 0 / 100% 100% no-repeat;
+  animation: sn-bat-flap var(--flap, .5s) steps(15, jump-none) infinite;
+}
+/* a crossing is not a straight line: the bat lifts, dips and banks its way
+   over, then waits off-screen for the rest of the cycle */
+@keyframes sn-bat-ltr {
+  0% { transform: translate3d(-14vw, 2vh, 0) rotate(4deg); }
+  7% { transform: translate3d(12vw, -3vh, 0) rotate(-7deg); }
+  14% { transform: translate3d(35vw, 2vh, 0) rotate(6deg); }
+  21% { transform: translate3d(58vw, -5vh, 0) rotate(-8deg); }
+  26% { transform: translate3d(84vw, -2vh, 0) rotate(3deg); }
+  32%, 100% { transform: translate3d(114vw, var(--rise, -9vh), 0) rotate(-5deg); }
+}
+@keyframes sn-bat-rtl {
+  0% { transform: translate3d(114vw, 2vh, 0) rotate(-4deg); }
+  7% { transform: translate3d(88vw, -4vh, 0) rotate(7deg); }
+  14% { transform: translate3d(63vw, 1vh, 0) rotate(-6deg); }
+  21% { transform: translate3d(38vw, -6vh, 0) rotate(8deg); }
+  26% { transform: translate3d(14vw, -1vh, 0) rotate(-3deg); }
+  32%, 100% { transform: translate3d(-14vw, var(--rise, -9vh), 0) rotate(5deg); }
+}
+@keyframes sn-bat-bob { from { transform: translate3d(0, -18px, 0); } to { transform: translate3d(0, 18px, 0); } }
+@keyframes sn-bat-flap { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-93.3333%, 0, 0); } }
+.sn-haunt.front .sn-bat:nth-child(1) { --y: 16%; --s: 84px; --d: 28s; --dl: -4s; }
+.sn-haunt.front .sn-bat:nth-child(2) { --y: 22%; --s: 62px; --d: 28s; --dl: -4.9s; --rise: -4vh; --bob: 2s; --flap: .19s; }
+.sn-haunt.front .sn-bat:nth-child(3) { --y: 46%; --s: 72px; --d: 37s; --dl: -24s; --rise: -18vh; --bob: 2.8s; animation-name: sn-bat-rtl; }
+.sn-haunt.front .sn-bat:nth-child(4) { --y: 33%; --s: 40px; --d: 31s; --dl: -13s; --rise: 4vh; --bob: 3.2s; --flap: .56s; }
+.sn-haunt.back .sn-bat { filter: none; opacity: .85; }
+.sn-haunt.back .sn-bat:nth-child(3) { --y: 30%; --s: 30px; --d: 46s; --dl: -12s; --rise: -6vh; --flap: .28s; }
+.sn-haunt.back .sn-bat:nth-child(4) { --y: 58%; --s: 24px; --d: 52s; --dl: -33s; --rise: -12vh; --flap: .3s; animation-name: sn-bat-rtl; }
+.sn-haunt.back .sn-bat:nth-child(5) { --y: 12%; --s: 26px; --d: 58s; --dl: -47s; --rise: 6vh; --flap: .26s; }
+
+/* a spider on its thread. The span drops and climbs; everything hanging
+   (the thread, drawn as ::before, and the spider) lives inside <i>, which
+   swings about a point above the top of the screen, so the thread leans
+   with the spider instead of staying stiff while it sways. */
+.sn-dangle { position: absolute; left: 60%; top: 0; width: calc(34px * var(--sn-k, 1)); height: calc(44px * var(--sn-k, 1));
+  transform: translate3d(0, -160px, 0); }
+.sn-dangle i { display: block; width: 100%; height: 100%; position: relative; transform-origin: 50% -90vh; }
+.sn-dangle.visiting i { animation: sn-dangle-sway 4.2s ease-in-out infinite alternate; }
+.sn-dangle i::before { content: ""; position: absolute; left: 50%; bottom: 58%; margin-left: -.5px;
+  width: 1px; height: 100vh; background: var(--sn-web); }
+
+@keyframes sn-dangle-sway { from { transform: rotate(-1.1deg); } to { transform: rotate(1.1deg); } }
+/* a spider crawling over the glass. hub.js walks it (spiderWalk): a turn,
+   a dart, a pause, and its legs cycle through the seven drawn poses only
+   while it is moving, so it never walks on the spot. While Halloween paints
+   it stays on the screen and wanders; when the layer is hidden (no look,
+   night, reduced motion) hub.js parks it off-screen, and the transform below
+   is where it waits until then. */
+.sn-crawl { position: absolute; left: 0; top: 0; width: calc(58px * var(--sn-k, 1)); height: calc(76px * var(--sn-k, 1));
+  transform: translate3d(-80px, -80px, 0); }
+.sn-crawl b, .sn-dangle b { display: block; width: 100%; height: 100%; overflow: hidden;
+  filter: drop-shadow(0 0 4px var(--sn-spider-glow)); }
+.sn-crawl b::before, .sn-dangle b::before {
+  content: ""; display: block; width: 700%; height: 100%; background: var(--sn-spider);
+  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat;
+}
+.sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: sn-walk var(--walk-ms, 520ms) steps(7) infinite; }
+@keyframes sn-walk { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-100%, 0, 0); } }
+@media (max-width: 1000px) {
+  /* a phone screen is a fifth of the wall’s width: at wall size one web
+     covered the whole first card */
+  :root:not([data-layout="desktop"])[data-look^="halloween-"] { --sn-k: .5; }
+  :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(1) { left: -110px; top: -120px; }
+  :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(2) { right: -96px; bottom: -92px; }
+}
+
+/* corner webs, behind the glass: a card over one blurs it to a silver haze,
+   the open photo shows every thread. Hairlines at any size (the SVG keeps
+   its stroke width when scaled). */
+.sn-web { position: absolute; width: calc(var(--s) * var(--sn-k, 1)); height: calc(var(--s) * var(--sn-k, 1)); background: var(--sn-web);
+  -webkit-mask: url("seasons/spider-web.svg") center / contain no-repeat; mask: url("seasons/spider-web.svg") center / contain no-repeat; }
+body > .season .sn-web:nth-child(1) { --s: 620px; left: -250px; top: -270px; transform: rotate(9deg); }
+body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px; transform: rotate(-16deg); }
+
+/* the Settings preview: everything still, scaled to the tile. --sn-k is the
+   wall's phone shrink; a tile sets its own sizes, so it opts out (else the
+   same tile drew at half size in October and full size in September). */
+.look-swatch { --sn-k: 1; }
+.look-swatch .sn-bat { animation: none; transform: translate3d(var(--tx), 0, 0); }
+.look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
+.look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
+.look-swatch .sn-haunt.back .sn-bat:nth-child(4) { --tx: 128px; --y: 36%; --s: 11px; }
+.look-swatch .sn-haunt.back .sn-bat:nth-child(5) { --tx: 74px; --y: 62%; --s: 9px; }
+.look-swatch .sn-web:nth-child(1) { --s: 92px; left: -34px; top: -38px; }
+.look-swatch .sn-web:nth-child(2) { --s: 78px; right: -30px; bottom: -30px; }
 
 /* ---- the seasonal mark beside the wordmark ---- */
 .season-mark { display: none; }
@@ -2856,6 +3045,8 @@ body.integ-off-todos .todo-slot { display: none; }
 .look-swatch[data-look="fall-misty-road"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 [data-look="fall-maple-sky"] .season-mark,
 .look-swatch[data-look="fall-maple-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look^="halloween-"] .season-mark,
+.look-swatch[data-look^="halloween-"] .look-mark { --mark: url("seasons/bat.svg"); }
 
 /* While a look paints, it owns the accent: the swatches step back and say why. */
 .look-accent-note { display: none; font-size: 12px; color: var(--faint); }
@@ -2880,7 +3071,7 @@ body.integ-off-todos .todo-slot { display: none; }
 .look-tile.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 /* the preview: the real photo in miniature, painted by the look's own tokens */
 .look-swatch { position: relative; height: 128px; overflow: hidden; isolation: isolate;
-  background: var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground); }
+  background: var(--sn-haze, linear-gradient(transparent, transparent)), var(--sn-wash), var(--sn-scene) var(--sn-pos) / cover no-repeat, var(--ground); }
 .look-swatch .season { display: block; position: absolute; inset: 0; z-index: 0; animation: none; background: none; }
 .look-swatch .sn-leaf.fall { top: var(--y); animation: none; }
 .look-swatch .sn-leaf b { animation: none; }
@@ -2917,9 +3108,14 @@ body.integ-off-todos .todo-slot { display: none; }
    fade. The wall's leaf layer goes away entirely: it sits OVER the cards, so
    still leaves would rest on the same words forever (they covered "Workout"
    and the Laundry title in testing). The Settings previews keep their
-   leaves, still, at their own spots. */
+   leaves, still, at their own spots. Halloween: every creature animation
+   is switched off by its own selector (a hidden element’s animation still
+   ticks), the far bats go (frozen at the left edge they looked dropped),
+   and the webs stay: they never moved. */
 @media (prefers-reduced-motion: reduce) {
   :root[data-look]:not([data-look="none"]) body > .season, .sn-leaf, .sn-leaf.fall, .sn-leaf b, .sn-leaf.fall b { animation: none; }
   .sn-leaf.fall { top: var(--y); }
-  :root[data-look^="fall-"] body > .season-fx { display: none; }
+  .sn-bat, .sn-bat i, .sn-bat b::before, .sn-dangle.visiting i, .sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: none; }
+  :root[data-look]:not([data-look="none"]) body > .season .sn-bat { display: none; }
+  :root[data-look]:not([data-look="none"]) body > .season-fx { display: none; }
 }
