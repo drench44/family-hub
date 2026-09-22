@@ -701,6 +701,9 @@ body {
 /* the just-finished machine gets the same wash grammar the climate card uses
    for warn states — visible across the kitchen, gone once the door opens */
 .ln-m.ln-ph-done { background: color-mix(in srgb, var(--good) 9%, transparent); }
+/* a washed load nobody has moved: amber, steady, no glow. It wants doing,
+   it isn't an alarm (the dryer starting or the washer powering on ends it) */
+.ln-m.ln-ph-waiting { background: color-mix(in srgb, var(--warn) 8%, transparent); }
 .ln-door { width: 100px; height: 100px; }
 /* brushed-steel bezel: light falls from the upper left */
 .ln-bezel { fill: none; stroke-width: 6; }
@@ -730,6 +733,7 @@ body {
   transform: rotate(-90deg); transform-origin: 50px 50px; }
 .ln-ph-paused .ln-arc { stroke: var(--warn); }
 .ln-ph-done .ln-arc { stroke: var(--good); }
+.ln-ph-waiting .ln-arc { stroke: var(--warn); }
 /* the finished-load beacon: a fat translucent ring under the data ring that
    breathes, plus the drum's cycle-complete light */
 .ln-halo { fill: none; stroke: var(--good); stroke-width: 7; opacity: .18;
@@ -782,7 +786,11 @@ body {
    purpose: .ln-washer .ln-heap re-sets animation-NAME at equal specificity,
    so `animation: none` alone survives only by declaration order — pausing
    too makes stillness robust against reordering. */
-.ln-ph-done .ln-heap { animation: none; animation-play-state: paused; }
+.ln-ph-done .ln-heap, .ln-ph-waiting .ln-heap { animation: none;
+  animation-play-state: paused; }
+/* wet: the waiting load reads darker and cooler than a dry heap */
+.ln-ph-waiting .ln-cl1 { fill: color-mix(in srgb, var(--p2) 52%, #0B1A2B); }
+.ln-ph-waiting .ln-cl2 { fill: color-mix(in srgb, var(--p2) 60%, #22384F); }
 /* the washer's slosh adds a slight bob — its load is buoyed by the water
    (both machines seat at the same 10px depth; operator, 2026-08-17) */
 .ln-washer .ln-heap { animation-name: ln-slosh-w; }
@@ -927,6 +935,7 @@ body {
 .ln-big .num { font-size: 32px; }
 .ln-unit { margin-left: 4px; font-size: 14px; font-weight: 500; color: var(--dim); }
 .ln-ph-done .ln-big { color: var(--good); }
+.ln-ph-waiting .ln-big { color: var(--warn); }
 .ln-ph-error .ln-big { color: var(--crit); }
 .ln-ph-idle .ln-big, .ln-ph-offline .ln-big { color: var(--dim); font-weight: 550; }
 .ln-sub { margin-top: 1px; font-size: 13.5px; min-height: 17px;

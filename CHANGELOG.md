@@ -10,6 +10,31 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Laundry: a finished wash now reads **Waiting** (amber) after its half hour
+  as Done, until the load is moved: the dryer starting or the washer being
+  turned on ends it, and it gives up after 12 hours. In this house's own
+  cycle log the wet load sat a median of about 100 minutes, and the wall used
+  to call the washer "Idle" the whole time. A dryer starting also ends the
+  washer's green Done early.
+- Laundry: errors name the fault when the machine reports one ("won't
+  drain", "load is unbalanced", "door is open"), and a delayed start says
+  when it will start. Both read optional Home Assistant entities
+  (`error_entity`, `start_entity`); leave them out and nothing changes.
+
+### Changed
+- Laundry: the ring shows the share of the cycle left, against the machine's
+  own cycle length (optional `total_entity`), instead of a 60-minute dial
+  that sat full and frozen for the first 50 minutes of a long wash.
+- Laundry: plain words for what the machine is doing ("Sensing load",
+  "Draining", "Cooling down"). Load sensing shows "Starting" instead of a
+  time that is 15 to 20 minutes too long, and a dryer holding "1 min" while
+  it cools reads "Cooling, almost done".
+
+### Fixed
+- Laundry: the dryer no longer shows "1 min" (once, "6 min") for the first
+  minutes of every load. That is LG's placeholder; the card now uses the
+  cycle's real length until the machine reports a real finish time.
 ## [1.6.1] — 2026-09-22
 
 ### Changed

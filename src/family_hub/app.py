@@ -2369,6 +2369,12 @@ def _laundry_annotate(t: dict) -> dict:
             phase_key = f"laundry_phase_{m['id']}"
             missed_key = f"laundry_missed_{m['id']}"
             nonoff_key = f"laundry_nonoff_{m['id']}"
+            start_key = f"laundry_start_{m['id']}"
+            # A washer's finished load is WET and waits to be moved; the key
+            # holds the finish moment until something shows it was moved (see
+            # _laundry_present_waiting). Washers only: a dry load isn't urgent.
+            wait_key = (f"laundry_wait_{m['id']}"
+                        if m.get("kind") == "washer" else None)
             phase = m.get("phase")
             prev = fdb.kv_get(c, phase_key)
             # Provenance across an HA blip: prev collapses to "offline"
@@ -2384,6 +2390,8 @@ def _laundry_annotate(t: dict) -> dict:
                     and prev not in ("done", "offline")
                     and fdb.kv_get(c, done_key) != m["status_since"]):
                 fdb.kv_set(c, done_key, m["status_since"])
+                if wait_key:
+                    fdb.kv_set(c, wait_key, m["status_since"])
             elif phase == "idle" and came_from in ("running", "paused"):
                 # The missed finish: LG machines auto-power-off a minute or
                 # two after "end", so a 60s poll can watch running -> power_off
@@ -2407,6 +2415,8 @@ def _laundry_annotate(t: dict) -> dict:
                         and -tiles.LAUNDRY_MISSED_DONE_HOLD_MIN <= mt <= 0):
                     fdb.kv_set(c, done_key, m["finishes_at"])
                     fdb.kv_set(c, missed_key, m["finishes_at"])
+                    if wait_key:
+                        fdb.kv_set(c, wait_key, m["finishes_at"])
                     note = "missed_finish"
                 else:
                     if came_from == "running" and mt is not None and mt < 0:
@@ -2467,6 +2477,21 @@ def _laundry_annotate(t: dict) -> dict:
                 # must not erase a finish the family hasn't seen yet.
                 if fdb.kv_get(c, missed_key):
                     fdb.kv_set(c, missed_key, None)
+                # ...and a wait: the washer is in use again, so the old load
+                # is out. NOT on "done": that is the finish that just set it.
+                if (wait_key and phase != "done"
+                        and fdb.kv_get(c, wait_key)):
+                    fdb.kv_set(c, wait_key, None)
+            if phase == "running" and came_from not in ("running", "paused"):
+                # A cycle began (from idle, done, reserved, or first sight).
+                # Remembered so the placeholder finish LG reports for the
+                # first minutes of a cycle can be recognized (see
+                # _laundry_fix_placeholder) and so a dryer START can tell a
+                # waiting washer load that it was moved. Not re-stamped
+                # across an HA blip: came_from bridges offline.
+                fdb.kv_set(c, start_key,
+                           m.get("status_since")
+                           or dt.datetime.now(dt.timezone.utc).isoformat())
             if phase and phase != prev:
                 # the cycle log records every observed RAW transition (the
                 # synthesis below is presentation, never logged as fact) —
@@ -2508,6 +2533,13 @@ def _laundry_annotate(t: dict) -> dict:
                 # the rest of its window while someone is at the machine
                 # emptying it (caught in review, 2026-08-18: the branch
                 # comment claimed this and the code didn't do it).
+                if (m.get("status") == "initial" and wait_key
+                        and fdb.kv_get(c, wait_key)
+                        and not fdb.kv_get(c, missed_key)):
+                    # powered on after the Done hold ended: someone is at the
+                    # washer, so the waiting load is being dealt with
+                    _laundry_log_note(c, m, "wait_cleared_by_power_on")
+                    fdb.kv_set(c, wait_key, None)
                 if m.get("status") == "initial" and fdb.kv_get(c, missed_key):
                     # ...and the clear is LOGGED — the one status-keyed row
                     # in a phase-keyed log (the note says so in db.py): a
@@ -2530,6 +2562,8 @@ def _laundry_annotate(t: dict) -> dict:
                                     "failed; clearing the hold anyway",
                                     m["id"], exc_info=True)
                     fdb.kv_set(c, missed_key, None)
+                    if wait_key:
+                        fdb.kv_set(c, wait_key, None)
                 # Present a remembered finish (missed, or observed-then-
                 # auto-powered-off) as the Done it really was — green ring,
                 # "at 9:02pm" — for the hold window, then decay to idle +
@@ -2540,6 +2574,8 @@ def _laundry_annotate(t: dict) -> dict:
                     m["phase"] = "done"
                     m["status_since"] = ms
             m["last_done"] = fdb.kv_get(c, done_key)
+        _laundry_present_waiting(c, machines)
+        _laundry_fix_placeholder(c, machines)
     except Exception:
         log.warning("laundry: completion-memory kv / cycle-log write failed; "
                     "serving the tile without last_done (the interrupted "
@@ -2547,6 +2583,106 @@ def _laundry_annotate(t: dict) -> dict:
         for m in machines:
             m.setdefault("last_done", None)
     return {**t, "machines": machines}
+
+
+def _laundry_log_note(c, m: dict, note: str) -> None:
+    """A status-keyed row in the phase-keyed cycle log (idle -> idle, like
+    hold_cleared_by_power_on): how long wet loads really wait, and what ended
+    the wait, is the evidence that sizes LAUNDRY_WAIT_MAX_H. Same failure
+    asymmetry as the transition log: a locked DB aborts the pass so it
+    retries whole; anything else warns and lets the state change proceed."""
+    try:
+        fdb.laundry_log_add(c, m["id"], "idle", "idle", m.get("status"),
+                            m.get("finishes_at"), m.get("status_since"), note)
+    except sqlite3.OperationalError:
+        raise
+    except Exception:
+        log.warning("laundry %s: %s log write failed; continuing", m["id"],
+                    note, exc_info=True)
+
+
+def _laundry_dt(iso: str | None) -> dt.datetime | None:
+    """An aware datetime from a stored stamp, else None (naive refused)."""
+    try:
+        t = dt.datetime.fromisoformat(iso) if iso else None
+    except (TypeError, ValueError):
+        return None
+    return t if t is not None and t.tzinfo is not None else None
+
+
+def _laundry_present_waiting(c, machines: list[dict]) -> None:
+    """A finished washer load that nobody has moved yet. The real data
+    (2026-08-18..09-21, 34 washes) is why this exists: the dryer started a
+    median ~100 minutes after the washer finished, often 2 to 5 hours, and
+    only 5 of 34 inside the 30-minute Done hold. So the wall read "Idle" for
+    hours while wet clothes sat in the drum.
+
+    Once the Done hold is over, a washer with a remembered finish presents as
+    "waiting" (status_since = the finish) until something shows the load was
+    moved: a DRYER started after that finish (the load went in it), the
+    washer was powered on or started again (handled in _laundry_annotate),
+    or LAUNDRY_WAIT_MAX_H passed (a load hung up to dry leaves no trace, so
+    the claim must expire). A dryer start also ends a still-running Done
+    hold: the load is visibly dealt with. Each way out is logged."""
+    dryer_starts = [t for t in (
+        _laundry_dt(fdb.kv_get(c, f"laundry_start_{m['id']}"))
+        for m in machines if m.get("kind") == "dryer") if t is not None]
+    for m in machines:
+        if m.get("kind") != "washer":
+            continue
+        wait_key = f"laundry_wait_{m['id']}"
+        waited = fdb.kv_get(c, wait_key)
+        since = _laundry_dt(waited)
+        if waited and since is None:
+            log.warning("laundry %s: unusable wait stamp %r; dropping it",
+                        m["id"], waited)
+            fdb.kv_set(c, wait_key, None)
+            continue
+        if since is None:
+            continue
+        if any(t > since for t in dryer_starts):
+            _laundry_log_note(c, m, "wait_cleared_by_dryer")
+            fdb.kv_set(c, wait_key, None)
+            missed_key = f"laundry_missed_{m['id']}"
+            if m.get("phase") == "done" and fdb.kv_get(c, missed_key):
+                # the synthetic Done hold (the machine itself is off): the
+                # load is in the dryer now, so stop calling it waiting-done
+                fdb.kv_set(c, missed_key, None)
+                m["phase"] = "idle"
+                m["status_since"] = None
+            continue
+        age_h = (dt.datetime.now(dt.timezone.utc) - since).total_seconds() / 3600
+        if age_h > tiles.LAUNDRY_WAIT_MAX_H:
+            _laundry_log_note(c, m, "wait_expired")
+            fdb.kv_set(c, wait_key, None)
+            continue
+        if m.get("phase") == "idle":
+            m["phase"] = "waiting"
+            m["status_since"] = waited
+
+
+def _laundry_fix_placeholder(c, machines: list[dict]) -> None:
+    """LG reports a placeholder finish for the first minutes of a cycle: the
+    dryer says "1 minute left" (once, "6 minutes") right after it starts, on
+    every load in the live history, before the real projection lands. The
+    machine's own cycle length gives it away: a finish that implies more of
+    the cycle has ELAPSED than really has since the start can't be right
+    (a pause only ever goes the other way). Present start + cycle length
+    until the machine reports something consistent. Presentation only: the
+    cycle log keeps the raw value."""
+    now = dt.datetime.now(dt.timezone.utc)
+    for m in machines:
+        total = m.get("total_min")
+        fin = _laundry_dt(m.get("finishes_at"))
+        if m.get("phase") != "running" or not total or fin is None:
+            continue
+        start = _laundry_dt(fdb.kv_get(c, f"laundry_start_{m['id']}"))
+        if start is None or start > now:
+            continue
+        elapsed = (now - start).total_seconds() / 60
+        implied = total - (fin - now).total_seconds() / 60
+        if implied - elapsed > tiles.LAUNDRY_PLACEHOLDER_SLACK_MIN:
+            m["finishes_at"] = (start + dt.timedelta(minutes=total)).isoformat()
 
 
 @app.get("/api/laundry/log")

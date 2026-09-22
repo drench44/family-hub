@@ -360,11 +360,13 @@ def demo_laundry() -> dict:
             {"id": "washer", "label": "Washer", "kind": "washer",
              "phase": "running", "status": "rinsing",
              "finishes_at": iso(23), "status_since": iso(-8),
+             "total_min": 48, "starts_at": None, "error": None,
              "last_done": iso(-26 * 60)},
             {"id": "dryer", "label": "Dryer", "kind": "dryer",
              "phase": "done", "status": "end",
-             "finishes_at": None, "status_since": iso(-47),
-             "last_done": iso(-47)},
+             "finishes_at": None, "status_since": iso(-12),
+             "total_min": None, "starts_at": None, "error": None,
+             "last_done": iso(-12)},
         ],
     }
 

@@ -579,9 +579,125 @@ def test_laundry_happy_two_machines():
     w, d = t["machines"]
     assert w == {"id": "washer", "label": "Washer", "kind": "washer",
                  "phase": "running", "status": "rinsing",
-                 "finishes_at": FINISH, "status_since": SINCE}
+                 "finishes_at": FINISH, "status_since": SINCE,
+                 "total_min": None, "starts_at": None, "error": None}
     assert d["phase"] == "done" and d["finishes_at"] is None
     assert d["status_since"] == SINCE   # WHEN it finished (last_changed of end)
+
+
+def _cfg_with(**extra):
+    """LAUNDRY_CFG with optional entities added to the washer."""
+    washer = {**LAUNDRY_CFG["machines"][0], **extra}
+    return Config(laundry={"ha_base": "http://ha",
+                           "machines": [washer, LAUNDRY_CFG["machines"][1]]})
+
+
+def run_laundry_cfg(cfg, handler, token="tok"):
+    async def run():
+        async with make_client(handler) as c:
+            return await tiles.laundry_tile(c, cfg, token)
+    return asyncio.run(run())
+
+
+def _counting(states, seen):
+    inner = laundry_handler(states)
+
+    def handler(req):
+        seen.append(req.url.path.rsplit("/", 1)[-1])
+        return inner(req)
+    return handler
+
+
+def test_laundry_total_minutes_parsed_and_refused():
+    assert tiles._laundry_minutes("54") == 54.0
+    assert tiles._laundry_minutes("104.0") == 104.0
+    for bad in ("0", "-3", "unknown", "", None, "2000", [], "nan?"):
+        assert tiles._laundry_minutes(bad) is None, bad
+
+
+def test_laundry_total_entity_read_every_poll_when_configured():
+    tiles.reset_caches()
+    seen = []
+    cfg = _cfg_with(total_entity="sensor.w_total")
+    t = run_laundry_cfg(cfg, _counting({
+        "sensor.w_status": ha_state("running"), "sensor.w_rem": ha_state(FINISH),
+        "sensor.w_total": ha_state("104"),
+        "sensor.d_status": ha_state("power_off"), "sensor.d_rem": ha_state("unknown"),
+    }, seen))
+    w, d = t["machines"]
+    assert w["total_min"] == 104.0 and d["total_min"] is None
+    assert "sensor.w_total" in seen
+
+
+def test_laundry_start_entity_read_only_while_reserved():
+    # sensor.washer_delayed_start is lg_thinq's relative-to-start timer made
+    # absolute (now + delta, read from its sensor.py): WHEN the cycle starts
+    start = "2026-08-18T13:00:00+00:00"
+    for status, want in (("reserved", start), ("running", None)):
+        tiles.reset_caches()
+        seen = []
+        cfg = _cfg_with(start_entity="sensor.w_start")
+        t = run_laundry_cfg(cfg, _counting({
+            "sensor.w_status": ha_state(status), "sensor.w_rem": ha_state(FINISH),
+            "sensor.w_start": ha_state(start),
+            "sensor.d_status": ha_state("power_off"), "sensor.d_rem": ha_state("unknown"),
+        }, seen))
+        assert t["machines"][0]["starts_at"] == want, status
+        assert ("sensor.w_start" in seen) == (status == "reserved"), \
+            "no extra HA read on an ordinary poll"
+
+
+def _err_event(fired, code):
+    return {"state": fired, "last_changed": fired,
+            "attributes": {"event_type": code}}
+
+
+def test_laundry_error_entity_names_the_current_fault_only():
+    since = "2026-08-17T21:02:00+00:00"
+    cases = [
+        (_err_event("2026-08-17T21:01:30+00:00", "water_drain_error"), "water_drain_error"),
+        (_err_event("2026-08-17T21:03:00+00:00", "door_open_error"), "door_open_error"),
+        # a fault from an earlier episode must not be named now
+        (_err_event("2026-08-17T20:00:00+00:00", "water_drain_error"), None),
+        (_err_event("unknown", "water_drain_error"), None),
+        (_err_event("2026-08-17T21:01:30+00:00", "<script>"), None),
+        ({"state": "2026-08-17T21:01:30+00:00", "attributes": None}, None),
+    ]
+    for event, want in cases:
+        tiles.reset_caches()
+        seen = []
+        cfg = _cfg_with(error_entity="event.w_error")
+        t = run_laundry_cfg(cfg, _counting({
+            "sensor.w_status": ha_state("error", last_changed=since),
+            "sensor.w_rem": ha_state("unknown"),
+            "event.w_error": event,
+            "sensor.d_status": ha_state("power_off"), "sensor.d_rem": ha_state("unknown"),
+        }, seen))
+        assert t["machines"][0]["error"] == want, event
+        assert "event.w_error" in seen
+
+
+def test_laundry_error_entity_not_read_when_no_error():
+    tiles.reset_caches()
+    seen = []
+    cfg = _cfg_with(error_entity="event.w_error")
+    run_laundry_cfg(cfg, _counting({
+        "sensor.w_status": ha_state("running"), "sensor.w_rem": ha_state(FINISH),
+        "sensor.d_status": ha_state("power_off"), "sensor.d_rem": ha_state("unknown"),
+    }, seen))
+    assert "event.w_error" not in seen
+
+
+def test_laundry_optional_entity_failure_never_sinks_the_machine():
+    tiles.reset_caches()
+    cfg = _cfg_with(total_entity="sensor.w_total", error_entity="event.w_error")
+    t = run_laundry_cfg(cfg, laundry_handler({       # both optional ids 404
+        "sensor.w_status": ha_state("error"), "sensor.w_rem": ha_state("unknown"),
+        "sensor.d_status": ha_state("power_off"), "sensor.d_rem": ha_state("unknown"),
+    }))
+    w = t["machines"][0]
+    assert t["available"] is True and w["phase"] == "error"
+    assert w["total_min"] is None and w["error"] is None
 
 
 def test_laundry_phase_mapping():

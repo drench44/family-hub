@@ -3342,7 +3342,9 @@ def test_tiles_laundry_stale_observed_finish_does_not_hold(client, monkeypatch):
     monkeypatch.setattr("family_hub.tiles.laundry_tile",
                         tile_with("idle", "power_off", iso(0)))
     m = machine()
-    assert m["phase"] == "idle"
+    # not a fresh green Done; a WASHER load nobody has moved presents as
+    # "waiting" instead (see test_laundry_washer_load_waits_until_...)
+    assert m["phase"] == "waiting" and m["status_since"] == t_end
     assert m["last_done"] == t_end   # the accurate stamp still serves the line
     # the refusal is LOUD in the cycle log — a bare NULL row would be
     # indistinguishable from an ordinary transition, invisible to the
@@ -3470,6 +3472,224 @@ def test_tiles_laundry_route_stamps_and_presents_a_missed_finish(client, monkeyp
                         tile_with("idle", "initial", iso(0)))
     m = machine()
     assert m["last_done"] == t_end and m["phase"] == "idle"
+
+
+def _laundry_pair(w, d):
+    """A two-machine tile stand-in: w and d are (phase, status, since,
+    finishes, total) tuples for the washer and dryer."""
+    def mk(mid, kind, spec):
+        phase, status, since, finishes, total = spec
+        return {"id": mid, "label": mid.title(), "kind": kind, "phase": phase,
+                "status": status, "finishes_at": finishes,
+                "status_since": since, "total_min": total, "starts_at": None,
+                "error": None}
+
+    async def tile(hclient, cfg, token):
+        return {"available": True, "machines": [mk("washer", "washer", w),
+                                                mk("dryer", "dryer", d)]}
+    return tile
+
+
+def test_config_keeps_valid_optional_laundry_entities_only(caplog):
+    from family_hub.config import _clean_laundry
+    got, err = _clean_laundry({"ha_base": "http://ha", "machines": [{
+        "id": "washer", "status_entity": "sensor.s", "remaining_entity": "sensor.r",
+        "total_entity": " sensor.t ", "start_entity": 7, "error_entity": ""}]})
+    assert err is None
+    m = got["machines"][0]
+    assert m["total_entity"] == "sensor.t"
+    assert "start_entity" not in m and "error_entity" not in m
+    assert "ignoring start_entity" in caplog.text
+
+
+def test_laundry_washer_load_waits_until_the_dryer_starts(client, monkeypatch):
+    # Real data (34 washes, 2026-08-18..09-21): the dryer started a median
+    # ~100 min after the washer finished, only 5 of 34 inside the 30-min
+    # Done hold. The wall said "Idle" for hours over a drum of wet clothes.
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-45)     # finished 45 min ago: past the 30-min Done hold
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("running", "spinning", iso(-80), t_end, 35), off))
+    get()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("done", "end", t_end, None, None), off))
+    get()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-44), None, None), off))
+    w = get()["washer"]
+    assert w["phase"] == "waiting", "a finished wash nobody moved is waiting"
+    assert w["status_since"] == t_end and w["last_done"] == t_end
+    assert get()["washer"]["phase"] == "waiting"      # steady
+    # the dryer starts: the load went in it
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-44), None, None),
+        ("running", "running", iso(0), iso(54), 54)))
+    ms = get()
+    assert ms["washer"]["phase"] == "idle" and ms["washer"]["last_done"] == t_end
+    notes = [r["note"] for r in client.get("/api/laundry/log").json()["entries"]]
+    assert "wait_cleared_by_dryer" in notes
+    # and it stays cleared after the dryer finishes
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-44), None, None), off))
+    assert get()["washer"]["phase"] == "idle"
+
+
+def test_laundry_dryer_that_started_BEFORE_the_finish_does_not_clear_it(
+        client, monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    dry = ("running", "running", iso(-50), iso(10), 60)   # started long ago
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-300), None, None), dry))
+    get()
+    t_end = iso(-40)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("running", "spinning", iso(-70), t_end, 30), dry))
+    get()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("done", "end", t_end, None, None), dry))
+    get()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-39), None, None), dry))
+    assert get()["washer"]["phase"] == "waiting", \
+        "a dryer already running when the wash ended holds a different load"
+
+
+def test_laundry_dryer_start_ends_a_fresh_done_hold_too(client, monkeypatch):
+    # 5 of 34 real washes moved inside the hold: the Done glow should stop
+    # the moment the load is in the dryer, not glow on for the full 30 min
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-3)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("running", "spinning", iso(-40), t_end, 35), off))
+    get()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("done", "end", t_end, None, None), off))
+    get()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-2), None, None), off))
+    assert get()["washer"]["phase"] == "done"          # the hold, as before
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-2), None, None),
+        ("running", "running", iso(0), iso(54), 54)))
+    assert get()["washer"]["phase"] == "idle"
+
+
+def test_laundry_waiting_cleared_by_washer_power_on_and_logged(client, monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-90)
+    for w in (("running", "spinning", iso(-120), t_end, 30),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-89), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, off))
+        get()
+    assert get()["washer"]["phase"] == "waiting"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "initial", iso(0), None, None), off))
+    assert get()["washer"]["phase"] == "idle"
+    rows = client.get("/api/laundry/log").json()["entries"]
+    assert rows[0]["note"] == "wait_cleared_by_power_on"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(0), None, None), off))
+    assert get()["washer"]["phase"] == "idle", "powering back off must not resurrect it"
+
+
+def test_laundry_waiting_expires_after_the_cap(client, monkeypatch):
+    # a load hung up to dry leaves no signal at all; the claim must end
+    from family_hub import tiles as t_mod
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-3000), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-(t_mod.LAUNDRY_WAIT_MAX_H * 60 + 5))
+    for w in (("running", "spinning", iso(-900), t_end, 30),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-700), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, off))
+        get()
+    w = get()["washer"]
+    assert w["phase"] == "idle" and w["last_done"] == t_end
+    notes = [r["note"] for r in client.get("/api/laundry/log").json()["entries"]]
+    assert "wait_expired" in notes
+
+
+def test_laundry_dryer_never_waits(client, monkeypatch):
+    # dry clothes don't sour; only a washer load presents as waiting
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-60)
+    for d in (("running", "running", iso(-110), t_end, 50),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-59), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, d))
+        get()
+    assert get()["dryer"]["phase"] == "idle"
+
+
+def test_laundry_start_of_cycle_placeholder_finish_is_replaced(client, monkeypatch):
+    # Live history, every dryer load: right after it starts, remaining time
+    # reads "1 min" (once "6 min") for a minute or more before the real
+    # projection lands, e.g. 09-12 16:31:38 start, total 54, finish 16:32:35.
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    start = now - dt.timedelta(minutes=1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("running", "running", start.isoformat(), iso(1), 54)))
+    d = get()["dryer"]
+    fixed = dt.datetime.fromisoformat(d["finishes_at"])
+    assert abs((fixed - (start + dt.timedelta(minutes=54))).total_seconds()) < 1
+    # the raw value stays in the cycle log
+    row = client.get("/api/laundry/log").json()["entries"][0]
+    assert row["machine"] == "dryer" and row["finishes_at"] == iso(1)
+    # the real projection lands: consistent, left alone
+    real = iso(52)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("running", "running", start.isoformat(), real, 54)))
+    assert get()["dryer"]["finishes_at"] == real
+    # end-game sensor dry (09-12 17:30: total 60, "1 min left" repeated
+    # while cooling): at minute 59 of a 60-min cycle "1 min" IS consistent
+    late = (now - dt.timedelta(minutes=59)).isoformat()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, off))
+    get()                                   # the dryer ends that cycle
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("running", "cooling", late, iso(1), 60)))
+    assert get()["dryer"]["finishes_at"] == iso(1)
+
+
+def test_laundry_placeholder_fix_leaves_a_long_paused_cycle_alone(client, monkeypatch):
+    # after a pause the machine is BEHIND schedule (elapsed > implied): the
+    # rule only ever fires the other way
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    start = iso(-50)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("running", "running", start, iso(30), 54)))
+    assert get()["dryer"]["finishes_at"] == iso(30)
 
 
 def _laundry_stub_tile(machines, calls=None):

@@ -50,6 +50,15 @@ LAUNDRY_TTL = 4.0
 # idle + the "last load" line after this window — long enough to be seen
 # across the kitchen, not forever.
 LAUNDRY_MISSED_DONE_HOLD_MIN = 30.0
+# How long a finished WASHER load keeps presenting as "waiting" when nothing
+# shows it was moved (no dryer start, no washer power-on). Mildew starts to
+# matter around here, and a load that was hung to dry leaves no signal at
+# all, so the claim has to expire. See app._laundry_present_waiting.
+LAUNDRY_WAIT_MAX_H = 12.0
+# Minutes of disagreement between "cycle length minus time left" and "time
+# since the cycle started" before a finish time is treated as LG's start-of-
+# cycle placeholder. See app._laundry_fix_placeholder.
+LAUNDRY_PLACEHOLDER_SLACK_MIN = 5.0
 _laundry_cache: dict[str, tuple[float, dict]] = {}
 
 
@@ -538,6 +547,47 @@ def _laundry_ts(raw: object) -> str | None:
     return raw
 
 
+def _laundry_minutes(raw: object) -> float | None:
+    """A cycle-length sensor state ("54", "104.0") as minutes, or None. Zero,
+    negative and absurd (> a day) values are refused: lg_thinq reports 0 and
+    `unknown` when the machine is off, and neither is a cycle length."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if 0 < v <= 24 * 60 else None
+
+
+# How far BEFORE the status went to "error" an error event may have fired and
+# still describe this error episode (the event and the status arrive as two
+# separate pushes, in either order). Older events are a previous episode.
+LAUNDRY_ERROR_EVENT_WINDOW_MIN = 10.0
+_ERROR_CODE_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
+def _laundry_error_code(event: dict | None, status_since: str | None) -> str | None:
+    """The error type from an HA event entity (state = when it fired,
+    attributes.event_type = which error), only if it belongs to the CURRENT
+    error episode. None when unknown: the card then says the generic thing
+    rather than naming a stale fault the machine has since cleared."""
+    if not event:
+        return None
+    fired = _laundry_ts(event.get("state"))
+    attrs = event.get("attributes")
+    code = attrs.get("event_type") if isinstance(attrs, dict) else None
+    if not fired or not isinstance(code, str) or not _ERROR_CODE_RE.match(code):
+        return None
+    if status_since:
+        try:
+            gap = (dt.datetime.fromisoformat(status_since)
+                   - dt.datetime.fromisoformat(fired)).total_seconds() / 60.0
+        except TypeError:        # one naive, one aware: can't be ordered
+            return None
+        if gap > LAUNDRY_ERROR_EVENT_WINDOW_MIN:
+            return None
+    return code
+
+
 # Entities currently in a warned-about outage — failure logging is EDGE-
 # triggered (one warning going down, one info coming back) because the 5s
 # background watcher would otherwise turn a prolonged HA outage into ~48
@@ -622,7 +672,7 @@ async def _ha_state(client, base: str, token: str, entity: str) -> dict | None:
 async def laundry_tile(client, cfg, token: str) -> dict:
     """Washer/dryer status proxied from Home Assistant into a trimmed,
     fail-soft tile: ``{available, machines: [{id, label, kind, phase, status,
-    finishes_at, status_since}]}``.
+    finishes_at, status_since, total_min, starts_at, error}]}``.
 
     Per machine, two entity reads (concurrent across all machines): the
     Current-status enum drives ``phase`` (running / paused / done / idle /
@@ -633,7 +683,11 @@ async def laundry_tile(client, cfg, token: str) -> dict:
     ``last_changed``, so a machine sitting in "end" carries WHEN it finished.
 
     A failed status read marks that machine ``offline``; a failed remaining
-    read only drops ``finishes_at``. Only the whole-HA case — every status
+    read only drops ``finishes_at``. The optional entities (see config.py)
+    only ever add detail: ``total_min`` (cycle length, read every poll when
+    configured), ``starts_at`` (read only while ``reserved``) and ``error``
+    (the error event's type, read only while in ``error``); a failed or
+    absent read leaves them None. Only the whole-HA case — every status
     read failing at once — returns ``{"available": False}``, and errors are
     never cached, so a transient blip retries on the next poll."""
     laundry = getattr(cfg, "laundry", None)
@@ -646,15 +700,23 @@ async def laundry_tile(client, cfg, token: str) -> dict:
     if cached is not None and cached[0] > time.monotonic():
         return cached[1]
     machines = laundry["machines"]
+    async def _none():
+        return None
+
+    def _opt(m, key):
+        return (_ha_state(client, base, token, m[key]) if m.get(key)
+                else _none())
+
     fetches = []
     for m in machines:
         fetches.append(_ha_state(client, base, token, m["status_entity"]))
         fetches.append(_ha_state(client, base, token, m["remaining_entity"]))
+        fetches.append(_opt(m, "total_entity"))
     states = await asyncio.gather(*fetches)
     out = []
     any_status = False
     for i, m in enumerate(machines):
-        st, rem = states[2 * i], states[2 * i + 1]
+        st, rem, tot = states[3 * i], states[3 * i + 1], states[3 * i + 2]
         status = st.get("state") if st else None
         finishes = _laundry_ts(rem.get("state") if rem else None)
         if st is not None:
@@ -666,7 +728,27 @@ async def laundry_tile(client, cfg, token: str) -> dict:
             "status": str(status or "").strip().lower() or None,
             "finishes_at": finishes,
             "status_since": _laundry_ts(st.get("last_changed") if st else None),
+            "total_min": _laundry_minutes(tot.get("state") if tot else None),
+            "starts_at": None,
+            "error": None,
         })
+    # Phase-dependent detail, second round: only the machines that need it,
+    # so a normal poll costs no extra HA reads.
+    extra = []
+    for m, o in zip(machines, out):
+        if o["phase"] == "reserved" and m.get("start_entity"):
+            extra.append((o, "starts_at",
+                          _ha_state(client, base, token, m["start_entity"])))
+        elif o["phase"] == "error" and m.get("error_entity"):
+            extra.append((o, "error",
+                          _ha_state(client, base, token, m["error_entity"])))
+    if extra:
+        got = await asyncio.gather(*(f for _, _, f in extra))
+        for (o, key, _), body in zip(extra, got):
+            if key == "starts_at":
+                o["starts_at"] = _laundry_ts(body.get("state") if body else None)
+            else:
+                o["error"] = _laundry_error_code(body, o["status_since"])
     if not any_status:
         # HA itself is unreachable (or the token is dead): the whole card is
         # offline. Not cached, so recovery shows on the next poll.
