@@ -2870,7 +2870,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look^="fall-"] body > .season-fx .sn-leaves,
 :root[data-look^="fall-"] body > .season .sn-leaves,
 .look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
-.sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); }
+.sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); perspective: 260px; }
 .sn-leaf b {
   display: block; width: 100%; height: 100%;
   background: linear-gradient(140deg, var(--c1), var(--c2));
@@ -2883,30 +2883,40 @@ body.integ-off-todos .todo-slot { display: none; }
   top: 0; animation: sn-fall var(--d) linear var(--dl) infinite;
   filter: drop-shadow(0 1px 1px rgba(0,0,0,.30)) drop-shadow(0 4px 6px rgba(0,0,0,.22));
 }
-.sn-leaf.fall b { animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate; }
-@keyframes sn-fall { from { transform: translate3d(0, -12vh, 0); } to { transform: translate3d(0, 112vh, 0); } }
+.sn-leaf.fall b { animation: sn-sway var(--sw, 5.5s) ease-in-out var(--dl) infinite alternate,
+  sn-rock var(--rk, 2.9s) ease-in-out var(--dl) infinite alternate; }
+/* the fall drifts a little sideways on the air (--drift), so no leaf rides a
+   dead-straight lane */
+@keyframes sn-fall { from { transform: translate3d(0, -12vh, 0); } to { transform: translate3d(var(--drift, 0px), 112vh, 0); } }
 @keyframes sn-sway {
   from { transform: translate3d(calc(var(--amp, 26px) * -1), 0, 0) rotate(var(--r0, -18deg)); }
   to   { transform: translate3d(var(--amp, 26px), 0, 0) rotate(var(--r1, 32deg)); }
 }
+/* A real leaf tips and rocks as it falls, catching the light at an angle and
+   showing its edge. The rock is a 3D turn on its own property (`rotate`, not
+   `transform`, so it adds to the sway instead of replacing it; it tilts the
+   sway's swing a few px, which only reads as more air), timed
+   apart from the sway so the two never fall into one mechanical beat. It
+   stays short of edge-on, so a leaf never blinks out. */
+@keyframes sn-rock { from { rotate: 1 .35 0 -55deg; } to { rotate: 1 .35 0 55deg; } }
 /* the six near leaves (the far set overrides these under .sn-leaves.back) */
-.sn-leaf:nth-child(1) { --x: 6%;  --y: 22%; --s: 40px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-3); --d: 30s; --dl: -4s; }
-.sn-leaf:nth-child(2) { --x: 30%; --y: 64%; --s: 34px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-1); --d: 36s; --dl: -19s; --sw: 6.5s; --r1: 48deg; }
-.sn-leaf:nth-child(3) { --x: 57%; --y: 38%; --s: 44px; --c1: var(--sn-leaf-4); --c2: var(--sn-leaf-2); --d: 33s; --dl: -27s; --amp: 34px; }
-.sn-leaf:nth-child(4) { --x: 82%; --y: 71%; --s: 36px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-2); --d: 39s; --dl: -11s; --sw: 7s; }
-.sn-leaf:nth-child(5) { --x: 44%; --y: 12%; --s: 24px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 48s; --dl: -33s; --o: .85; --amp: 18px; }
-.sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 22px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 52s; --dl: -44s; --o: .85; --amp: 16px; }
+.sn-leaf:nth-child(1) { --x: 6%;  --y: 22%; --s: 40px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-3); --d: 30s; --dl: -4s; --drift: 70px; --rk: 2.7s; }
+.sn-leaf:nth-child(2) { --x: 30%; --y: 64%; --s: 34px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-1); --d: 36s; --dl: -19s; --sw: 6.5s; --r1: 48deg; --drift: -50px; --rk: 3.4s; }
+.sn-leaf:nth-child(3) { --x: 57%; --y: 38%; --s: 44px; --c1: var(--sn-leaf-4); --c2: var(--sn-leaf-2); --d: 33s; --dl: -27s; --amp: 34px; --drift: 110px; --rk: 2.4s; }
+.sn-leaf:nth-child(4) { --x: 82%; --y: 71%; --s: 36px; --c1: var(--sn-leaf-1); --c2: var(--sn-leaf-2); --d: 39s; --dl: -11s; --sw: 7s; --drift: -80px; --rk: 3.1s; }
+.sn-leaf:nth-child(5) { --x: 44%; --y: 12%; --s: 24px; --c1: var(--sn-leaf-3); --c2: var(--sn-leaf-1); --d: 48s; --dl: -33s; --o: .85; --amp: 18px; --drift: 40px; --rk: 3.8s; }
+.sn-leaf:nth-child(6) { --x: 93%; --y: 30%; --s: 22px; --c1: var(--sn-leaf-2); --c2: var(--sn-leaf-4); --d: 52s; --dl: -44s; --o: .85; --amp: 16px; --drift: -60px; --rk: 4.2s; }
 /* The far leaves: a second set inside the photo layer, behind the glass, so
    a card they pass behind blurs them and the open photo shows them sharp.
    Smaller and slower than the near ones, on their own lanes, no shadow:
    size, speed and blur together read as depth. */
 .sn-leaves.back .sn-leaf.fall { filter: none; }
-.sn-leaves.back .sn-leaf:nth-child(1) { --x: 18%; --y: 30%; --s: 22px; --d: 44s; --dl: -9s; --amp: 18px; --o: .9; }
-.sn-leaves.back .sn-leaf:nth-child(2) { --x: 38%; --y: 55%; --s: 18px; --d: 52s; --dl: -30s; --amp: 14px; --o: .85; }
-.sn-leaves.back .sn-leaf:nth-child(3) { --x: 66%; --y: 20%; --s: 24px; --d: 47s; --dl: -16s; --amp: 20px; --o: .9; }
-.sn-leaves.back .sn-leaf:nth-child(4) { --x: 74%; --y: 80%; --s: 20px; --d: 55s; --dl: -38s; --amp: 16px; --o: .85; }
-.sn-leaves.back .sn-leaf:nth-child(5) { --x: 11%; --y: 70%; --s: 16px; --d: 60s; --dl: -22s; --amp: 12px; --o: .8; }
-.sn-leaves.back .sn-leaf:nth-child(6) { --x: 88%; --y: 50%; --s: 18px; --d: 58s; --dl: -50s; --amp: 14px; --o: .8; }
+.sn-leaves.back .sn-leaf:nth-child(1) { --x: 18%; --y: 30%; --s: 22px; --d: 44s; --dl: -9s; --amp: 18px; --o: .9; --drift: 50px; --rk: 3.6s; }
+.sn-leaves.back .sn-leaf:nth-child(2) { --x: 38%; --y: 55%; --s: 18px; --d: 52s; --dl: -30s; --amp: 14px; --o: .85; --drift: -40px; --rk: 4.1s; }
+.sn-leaves.back .sn-leaf:nth-child(3) { --x: 66%; --y: 20%; --s: 24px; --d: 47s; --dl: -16s; --amp: 20px; --o: .9; --drift: 70px; --rk: 3.3s; }
+.sn-leaves.back .sn-leaf:nth-child(4) { --x: 74%; --y: 80%; --s: 20px; --d: 55s; --dl: -38s; --amp: 16px; --o: .85; --drift: -30px; --rk: 4.6s; }
+.sn-leaves.back .sn-leaf:nth-child(5) { --x: 11%; --y: 70%; --s: 16px; --d: 60s; --dl: -22s; --amp: 12px; --o: .8; --drift: 30px; --rk: 5s; }
+.sn-leaves.back .sn-leaf:nth-child(6) { --x: 88%; --y: 50%; --s: 18px; --d: 58s; --dl: -50s; --amp: 14px; --o: .8; --drift: -50px; --rk: 4.4s; }
 /* A wall left on overnight doesn't need leaves falling in a dark kitchen. */
 .is-night .sn-leaf, .is-night .sn-leaf b,
 .is-night .sn-bat, .is-night .sn-bat i, .is-night .sn-bat b,
@@ -2915,6 +2925,10 @@ body.integ-off-todos .todo-slot { display: none; }
    stacking layer, which would put the top bar and the open gear menu UNDER
    the leaves. The far leaves stay, still, behind the glass. */
 :root[data-look]:not([data-look="none"]) body.is-night > .season-fx { display: none; }
+/* The far bats go too. Paused, a third of them stopped mid-sky, and their
+   wingbeat (on b::before) kept going: a bat hanging in the air flapping on
+   the spot. The webs stay, the far leaves rest. */
+:root[data-look]:not([data-look="none"]) body.is-night > .season .sn-bat { display: none; }
 
 /* ---- Halloween's creatures (every halloween-* look) ----
    The same two layers as the leaves. Over the cards (.season-fx): a pair of
@@ -2968,7 +2982,7 @@ body.integ-off-todos .todo-slot { display: none; }
 @keyframes sn-bat-bob { from { transform: translate3d(0, -18px, 0); } to { transform: translate3d(0, 18px, 0); } }
 @keyframes sn-bat-flap { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-93.3333%, 0, 0); } }
 .sn-haunt.front .sn-bat:nth-child(1) { --y: 16%; --s: 84px; --d: 28s; --dl: -4s; }
-.sn-haunt.front .sn-bat:nth-child(2) { --y: 22%; --s: 62px; --d: 28s; --dl: -4.9s; --rise: -4vh; --bob: 2s; --flap: .19s; }
+.sn-haunt.front .sn-bat:nth-child(2) { --y: 22%; --s: 62px; --d: 28s; --dl: -4.9s; --rise: -4vh; --bob: 2s; --flap: .32s; }
 .sn-haunt.front .sn-bat:nth-child(3) { --y: 46%; --s: 72px; --d: 37s; --dl: -24s; --rise: -18vh; --bob: 2.8s; animation-name: sn-bat-rtl; }
 .sn-haunt.front .sn-bat:nth-child(4) { --y: 33%; --s: 40px; --d: 31s; --dl: -13s; --rise: 4vh; --bob: 3.2s; --flap: .56s; }
 .sn-haunt.back .sn-bat { filter: none; opacity: .85; }
@@ -2984,7 +2998,7 @@ body.integ-off-todos .todo-slot { display: none; }
   transform: translate3d(0, -160px, 0); }
 .sn-dangle i { display: block; width: 100%; height: 100%; position: relative; transform-origin: 50% -90vh; }
 .sn-dangle.visiting i { animation: sn-dangle-sway 4.2s ease-in-out infinite alternate; }
-.sn-dangle i::before { content: ""; position: absolute; left: 50%; bottom: 58%; margin-left: -.5px;
+.sn-dangle i::before { content: ""; position: absolute; left: 50%; bottom: 80%; margin-left: -.5px;
   width: 1px; height: 100vh; background: var(--sn-web); }
 
 @keyframes sn-dangle-sway { from { transform: rotate(-1.1deg); } to { transform: rotate(1.1deg); } }
@@ -3002,6 +3016,9 @@ body.integ-off-todos .todo-slot { display: none; }
   content: ""; display: block; width: 700%; height: 100%; background: var(--sn-spider);
   -webkit-mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat;
 }
+/* a spider on silk hangs head-down from the tip of its abdomen, where the
+   thread leaves it (the drawing faces up, so it turns over) */
+.sn-dangle b { transform: rotate(180deg); }
 .sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: sn-walk var(--walk-ms, 520ms) steps(7) infinite; }
 @keyframes sn-walk { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-100%, 0, 0); } }
 @media (max-width: 1000px) {
