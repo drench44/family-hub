@@ -243,6 +243,21 @@ For each `PENDING_*` row, oldest first:
 - **Update:** `PUT` full regenerated ICS with `If-Match: <base_etag>`. On success
   store new ETag → `SYNCED`.
 - **Delete:** `DELETE` with `If-Match: <base_etag>`.
+- **A wall change during the request:** every queued change gives the row a
+  fresh `local_rev` from one shared counter (`cal_rev`), so a value is never
+  reused, even by a row deleted and re-added under the same id. After a push,
+  the row goes `SYNCED` (or is dropped, for a delete) only if `local_rev`
+  still matches the value read before the request. Otherwise the newer change
+  stays queued and adopts the new href/etag, so the next push builds on it. A
+  row deleted during its create upload comes back as a `PENDING_DELETE` for
+  the new server copy, so that delete retries like any other. A 412 never
+  forces the server copy over a wall change made while the request was out:
+  a newer delete moves onto the server's copy and goes ahead; a newer edit
+  stays queued, and because it was built on the copy that lost, its own push
+  meets the same 412 and server-wins drops it (logged). A delete whose own
+  DELETE conflicts is dropped the same way, keeping the other device's edit.
+  A create that conflicts with nothing at its URL is kept and retried. An
+  edit to a row queued for delete is refused.
 - **`412 Precondition Failed`** on any of these = the server copy moved under us →
   §5.6 conflict resolution.
 - **Bump `SEQUENCE`** on every semantic update we originate (native iCalendar

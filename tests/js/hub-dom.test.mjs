@@ -7144,6 +7144,21 @@ test('seasonHauntHtml: the creatures each layer carries, spans only, balanced', 
 });
 
 // ---- the two JS-walked spiders ----
+// mulberry32: a small seeded PRNG in [0, 1), the same sequence every run
+function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// Seed 15 is chosen on purpose: its crawler walk makes a turn printed as
+// 5.7e-14deg (exponent form), the path that used to flake, so it runs every time.
+const SPIDER_SEED = 15;
+
 // A fake creature: one <span class="sn-crawl"> inside .sn-haunt inside
 // .season-fx, a sized layer, and whatever animate() the test wants.
 function spiderStage(sandbox, document, opts = {}) {
@@ -7182,6 +7197,12 @@ function spiderStage(sandbox, document, opts = {}) {
   document.hidden = Boolean(opts.hiddenTab);
   document.querySelector = (sel) => (sel.includes('sn-crawl') || sel.includes('sn-dangle') ? el : null);
   sandbox.getComputedStyle = () => ({ display: 'block' });
+  // A seeded Math.random, so every run walks the same path and a failure is
+  // repeatable. With the real one each run drew a fresh path, and a rare one
+  // (a turn that lands at 5.7e-14deg, which the transform parser could not
+  // read) failed the suite about once in a hundred runs.
+  sandbox.Math = Object.create(Math);
+  sandbox.Math.random = seededRandom(SPIDER_SEED);
   return { el, layer, moves };
 }
 
@@ -7327,6 +7348,10 @@ test('the crawler walks: legs tied to its pace, turns the short way, stays on sc
   }
   // ...and the pace is drawn fresh each time, so the cycle time varies: a
   // fixed cycle is exactly the skating the class exists to prevent
+  // SPIDER_SEED is picked so this walk hits a turn printed in exponent form;
+  // if a change to the walker moves the seed off that path, pick a new one
+  assert.ok(moves.some((m) => /e-\d+deg/.test(m.frames[1].transform)),
+    'the seeded walk no longer covers a turn printed in exponent form');
   const cycles = new Set(moves.map((m) => m.walkMs));
   assert.ok(cycles.size >= 2, `the leg cycle never changed (${[...cycles].join()}), so it is not tied to the pace`);
   assert.ok(!el.classList.contains('walking'), 'and it ends up still');

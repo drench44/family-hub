@@ -127,7 +127,8 @@ def test_reconcile_completions_records_ios_checkoff_add_only(conn):
     coll = oid.split("/", 1)[0]
     utcnow = _NOW.replace(tzinfo=dt.timezone.utc)
     # simulate: reminder pushed, then completed in iOS, stored SYNCED by the pull
-    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1")
+    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1",
+                               fdb.get_cal_object(conn, oid)["local_rev"])
     done = rem.set_completed(fdb.get_cal_object(conn, oid)["raw_ics"], True, utcnow)
     fdb.upsert_cal_object_synced(conn, {
         "id": oid, "collection_id": coll, "comp_type": "VTODO", "uid": m["uid"],
@@ -157,6 +158,29 @@ def test_reconcile_refreshes_mirrored_reminder_on_edit(conn):
     assert chore_mirror.reconcile(conn, _CFG, _NOW)["updated"] == 0   # idempotent
 
 
+def test_reconcile_does_not_count_a_refresh_of_a_reminder_queued_for_delete(conn):
+    """An edit can't revive a reminder already queued for delete, so the
+    refresh is skipped: not counted, and the ledger keeps its old sig so a
+    later tick tries again once the row settles."""
+    pid, cid = _mirrored(conn)
+    m = fdb.get_chore_mirror(conn, cid, _NOW.date().isoformat())
+    oid = m["cal_object_id"]
+    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1",
+                               fdb.get_cal_object(conn, oid)["local_rev"])
+    fdb.queue_cal_object_delete(conn, oid, "t0")
+    others = [x for x in fdb.list_chore_mirror(conn) if x["cal_object_id"] != oid]
+    for x in others:                  # the other days: out of the picture
+        conn.execute("DELETE FROM chore_mirror WHERE chore_id = ? AND date = ?",
+                     (x["chore_id"], x["date"]))
+    conn.commit()
+    fdb.update_chore(conn, cid, title="Wash dishes")
+    old_sig = fdb.get_chore_mirror(conn, cid, _NOW.date().isoformat())["sig"]
+    res = chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert fdb.get_cal_object(conn, oid)["sync_state"] == "PENDING_DELETE"
+    assert fdb.get_chore_mirror(conn, cid, _NOW.date().isoformat())["sig"] == old_sig
+    assert res["updated"] == 0
+
+
 # --- review fixes: handoff / completed guards / orphan / prune-skip --------
 
 def _complete_in_ios(conn, m, title="Dishes"):
@@ -165,7 +189,8 @@ def _complete_in_ios(conn, m, title="Dishes"):
     from family_hub import reminders as rem
     oid = m["cal_object_id"]
     coll = oid.split("/", 1)[0]
-    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1")
+    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1",
+                               fdb.get_cal_object(conn, oid)["local_rev"])
     done = rem.set_completed(fdb.get_cal_object(conn, oid)["raw_ics"], True,
                              _NOW.replace(tzinfo=dt.timezone.utc))
     fdb.upsert_cal_object_synced(conn, {
@@ -253,7 +278,9 @@ def test_reconcile_recreates_orphaned_ledger_row(conn):
     chore_mirror.reconcile(conn, _CFG, _NOW)
     today = _NOW.date().isoformat()
     m = fdb.get_chore_mirror(conn, cid, today)
-    fdb.delete_cal_object_row(conn, m["cal_object_id"])     # object vanished (iOS delete)
+    conn.execute("DELETE FROM cal_objects WHERE id = ?",     # object vanished (iOS delete)
+                 (m["cal_object_id"],))
+    conn.commit()
     res = chore_mirror.reconcile(conn, _CFG, _NOW, synced_collections={"caldav:emma"})
     assert res["created"] >= 1
     assert fdb.get_cal_object(conn, m["cal_object_id"]) is not None   # re-mirrored
@@ -263,7 +290,8 @@ def test_push_completion_on_synced_object_bumps_to_pending_update(conn):
     pid, cid = _mirrored(conn)
     today = _NOW.date().isoformat()
     m = fdb.get_chore_mirror(conn, cid, today)
-    fdb.mark_cal_object_pushed(conn, m["cal_object_id"], "https://x", "e1")
+    fdb.mark_cal_object_pushed(conn, m["cal_object_id"], "https://x", "e1",
+                               fdb.get_cal_object(conn, m["cal_object_id"])["local_rev"])
     assert chore_mirror.push_completion(conn, cid, today, True) is True
     obj = fdb.get_cal_object(conn, m["cal_object_id"])
     assert obj["sync_state"] == "PENDING_UPDATE" and "STATUS:COMPLETED" in obj["raw_ics"]

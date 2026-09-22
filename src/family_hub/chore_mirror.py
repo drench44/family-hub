@@ -265,8 +265,11 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
                     ics = remlogic.build_chore_vtodo(
                         cur["uid"], _title(chore), d,
                         chore.get("due_times") or [], now, tz=tz)
-                    fdb.queue_cal_object_update(
-                        conn, cur["cal_object_id"], ics, _title(chore), now_iso)
+                    if not fdb.queue_cal_object_update(
+                            conn, cur["cal_object_id"], ics, _title(chore), now_iso):
+                        # gone, or queued for delete: nothing was queued, so keep
+                        # the old sig (a later tick retries) and don't count it
+                        continue
                     fdb.upsert_chore_mirror(conn, cid, diso, pid, cur["cal_object_id"],
                                             cur["uid"], _sig(chore))
                     updated += 1
