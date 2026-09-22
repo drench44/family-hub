@@ -4996,7 +4996,52 @@ _BT0 = dt.datetime(2026, 8, 18, 12, 0, tzinfo=dt.timezone.utc)
 def test_backup_status_unknown(app_mod):
     assert app_mod._backup_status(None, _BT0, 129600) == {
         "known": False, "last_success": None, "age_s": None,
-        "stale": False, "threshold_s": 129600}
+        "stale": False, "threshold_s": 129600, "remote": None}
+
+
+def _kv_backup(app_mod, tmp_path, rec):
+    conn = fdb.connect(str(tmp_path / "rb.db"))
+    fdb.ensure_schema(conn)
+    fdb.kv_set(conn, "backup_status", rec)
+    return app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+
+
+def test_build_backup_without_remote_has_no_remote_block(app_mod, tmp_path):
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": (_BT0 - dt.timedelta(hours=1)).isoformat()})
+    assert s["remote"] is None and s["stale"] is False
+
+
+def test_build_backup_good_remote(app_mod, tmp_path):
+    ok_at = (_BT0 - dt.timedelta(hours=1)).isoformat()
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": ok_at, "remote_ok": True, "remote_at": ok_at,
+                    "remote_ok_at": ok_at})
+    assert s["remote"] == {"ok": True, "last_ok": ok_at, "age_s": 3600,
+                           "stale": False, "failing": False}
+
+
+def test_build_backup_failing_remote_is_not_healthy(app_mod, tmp_path):
+    """The local snapshot is fresh but the NAS copy failed: that used to read
+    as a healthy backup. It must now surface as failing."""
+    fresh = (_BT0 - dt.timedelta(hours=1)).isoformat()
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": fresh, "remote_ok": False, "remote_at": fresh,
+                    "remote_ok_at": (_BT0 - dt.timedelta(hours=2)).isoformat()})
+    assert s["stale"] is False                       # local is fine
+    assert s["remote"]["failing"] is True and s["remote"]["ok"] is False
+
+
+def test_build_backup_remote_never_succeeded_or_old_is_stale(app_mod, tmp_path):
+    fresh = (_BT0 - dt.timedelta(hours=1)).isoformat()
+    never = _kv_backup(app_mod, tmp_path,
+                       {"at": fresh, "remote_ok": False, "remote_at": fresh})
+    assert never["remote"]["stale"] is True and never["remote"]["last_ok"] is None
+    old = (_BT0 - dt.timedelta(hours=40)).isoformat()
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": fresh, "remote_ok": True, "remote_at": old,
+                    "remote_ok_at": old})
+    assert s["remote"]["stale"] is True and s["remote"]["failing"] is False
 
 
 def test_backup_status_fresh(app_mod):

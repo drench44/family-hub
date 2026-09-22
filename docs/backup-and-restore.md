@@ -82,4 +82,6 @@ configure on the box — they never belong in this repo.
 3. Verify: `sudo systemctl start family-hub-backup.service` then check the NAS
    path holds the tiered tree. A NAS outage later exits the run non-zero (loud
    in `journalctl -u family-hub-backup`) **after** the local snapshot is safely
-   written, so it never costs you the local backup.
+   written, so it never costs you the local backup. Each run also records the
+   NAS result in the hub's backup heartbeat, and the wall header shows an
+   "Off-box backup failing" (or "stale") badge until a copy succeeds again.

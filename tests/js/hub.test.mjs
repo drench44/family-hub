@@ -1100,6 +1100,43 @@ test('backupBadge: amber with age when a known backup is stale', () => {
   assert.match(b.text, /40h/);   // 144000s
 });
 
+// The local snapshot can be fresh while every off-box copy fails. That used to
+// read as a healthy backup; a failing or stale remote now shows the badge.
+test('backupBadge: a healthy remote (or none configured) stays hidden', () => {
+  const ok = { ok: true, last_ok: 'x', age_s: 3600, stale: false, failing: false };
+  assert.equal(backupBadge({ known: true, stale: false, age_s: 60, remote: ok }).show, false);
+  assert.equal(backupBadge({ known: true, stale: false, age_s: 60, remote: null }).show, false);
+});
+
+test('backupBadge: amber when the off-box copy is failing', () => {
+  const b = backupBadge({ known: true, stale: false, age_s: 60, threshold_s: 129600,
+    remote: { ok: false, last_ok: 'x', age_s: 7200, stale: false, failing: true } });
+  assert.equal(b.show, true);
+  assert.equal(b.level, 'warn');
+  assert.match(b.text, /Off-box backup failing/);
+  assert.match(b.title, /2h/);          // last good copy 7200s ago
+});
+
+test('backupBadge: amber with age when the off-box copy is stale', () => {
+  const b = backupBadge({ known: true, stale: false, age_s: 60, threshold_s: 129600,
+    remote: { ok: true, last_ok: 'x', age_s: 144000, stale: true, failing: false } });
+  assert.equal(b.show, true);
+  assert.match(b.text, /Off-box backup stale \(40h\)/);
+});
+
+test('backupBadge: a remote that never succeeded says so', () => {
+  const b = backupBadge({ known: true, stale: false, age_s: 60, threshold_s: 129600,
+    remote: { ok: false, last_ok: null, age_s: null, stale: true, failing: true } });
+  assert.equal(b.show, true);
+  assert.match(b.title, /never/i);
+});
+
+test('backupBadge: a stale LOCAL backup still wins the badge text', () => {
+  const b = backupBadge({ known: true, stale: true, age_s: 144000, threshold_s: 129600,
+    remote: { ok: false, last_ok: null, age_s: null, stale: true, failing: true } });
+  assert.match(b.text, /^⚠ Backup stale/);
+});
+
 /* ---- month lanes (the Google-style spanning bars) ---- */
 const WEEK = ['2026-08-23', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-29'];
 

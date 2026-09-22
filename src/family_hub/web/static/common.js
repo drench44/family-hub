@@ -90,20 +90,36 @@ function fmtTime(iso) {
 /* Backup-health header badge. Pure: maps the /api/hub `backup` block to a
    descriptor {show, level, text, title}. Hidden while the backup is healthy,
    still 'unknown' (no heartbeat recorded yet), or the payload is missing;
-   amber only once a KNOWN backup has gone stale. */
+   amber once a KNOWN backup has gone stale, or when an off-box mirror is
+   configured and its last copy failed or is too old (a fresh local snapshot
+   alone used to read healthy while every NAS copy failed). */
 function fmtBackupAge(s) {
   if (s == null) return '—';
   const h = Math.round(s / 3600);
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
 }
 function backupBadge(status) {
-  if (!status || !status.known || !status.stale) return { show: false };
-  const age = fmtBackupAge(status.age_s);
+  if (!status || !status.known) return { show: false };
+  const limit = fmtBackupAge(status.threshold_s);
+  if (status.stale) {
+    const age = fmtBackupAge(status.age_s);
+    return {
+      show: true,
+      level: 'warn',
+      text: `⚠ Backup stale (${age})`,
+      title: `No successful backup in ${age} (warns past ${limit})`,
+    };
+  }
+  const r = status.remote;
+  if (!r || (!r.failing && !r.stale)) return { show: false };
+  const lastGood = r.last_ok
+    ? `last good off-box copy ${fmtBackupAge(r.age_s)} ago`
+    : 'an off-box copy has never succeeded';
   return {
     show: true,
     level: 'warn',
-    text: `⚠ Backup stale (${age})`,
-    title: `No successful backup in ${age} (warns past ${fmtBackupAge(status.threshold_s)})`,
+    text: r.failing ? '⚠ Off-box backup failing' : `⚠ Off-box backup stale (${fmtBackupAge(r.age_s)})`,
+    title: `${r.failing ? 'The last off-box copy failed' : `No off-box copy in ${limit}`}; ${lastGood}. The local backup is fine.`,
   };
 }
 
