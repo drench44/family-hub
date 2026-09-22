@@ -76,6 +76,11 @@ touching system fonts.
 
 - `tests/js/osk.test.mjs` — the pure transform, incl. symbol/emoji insert and
   grapheme-aware backspace (surrogate pair, variation selector, ZWJ sequence).
+- `tests/js/osk-dom.test.mjs`: osk.js itself in kiosk mode on a small fake
+  DOM: focus shows the keyboard, and it hides once its field leaves the DOM
+  (Firefox fires no blur for a removed field, so an idle-closed overlay used
+  to leave it docked), while a repaint that swaps in a new focused field
+  keeps it up.
 - `tests/test_static.py` — structural guards for kiosk activation, OS-keyboard
   suppression, the symbol/emoji layers, the grapheme helper, the CSS, the
   `renderTodosPaint` focus/caret preservation, and that `hide()` blurs a
