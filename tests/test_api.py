@@ -3010,10 +3010,13 @@ def test_caldav_test_connection_never_overlaps_the_background_sync(
     active = {"now": 0, "max": 0}
     guard = threading.Lock()
 
+    started = threading.Event()
+
     def fake_sync_once(client, conn, cfg, now):
         with guard:
             active["now"] += 1
             active["max"] = max(active["max"], active["now"])
+        started.set()
         _time.sleep(0.2)
         with guard:
             active["now"] -= 1
@@ -3025,7 +3028,7 @@ def test_caldav_test_connection_never_overlaps_the_background_sync(
         bg = threading.Thread(
             target=lambda: appmod._sync_tick(None, appmod._db(), appmod.cfg))
         bg.start()
-        _time.sleep(0.05)                     # the background sync is running
+        assert started.wait(5), "the background sync never started"
         assert tc.post("/api/integrations/icloud_caldav/test").json() \
             == {"ok": True}
         bg.join()
@@ -3412,6 +3415,33 @@ def test_laundry_steady_state_writes_nothing(client, monkeypatch):
         for _ in range(3):
             assert client.get("/api/tiles/laundry").status_code == 200
         assert writes == [], f"steady {phase} rewrote {writes}"
+
+
+def test_laundry_annotations_never_run_side_by_side(app_mod, monkeypatch):
+    """The watcher and the route's inline fallback both annotate in worker
+    threads now. Run together, both could read the same previous phase and
+    log one finished load twice. The lock keeps them one at a time."""
+    import threading
+    import time as _time
+    active = {"now": 0, "max": 0}
+    guard = threading.Lock()
+
+    def slow(t):
+        with guard:
+            active["now"] += 1
+            active["max"] = max(active["max"], active["now"])
+        _time.sleep(0.1)
+        with guard:
+            active["now"] -= 1
+        return t
+    monkeypatch.setattr(app_mod, "_laundry_annotate", slow)
+    threads = [threading.Thread(target=app_mod._laundry_annotate_serial,
+                                args=({"machines": []},)) for _ in range(3)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert active["max"] == 1
 
 
 def test_laundry_annotate_runs_off_the_event_loop(app_mod, monkeypatch):
