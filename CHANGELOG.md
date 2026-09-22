@@ -32,6 +32,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 - "Test connection" for iCloud no longer runs a second sync on top of the
   one already running in the background. It waits its turn, or says a sync
   is already running.
+- The Google Calendar sign-in file is now saved all at once, readable only by
+  its owner. A crash or full disk while saving can no longer leave half a
+  file that looks like the calendar was never connected.
 
 ## [1.7.0] — 2026-09-22
 
