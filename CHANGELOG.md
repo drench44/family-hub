@@ -23,6 +23,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A checked-off to-do now leaves the list five minutes after it's checked
   (tap it again inside that window to undo) and moves to "recently done",
   instead of staying on the wall, struck through, until midnight.
+- A phone (or the wall's full list) left open on the To-Dos view now picks up
+  check-offs made elsewhere on the next refresh, instead of showing them as
+  open until it is closed and reopened.
+- Turning iCloud off in Settings no longer leaves the To-Do card showing an
+  empty iCloud list; it shows the local list until iCloud is switched back on.
 
 ## [1.6.0] — 2026-09-19
 

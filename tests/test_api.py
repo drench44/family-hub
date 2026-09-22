@@ -1361,7 +1361,7 @@ def test_todos_patch_moves_bucket_and_renames(client):
                         json={"bucket": "whenever"}).status_code == 422
 
 
-def test_todos_complete_lingers_briefly_then_archives(client, app_mod, monkeypatch):
+def test_todos_complete_lingers_briefly_then_archives(client, app_mod):
     tid = client.post("/api/todos", json={"title": "Water plants"}).json()["id"]
     assert client.post(f"/api/todos/{tid}/complete").json() == {"ok": True}
 
@@ -1372,13 +1372,14 @@ def test_todos_complete_lingers_briefly_then_archives(client, app_mod, monkeypat
     assert [t["id"] for t in data["recent_done"]] == [tid]
     assert [t["id"] for t in client.get("/api/hub").json()["todos"]["now"]] == [tid]
 
-    # past the grace window, SAME day: gone from buckets and the wall, still
-    # restorable (operator report 2026-09-22: a checked item sat on the wall
-    # all day, so checking it off looked broken)
-    real_now = dt.datetime.now(dt.timezone.utc)
-    later = real_now + dt.timedelta(minutes=tdlogic.DONE_GRACE_MIN, seconds=5)
-    real_group = tdlogic.group
-    monkeypatch.setattr(tdlogic, "group", lambda rows, now=None: real_group(rows, later))
+    # age the REAL stored stamp past the grace window, same day: gone from
+    # buckets and the wall, still restorable (operator report 2026-09-22: a
+    # checked item sat on the wall all day, so checking it off looked broken)
+    c = app_mod._db()
+    aged = (dt.datetime.now(dt.timezone.utc)
+            - dt.timedelta(minutes=tdlogic.DONE_GRACE_MIN, seconds=5)).isoformat()
+    c.execute("UPDATE todos SET done_at = ? WHERE id = ?", (aged, tid))
+    c.commit()
     data = client.get("/api/todos").json()
     assert data["buckets"]["now"] == []
     assert [t["id"] for t in data["recent_done"]] == [tid]

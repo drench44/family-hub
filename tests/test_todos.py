@@ -32,10 +32,32 @@ def test_done_item_is_visible_only_inside_the_grace_window():
     assert td.is_visible(yesterday, NOW) is False
 
 
-def test_done_item_with_unusable_done_at_is_hidden_not_pinned():
-    # a naive or garbage stamp can't be aged, so it must not stay up forever
-    assert td.is_visible(_t(1, done_at="2026-08-14T14:59:00", done_date="2026-08-14"), NOW) is False
-    assert td.is_visible(_t(1, done_at="yesterday", done_date="2026-08-14"), NOW) is False
+def test_done_item_with_unusable_done_at_is_hidden_not_pinned(caplog):
+    # a naive, garbage or future stamp can't be aged, so it must not stay up
+    # forever (a future one would linger until real time caught up to it)
+    td._warned_bad.clear()
+    naive = _t(11, done_at="2026-08-14T14:59:00", done_date="2026-08-14")
+    garbage = _t(12, done_at="yesterday", done_date="2026-08-14")
+    future = _t(13, done_at="2026-08-14T18:00:00+00:00", done_date="2026-08-14")
+    with caplog.at_level("WARNING", logger="family_hub.todos"):
+        for row in (naive, garbage, future):
+            assert td.is_visible(row, NOW) is False
+            assert td.is_visible(row, NOW) is False       # second poll
+    warned = [r for r in caplog.records if "unusable done_at" in r.getMessage()]
+    assert len(warned) == 3, "one warning per bad row, not one per poll"
+
+
+def test_done_item_a_few_seconds_ahead_still_shows():
+    # small clock steps are tolerated: a stamp 30s ahead is a fresh check-off
+    ahead = _t(1, done_at=(NOW + dt.timedelta(seconds=30)).isoformat(), done_date="2026-08-14")
+    assert td.is_visible(ahead, NOW) is True
+
+
+def test_done_item_with_another_offset_ages_correctly():
+    local = _t(1, done_at="2026-08-14T07:57:00-07:00", done_date="2026-08-14")  # 14:57Z
+    assert td.is_visible(local, NOW) is True
+    old = _t(2, done_at="2026-08-14T07:50:00-07:00", done_date="2026-08-14")    # 14:50Z
+    assert td.is_visible(old, NOW) is False
 
 
 def test_group_buckets_and_hides_old_done():
