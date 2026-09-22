@@ -32,6 +32,41 @@ def test_group_sorts_by_due_then_title():
     assert [r["title"] for r in rem.group(items, TODAY)["upcoming"]] == ["Z", "A", "B"]
 
 
+LA = __import__("zoneinfo").ZoneInfo("America/Los_Angeles")
+
+
+def test_group_buckets_timed_due_by_the_local_day():
+    """A timed DUE is stored in UTC. 7pm Pacific on the 17th is 02:00Z on the
+    18th, so bucketing by the UTC string's date put a tonight chore under
+    "upcoming" (and a last-night one under "today"). Bucket by the hub's own
+    zone instead, and hand the wall the local time so its date label agrees."""
+    items = [
+        _r("1", "Tonight", "2026-08-18T02:00:00+00:00"),       # 7pm on the 17th
+        _r("2", "Last night", "2026-08-17T03:00:00+00:00"),    # 8pm on the 16th
+        _r("3", "Zulu form", "2026-08-18T06:59:00Z"),          # 23:59 on the 17th
+        _r("4", "Tomorrow", "2026-08-18T07:00:00+00:00"),      # 00:00 on the 18th
+        _r("5", "All-day", "2026-08-17"),
+    ]
+    g = rem.group(items, TODAY, LA)
+    assert [r["title"] for r in g["today"]] == ["All-day", "Tonight", "Zulu form"]
+    assert [r["title"] for r in g["overdue"]] == ["Last night"]
+    assert [r["title"] for r in g["upcoming"]] == ["Tomorrow"]
+    tonight = g["today"][1]
+    assert tonight["due"] == "2026-08-17T19:00:00-07:00"
+    # the caller's dicts are not rewritten (the cache keeps the UTC form)
+    assert items[0]["due"] == "2026-08-18T02:00:00+00:00"
+
+
+def test_group_leaves_floating_and_unparseable_dues_alone():
+    """A floating (no zone) time is already local wall time; a junk string must
+    not raise out of the wall's render. Both bucket by their own date prefix."""
+    items = [_r("1", "Floating", "2026-08-17T23:30:00"),
+             _r("2", "Junk", "2026-08-17Tnonsense")]
+    g = rem.group(items, TODAY, LA)
+    assert [r["title"] for r in g["today"]] == ["Floating", "Junk"]
+    assert g["today"][0]["due"] == "2026-08-17T23:30:00"
+
+
 def test_open_count_excludes_completed():
     items = [_r("1", "a"), _r("2", "b", completed=True), _r("3", "c")]
     assert rem.open_count(items) == 2

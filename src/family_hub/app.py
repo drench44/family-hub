@@ -1039,7 +1039,7 @@ def hub():
     # AND enabled. A separate surface from the local To-Dos; two-way when the
     # operator has enabled writes (readonly=False).
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
-    reminders_block = (remlogic.group(_visible_reminders(c), today)
+    reminders_block = (remlogic.group(_visible_reminders(c), today, TZ)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
     people, away_ok = _people_day(c, today)
     # Backup health for the header badge — fails-soft like the todos block above:
@@ -1422,7 +1422,7 @@ def reminders_full():
     c = _db()
     if not _integration_on(c, "icloud_caldav"):
         return {"buckets": {b: [] for b in remlogic.BUCKETS}, "configured": False}
-    return {"buckets": remlogic.group(_visible_reminders(c), _today()),
+    return {"buckets": remlogic.group(_visible_reminders(c), _today(), TZ),
             "configured": True, "writable": _reminders_writable(c)}
 
 
