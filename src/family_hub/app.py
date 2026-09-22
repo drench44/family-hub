@@ -1948,11 +1948,17 @@ def admin_away_back(pid: int, a: AwayBackIn | None = None):
     row = fdb.get_away_period(c, pid)
     if row is None:
         raise HTTPException(404, "unknown away period")
-    end = (_valid_date(a.end_date) if a and a.end_date
+    explicit = bool(a and a.end_date)
+    if not explicit and row["start_date"] >= _today().isoformat():
+        # "Going away" then "I'm back" on the same day (or before a planned
+        # start): the default end, yesterday, falls before the start, so the
+        # period never took effect. Remove it instead of 422ing every tap.
+        fdb.delete_away_period(c, pid)
+        return {"ok": True}
+    end = (_valid_date(a.end_date) if explicit
            else (_today() - dt.timedelta(days=1)).isoformat())
-    # Guard the fast "Going away" (start=today) then immediate "I'm back"
-    # (end defaults to yesterday) double-tap: end < start would silently void
-    # the period via away_map's a>b skip.
+    # An explicit end before the start would silently void the period via
+    # away_map's a>b skip.
     if end < row["start_date"]:
         raise HTTPException(422, "end_date must not be before start_date")
     fdb.close_away_period(c, pid, end)
