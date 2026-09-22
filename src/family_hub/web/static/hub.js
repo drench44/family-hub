@@ -3514,7 +3514,8 @@ async function submitAwayOpen(pid) {
 }
 
 /* Close an open away period ("I'm back") — no body needed; the server ends it
-   as of yesterday by default. */
+   as of yesterday by default, or removes it outright when it started today
+   (it never took effect). */
 async function submitAwayBack(periodId) {
   try {
     await j(`/api/admin/away/${periodId}/back`, { method: 'POST' });

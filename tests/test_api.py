@@ -2005,16 +2005,35 @@ def test_open_period_mid_day_keeps_the_backups_day_whole(
     assert b2["week"][-2] == "done" and b2["streak"] == 1
 
 
-def test_away_back_rejects_end_before_start(client, app_mod, monkeypatch):
-    """S2: the fast 'Going away' (start=today) then immediate 'I'm back' (end
-    defaults to yesterday) double-tap must 422, not silently void the period."""
+def test_away_back_same_day_cancels_the_period(client, app_mod, monkeypatch):
+    """'Going away' (start=today) then 'I'm back' the same day used to 422
+    every time: the default end (yesterday) falls before the start. The period
+    never took effect, so the plain tap removes it and succeeds. The wall
+    treats the person as present again straight away."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
     p1 = _make_person(client, "Remy")
     pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
-    assert client.post(f"/api/admin/away/{pid}/back").status_code == 422
-    # an explicit end on/after start still works
+    r = client.post(f"/api/admin/away/{pid}/back")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert fdb.get_away_period(app_mod._db(), pid) is None
+    assert client.get("/api/admin/away").json()["away_periods"] == []
+    hub = client.get("/api/hub").json()
+    assert next(p for p in hub["people"]
+                if p["person"]["id"] == p1)["away"] is False
+
+
+def test_away_back_same_day_explicit_end_still_closes(client, app_mod,
+                                                      monkeypatch):
+    """An explicit end_date keeps the old meaning: close the period on that
+    day (here: away for today only), and an end before the start is a 422."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
+    assert client.post(f"/api/admin/away/{pid}/back",
+                       json={"end_date": "2026-08-16"}).status_code == 422
     assert client.post(f"/api/admin/away/{pid}/back",
                        json={"end_date": "2026-08-17"}).status_code == 200
+    assert fdb.get_away_period(app_mod._db(), pid)["end_date"] == "2026-08-17"
 
 
 def test_away_patch_rejects_end_before_start(client, app_mod, monkeypatch):
