@@ -10,6 +10,45 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- When the away list can't be read, the wall no longer saves that day's
+  chore plan into history. A plan built without it could record the wrong
+  person as the owner for good.
+- Checking off a chore just after midnight now counts for the day the wall
+  is showing. Before, it landed on the new day and the tick disappeared.
+- If a chore tap is for a day that can no longer be changed, the wall says
+  the day has ended instead of asking you to tap again.
+- Tapping "I'm back" on the same day as "Going away" now works. The away
+  time never started, so it is simply removed. Before, it failed every time.
+- An iCloud reminder due at a set time in the evening now shows under the
+  right day. Times are read in the hub's own time zone, so a 7pm reminder no
+  longer shows up as tomorrow's.
+- The backup badge now warns when the copy to the NAS fails or goes stale.
+  Before, it only looked at the local snapshot, so it read healthy even when
+  every NAS copy was failing.
+- The backup now checks that the NAS is actually mounted before copying to
+  it. If the mount had dropped, it used to copy onto the box's own disk and
+  report success. Now that counts as a failed NAS copy.
+- The washer and dryer watcher no longer writes to the database every five
+  seconds when nothing changed (about 35,000 needless writes a day), and its
+  database work no longer holds up the rest of the hub while it runs.
+- The laundry watcher's "still watching" time stamp is saved every 30
+  seconds instead of every 5, which cuts another ~17,000 writes a day.
+- An iCloud reminder edited on the wall at the same moment a sync pulls it
+  can no longer be quietly thrown away. The edit now always waits to be sent.
+- "Test connection" for iCloud no longer runs a second sync on top of the
+  one already running in the background. It waits its turn, or says a sync
+  is already running.
+- The Google Calendar sign-in file is now saved all at once, readable only by
+  its owner. A crash or full disk while saving can no longer leave half a
+  file that looks like the calendar was never connected.
+- The health check now makes sure the database can be read. Before, it said
+  "ok" even when the database was missing or broken.
+- The hub's log is much smaller. It no longer writes a line for every check
+  on the washer and dryer, which was about two thirds of it.
+- Every container's log is now capped (5 files of 10 MB), and the camera
+  relay gets 256 MB of memory instead of 128 MB, which it kept running out of.
+
 ## [1.7.0] — 2026-09-22
 
 ### Added

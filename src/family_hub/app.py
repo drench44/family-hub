@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -50,6 +50,12 @@ logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("family_hub")
+# httpx (and httpcore under it) log every request at INFO. The laundry watcher
+# polls Home Assistant every 5s, so those lines were two thirds of the hub's
+# log, ~19 MB a day. Their warnings and errors still come through, and every
+# failed upstream fetch is also logged by our own code where it is handled.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 cfg = load_config(os.environ.get("CONFIG_PATH", "config.json"))
 # Server-side camera fetches reach go2rtc over the shared compose network
@@ -788,6 +794,24 @@ def _config_panel_links() -> list[dict]:
 
 @app.get("/health")
 def health():
+    """Liveness for the container healthcheck, and it means the hub can use its
+    database. It used to return ok without touching the db, so a missing or
+    corrupt hub.db read healthy while every real request failed. One read of a
+    table the app always has, on the same per-thread connection the routes
+    use. SELECT 1 alone never reads the file, and a schema count passes on the
+    empty file sqlite quietly creates when hub.db has gone missing. Stays
+    sub-millisecond."""
+    try:
+        _db().execute("SELECT 1 FROM kv LIMIT 1").fetchone()
+        # A connection opened before hub.db was deleted keeps reading the
+        # unlinked file, so check the path too (after _db(), which creates the
+        # file on a fresh install).
+        if not os.path.exists(DB_PATH):
+            raise FileNotFoundError("hub.db is missing")
+    except Exception as e:
+        log.error("health: database unusable: %s", e)
+        return JSONResponse({"status": "error", "db": type(e).__name__},
+                            status_code=503)
     return {"status": "ok"}
 
 
@@ -931,8 +955,16 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         rows = fdb.day_log(c, d_str)
     else:
         rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
-        if d == today:
+        # Only freeze a plan built WITH the away overlay. A degraded build
+        # treats everyone as present, and the log is permanent history: it
+        # would record the wrong owner for good. The next healthy serve
+        # freezes the real plan.
+        if d == today and away_ok:
             _freeze_day(c, d_str, rows)
+        elif d == today:
+            log.warning("today's chore log not saved (away overlay failed); "
+                        "if it keeps failing, %s drops out of chore history",
+                        d_str)
 
     completed_ids = {r["chore_id"]
                      for r in fdb.completions_between(c, d_str, d_str)}
@@ -980,34 +1012,64 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
     return plan, away_ok
 
 
-def _backup_status(last_success, now, stale_s):
+def _backup_status(last_success, now, stale_s, remote=None):
     """Pure: (last-success datetime or None, now, threshold secs) -> the /api/hub
     `backup` block. 'known' is False before any heartbeat exists, so a fresh
-    deploy shows a muted 'unknown', never a false alarm."""
+    deploy shows a muted 'unknown', never a false alarm.
+
+    `remote` is None when no off-box mirror is configured, else
+    {"ok": last attempt succeeded, "last_ok": datetime of the last good copy or
+    None}. A failing last attempt, or no good copy within the threshold, marks
+    the remote unhealthy: the local snapshot alone is not a healthy backup when
+    the operator asked for an off-box one."""
+    remote_block = None
+    if remote is not None:
+        last_ok = remote.get("last_ok")
+        r_age = int((now - last_ok).total_seconds()) if last_ok else None
+        remote_block = {
+            "ok": bool(remote.get("ok")),
+            "last_ok": last_ok.isoformat() if last_ok else None,
+            "age_s": r_age,
+            "stale": r_age is None or r_age > stale_s,
+            "failing": not remote.get("ok"),
+        }
     if last_success is None:
         return {"known": False, "last_success": None, "age_s": None,
-                "stale": False, "threshold_s": stale_s}
+                "stale": False, "threshold_s": stale_s, "remote": remote_block}
     age = int((now - last_success).total_seconds())
     return {"known": True, "last_success": last_success.isoformat(), "age_s": age,
-            "stale": age > stale_s, "threshold_s": stale_s}
+            "stale": age > stale_s, "threshold_s": stale_s,
+            "remote": remote_block}
+
+
+def _heartbeat_ts(value):
+    """An ISO timestamp from the heartbeat, as an aware UTC datetime, or None
+    when missing or unparseable (fails safe to 'unknown', never false-fresh)."""
+    if not value:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=dt.timezone.utc)
 
 
 def _build_backup(conn, now=None, stale_s=BACKUP_STALE_S):
     """Read the 'backup_status' heartbeat the backup script writes into hub.db on
     every successful snapshot ({"at": ISO, ...}) and derive staleness. family-hub
     `kv` has no updated_at column, so the timestamp lives in the value. A stale
-    heartbeat also catches 'backups stopped running at all'."""
+    heartbeat also catches 'backups stopped running at all'. When an off-box
+    mirror is configured the script also records its outcome (remote_ok,
+    remote_ok_at); the key's presence is what says a mirror is configured."""
     now = now or dt.datetime.now(dt.timezone.utc)
     rec = fdb.kv_get(conn, "backup_status")
-    last = None
-    if isinstance(rec, dict) and rec.get("at"):
-        try:
-            last = dt.datetime.fromisoformat(rec["at"])
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=dt.timezone.utc)
-        except (ValueError, TypeError):
-            last = None
-    return _backup_status(last, now, stale_s)
+    if not isinstance(rec, dict):
+        return _backup_status(None, now, stale_s)
+    remote = None
+    if "remote_ok" in rec:
+        remote = {"ok": rec.get("remote_ok") is True,
+                  "last_ok": _heartbeat_ts(rec.get("remote_ok_at"))}
+    return _backup_status(_heartbeat_ts(rec.get("at")), now, stale_s, remote)
 
 
 @app.get("/api/hub")
@@ -1035,7 +1097,7 @@ def hub():
     # AND enabled. A separate surface from the local To-Dos; two-way when the
     # operator has enabled writes (readonly=False).
     caldav_on = "icloud_caldav" in istate["enabled_ids"]
-    reminders_block = (remlogic.group(_visible_reminders(c), today)
+    reminders_block = (remlogic.group(_visible_reminders(c), today, TZ)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
     people, away_ok = _people_day(c, today)
     # Backup health for the header badge — fails-soft like the todos block above:
@@ -1193,6 +1255,13 @@ def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
 def uncomplete(chore_id: int, date: str | None = None):
     c = _db()
     date_str = date or _today().isoformat()
+    # Same checks as complete(): the wall sends the day it is showing.
+    try:
+        d = dt.date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(422, "bad date")
+    if abs((d - _today()).days) > 366:
+        raise HTTPException(422, "date out of range")
     # Resolve the current owner BEFORE clearing, so the reopen can't be pushed
     # onto a mirror ledger row that still names the other person (M3).
     owner = _resolved_owner(c, chore_id, date_str)
@@ -1377,7 +1446,15 @@ def caldav_test_connection():
     client = _get_caldav_client()
     if client is None:
         return {"ok": False, "error": "no credentials"}
-    return caldav_sync.sync_once(client, _db(), cfg, _now_local())
+    # Wait for a background sync already in flight rather than running a
+    # second one beside it; a sync that never finishes gets an honest error.
+    if not _caldav_sync_lock.acquire(timeout=CALDAV_TEST_WAIT_S):
+        return {"ok": False,
+                "error": "a sync is already running; try again in a minute"}
+    try:
+        return caldav_sync.sync_once(client, _db(), cfg, _now_local())
+    finally:
+        _caldav_sync_lock.release()
 
 
 @app.get("/api/integrations/icloud_caldav/collections")
@@ -1411,7 +1488,7 @@ def reminders_full():
     c = _db()
     if not _integration_on(c, "icloud_caldav"):
         return {"buckets": {b: [] for b in remlogic.BUCKETS}, "configured": False}
-    return {"buckets": remlogic.group(_visible_reminders(c), _today()),
+    return {"buckets": remlogic.group(_visible_reminders(c), _today(), TZ),
             "configured": True, "writable": _reminders_writable(c)}
 
 
@@ -1937,11 +2014,18 @@ def admin_away_back(pid: int, a: AwayBackIn | None = None):
     row = fdb.get_away_period(c, pid)
     if row is None:
         raise HTTPException(404, "unknown away period")
-    end = (_valid_date(a.end_date) if a and a.end_date
+    explicit = bool(a and a.end_date)
+    if not explicit and row["start_date"] == _today().isoformat():
+        # "Going away" then "I'm back" on the same day: the default end,
+        # yesterday, falls before the start, so the period never took effect.
+        # Remove it instead of 422ing every tap. A trip planned for a LATER
+        # start still 422s below: one tap must not quietly delete a plan.
+        fdb.delete_away_period(c, pid)
+        return {"ok": True}
+    end = (_valid_date(a.end_date) if explicit
            else (_today() - dt.timedelta(days=1)).isoformat())
-    # Guard the fast "Going away" (start=today) then immediate "I'm back"
-    # (end defaults to yesterday) double-tap: end < start would silently void
-    # the period via away_map's a>b skip.
+    # An explicit end before the start would silently void the period via
+    # away_map's a>b skip.
     if end < row["start_date"]:
         raise HTTPException(422, "end_date must not be before start_date")
     fdb.close_away_period(c, pid, end)
@@ -2032,6 +2116,9 @@ LAUNDRY_WATCH_S = 5.0
 # enough for a watcher that was a few ticks late, far narrower than any
 # sub-status (sensing ~1 min is the only one this short, and it IS the start).
 LAUNDRY_START_EXACT_MIN = 2.0
+# How stale the persisted "last watcher tick" may get before it is rewritten.
+# Well under LAUNDRY_START_EXACT_MIN, so the gap check above stays meaningful.
+LAUNDRY_TICK_PERSIST_S = 30.0
 # The placeholder finish only appears in a cycle's first minutes (live
 # history: 1 to 6 min); past this, a disagreement is the machine revising
 # its own estimate and is left alone.
@@ -2138,7 +2225,7 @@ async def _laundry_watch_tick() -> None:
         return
     if t.get("available"):
         try:
-            snap = _laundry_annotate(t)
+            snap = await _laundry_annotate_off_loop(t)
             if _laundry_annotate_failures >= LAUNDRY_ANNOTATE_STRIKES:
                 log.warning("laundry: completion history is working again")
             _laundry_annotate_failures = 0
@@ -2289,7 +2376,7 @@ async def _laundry_payload() -> dict:
     t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
     if not t.get("available"):
         return t
-    return _laundry_annotate(t)
+    return await _laundry_annotate_off_loop(t)
 
 
 @app.get("/api/tiles/laundry")
@@ -2354,6 +2441,25 @@ async def laundry_stream():
                                       "X-Accel-Buffering": "no"})
 
 
+# One annotation at a time. On the event loop the watcher and the route's
+# inline fallback were serialized for free; in worker threads (each with its
+# own per-thread connection) two of them could both read the same previous
+# phase and log the same transition twice.
+_laundry_annotate_lock = threading.Lock()
+
+
+def _laundry_annotate_serial(t: dict) -> dict:
+    with _laundry_annotate_lock:
+        return _laundry_annotate(t)
+
+
+async def _laundry_annotate_off_loop(t: dict) -> dict:
+    """Run _laundry_annotate in a worker thread. It does blocking SQLite reads
+    and commits (with a 5s busy timeout), and on the event loop every tick of
+    the 5s watcher stalled every open stream and async request with it."""
+    return await asyncio.to_thread(_laundry_annotate_serial, t)
+
+
 def _laundry_annotate(t: dict) -> dict:
     # Completion memory: a machine sitting in "end" carries WHEN it finished
     # (status_since). Stamp that into the kv store so "finished at 2:14"
@@ -2386,7 +2492,15 @@ def _laundry_annotate(t: dict) -> dict:
         watching = (last_tick is not None and
                     (now_utc - last_tick).total_seconds() / 60
                     <= LAUNDRY_START_EXACT_MIN)
-        fdb.kv_set(c, "laundry_last_tick", now_utc.isoformat())
+        # Refresh the stamp only once it is LAUNDRY_TICK_PERSIST_S old, not
+        # on every 5s tick (that alone was ~17k commits a day). The stored
+        # time then trails the real last tick by at most that much, so a
+        # gap can only read slightly LONGER than it was: the safe direction
+        # (not a watched start), and far inside the 2 min window.
+        if (last_tick is None or last_tick > now_utc
+                or (now_utc - last_tick).total_seconds()
+                >= LAUNDRY_TICK_PERSIST_S):
+            fdb.kv_set(c, "laundry_last_tick", now_utc.isoformat())
         for m in machines:
             done_key = f"laundry_done_{m['id']}"
             phase_key = f"laundry_phase_{m['id']}"
@@ -2570,7 +2684,11 @@ def _laundry_annotate(t: dict) -> dict:
                                 "advancing the transition anyway",
                                 m["id"], exc_info=True)
                 fdb.kv_set(c, phase_key, phase)
-            if phase and phase != "offline":
+            # Write only on change: this runs every 5s per machine, and an
+            # unconditional write was ~35k commits a day for a phase that
+            # had not moved.
+            if (phase and phase != "offline"
+                    and fdb.kv_get(c, nonoff_key) != phase):
                 fdb.kv_set(c, nonoff_key, phase)
             if phase == "idle":
                 # A person powering the machine on is the one human-contact
@@ -2793,6 +2911,15 @@ async def tile_camera(src: str = "cam"):
 
 _caldav_client = None
 _caldav_client_built = False
+# Every CalDAV sync (the background tick and settings' "Test connection") runs
+# under this lock. Each uses its own connection, so without it two syncs could
+# pull and push the same outbox at once: double PUTs, and one sync's writes
+# landing over the other's.
+_caldav_sync_lock = threading.Lock()
+# How long "Test connection" waits for a background sync that is mid-run.
+# Kept well under the wall's 12s request timeout (J_TIMEOUT_MS in common.js),
+# so a busy lock reads as "already running", not as a generic failed request.
+CALDAV_TEST_WAIT_S = 5
 
 
 def _get_caldav_client():
@@ -2821,7 +2948,8 @@ def _sync_tick(client, conn, cfg):
         try:
             cdav = _get_caldav_client()
             if cdav is not None:
-                caldav_sync.sync_once(cdav, conn, cfg, _now_local())
+                with _caldav_sync_lock:
+                    caldav_sync.sync_once(cdav, conn, cfg, _now_local())
         except Exception:
             log.exception("caldav sync tick error (non-fatal)")
         return conn

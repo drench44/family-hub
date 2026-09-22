@@ -51,20 +51,42 @@ def parse_vtodo(ics_data, list_id: str, list_name: str = "") -> list[dict]:
     return out
 
 
-def group(reminders: list[dict], today: dt.date) -> dict:
+def _local_due(due: str, tz) -> str:
+    """A timed DUE with an offset/Z, re-expressed in the hub's zone `tz`, so its
+    date prefix is the LOCAL day. Timed DUEs are stored in UTC: 7pm Pacific is
+    02:00Z the next day, and bucketing that string's first 10 chars filed a
+    tonight chore under tomorrow. All-day dates, floating (zone-less) times and
+    anything unparseable come back unchanged."""
+    if tz is None or len(due) <= 10:
+        return due
+    try:
+        when = dt.datetime.fromisoformat(due)
+    except ValueError:
+        return due
+    if when.tzinfo is None:
+        return due
+    return when.astimezone(tz).isoformat()
+
+
+def group(reminders: list[dict], today: dt.date, tz=None) -> dict:
     """Incomplete reminders bucketed overdue / today / upcoming / no-date, each
     sorted by due date then title. Completed ones are dropped.
 
-    NOTE: all-day (VALUE=DATE) DUEs — the common iCloud case — bucket exactly.
-    A timed DUE carrying an offset/Z is bucketed by the date prefix of its own
-    encoding, which can differ from the local day near midnight; revisit with a
-    timezone-normalizing compare if timed reminders ever misbucket."""
+    All-day (VALUE=DATE) DUEs, the common iCloud case, bucket by their date.
+    With `tz` (the hub's zone), a timed DUE is converted to local time first and
+    the returned row carries that local form, so the wall's date label agrees
+    with the bucket. The input dicts are never modified."""
     out: dict[str, list[dict]] = {b: [] for b in BUCKETS}
     ti = today.isoformat()
     for r in reminders:
         if r.get("completed"):
             continue
         due = r.get("due")
+        if due:
+            local = _local_due(due, tz)
+            if local != due:
+                r = {**r, "due": local}
+                due = local
         if not due:
             out["no_date"].append(r)
         elif due[:10] < ti:

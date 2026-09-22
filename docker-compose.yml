@@ -1,3 +1,11 @@
+# Every container caps its json log at 5 x 10 MB. Uncapped, docker keeps a
+# container's log forever: the hub alone wrote ~19 MB a day.
+x-logging: &capped-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   web:
     build: { context: ., dockerfile: web.Dockerfile }
@@ -7,6 +15,7 @@ services:
     user: "${HUB_UID:-1000}:${HUB_GID:-1000}"
     restart: unless-stopped
     mem_limit: 256m
+    logging: *capped-logs
     environment:
       - TZ=${TZ:-America/Los_Angeles}
       # camera fetches go over the compose network — a container can't hairpin
@@ -49,6 +58,7 @@ services:
     container_name: family-hub-wyze-bridge
     restart: unless-stopped
     mem_limit: 256m
+    logging: *capped-logs
     environment:
       - TZ=${TZ:-America/Los_Angeles}
       - WB_AUTH=False          # LAN-only WebUI, same trust model as the hub
@@ -68,7 +78,10 @@ services:
     image: alexxit/go2rtc:1.9.14
     container_name: family-hub-go2rtc
     restart: unless-stopped
-    mem_limit: 128m
+    # 128m was OOM-killed five times in nine days with a few camera streams
+    # open; 256m gives it room.
+    mem_limit: 256m
+    logging: *capped-logs
     environment: [ "TZ=${TZ:-America/Los_Angeles}" ]
     ports:
       - "${HUB_BIND:-0.0.0.0}:1984:1984"
