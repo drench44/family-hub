@@ -1658,6 +1658,32 @@ def test_away_overlay_build_fails_soft(client, app_mod, monkeypatch, caplog):
                for rec in caplog.records if rec.levelno >= logging.ERROR)
 
 
+def test_failed_away_overlay_never_freezes_todays_log(client, app_mod,
+                                                      monkeypatch):
+    """Today's plan is frozen into the occurrence log on every serve, and that
+    log becomes permanent history. If the away overlay failed, the plan was
+    built as if nobody were away, so freezing it would record the wrong owner
+    forever. A degraded serve must leave the log alone: no first write, and no
+    overwrite of a good record frozen earlier in the day."""
+    c = app_mod._db()
+    today = app_mod._today().isoformat()
+    pid, cid = _seed_person_chore(client, title="Dishes")
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated away_map failure")
+    monkeypatch.setattr(app_mod.fdb, "away_map", boom)
+    assert client.get("/api/hub").json()["away_ok"] is False
+    assert fdb.day_log(c, today) == [], "a degraded plan must not be frozen"
+
+    # A good record frozen earlier (here: a backup owned it) survives too.
+    other = client.post("/api/admin/people",
+                        json={"name": "Kit", "color": "#E0A030"}).json()["id"]
+    _log(c, today, cid, other)
+    client.get("/api/hub")
+    client.get(f"/api/chores/day?date={today}")
+    assert [r["person_id"] for r in fdb.day_log(c, today)] == [other]
+
+
 def test_hub_away_ok_by_default(client, app_mod):
     _seed_person_chore(client, title="Dishes")
     assert client.get("/api/hub").json()["away_ok"] is True

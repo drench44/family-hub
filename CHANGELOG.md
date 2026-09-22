@@ -10,6 +10,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- When the away list can't be read, the wall no longer saves that day's
+  chore plan into history. A plan built without it could record the wrong
+  person as the owner for good.
+
 ## [1.7.0] — 2026-09-22
 
 ### Added
