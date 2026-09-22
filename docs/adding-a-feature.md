@@ -222,9 +222,23 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       asks for it (MIT does), and run the full Python suite AFTER committing:
       `test_no_house_data` only scans tracked files, and dense SVG path data
       can look like an IP address to it.
-- [ ] Because the wall's phone clients cache assets aggressively, treat a
-      deploy as a release (at least a `patch`) so `?v=` moves and phones pick
-      up the new bytes — the wall itself already auto-reloads on the build hash.
+- [ ] Scripts, stylesheets and the manifest are served `no-cache` (ETag
+      304s keep it cheap), so a deploy reload always runs the new code even
+      when `?v=` did not move. Still treat a deploy as a release (at least a
+      `patch`) so the version line tells you what is running. The wall
+      auto-reloads on the build hash, which folds in the loaded config too:
+      a config change (new camera, moved panel) reloads open walls once idle,
+      because cameras and panels are built once per page load.
+- [ ] Anything that fetches in the background and repaints (a poll, a day
+      browser, a stream fallback) must drop a reply that lands after a
+      newer one: number the requests and ignore the stale ones. An older
+      `/api/hub` reply once repainted a checked chore as undone and fired the
+      confetti twice (see `pollSeq`, `choresFullSeq`, `lnEpoch` in hub.js).
+- [ ] A new modal or popover goes in the set `surfaceOpen()` and
+      `wallBusy()` read, closes on idle and on Escape, is a
+      `role="dialog"` with `aria-modal`, and moves focus in on open and back
+      on close (`dialogOpened` / `dialogClosed`). One left out of the idle
+      return blocks the deploy auto-reload for good.
 - [ ] Privacy scan clean, CI green, PR merged.
 - [ ] Deploy via the deployment overlay's `deploy.sh` (frontend is BAKED
       into the image — a bare restart ships nothing).
