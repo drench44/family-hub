@@ -1439,11 +1439,48 @@ def test_delete_during_a_conflicted_create_does_not_resurrect(conn):
     wall.close()
 
 
+def test_conflicted_create_readded_meanwhile_takes_over_the_server_copy(
+        conn, monkeypatch):
+    """The narrow case where the id is re-added between the resolver seeing
+    the row gone and queueing the orphan delete. The new row must take over
+    the iCloud copy as an update; left without an href, its create would 412
+    again and server-wins would throw the re-add away."""
+    _queue_new_oops(conn)
+    sent = fdb.get_cal_object(conn, "caldav:rem/U-NEW")
+    readded = remlogic.build_vtodo("U-NEW", "Oops again", _UTC_NOW)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U-NEW", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "U-NEW", "summary": "Oops again",
+        "raw_ics": readded}, "t0c")
+    real_get = fdb.get_cal_object
+    seen = []
+
+    def gone_once(c, oid):                  # the resolver's look saw it gone
+        if not seen:
+            seen.append(oid)
+            return None
+        return real_get(c, oid)
+
+    monkeypatch.setattr(fdb, "get_cal_object", gone_once)
+
+    class Server(WriteFake):
+        def get_object(self, collection, href):
+            return {"href": href, "etag": "srv-etag2",
+                    "ics": remlogic.build_vtodo("U-NEW", "Oops", _UTC_NOW)}
+
+    client = Server([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    caldav_sync._resolve_conflict(client, conn, client.discover()[0], sent, "t1",
+                                  conflict_href="h/rem/U-NEW.ics")
+    monkeypatch.setattr(fdb, "get_cal_object", real_get)
+    row = fdb.get_cal_object(conn, "caldav:rem/U-NEW")
+    assert row["sync_state"] == "PENDING_UPDATE" and row["raw_ics"] == readded
+    assert (row["href"], row["base_etag"]) == ("h/rem/U-NEW.ics", "srv-etag2")
+
+
 def test_edit_during_a_conflicted_update_is_resolved_next_round(conn):
     """A newer wall edit that lands while a 412 upload is out is not forced
-    over (that would drop it without a word). It stays queued; the next
-    flush pushes it against the server's copy and resolves any conflict
-    then, with the right edit in hand."""
+    over in the same step (that would drop it without a word). It stays
+    queued; its own push resolves it next flush (see the round-two test)."""
     _seed_synced_todo(conn)
     done = remlogic.set_completed(_VTODO, True, _UTC_NOW)
     fdb.queue_cal_object_update(conn, "caldav:rem/t1", done, "Buy milk", "t0")
@@ -1535,3 +1572,176 @@ def test_same_id_recreated_during_its_create_upload_is_not_marked_synced(conn):
     caldav_sync.flush_pending(client, conn, client.discover(), "t2")
     assert client.server["h/rem/new1"] == second
     wall.close()
+
+
+def test_a_delete_that_conflicts_itself_keeps_the_phone_edit_and_says_so(
+        conn, caplog):
+    """A queued delete whose own DELETE hits a 412 (the reminder was edited on
+    another device first) follows server-wins: the edited reminder stays, and
+    the log says a wall DELETE was dropped, not an edit."""
+    _seed_synced_todo(conn)
+    fdb.queue_cal_object_delete(conn, "caldav:rem/t1", "t0")
+    client = ConflictMidFlight([{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+                               None)
+    client.server["h/rem/0"] = _SERVER_NEWER
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["conflicts"] == 1
+    row = fdb.get_cal_object(conn, "caldav:rem/t1")
+    assert row["sync_state"] == "SYNCED" and "edited on phone" in row["raw_ics"]
+    assert any("delete" in r.getMessage() and "edited on another device"
+               in r.getMessage() for r in caplog.records)
+
+
+def test_a_newer_edit_during_a_conflict_loses_to_the_server_next_round(
+        conn, caplog):
+    """Round two of the conflicted-edit case: the newer wall edit was built on
+    the losing local copy, so pushing it would overwrite the phone's change.
+    Its own push then hits the same 412 and server-wins drops it, with a
+    warning. Pinned so the docs can say exactly this."""
+    _seed_synced_todo(conn)
+    done = remlogic.set_completed(_VTODO, True, _UTC_NOW)
+    fdb.queue_cal_object_update(conn, "caldav:rem/t1", done, "Buy milk", "t0")
+    newer = done.replace("SUMMARY:Buy milk", "SUMMARY:Buy oat milk")
+    wall = _wall_conn(conn)
+    client = ConflictMidFlight(
+        [{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+        lambda: fdb.queue_cal_object_update(wall, "caldav:rem/t1", newer,
+                                            "Buy oat milk", "t0b"))
+    client.server["h/rem/0"] = _SERVER_NEWER
+    caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        caldav_sync.flush_pending(client, conn, client.discover(), "t2")
+    row = fdb.get_cal_object(conn, "caldav:rem/t1")
+    assert row["sync_state"] == "SYNCED" and "edited on phone" in row["raw_ics"]
+    assert any("server wins" in r.getMessage() for r in caplog.records)
+    wall.close()
+
+
+def test_a_create_conflict_with_no_server_copy_keeps_the_reminder(conn):
+    """A create 412s (If-None-Match:*) but the GET then finds nothing there.
+    Dropping the row lost a reminder the family just added. It stays queued
+    as a create, with the error recorded, and retries next sync."""
+    _queue_new_oops(conn)
+
+    class Odd(ConflictMidFlight):
+        def get_object(self, collection, href):
+            return None
+
+    client = Odd([{"id": "rem", "name": "Groceries", "comp": "VTODO"}], None)
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    row = fdb.get_cal_object(conn, "caldav:rem/U-NEW")
+    assert row is not None, "a brand-new reminder was dropped"
+    assert row["sync_state"] == "PENDING_CREATE"
+    assert row["sync_attempts"] == 1 and row["last_sync_error"]
+    assert len(res["errors"]) == 1
+
+
+def test_forced_upsert_with_a_revision_never_inserts(conn):
+    """The conflict path's forced write names the revision it resolves. If
+    the row was deleted on the wall meanwhile, it must not be re-inserted as
+    SYNCED (that would bring a deleted reminder back)."""
+    wrote = fdb.upsert_cal_object_synced(conn, {
+        "id": "caldav:rem/gone", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "gone", "href": "h/x", "etag": "e",
+        "summary": "x", "raw_ics": _VTODO, "sequence": 0,
+        "last_modified": None}, force=True, expected_rev=3)
+    assert wrote is False
+    assert fdb.get_cal_object(conn, "caldav:rem/gone") is None
+
+
+def test_orphan_whose_id_came_back_adopts_the_uploaded_copy(conn):
+    """The row was deleted during its create upload and a new row took the
+    same id before the cleanup ran. The new row must point at the copy the
+    upload made (as an update), not create a second one."""
+    _seed_vtodo_collection(conn)
+    row = {"id": "caldav:rem/U-NEW", "collection_id": "caldav:rem",
+           "comp_type": "VTODO", "uid": "U-NEW", "summary": "Oops",
+           "raw_ics": "OLD", "local_rev": 1}
+    second = remlogic.build_vtodo("U-NEW", "Oops again", _UTC_NOW)
+    fdb.queue_cal_object_create(conn, {**row, "raw_ics": second}, "t0c")
+    client = WriteFake([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
+    col = client.discover()[0]
+    col = {**col, "id": "rem"}
+    caldav_sync._delete_orphaned_upload(client, conn, col, row, "h/rem/new1",
+                                        "srv-etag", "t1")
+    assert client.deletes == []
+    cur = fdb.get_cal_object(conn, "caldav:rem/U-NEW")
+    assert cur["sync_state"] == "PENDING_UPDATE" and cur["raw_ics"] == second
+    assert (cur["href"], cur["base_etag"]) == ("h/rem/new1", "srv-etag")
+
+
+def test_forced_upsert_leaves_a_newer_revision_alone(conn):
+    """The conflict write names the revision it resolves; a row that moved on
+    to a newer revision (a wall edit since) is not overwritten."""
+    _seed_synced_todo(conn)
+    oid = "caldav:rem/t1"
+    newer = _VTODO.replace("Buy milk", "Buy oat milk")
+    fdb.queue_cal_object_update(conn, oid, newer, "Buy oat milk", "t0")
+    rev = fdb.get_cal_object(conn, oid)["local_rev"]
+    wrote = fdb.upsert_cal_object_synced(conn, {
+        "id": oid, "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "href": "h/rem/0", "etag": "srv", "summary": "server",
+        "raw_ics": _SERVER_NEWER, "sequence": 1, "last_modified": None},
+        force=True, expected_rev=rev - 1)
+    assert wrote is False
+    row = fdb.get_cal_object(conn, oid)
+    assert row["sync_state"] == "PENDING_UPDATE" and row["raw_ics"] == newer
+
+
+def test_conflicted_update_deleted_meanwhile_and_gone_from_icloud_is_dropped(conn):
+    """The wall deletes a reminder while its update 412s, and iCloud no longer
+    has it either. Both sides agree it is gone: the row is dropped now, not
+    kept to send a pointless DELETE."""
+    _seed_synced_todo(conn)
+    done = remlogic.set_completed(_VTODO, True, _UTC_NOW)
+    fdb.queue_cal_object_update(conn, "caldav:rem/t1", done, "Buy milk", "t0")
+    wall = _wall_conn(conn)
+    client = ConflictMidFlight(
+        [{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+        lambda: fdb.queue_cal_object_delete(wall, "caldav:rem/t1", "t0b"))
+    caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert fdb.get_cal_object(conn, "caldav:rem/t1") is None
+    caldav_sync.flush_pending(client, conn, client.discover(), "t2")
+    assert client.deletes == []
+    wall.close()
+
+
+def test_every_queue_path_takes_a_revision_above_all_others(conn):
+    """Every queued change takes its revision from the one shared counter, so
+    it is above every revision any row holds (an upload in flight holds one).
+    A per-row +1 could repeat another row's value, or the value a DELETE in
+    flight is holding for this same id."""
+    _seed_synced_todo(conn)
+    _queue_new_oops(conn)
+
+    def top():
+        return max(r["local_rev"] for r in fdb.list_cal_objects(conn))
+
+    def rev(oid):
+        return fdb.get_cal_object(conn, oid)["local_rev"]
+
+    def push_other_ahead():
+        # the other row edited a few times, so its revision is well past
+        # t1's: a per-row +1 on t1 would land at or below it
+        for n in range(3):
+            fdb.queue_cal_object_update(conn, "caldav:rem/U-NEW", f"X{n}", "Oops", "t")
+
+    push_other_ahead()
+    before = top()
+    fdb.queue_cal_object_update(conn, "caldav:rem/t1", _VTODO, "Buy milk", "t1")
+    assert rev("caldav:rem/t1") > before
+    push_other_ahead()
+    before = top()
+    fdb.queue_cal_object_create(conn, {             # existing id: the upsert path
+        "id": "caldav:rem/t1", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "t1", "summary": "Buy milk",
+        "raw_ics": _VTODO}, "t2")
+    assert rev("caldav:rem/t1") > before
+    push_other_ahead()
+    before = top()
+    fdb.queue_cal_object_delete(conn, "caldav:rem/t1", "t3")
+    assert rev("caldav:rem/t1") > before
+    before = top()
+    fdb.queue_cal_object_update(conn, "caldav:rem/U-NEW", "X", "Oops", "t4")
+    assert rev("caldav:rem/U-NEW") > before
