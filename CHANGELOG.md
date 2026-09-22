@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-09-22
+
 ### Changed
 - Fall leaves drift sideways and tip in 3D as they fall, instead of sliding
   down straight lanes flat to the glass.
