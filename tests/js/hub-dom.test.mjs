@@ -889,6 +889,21 @@ test('toggleChore sends the date the wall is showing, not the server\'s', async 
   assert.deepEqual(seen[0], [42, false, '2026-09-21']);
 });
 
+test('toggleChore says the day has ended when a refused tap crossed midnight', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.attemptToggle = async () => false;
+  vm.runInContext("data_date = '2026-09-21';", sandbox);
+  // the refresh after the tap finds the server already on the next day
+  sandbox.poll = async () => { vm.runInContext("data_date = '2026-09-22';", sandbox); };
+
+  await sandbox.toggleChore(42, false);
+
+  const el = document.getElementById('toast');
+  assert.ok(el, 'a toast is shown');
+  assert.match(el.textContent, /day has ended/);
+  assert.doesNotMatch(el.textContent, /tap again/, 'a retry can never work here');
+});
+
 test('toggleChore shows NO toast when the write succeeds', async () => {
   const { document, sandbox } = newHub();
   sandbox.attemptToggle = async () => true;
