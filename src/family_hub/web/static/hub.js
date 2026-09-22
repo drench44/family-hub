@@ -553,9 +553,18 @@ function choresNavHtml() {
     + `</div>`;
 }
 
+/* Every renderChoresFull pass takes a number. A fetched day paints only if no
+   newer pass started while it was in flight AND the view still shows the day
+   it asked for: paging prev then back to today left yesterday's slow reply
+   landing under today's label, and a tap on those rows wrote to the wrong day. */
+let choresFullSeq = 0;
+
 async function renderChoresFull(prefetched) {
   const host = document.getElementById('chores-full');
   if (!host) return;
+  const seq = ++choresFullSeq;
+  const day = choreState.day;
+  const stale = () => seq !== choresFullSeq || choreState.day !== day;
   let people = prefetched;
   // Same degraded-state flag renderPeople reads: when the server's away overlay
   // build failed it ships the day with NOBODY marked away, so the view owes a
@@ -564,10 +573,12 @@ async function renderChoresFull(prefetched) {
   let awayOk = prefetched && hubData ? hubData.away_ok : undefined;
   if (!people) {
     try {
-      const day = await j(`/api/chores/day?date=${choreState.day}`);
-      people = day.people;
-      awayOk = day.away_ok;
+      const got = await j(`/api/chores/day?date=${day}`);
+      if (stale()) return;   // the user moved on; a newer pass owns the view
+      people = got.people;
+      awayOk = got.away_ok;
     } catch (e) {
+      if (stale()) return;   // a stale failure must not paint its error either
       host.innerHTML = choresNavHtml()
         + `<div class="cal-empty">couldn’t load that day — is the hub reachable?</div>`;
       return;
@@ -1103,6 +1114,12 @@ function renderTodosPaint() {
   if (recent && wasOpen) recent.open = true;
 }
 
+/* Same newest-wins numbering as poll(): a refresh started before a write can
+   answer after the one started after it, and must not repaint (or re-cache)
+   the pre-write list over the fresh one. */
+let todosFullSeq = 0;
+let todosFullApplied = 0;
+
 async function renderTodosFull() {
   // The full view follows the same source as the home card. Read it from the
   // last hub payload so the fetch below hits the right endpoint.
@@ -1110,10 +1127,15 @@ async function renderTodosFull() {
   todoState.source = source;
   const icloud = source === 'icloud';
   const had = icloud ? todoState.reminders != null : todoState.data != null;
+  const seq = ++todosFullSeq;
   try {
-    if (icloud) todoState.reminders = await j('/api/reminders');
-    else todoState.data = await j('/api/todos');
+    const got = await j(icloud ? '/api/reminders' : '/api/todos');
+    if (seq < todosFullApplied) return;
+    todosFullApplied = seq;
+    if (icloud) todoState.reminders = got;
+    else todoState.data = got;
   } catch (e) {
+    if (seq < todosFullApplied) return;   // a newer refresh already painted
     // keep the last data (or null -> unreachable message). But if this was a
     // REFRESH (data already populated from a prior load) a silent catch would
     // let the stale pre-mutation list sit on screen while the conn badge
@@ -1147,14 +1169,34 @@ async function toggleTodo(id, done) {
   if (r.ok && !done) setTimeout(refreshTodos, TODO_DONE_GRACE_MS + 2000);
 }
 
+/* One add at a time. A redraw during an add (the poll-driven refresh, the
+   OSK's re-focus) rebuilds #todo-add-input and carries the draft into the new
+   field, so clearing only the field the add read from left the text sitting
+   in the new one, and a second Done added it twice. The guard drops that
+   second submit; clearAddedText then clears whichever field is on screen now,
+   but only if it still holds exactly what was added (never newer typing). */
+let todoAddInFlight = false;
+
+function clearAddedText(title, input) {
+  [input, document.getElementById('todo-add-input')].forEach((el) => {
+    if (el && el.value.trim() === title) el.value = '';
+  });
+}
+
 async function addTodo() {
+  if (todoAddInFlight) return;
   const input = document.getElementById('todo-add-input');
   const title = ((input && input.value) || '').trim();
   if (!title) return;
-  const r = await attemptTodo('/api/todos', 'POST',
-    { title, bucket: todoState.addBucket });
-  if (!r.ok) { showToast(todoFailMessage(r.error)); return; }
-  if (input) input.value = '';
+  todoAddInFlight = true;
+  try {
+    const r = await attemptTodo('/api/todos', 'POST',
+      { title, bucket: todoState.addBucket });
+    if (!r.ok) { showToast(todoFailMessage(r.error)); return; }
+    clearAddedText(title, input);
+  } finally {
+    todoAddInFlight = false;
+  }
   await refreshTodos();
 }
 
@@ -1196,6 +1238,7 @@ async function toggleReminder(id, completed) {
 }
 
 async function addReminder() {
+  if (todoAddInFlight) return;                     // same one-add-at-a-time guard as addTodo
   const input = document.getElementById('todo-add-input');
   const title = ((input && input.value) || '').trim();
   if (!title) return;
@@ -1203,9 +1246,14 @@ async function addReminder() {
   if (!lists.length) return;                       // no target list -> nothing to do
   const sel = document.getElementById('todo-list-select');
   const listId = sel ? sel.value : lists[0].id;    // single list needs no picker
-  const r = await attemptTodo('/api/reminders/add', 'POST', { list_id: listId, title });
-  if (!r.ok) { showToast(reminderFailMessage(r.error)); return; }
-  if (input) input.value = '';
+  todoAddInFlight = true;
+  try {
+    const r = await attemptTodo('/api/reminders/add', 'POST', { list_id: listId, title });
+    if (!r.ok) { showToast(reminderFailMessage(r.error)); return; }
+    clearAddedText(title, input);
+  } finally {
+    todoAddInFlight = false;
+  }
   await refreshTodos();
 }
 
@@ -2917,13 +2965,21 @@ function applyLaundry(data) {
    catch-up): the stream below delivers changes in seconds, but a wall that
    can't hold a stream open must never be worse off than the old 60s poll. */
 let lnLastPoll = 0;   // lnWake skips the refetch when a poll JUST ran
+/* Bumped by every poll start AND every stream event. A poll reply lands only
+   if nothing newer happened while it was in flight: a 60s poll answering
+   after a stream update would otherwise repaint the older machine state
+   (and a wake refetch racing the beat, the older of two polls). */
+let lnEpoch = 0;
 async function fetchLaundry() {
   lnLastPoll = Date.now();
+  const epoch = ++lnEpoch;
   try {
     const data = await j('/api/tiles/laundry');
+    if (epoch !== lnEpoch) return;   // superseded by a stream event or a newer poll
     laundryFails = 0;
     applyLaundry(data);
   } catch (e) {
+    if (epoch !== lnEpoch) return;   // something newer already reported the feed
     laundryFails += 1;
     if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) {
       applyLaundry({ available: false });
@@ -2946,6 +3002,7 @@ function lnConnect() {
   try {
     lnStream = new EventSource('/api/laundry/stream');
     lnStream.onmessage = (ev) => {
+      lnEpoch += 1;       // newer than any poll still in flight (see fetchLaundry)
       laundryFails = 0;   // a live stream IS the feed being healthy — don't
       try {               // let 3 unlucky poll instants blank a correct card
         applyLaundry(JSON.parse(ev.data));
@@ -3278,9 +3335,20 @@ function wallBusy() {
     || (Date.now() - lastInteraction < INTERACTION_QUIET_MS);
 }
 
+/* Polls overlap: the 60s beat and a post-tap refresh can both be in flight,
+   and the older one can answer last. Each poll takes a number; a reply older
+   than the newest one already applied is dropped, success or failure, so a
+   pre-tap payload can't repaint a checked chore as undone for a minute (and
+   reset lastPeople, which fired the confetti a second time). */
+let pollSeq = 0;
+let pollApplied = 0;
+
 async function poll() {
+  const seq = ++pollSeq;
   try {
     const data = await j('/api/hub');
+    if (seq < pollApplied) return;
+    pollApplied = seq;
     hubData = data;
     // Auto-reload when a deploy changes the baked frontend (the server's build
     // token changes), so the kiosk picks up updates without a manual refresh —
@@ -3304,6 +3372,7 @@ async function poll() {
     document.body.dataset.conn = 'up';
     document.getElementById('conn-word').textContent = 'live';
   } catch (e) {
+    if (seq < pollApplied) return;   // a newer poll already answered: the hub is up
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
   }

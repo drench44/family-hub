@@ -7772,3 +7772,248 @@ test('laundryTick: the ring drains against the cycle length between polls', asyn
     .getAttribute('stroke-dasharray').split(' ').map(Number);
   assert.ok(Math.abs(len / circ - 55 / 110) < 0.01, 'half the cycle left, half the ring');
 });
+
+// ---- stale replies (frontend audit 2026-09-22) ----
+//
+// Each test below parks a request in flight with a hand-resolved promise, lets
+// a NEWER request (or a newer stream event) land first, then resolves the old
+// one, and proves the old reply is dropped instead of repainting stale state.
+// `deferredFetch` records every call and hands back its resolver by URL.
+function deferredFetch() {
+  const pending = [];
+  const fetch = (url, opts) => new Promise((resolve, reject) => {
+    pending.push({ url: String(url), opts, resolve, reject });
+  });
+  const take = (re) => {
+    const i = pending.findIndex((p) => re.test(p.url));
+    assert.ok(i >= 0, `a request matching ${re} is in flight`);
+    return pending.splice(i, 1)[0];
+  };
+  return { fetch, pending, take };
+}
+
+const OTHER_DAY_PEOPLE = [{
+  person: { id: 1, name: 'Sam Rivera', color: '#5BC9F0' },
+  chores: [{ id: 77, title: 'Mow lawn', icon: '', rot: false, done: false }],
+  streak: 0, week: [], total: 1, done_count: 0,
+}];
+
+test('chores day browser: a slow reply for a day the user already left never paints over today', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  const net = deferredFetch();
+  ctx.sandbox.fetch = net.fetch;
+  ctx.tap('[data-chnav="prev"]');                 // asks for 2026-08-13 (slow)
+  ctx.tap('[data-chnav="today"]');                // back on today: painted at once
+  const todayHtml = ctx.choresFull.innerHTML;
+  assert.match(todayHtml, /data-chore="10"/, 'today is showing, with tappable rows');
+  net.take(/date=2026-08-13/).resolve(okResp(
+    { date: '2026-08-13', people: OTHER_DAY_PEOPLE, away_ok: true }));
+  await flush();
+  assert.equal(ctx.choresFull.innerHTML, todayHtml,
+    "yesterday's late reply must not repaint today's view (its rows would write to today)");
+  assert.doesNotMatch(ctx.choresFull.innerHTML, /Mow lawn/);
+});
+
+test('chores day browser: two days in flight, only the day on screen paints', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  const net = deferredFetch();
+  ctx.sandbox.fetch = net.fetch;
+  ctx.tap('[data-chnav="prev"]');                 // 08-13 in flight
+  ctx.tap('[data-chnav="prev"]');                 // 08-12 in flight
+  net.take(/date=2026-08-12/).resolve(okResp(
+    { date: '2026-08-12', people: SAMPLE_PEOPLE, away_ok: true }));
+  await flush();
+  assert.match(ctx.choresFull.innerHTML, /2026-08-12/, 'the day on screen painted');
+  const shown = ctx.choresFull.innerHTML;
+  net.take(/date=2026-08-13/).reject(new Error('down'));   // a stale FAILURE
+  await flush();
+  assert.equal(ctx.choresFull.innerHTML, shown,
+    'a stale failure for a day already left must not paint its error either');
+  // and a stale success lands no better
+  ctx.tap('[data-chnav="prev"]');                 // 08-11 in flight
+  ctx.tap('[data-chnav="next"]');                 // back to 08-12 in flight
+  net.take(/date=2026-08-12/).resolve(okResp(
+    { date: '2026-08-12', people: SAMPLE_PEOPLE, away_ok: true }));
+  await flush();
+  net.take(/date=2026-08-11/).resolve(okResp(
+    { date: '2026-08-11', people: OTHER_DAY_PEOPLE, away_ok: true }));
+  await flush();
+  assert.match(ctx.choresFull.innerHTML, /2026-08-12/);
+  assert.doesNotMatch(ctx.choresFull.innerHTML, /Mow lawn/, "08-11's late reply is dropped");
+});
+
+function hubPayload(done, build = 'aaa') {
+  return {
+    date: '2026-08-14', build, links: {}, todos: {}, integrations: [],
+    calendar: { status: 'ok', events: [] },
+    people: [{
+      person: { id: 1, name: 'Sam Rivera', color: '#5BC9F0' },
+      chores: [{ id: 10, title: 'Feed cat', icon: '', rot: false, done }],
+      streak: 0, week: [], total: 1, done_count: done ? 1 : 0,
+    }],
+  };
+}
+
+test('poll: an older in-flight reply never overwrites a newer one (no undone flash, no double confetti)', async () => {
+  const { document, sandbox } = newHub();
+  let confetti = 0;
+  sandbox.celebrate = () => { confetti++; };
+  sandbox.fetch = async () => okResp(hubPayload(false));
+  await sandbox.poll();                           // the wall at rest: chore open
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const older = sandbox.poll();                   // the 60s beat, started before the tap
+  const newer = sandbox.poll();                   // the post-tap refresh
+  const [a, b] = [net.take(/\/api\/hub/), net.take(/\/api\/hub/)];
+  b.resolve(okResp(hubPayload(true)));            // the newer answer lands first
+  await newer;
+  assert.match(document.getElementById('people').innerHTML, /chore-row done/, 'shows done');
+  assert.equal(confetti, 1, 'finishing the last chore celebrates once');
+  a.resolve(okResp(hubPayload(false)));           // then the stale one
+  await older;
+  assert.match(document.getElementById('people').innerHTML, /chore-row done/,
+    'the stale reply is dropped: the chore stays done');
+  assert.equal(vm.runInContext('hubData.people[0].done_count', sandbox), 1);
+  sandbox.fetch = async () => okResp(hubPayload(true));
+  await sandbox.poll();                           // the next beat
+  assert.equal(confetti, 1, 'no second celebration for the same finish');
+});
+
+test('poll: a stale FAILURE does not flip a live wall to offline', async () => {
+  const { document, sandbox } = newHub();
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const older = sandbox.poll();
+  const newer = sandbox.poll();
+  const [a, b] = [net.take(/\/api\/hub/), net.take(/\/api\/hub/)];
+  b.resolve(okResp(hubPayload(false)));
+  await newer;
+  a.reject(new Error('timed out'));
+  await older;
+  assert.equal(document.body.dataset.conn, 'up', 'the newer success stands');
+});
+
+test('renderTodosFull: an older /api/todos reply never repaints over a newer one', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div'); host._id = 'todos-full'; document.body.appendChild(host);
+  vm.runInContext("hubData = { todo_source: 'local' }; openView = 'todos';", sandbox);
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const list = (title) => ({
+    buckets: { now: [{ id: 1, title, bucket: 'now', done_at: null }], soon: [], later: [] },
+    recent_done: [],
+  });
+  const older = sandbox.renderTodosFull();
+  const newer = sandbox.renderTodosFull();
+  const [a, b] = [net.take(/\/api\/todos/), net.take(/\/api\/todos/)];
+  b.resolve(okResp(list('Fresh')));
+  await newer;
+  a.resolve(okResp(list('Stale')));
+  await older;
+  assert.match(host.innerHTML, /Fresh/);
+  assert.doesNotMatch(host.innerHTML, /Stale/, 'the stale list is dropped');
+  assert.equal(vm.runInContext('todoState.data.buckets.now[0].title', sandbox), 'Fresh',
+    'and the cache keeps the newer list too');
+});
+
+test('laundry: a poll reply that was in flight when a stream update landed is dropped', async () => {
+  const { sandbox } = newHub();
+  class FakeES {
+    constructor(url) { this.url = url; this.readyState = 1; FakeES.last = this; }
+  }
+  FakeES.CLOSED = 2;
+  sandbox.window.EventSource = FakeES;
+  sandbox.EventSource = FakeES;
+  sandbox.lnConnect();
+  assert.ok(FakeES.last, 'the stream opened');
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const poll = sandbox.fetchLaundry();            // the 60s fallback, slow
+  const newer = { available: true, machines: [{ id: 'w', status: 'done' }] };
+  FakeES.last.onmessage({ data: JSON.stringify(newer) });   // the stream is newer
+  net.take(/\/api\/tiles\/laundry/).resolve(okResp(
+    { available: true, machines: [{ id: 'w', status: 'running' }] }));
+  await poll;
+  assert.equal(vm.runInContext('laundryData.machines[0].status', sandbox), 'done',
+    'the older poll reply must not repaint over the stream update');
+});
+
+test('laundry: of two polls in flight, the older reply is dropped', async () => {
+  const { sandbox } = newHub();
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const older = sandbox.fetchLaundry();
+  const newer = sandbox.fetchLaundry();
+  const [a, b] = [net.take(/laundry/), net.take(/laundry/)];
+  b.resolve(okResp({ available: true, machines: [{ id: 'w', status: 'done' }] }));
+  await newer;
+  a.resolve(okResp({ available: true, machines: [{ id: 'w', status: 'running' }] }));
+  await older;
+  assert.equal(vm.runInContext('laundryData.machines[0].status', sandbox), 'done');
+});
+
+test('addTodo: a second Done while the add is in flight adds nothing, and the live input clears', async () => {
+  const { document, sandbox } = newHub();
+  const first = document.createElement('input'); first._id = 'todo-add-input'; first.value = 'Milk';
+  document.body.appendChild(first);
+  vm.runInContext("hubData = { todo_source: 'local' }; todoState.source = 'local';", sandbox);
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const adding = sandbox.addTodo();
+  // A redraw lands mid-add (renderTodosPaint carries the draft into a NEW input).
+  first.remove();
+  const second = document.createElement('input'); second._id = 'todo-add-input'; second.value = 'Milk';
+  document.body.appendChild(second);
+  await sandbox.addTodo();                        // the second Done
+  const posts = net.pending.filter((p) => p.url === '/api/todos' && p.opts && p.opts.method === 'POST');
+  assert.equal(posts.length, 1, 'only one POST: the second Done is ignored while the first is in flight');
+  // the refresh after it: let the poll + GET fail fast, they are not under test
+  const post = net.take(/\/api\/todos$/);
+  sandbox.fetch = async () => { throw new Error('offline in test'); };
+  post.resolve(okResp({ id: 5 }));
+  await adding;
+  assert.equal(second.value, '', 'the input on screen clears, not just the detached one');
+  second.value = 'Eggs';
+  let posted = 0;
+  sandbox.fetch = async (url, opts) => {
+    if (opts && opts.method === 'POST') { posted++; return okResp({ id: 6 }); }
+    throw new Error('offline in test');
+  };
+  await sandbox.addTodo();
+  assert.equal(posted, 1, 'the guard released: the next add goes through');
+  assert.equal(second.value, '');
+});
+
+test('addTodo: text typed during the in-flight add is kept, not wiped', async () => {
+  const { document, sandbox } = newHub();
+  const input = document.createElement('input'); input._id = 'todo-add-input'; input.value = 'Milk';
+  document.body.appendChild(input);
+  vm.runInContext("hubData = { todo_source: 'local' }; todoState.source = 'local';", sandbox);
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const adding = sandbox.addTodo();
+  input.value = 'Bread';                          // typed the next one already
+  const post = net.take(/\/api\/todos$/);
+  sandbox.fetch = async () => { throw new Error('offline in test'); };
+  post.resolve(okResp({ id: 5 }));
+  await adding;
+  assert.equal(input.value, 'Bread', 'only the text that was added is cleared');
+});
+
+test('addReminder: a second Done while the add is in flight adds nothing', async () => {
+  const { document, sandbox } = newHub();
+  const input = document.createElement('input'); input._id = 'todo-add-input'; input.value = 'Eggs';
+  document.body.appendChild(input);
+  vm.runInContext("hubData = { todo_source: 'icloud', reminder_lists: [{ id: 'caldav:g', name: 'G' }] };"
+    + " todoState.source = 'icloud';", sandbox);
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const adding = sandbox.addReminder();
+  await sandbox.addReminder();
+  assert.equal(net.pending.filter((p) => p.url === '/api/reminders/add').length, 1);
+  const post = net.take(/\/api\/reminders\/add/);
+  sandbox.fetch = async () => { throw new Error('offline in test'); };
+  post.resolve(okResp({ id: 'caldav:g/1' }));
+  await adding;
+  assert.equal(input.value, '');
+});
