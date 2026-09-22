@@ -76,13 +76,22 @@ at one URL.
   feed quietly hides its card, never the wall. The weather feed's shape is
   documented in [`docs/weather-feed.md`](docs/weather-feed.md) (the 5-day strip
   needs a `dailyForecast` array on the feed and stays hidden without one).
-- **Laundry:** washer + dryer as porthole cards fed by Home Assistant — a
-  timer-dial ring counts the minutes down, the drum tumbles while a cycle
-  runs (wash water and suds in the washer, a heat glow in the dryer), and a
-  finished load shows a check with *when* it finished — held for half an
-  hour even after the machine shuts itself down, then kept as a quiet
-  "last load" line (powering the machine back on clears the check early:
-  someone's collecting it). The card is real-time: a
+- **Laundry:** washer + dryer as porthole cards fed by Home Assistant. The
+  ring around each door shows how much of the cycle is left (against the
+  machine's own cycle length when HA reports one, else a 60-minute dial),
+  the drum tumbles while a cycle runs (wash water and suds in the washer, a
+  heat glow in the dryer), and the words say what the machine is doing
+  ("Sensing load", "Rinsing", "Cooling, almost done"). A finished load shows
+  a check with *when* it finished, held for half an hour even after the
+  machine shuts itself down. After that a finished **wash** turns amber and
+  reads **Waiting** until the load is moved: the dryer starting, or the
+  washer being turned on, ends it (a wet load can sit for hours; this
+  household's median was about 100 minutes). It gives up after 12 hours,
+  and then the card keeps a quiet "last load" line. Errors name the fault
+  when the machine does ("won't drain", "load is unbalanced"), and a delayed
+  start says when it will start. LG's placeholder "1 min left" at the start
+  of a dryer cycle is caught and replaced with the real length. The card is
+  real-time: a
   server-side watcher re-reads Home Assistant every 5 seconds for the whole
   cycle and pushes each change to open walls over a live stream
   (`GET /api/laundry/stream`, server-sent events), so a status change shows
@@ -214,7 +223,7 @@ once with **`?kiosk=1`** to turn it on (the setting is then remembered;
 | `go2rtc_base` | Your go2rtc URL (browser-reachable), omit if no cameras |
 | `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
 | `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
-| `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
+| `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). Optional per machine: `total_entity` (cycle length in minutes; LG *Total time*), `start_entity` (LG *Delayed start* timestamp) and `error_entity` (LG *Error* event). Each only adds detail; leave any out. The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
 | `fleet` | Fleet Console card: `{"base": "http://192.168.1.50:3000"}` — the base URL of a separate home-lab dashboard app exposing a compact `/api/rollup` status endpoint (host + 3D-printer status). Optional `"label"`. Omit to skip the card. Pair with a `"fleet"` entry in `panels` (below) to get the **⛶ Console** full-screen button. |
 | `theme` | House default display theme — `{"mode","accent","columns","layout","idleReturn","season"}` (`mode`: light/soft/dark/grey/black, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines, `layout`: auto/desktop, `idleReturn`: on/off, `season`: on/off for seasonal looks). Applied on a fresh device with no saved override |
 

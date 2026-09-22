@@ -40,8 +40,13 @@ class Config:
     # "status_entity","remaining_entity"}, ...]}. `kind` is "washer" or
     # "dryer" (drives the card's tint); the entities are HA sensor ids (the
     # lg_thinq integration's Current-status enum + Remaining-time timestamp,
-    # but any integration with the same two sensor shapes works). The HA
-    # long-lived token comes from the HA_TOKEN env var, never this file.
+    # but any integration with the same two sensor shapes works). Three
+    # OPTIONAL entities per machine make the card better when present:
+    # "total_entity" (cycle length in minutes: drives the progress ring and
+    # catches LG's placeholder finish time at a cycle's start),
+    # "start_entity" (delayed-start timestamp: "starts 6:00am") and
+    # "error_entity" (the error event: "won't drain" instead of "Error").
+    # The HA long-lived token comes from the HA_TOKEN env var, never this file.
     # None/absent = no laundry integration.
     laundry: dict | None = None
     # Set when a `laundry` block WAS written but nothing valid survived
@@ -98,13 +103,33 @@ def _clean_theme(raw_theme: object) -> dict | None:
     return cleaned or None
 
 
+_LAUNDRY_OPTIONAL = ("total_entity", "start_entity", "error_entity")
+
+
+def _optional_entities(m: dict) -> dict:
+    """The optional per-machine entity ids that are well-formed. A bad one is
+    dropped with a warning (the machine still works without it), never
+    silently kept as a non-string that would reach HA as a garbage URL."""
+    out = {}
+    for key in _LAUNDRY_OPTIONAL:
+        v = m.get(key)
+        if v is None:
+            continue
+        if isinstance(v, str) and v.strip():
+            out[key] = v.strip()
+        else:
+            log.warning("laundry: machine %r: ignoring %s=%r (needs an HA "
+                        "entity id string)", m.get("id"), key, v)
+    return out
+
+
 def _clean_laundry(raw: object) -> tuple[dict | None, str | None]:
     """Keep only a well-formed laundry block: a dict with a non-empty ha_base
     and at least one machine carrying an id and both entity ids. Malformed
     machine entries are dropped (never crash on a config typo); an empty
     survivor list means no laundry integration at all. Returns
     ({"ha_base": str, "machines": [{"id","label","kind","status_entity",
-    "remaining_entity"}, ...]}, None) when it survives, else (None, reason).
+    "remaining_entity", + any valid optional entities}, ...]}, None) when it survives, else (None, reason).
 
     The reason is the difference between "this hub has no laundry" (raw is
     absent: None, None) and "someone configured laundry and it is broken"
@@ -143,6 +168,7 @@ def _clean_laundry(raw: object) -> tuple[dict | None, str | None]:
             "kind": str(m.get("kind") or "washer"),
             "status_entity": str(status),
             "remaining_entity": str(remaining),
+            **_optional_entities(m),
         })
     if not machines:
         # ERROR, not warning: a hub that asked for laundry and got none is
