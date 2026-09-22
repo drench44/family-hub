@@ -426,6 +426,35 @@ def test_covering_for_migration_is_idempotent_and_keeps_old_rows(tmp_path):
     c.close()
 
 
+def test_cal_objects_local_rev_migration_keeps_old_rows(tmp_path):
+    """local_rev lands on an EXISTING cal_objects table by plain additive
+    ALTER: rows (including queued wall edits) keep every value and start at
+    revision 0, and a second boot is a no-op."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.executescript("""
+      CREATE TABLE cal_objects(
+        id TEXT PRIMARY KEY, collection_id TEXT NOT NULL,
+        comp_type TEXT NOT NULL, uid TEXT NOT NULL, href TEXT, etag TEXT,
+        base_etag TEXT, summary TEXT NOT NULL DEFAULT '', raw_ics TEXT,
+        sequence INTEGER NOT NULL DEFAULT 0, last_modified TEXT,
+        sync_state TEXT NOT NULL DEFAULT 'SYNCED', local_modified_at TEXT,
+        sync_attempts INTEGER NOT NULL DEFAULT 0, last_sync_error TEXT);
+      INSERT INTO cal_objects(id, collection_id, comp_type, uid, href, etag,
+        base_etag, summary, raw_ics, sync_state, local_modified_at)
+        VALUES('caldav:rem/t1', 'caldav:rem', 'VTODO', 't1', 'h/1', 'e1',
+               'e1', 'Buy milk', 'ICS', 'PENDING_UPDATE', 't0');""")
+    c.commit()
+    fdb.ensure_schema(c)
+    row = fdb.get_cal_object(c, "caldav:rem/t1")
+    assert row["local_rev"] == 0
+    assert (row["sync_state"], row["raw_ics"], row["base_etag"]) == \
+        ("PENDING_UPDATE", "ICS", "e1")
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    assert fdb.queue_cal_object_update(c, "caldav:rem/t1", "ICS2", "x", "t1")
+    assert fdb.get_cal_object(c, "caldav:rem/t1")["local_rev"] == 1
+    c.close()
+
+
 def test_occurrence_log_between(conn):
     fdb.replace_day_log(conn, "2026-08-12", [_row(1, 7)])
     fdb.replace_day_log(conn, "2026-08-13", [_row(1, 8)])

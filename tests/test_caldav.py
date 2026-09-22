@@ -1151,3 +1151,196 @@ def test_sync_once_mirrors_chores_to_icloud(conn):
     assert any("DTSTAMP:20260817T190000Z" in p[2] for p in dishes)     # 12 PDT -> 19Z (UTC fix)
     assert fdb.list_chore_mirror(conn)
     assert all(o["sync_state"] == "SYNCED" for o in fdb.list_cal_objects(conn, "VTODO"))
+
+
+# --- push race: a wall edit that lands while the upload is in flight ---------
+
+def _wall_conn(conn):
+    """A SECOND connection to the same db file, the way the wall's request
+    threads write while the sync thread holds its own connection."""
+    path = conn.execute("PRAGMA database_list").fetchone()["file"]
+    return fdb.connect(path)
+
+
+class MidFlightEdit(WriteFake):
+    """WriteFake whose first PUT/DELETE runs `during` (a wall change on another
+    connection) while the upload is in flight, and records the If-Match each
+    request carried."""
+    def __init__(self, collections, during):
+        super().__init__(collections)
+        self._during = during
+        self.if_match = []
+
+    def _fire(self):
+        if self._during:
+            during, self._during = self._during, None
+            during()
+
+    def put_object(self, collection, href, ics, base_etag=None, uid=None):
+        self.if_match.append(base_etag)
+        res = super().put_object(collection, href, ics, base_etag, uid)
+        self._fire()
+        return res
+
+    def delete_object(self, collection, href, base_etag=None):
+        self.if_match.append(base_etag)
+        super().delete_object(collection, href, base_etag)
+        self._fire()
+
+
+def test_edit_during_update_push_is_not_lost(conn):
+    """The lost-edit race: the sync thread PUTs version A of a reminder; while
+    that upload is in flight the wall saves version B. Marking the row SYNCED
+    after the upload used to throw B away (the next pull overwrote it with A).
+    B must stay queued, built on the etag the upload just earned, and reach
+    iCloud on the next flush without a conflict."""
+    _seed_synced_todo(conn)
+    first = remlogic.set_completed(_VTODO, True, _UTC_NOW)
+    fdb.queue_cal_object_update(conn, "caldav:rem/t1", first, "Buy milk", "t0")
+    second = first.replace("SUMMARY:Buy milk", "SUMMARY:Buy oat milk")
+    wall = _wall_conn(conn)
+
+    def wall_edit():
+        assert fdb.queue_cal_object_update(wall, "caldav:rem/t1", second,
+                                           "Buy oat milk", "t0b")
+
+    client = MidFlightEdit([{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+                           wall_edit)
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["pushed"] == 1 and res["errors"] == []
+    row = fdb.get_cal_object(conn, "caldav:rem/t1")
+    assert row["sync_state"] == "PENDING_UPDATE", "the newer wall edit was lost"
+    assert row["raw_ics"] == second and row["summary"] == "Buy oat milk"
+    assert row["base_etag"] == "srv-etag"      # built on what the upload earned
+    # the next flush sends B conditional on the etag A's upload got back
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t2")
+    assert res["pushed"] == 1 and res["conflicts"] == 0
+    assert client.if_match == ["e0", "srv-etag"]
+    assert client.server["h/rem/0"] == second
+    assert fdb.get_cal_object(conn, "caldav:rem/t1")["sync_state"] == "SYNCED"
+    wall.close()
+
+
+def test_edit_during_create_push_becomes_an_update(conn):
+    """A reminder added on the wall and edited while its create is uploading:
+    the create gave it a server URL, so the queued edit must become an UPDATE
+    to that URL. Left as a create it would PUT a duplicate, and a delete would
+    skip the server entirely."""
+    _seed_vtodo_collection(conn)
+    ics = remlogic.build_vtodo("U-NEW", "Water plants", _UTC_NOW)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U-NEW", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "U-NEW", "summary": "Water plants",
+        "raw_ics": ics}, "t0")
+    edited = remlogic.set_completed(ics, True, _UTC_NOW)
+    wall = _wall_conn(conn)
+
+    def wall_edit():
+        assert fdb.queue_cal_object_update(wall, "caldav:rem/U-NEW", edited,
+                                           "Water plants", "t0b")
+
+    client = MidFlightEdit([{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+                           wall_edit)
+    caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    row = fdb.get_cal_object(conn, "caldav:rem/U-NEW")
+    assert row["sync_state"] == "PENDING_UPDATE"
+    assert row["href"] == "h/rem/new1" and row["base_etag"] == "srv-etag"
+    assert row["raw_ics"] == edited
+    caldav_sync.flush_pending(client, conn, client.discover(), "t2")
+    assert [p[1] for p in client.puts] == [None, "h/rem/new1"]   # no duplicate
+    assert fdb.get_cal_object(conn, "caldav:rem/U-NEW")["sync_state"] == "SYNCED"
+    wall.close()
+
+
+def _queue_new_oops(conn):
+    _seed_vtodo_collection(conn)
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:rem/U-NEW", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "U-NEW", "summary": "Oops",
+        "raw_ics": remlogic.build_vtodo("U-NEW", "Oops", _UTC_NOW)}, "t0")
+
+
+def test_delete_during_create_push_removes_the_server_copy(conn):
+    """A reminder added and then deleted on the wall while its create is still
+    uploading: the delete dropped the local row (it looked unpushed), but the
+    upload landed it in iCloud. The flush must delete that server copy, or the
+    next pull brings the deleted reminder back."""
+    _queue_new_oops(conn)
+    wall = _wall_conn(conn)
+
+    def wall_delete():
+        assert fdb.queue_cal_object_delete(wall, "caldav:rem/U-NEW", "t0b")
+
+    client = MidFlightEdit([{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+                           wall_delete)
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["errors"] == []
+    assert client.deletes == [("rem", "h/rem/new1")]
+    assert client.if_match == [None, "srv-etag"]
+    assert client.server == {}
+    assert fdb.get_cal_object(conn, "caldav:rem/U-NEW") is None
+    wall.close()
+
+
+def test_delete_during_create_push_that_fails_is_reported(conn):
+    """If removing that orphaned server copy fails, the flush says so (an error
+    in the result) instead of counting a clean push."""
+    _queue_new_oops(conn)
+    wall = _wall_conn(conn)
+
+    class DeleteFails(MidFlightEdit):
+        def delete_object(self, collection, href, base_etag=None):
+            raise RuntimeError("HTTP 401 Unauthorized")
+
+    client = DeleteFails(
+        [{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+        lambda: fdb.queue_cal_object_delete(wall, "caldav:rem/U-NEW", "t0b"))
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["pushed"] == 0 and res["needs_auth"] is True
+    assert len(res["errors"]) == 1 and "401" in res["errors"][0]
+    wall.close()
+
+
+def test_recreate_during_delete_push_is_not_lost(conn):
+    """The chore mirror re-creates an occurrence while its old copy's DELETE is
+    in flight. Dropping the row after the DELETE used to lose the re-create.
+    It must survive as a fresh create (the server copy it pointed at is gone)."""
+    _seed_synced_todo(conn)
+    fdb.queue_cal_object_delete(conn, "caldav:rem/t1", "t0")
+    wall = _wall_conn(conn)
+
+    def wall_recreate():
+        fdb.queue_cal_object_create(wall, {
+            "id": "caldav:rem/t1", "collection_id": "caldav:rem",
+            "comp_type": "VTODO", "uid": "t1", "summary": "Buy milk",
+            "raw_ics": _VTODO}, "t0b")
+
+    client = MidFlightEdit([{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
+                           wall_recreate)
+    caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert client.deletes == [("rem", "h/rem/0")]
+    row = fdb.get_cal_object(conn, "caldav:rem/t1")
+    assert row is not None, "the re-create was dropped with the deleted row"
+    assert row["sync_state"] == "PENDING_CREATE"
+    assert row["href"] is None and row["base_etag"] is None
+    caldav_sync.flush_pending(client, conn, client.discover(), "t2")
+    assert client.puts[-1][1] is None                       # pushed as a create
+    assert fdb.get_cal_object(conn, "caldav:rem/t1")["sync_state"] == "SYNCED"
+    wall.close()
+
+
+def test_every_queued_change_bumps_the_local_revision(conn):
+    """The push compares this revision to know whether the row is still the
+    version it uploaded, so every kind of queued wall change must move it."""
+    _seed_synced_todo(conn)
+    oid = "caldav:rem/t1"
+    revs = [fdb.get_cal_object(conn, oid)["local_rev"]]
+    fdb.queue_cal_object_update(conn, oid, _VTODO, "Buy milk", "t1")
+    revs.append(fdb.get_cal_object(conn, oid)["local_rev"])
+    fdb.queue_cal_object_create(conn, {
+        "id": oid, "collection_id": "caldav:rem", "comp_type": "VTODO",
+        "uid": "t1", "summary": "Buy milk", "raw_ics": _VTODO}, "t2")
+    revs.append(fdb.get_cal_object(conn, oid)["local_rev"])
+    fdb.queue_cal_object_delete(conn, oid, "t3")
+    revs.append(fdb.get_cal_object(conn, oid)["local_rev"])
+    assert revs == sorted(set(revs)), revs                  # strictly increasing

@@ -81,6 +81,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The wall's on-screen keyboard now goes away when the box it was typing
   into disappears, for example when a full-screen view closes by itself.
   Before, it could stay docked over the home screen.
+- An iCloud reminder edited on the wall while the hub is still sending the
+  previous change is no longer lost. The newer edit now waits and goes out
+  on the next sync. The same holds for a reminder deleted or re-added
+  mid-send: a deleted one no longer comes back, and a re-added one is kept.
 
 ## [1.7.0] — 2026-09-22
 
