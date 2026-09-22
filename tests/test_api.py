@@ -61,6 +61,15 @@ def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
+def test_app_quiets_routine_polls_in_the_access_log(app_mod):
+    """The camera probes, tile polls and health checks were the biggest
+    source of container log lines. Importing the app attaches the filter that
+    drops their successful access-log lines (tests/test_access_log.py)."""
+    from family_hub import access_log
+    assert any(isinstance(f, access_log.QuietPollFilter)
+               for f in logging.getLogger("uvicorn.access").filters)
+
+
 def test_httpx_request_lines_are_quiet_but_its_warnings_are_not(app_mod):
     """httpx logs every request at INFO. With the laundry watcher polling Home
     Assistant every 5s that was two thirds of the hub's log (~19 MB a day).
