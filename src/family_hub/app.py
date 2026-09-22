@@ -1197,6 +1197,13 @@ def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
 def uncomplete(chore_id: int, date: str | None = None):
     c = _db()
     date_str = date or _today().isoformat()
+    # Same checks as complete(): the wall sends the day it is showing.
+    try:
+        d = dt.date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(422, "bad date")
+    if abs((d - _today()).days) > 366:
+        raise HTTPException(422, "date out of range")
     # Resolve the current owner BEFORE clearing, so the reopen can't be pushed
     # onto a mirror ledger row that still names the other person (M3).
     owner = _resolved_owner(c, chore_id, date_str)
