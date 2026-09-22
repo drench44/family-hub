@@ -32,6 +32,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The washer and dryer watcher no longer writes to the database every five
   seconds when nothing changed (about 35,000 needless writes a day), and its
   database work no longer holds up the rest of the hub while it runs.
+- The laundry watcher's "still watching" time stamp is saved every 30
+  seconds instead of every 5, which cuts another ~17,000 writes a day.
 - An iCloud reminder edited on the wall at the same moment a sync pulls it
   can no longer be quietly thrown away. The edit now always waits to be sent.
 - "Test connection" for iCloud no longer runs a second sync on top of the
