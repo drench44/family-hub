@@ -931,7 +931,11 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         rows = fdb.day_log(c, d_str)
     else:
         rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
-        if d == today:
+        # Only freeze a plan built WITH the away overlay. A degraded build
+        # treats everyone as present, and the log is permanent history: it
+        # would record the wrong owner for good. The next healthy serve
+        # freezes the real plan.
+        if d == today and away_ok:
             _freeze_day(c, d_str, rows)
 
     completed_ids = {r["chore_id"]
