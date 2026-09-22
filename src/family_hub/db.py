@@ -271,10 +271,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if "covering_for" not in occ_cols:
         conn.execute("ALTER TABLE occurrence_log ADD COLUMN covering_for INTEGER")
         conn.commit()
-    # 2026-09-22: cal_objects gained local_rev, a counter every queued wall
-    # change bumps. The iCloud push compares it after an upload so a wall edit
-    # that landed mid-upload is not marked SYNCED and lost. Additive ALTER with
-    # a default; existing rows start at 0.
+    # 2026-09-22: cal_objects gained local_rev, a fresh value from the cal_rev
+    # counter on every queued wall change. The iCloud push compares it after an
+    # upload so a wall edit that landed mid-upload is not marked SYNCED and
+    # lost. Additive ALTER with a default; existing rows start at 0.
     cal_cols = {r["name"] for r in conn.execute("PRAGMA table_info(cal_objects)")}
     if "local_rev" not in cal_cols:
         conn.execute("ALTER TABLE cal_objects ADD COLUMN local_rev "
@@ -1014,7 +1014,23 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
 
     `expected_rev` limits the forced path to the version the conflicting push
     sent: a wall change queued since then is newer than the conflict and is
-    left alone. Returns True if the row was written."""
+    left alone. It is also a plain UPDATE, never an insert, so a row deleted
+    on the wall in the meantime is not brought back. Returns True if the row
+    was written."""
+    if force and expected_rev is not None:
+        cur = conn.execute(
+            "UPDATE cal_objects SET collection_id = ?, comp_type = ?, uid = ?, "
+            "href = ?, etag = ?, base_etag = ?, summary = ?, raw_ics = ?, "
+            "sequence = ?, last_modified = ?, sync_state = 'SYNCED', "
+            "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
+            "WHERE id = ? AND local_rev = ?",
+            (obj["collection_id"], obj["comp_type"], obj["uid"],
+             obj.get("href"), obj.get("etag"), obj.get("etag"),
+             obj.get("summary", ""), obj.get("raw_ics"),
+             int(obj.get("sequence") or 0), obj.get("last_modified"),
+             obj["id"], expected_rev))
+        conn.commit()
+        return cur.rowcount > 0
     cur = conn.execute(
         "INSERT INTO cal_objects(id, collection_id, comp_type, uid, "
         "href, etag, base_etag, summary, raw_ics, sequence, last_modified, "
@@ -1027,13 +1043,12 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
         "raw_ics = excluded.raw_ics, sequence = excluded.sequence, "
         "last_modified = excluded.last_modified, sync_state = 'SYNCED', "
         "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
-        "WHERE cal_objects.sync_state = 'SYNCED' "
-        "OR (? AND (? IS NULL OR cal_objects.local_rev = ?))",
+        "WHERE cal_objects.sync_state = 'SYNCED' OR ?",
         (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
          obj.get("href"), obj.get("etag"), obj.get("etag"),
          obj.get("summary", ""), obj.get("raw_ics"),
          int(obj.get("sequence") or 0), obj.get("last_modified"),
-         1 if force else 0, expected_rev, expected_rev))
+         1 if force else 0))
     conn.commit()
     return cur.rowcount > 0
 
@@ -1260,12 +1275,6 @@ def finish_cal_object_delete(conn, oid: str, deleted_rev: int) -> str:
             "UPDATE cal_objects SET href = NULL, etag = NULL, base_etag = NULL, "
             "sync_state = 'PENDING_CREATE' WHERE id = ?", (oid,))
     return "superseded" if cur.rowcount else "deleted"
-
-
-def delete_cal_object_row(conn, oid: str) -> None:
-    """Remove a row outright (conflict resolution: the server object is gone)."""
-    conn.execute("DELETE FROM cal_objects WHERE id = ?", (oid,))
-    conn.commit()
 
 
 def record_cal_object_error(conn, oid: str, err: str, now_iso: str) -> None:

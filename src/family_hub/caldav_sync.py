@@ -143,43 +143,66 @@ def _store_object(conn, collection_id: str, comp_type: str, obj: dict,
 def _resolve_conflict(client, conn, col, row, now_iso: str,
                       conflict_href=None) -> None:
     """Server-wins resolution for a 412: adopt the server's current copy over our
-    losing local edit (instead of silently clobbering the concurrent phone/Siri
-    change) and log the dropped edit so it's never lost silently. If the object
-    is gone on the server, drop the local row to match. (Field-level auto-merge,
-    re-applying the wall's completion onto the server's newer body, is a
-    documented future step, TECHNICAL_DESIGN §5.6.)
+    losing local change (instead of silently clobbering the concurrent phone/Siri
+    edit) and log what was dropped so it's never lost silently. That includes a
+    wall delete whose own DELETE conflicts: the reminder was edited on another
+    device, and that edit is kept. If the object is gone on the server, the
+    local row goes too, except a create, which is kept and retried. (Field-level
+    auto-merge, re-applying the wall's completion onto the server's newer body,
+    is a documented future step, TECHNICAL_DESIGN §5.6.)
 
     `row` is the version the push sent. A wall change queued while that request
-    was out is newer than the conflict, so it is never forced over:
+    was out is handled on its own terms, never forced over here:
       - the row was deleted (a create that was still uploading): the server copy
         is queued for delete, not adopted, or the reminder would come back;
-      - the row is now a queued delete: it moves onto the server's current copy
-        and the delete goes ahead next flush;
-      - the row was edited again: it stays queued and the next flush resolves
-        it with that edit in hand.
+      - the row is now a queued delete: that delete came after the other
+        device's edit, so it moves onto the server's current copy and goes
+        ahead next flush;
+      - the row was edited again: it stays queued, and its own push meets the
+        same 412 next flush, where server-wins drops it (the edit was built on
+        the copy that just lost, so pushing it would overwrite the phone's).
     `conflict_href` is the URL the 412 came from, which a create's row lacks."""
     href = row.get("href") or conflict_href
     fresh = client.get_object(col, href) if href else None
     have_server_copy = bool(fresh and fresh.get("ics"))
+    server_href = (fresh.get("href") if fresh else None) or href
     current = fdb.get_cal_object(conn, row["id"])
     if current is None:
-        if have_server_copy:
-            fdb.queue_orphan_cal_delete(conn, row, fresh.get("href") or href,
-                                        fresh.get("etag"), now_iso)
+        if not have_server_copy:
+            return
+        if fdb.queue_orphan_cal_delete(conn, row, server_href,
+                                       fresh.get("etag"), now_iso) is None:
+            # re-added under the same id meanwhile: that row takes over the
+            # iCloud copy as an update (-1 matches no revision, never SYNCED)
+            fdb.mark_cal_object_pushed(conn, row["id"], server_href,
+                                       fresh.get("etag"), -1)
+            log.info("caldav conflict on %s: re-added on the wall; it takes over "
+                     "the iCloud copy", row["id"])
+        else:
             log.info("caldav conflict on %s: it was deleted on the wall; "
                      "queued the iCloud copy for delete", row["id"])
         return
     if current["local_rev"] != row["local_rev"]:
         if current["sync_state"] == "PENDING_DELETE":
-            if have_server_copy:
-                fdb.adopt_server_copy_for_delete(
-                    conn, row["id"], fresh.get("href") or href, fresh.get("etag"))
-            else:
+            if not have_server_copy:
                 fdb.finish_cal_object_delete(conn, row["id"], current["local_rev"])
-        log.info("caldav conflict on %s: changed on the wall meanwhile; "
-                 "kept the newer change queued", row["id"])
+                log.info("caldav conflict on %s: deleted on the wall and gone "
+                         "from iCloud too", row["id"])
+            elif fdb.adopt_server_copy_for_delete(conn, row["id"], server_href,
+                                                  fresh.get("etag")):
+                log.info("caldav conflict on %s: deleted on the wall meanwhile; "
+                         "the delete goes ahead on iCloud's current copy",
+                         row["id"])
+            return
+        log.info("caldav conflict on %s: changed on the wall meanwhile; the "
+                 "newer change stays queued", row["id"])
         return
     if not have_server_copy:
+        if row["sync_state"] == "PENDING_CREATE":
+            # our create was refused, yet nothing is there: keep the new
+            # reminder queued; the caller records this and it retries
+            raise RuntimeError("create conflicted but iCloud has no copy there; "
+                               "will retry")
         if fdb.finish_cal_object_delete(conn, row["id"], row["local_rev"]) \
                 == "deleted":
             log.warning("caldav conflict on %s: server object gone; "
@@ -189,17 +212,20 @@ def _resolve_conflict(client, conn, col, row, now_iso: str,
     adopted = fdb.upsert_cal_object_synced(conn, {
         "id": row["id"], "collection_id": row["collection_id"],
         "comp_type": row["comp_type"], "uid": row["uid"],
-        "href": fresh.get("href") or href, "etag": fresh.get("etag"),
+        "href": server_href, "etag": fresh.get("etag"),
         "summary": meta.get("summary", row.get("summary", "")),
         "raw_ics": fresh["ics"], "sequence": meta.get("sequence", 0),
         "last_modified": meta.get("last_modified")},
         force=True, expected_rev=row["local_rev"])
-    if adopted:
+    if not adopted:
+        log.info("caldav conflict on %s: changed on the wall meanwhile; the "
+                 "newer change stays queued", row["id"])
+    elif row["sync_state"] == "PENDING_DELETE":
+        log.warning("caldav conflict on %s: server wins; the wall's delete was "
+                    "dropped because it was edited on another device", row["id"])
+    else:
         log.warning("caldav conflict on %s: server wins; dropped losing local edit",
                     row["id"])
-    else:
-        log.info("caldav conflict on %s: changed on the wall meanwhile; "
-                 "kept the newer change queued", row["id"])
 
 
 def _delete_orphaned_upload(client, conn, col, row, href: str, etag,
@@ -208,10 +234,16 @@ def _delete_orphaned_upload(client, conn, col, row, href: str, etag,
     local row is gone but the upload put a copy in iCloud. Queue that copy for
     delete first (so a failure here is retried, counted as pending, and can't
     be revived by a pull), then try the DELETE now. Raises on failure; the
-    caller records it against the queued row."""
+    caller records it against the queued row.
+
+    If the id is already in use again (re-added in the moment between), the
+    new row takes over the uploaded copy instead: it becomes an update to that
+    URL rather than a second create."""
     rev = fdb.queue_orphan_cal_delete(conn, row, href, etag, now_iso)
     if rev is None:
-        log.info("caldav %s was re-created during its upload; it keeps the "
+        # -1 matches no revision, so this only adopts href/etag, never SYNCED
+        fdb.mark_cal_object_pushed(conn, row["id"], href, etag, -1)
+        log.info("caldav %s was re-added during its upload; it takes over the "
                  "iCloud copy", row["id"])
         return
     client.delete_object(col, href, base_etag=etag)

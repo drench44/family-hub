@@ -471,6 +471,14 @@ def test_cal_rev_counter_starts_above_every_stored_revision(tmp_path):
         "id": "caldav:rem/b", "collection_id": "caldav:rem",
         "comp_type": "VTODO", "uid": "b", "summary": "x", "raw_ics": "I"}, "t")
     assert fdb.get_cal_object(c, "caldav:rem/b")["local_rev"] == 8
+    # a revision handed out and then dropped with its row is never reissued
+    # after a restart: the counter is kept, not re-seeded from the rows left
+    assert fdb.queue_cal_object_delete(c, "caldav:rem/b", "t")   # pending create: dropped
+    fdb.ensure_schema(c)
+    fdb.queue_cal_object_create(c, {
+        "id": "caldav:rem/c", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "c", "summary": "x", "raw_ics": "I"}, "t")
+    assert fdb.get_cal_object(c, "caldav:rem/c")["local_rev"] == 9
     c.close()
 
 
