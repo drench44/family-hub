@@ -672,6 +672,17 @@ test('caldavPanelHtml: not connected + connecting disables the inputs and shows 
   assert.match(html, /data-caldav-connect[^>]*disabled/);
 });
 
+test('caldavPanelHtml: not connected puts the Apple ID draft back, escaped', () => {
+  // A redraw (the "enter both" error, a failed connect) used to wipe the typed
+  // Apple ID. The draft rides in ui.user; it is escaped like every other sink.
+  const html = caldavPanelHtml(null, { user: 'me"><img src=x>@example.com' });
+  assert.match(html, /id="caldav-user-input"[^>]*value="me&quot;&gt;&lt;img src=x&gt;@example\.com"/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(caldavPanelHtml(null, {}), /id="caldav-user-input"[^>]*value=""/, 'no draft: empty');
+  // the password field never takes a value from anywhere
+  assert.doesNotMatch(caldavPanelHtml(null, { user: 'x' }), /id="caldav-pw-input"[^>]*value=/);
+});
+
 test('caldavPanelHtml: not connected + a form error shows it inline', () => {
   const html = caldavPanelHtml(null, { formError: 'Enter both fields.' });
   assert.match(html, /form-error">Enter both fields\.</);

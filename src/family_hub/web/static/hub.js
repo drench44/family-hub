@@ -53,6 +53,11 @@ const celebrated = new Set();
 let caldavUi = {
   connecting: false, testing: false, testResult: null, formError: '',
   collections: [], collectionsError: false,
+  // The Apple ID typed into the not-connected form, carried across the
+  // panel's redraws (the "enter both" error, Connecting…, a failed connect all
+  // rebuild the inputs and used to wipe it). Never the password: that field
+  // simply comes back empty after a redraw.
+  user: '',
 };
 
 /* ----------------------------------------------------------- clock + night */
@@ -142,14 +147,14 @@ function eventRow(ev, day) {
       const n = days.indexOf(day) + 1;
       if (n > 0) tag = `<span class="cal-spantag">day ${n} of ${total}</span>`;
     }
-    return `<div class="cal-ev cal-ev-allday" data-eid="${escapeHtml(ev.id)}" tabindex="0"`
+    return `<div class="cal-ev cal-ev-allday" data-eid="${escapeHtml(ev.id)}" role="button" tabindex="0"`
       + ` style="--evc:${escapeHtml(color)};--evi:${inkFor(color)}">`
       + `<span class="cal-title">${escapeHtml(ev.title)}</span>${tag}</div>`;
   }
   const timeCell = continuation
     ? `<span class="cal-time num">→ ${escapeHtml(fmtTime(ev.end_ts))}</span>`
     : `<span class="cal-time num">${escapeHtml(fmtTime(ev.start_ts))}</span>`;
-  return `<div class="cal-ev${ended ? ' ended' : ''}" data-eid="${escapeHtml(ev.id)}" tabindex="0">`
+  return `<div class="cal-ev${ended ? ' ended' : ''}" data-eid="${escapeHtml(ev.id)}" role="button" tabindex="0">`
     + `<span class="cal-rail" style="background:${escapeHtml(color)}"></span>`
     + timeCell
     + `<span class="cal-title">${escapeHtml(ev.title)}</span>`
@@ -265,7 +270,7 @@ function monthCellHtml(cell, col, hasEvents, todayStr, win) {
   if (unsynced) cls.push('mg-unsynced');
   const dayNum = Number(cell.date.slice(8, 10));
   const label = dayNum === 1 ? `${MONTH_NAMES[Number(cell.date.slice(5, 7)) - 1].slice(0, 3)} 1` : String(dayNum);
-  return `<div class="${cls.join(' ')}" style="grid-column:${col + 1}" data-date="${cell.date}" tabindex="0">`
+  return `<div class="${cls.join(' ')}" style="grid-column:${col + 1}" data-date="${cell.date}" role="button" tabindex="0">`
     + `<span class="mg-num num">${label}</span>`
     + (unsynced ? `<span class="mg-unsynced-mark">not synced</span>` : '')
     + `</div>`;
@@ -297,18 +302,18 @@ function monthWeekHtml(cells, events, todayStr, win) {
       const cls = ['mg-bar'];
       if (it.contL) cls.push('mg-bar-contl');
       if (it.contR) cls.push('mg-bar-contr');
-      return `<span class="${cls.join(' ')}" data-eid="${eid}" tabindex="0"`
+      return `<span class="${cls.join(' ')}" data-eid="${eid}" role="button" tabindex="0"`
         + ` style="${place};--evc:${escapeHtml(color)};--evi:${inkFor(color)}">`
         + `<span class="mg-bar-title">${title}</span></span>`;
     }
     const ended = eventEnded(it.ev, Date.now());
-    return `<span class="mg-ev${ended ? ' ended' : ''}" data-eid="${eid}" tabindex="0" style="${place}">`
+    return `<span class="mg-ev${ended ? ' ended' : ''}" data-eid="${eid}" role="button" tabindex="0" style="${place}">`
       + `<span class="mg-dot" style="background:${escapeHtml(color)}"></span>`
       + `<span class="mg-ev-time num">${escapeHtml(fmtTime(it.ev.start_ts))}</span>`
       + `<span class="mg-ev-title">${title}</span></span>`;
   }).join('');
   const moreHtml = overflow.map((n, i) => n > 0
-    ? `<span class="mg-more" data-date="${days[i]}" tabindex="0" style="grid-column:${i + 1};grid-row:${MONTH_MAX_LANES + 2}">+${n} more</span>`
+    ? `<span class="mg-more" data-date="${days[i]}" role="button" tabindex="0" style="grid-column:${i + 1};grid-row:${MONTH_MAX_LANES + 2}">+${n} more</span>`
     : '').join('');
   return `<div class="mg-week">${cellHtml}${evHtml}${moreHtml}</div>`;
 }
@@ -430,17 +435,21 @@ function openEventDetail(eid) {
     ? `<span class="ev-chip" style="border-color:${escapeHtml(color)};color:${escapeHtml(color)}">${escapeHtml(ev.label)}</span>`
     : '';
   document.getElementById('ev-card').innerHTML =
-    `<button class="ev-close" type="button">✕</button>`
+    `<button class="ev-close" type="button" aria-label="Close">✕</button>`
     + `<div class="ev-rail" style="background:${escapeHtml(color)}"></div>`
     + `<div class="ev-title">${escapeHtml(ev.title)}</div>`
     + `<div class="ev-when num">${escapeHtml(dayLine)}</div>`
     + chip + loc + desc;
   document.getElementById('ev-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('ev-modal', document.getElementById('ev-card').querySelector('.ev-close'));
+  // Armed with or without an overlay: a card opened from the home feed and
+  // left up must still drift home, or wallBusy() holds off a deploy forever.
+  armIdle();
 }
 
 function closeEventDetail() {
   document.getElementById('ev-modal').classList.add('hidden');
+  dialogClosed('ev-modal');
 }
 
 /* --------------------------------------------------------------- people */
@@ -553,21 +562,35 @@ function choresNavHtml() {
     + `</div>`;
 }
 
+/* Every renderChoresFull pass takes a number. A fetched day paints only if no
+   newer pass started while it was in flight AND the view still shows the day
+   it asked for: paging prev then back to today left yesterday's slow reply
+   landing under today's label, and a tap on those rows wrote to the wrong day. */
+let choresFullSeq = 0;
+
 async function renderChoresFull(prefetched) {
   const host = document.getElementById('chores-full');
   if (!host) return;
-  let people = prefetched;
+  const seq = ++choresFullSeq;
+  const day = choreState.day;
+  const stale = () => seq !== choresFullSeq || choreState.day !== day;
+  // A prefetched list is always TODAY's (hubData.people), so it only stands in
+  // for the fetch when today is the day on screen. A chore tap that finishes
+  // after the user paged away must not paint today's rows under that day.
+  let people = prefetched && day === data_date ? prefetched : null;
   // Same degraded-state flag renderPeople reads: when the server's away overlay
   // build failed it ships the day with NOBODY marked away, so the view owes a
   // note rather than presenting a genuinely-away person as present. A prefetched
   // day is today's hub payload, which carries the flag itself.
-  let awayOk = prefetched && hubData ? hubData.away_ok : undefined;
+  let awayOk = people && hubData ? hubData.away_ok : undefined;
   if (!people) {
     try {
-      const day = await j(`/api/chores/day?date=${choreState.day}`);
-      people = day.people;
-      awayOk = day.away_ok;
+      const got = await j(`/api/chores/day?date=${day}`);
+      if (stale()) return;   // the user moved on; a newer pass owns the view
+      people = got.people;
+      awayOk = got.away_ok;
     } catch (e) {
+      if (stale()) return;   // a stale failure must not paint its error either
       host.innerHTML = choresNavHtml()
         + `<div class="cal-empty">couldn’t load that day — is the hub reachable?</div>`;
       return;
@@ -1103,6 +1126,12 @@ function renderTodosPaint() {
   if (recent && wasOpen) recent.open = true;
 }
 
+/* Same newest-wins numbering as poll(): a refresh started before a write can
+   answer after the one started after it, and must not repaint (or re-cache)
+   the pre-write list over the fresh one. */
+let todosFullSeq = 0;
+let todosFullApplied = 0;
+
 async function renderTodosFull() {
   // The full view follows the same source as the home card. Read it from the
   // last hub payload so the fetch below hits the right endpoint.
@@ -1110,10 +1139,15 @@ async function renderTodosFull() {
   todoState.source = source;
   const icloud = source === 'icloud';
   const had = icloud ? todoState.reminders != null : todoState.data != null;
+  const seq = ++todosFullSeq;
   try {
-    if (icloud) todoState.reminders = await j('/api/reminders');
-    else todoState.data = await j('/api/todos');
+    const got = await j(icloud ? '/api/reminders' : '/api/todos');
+    if (seq < todosFullApplied) return;
+    todosFullApplied = seq;
+    if (icloud) todoState.reminders = got;
+    else todoState.data = got;
   } catch (e) {
+    if (seq < todosFullApplied) return;   // a newer refresh already painted
     // keep the last data (or null -> unreachable message). But if this was a
     // REFRESH (data already populated from a prior load) a silent catch would
     // let the stale pre-mutation list sit on screen while the conn badge
@@ -1147,14 +1181,44 @@ async function toggleTodo(id, done) {
   if (r.ok && !done) setTimeout(refreshTodos, TODO_DONE_GRACE_MS + 2000);
 }
 
+/* One add at a time. A redraw during an add (the poll-driven refresh, the
+   OSK's re-focus) rebuilds #todo-add-input and carries the draft into the new
+   field, so clearing only the field the add read from left the text sitting
+   in the new one, and a second Done added it twice. The guard drops that
+   second submit; clearAddedText then clears whichever field is on screen now,
+   but only if it still holds exactly what was added (never newer typing). */
+let todoAddInFlight = null;   // the title being added, or null
+
+/* A submit that lands while an add is in flight: the same text is the
+   duplicate the guard exists for, dropped silently; different text is a new
+   item typed meanwhile, so say so rather than drop it without a word (it stays
+   in the box to submit again). */
+function addBusy(title) {
+  if (todoAddInFlight === null) return false;
+  if (title && title !== todoAddInFlight) showToast('Still adding the last one, tap Add again in a moment.');
+  return true;
+}
+
+function clearAddedText(title, input) {
+  [input, document.getElementById('todo-add-input')].forEach((el) => {
+    if (el && el.value.trim() === title) el.value = '';
+  });
+}
+
 async function addTodo() {
   const input = document.getElementById('todo-add-input');
   const title = ((input && input.value) || '').trim();
+  if (addBusy(title)) return;
   if (!title) return;
-  const r = await attemptTodo('/api/todos', 'POST',
-    { title, bucket: todoState.addBucket });
-  if (!r.ok) { showToast(todoFailMessage(r.error)); return; }
-  if (input) input.value = '';
+  todoAddInFlight = title;
+  try {
+    const r = await attemptTodo('/api/todos', 'POST',
+      { title, bucket: todoState.addBucket });
+    if (!r.ok) { showToast(todoFailMessage(r.error)); return; }
+    clearAddedText(title, input);
+  } finally {
+    todoAddInFlight = null;
+  }
   await refreshTodos();
 }
 
@@ -1198,14 +1262,20 @@ async function toggleReminder(id, completed) {
 async function addReminder() {
   const input = document.getElementById('todo-add-input');
   const title = ((input && input.value) || '').trim();
+  if (addBusy(title)) return;                      // same one-add-at-a-time guard as addTodo
   if (!title) return;
   const lists = (hubData && hubData.reminder_lists) || [];
   if (!lists.length) return;                       // no target list -> nothing to do
   const sel = document.getElementById('todo-list-select');
   const listId = sel ? sel.value : lists[0].id;    // single list needs no picker
-  const r = await attemptTodo('/api/reminders/add', 'POST', { list_id: listId, title });
-  if (!r.ok) { showToast(reminderFailMessage(r.error)); return; }
-  if (input) input.value = '';
+  todoAddInFlight = title;
+  try {
+    const r = await attemptTodo('/api/reminders/add', 'POST', { list_id: listId, title });
+    if (!r.ok) { showToast(reminderFailMessage(r.error)); return; }
+    clearAddedText(title, input);
+  } finally {
+    todoAddInFlight = null;
+  }
   await refreshTodos();
 }
 
@@ -1688,6 +1758,7 @@ function openOverlay(view) {
   } else if (view === 'settings') {
     content.innerHTML = `<div class="overlay-panel"><div id="settings-full"></div></div>`;
     caldavUi.formError = '';   // a stale validation message shouldn't outlive a reopen
+    caldavUi.user = '';        // nor a half-typed Apple ID from an earlier visit
     renderSettingsFull();      // instant paint from cache (hubData / lastIntegrations)
   }
   overlay().classList.add('open');
@@ -1698,6 +1769,7 @@ function openOverlay(view) {
   // Start + probe the grid streams now that the overlay is visible (offsetParent
   // is non-null once .open is set), so the live tiles connect and reveal.
   if (view === 'cameras-page' && (links.camera_page || []).length) probeCamera();
+  dialogOpened('overlay', document.getElementById('overlay-home'));
   armIdle();
 }
 
@@ -1707,6 +1779,7 @@ function closeOverlay() {
   document.getElementById('overlay-content').innerHTML = '';
   openView = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  dialogClosed('overlay');
   scrollPageToTop();   // coming home always lands at the top of the page
 }
 
@@ -1729,7 +1802,76 @@ const MODAL_CLOSERS = {
    "go home" paths can't drift apart again. */
 function closeAllOverlays() {
   Object.values(MODAL_CLOSERS).forEach((close) => close());
+  closeThemePop();   // the gear popover too: wallBusy() counts it as busy
   closeOverlay();
+}
+
+/* Is anything up that the idle return should close? The overlay, any
+   MODAL_CLOSERS modal, or the gear popover: the same set wallBusy() treats as
+   busy, so anything that can hold off a deploy reload also drifts home. */
+/* Is the element with this id present and carrying `cls`? / not .hidden? */
+function hasClassOn(id, cls) {
+  const el = document.getElementById(id);
+  return !!(el && el.classList.contains(cls));
+}
+function modalShown(id) {
+  const el = document.getElementById(id);
+  return !!(el && !el.classList.contains('hidden'));
+}
+
+function overlayOpen() {
+  return !!openView || hasClassOn('overlay', 'open');
+}
+
+function surfaceOpen() {
+  return overlayOpen() || hasClassOn('theme-pop', 'open')
+    || Object.keys(MODAL_CLOSERS).some(modalShown);
+}
+
+/* The idle timer's callback. Re-checks first: a card closed by hand leaves its
+   timer behind. And only a full-screen overlay coming home scrolls the page to
+   the top (closeOverlay): a phone scrolled down its Calendar tab with just an
+   event card or the popover up keeps its place when that closes. */
+function idleReturnHome() {
+  idleTimer = null;
+  if (overlayOpen()) { closeAllOverlays(); return; }
+  Object.values(MODAL_CLOSERS).forEach((close) => close());
+  closeThemePop();
+}
+
+/* Dialog focus: opening a dialog moves focus onto `target` (its close/home
+   button, or the dialog itself), so keyboard and screen-reader users land in
+   it; closing hands focus back to whatever had it before (the row or button
+   that opened it). Focus goes back only if it is still inside the closed
+   dialog or nowhere, and never to a text field: re-focusing one after an idle
+   close would pop the wall's on-screen keyboard, or a phone's. */
+const dialogReturnFocus = {};
+
+function isTextField(el) {
+  const tag = el && el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!(el && el.isContentEditable);
+}
+
+function dialogOpened(id, target) {
+  const root = document.getElementById(id);
+  if (!root) return;
+  const prev = document.activeElement;
+  if (prev && prev !== document.body && !(root.contains && root.contains(prev))) {
+    dialogReturnFocus[id] = prev;
+  }
+  const el = target || root;
+  try { el.focus({ preventScroll: true }); } catch (e) { /* detached or not focusable */ }
+}
+
+function dialogClosed(id) {
+  const prev = dialogReturnFocus[id];
+  delete dialogReturnFocus[id];
+  if (!prev || isTextField(prev) || prev.isConnected === false) return;
+  const root = document.getElementById(id);
+  const active = document.activeElement;
+  const lost = !active || active === document.body || !!(root && root.contains && root.contains(active));
+  if (!lost) return;
+  try { prev.focus({ preventScroll: true }); } catch (e) { /* gone */ }
 }
 
 /* Whether this device drifts back to the home wall after an idle timeout. The
@@ -1745,13 +1887,14 @@ function idleReturnEnabled() {
 function armIdle() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (!idleReturnEnabled()) return;   // this device opted out — never yank it home
-  idleTimer = setTimeout(closeAllOverlays, idleReturnMs(openView));
+  if (!surfaceOpen()) return;         // nothing up to return from
+  idleTimer = setTimeout(idleReturnHome, idleReturnMs(openView));
 }
 
 /* --------------------------------------------------------------- polling */
 
 let hubData = null;
-let loadedBuild = null;   // /api/hub build token at page load; a change => deploy => reload
+let loadedBuild = null;   // /api/hub build token at page load; a change => deploy or config change => reload
 let lastInteraction = 0;  // ms of the last user touch/keypress (see noteInteraction)
 const INTERACTION_QUIET_MS = 4000;
 // Records a user touch/keypress so the deploy auto-reload defers for a few
@@ -2917,13 +3060,21 @@ function applyLaundry(data) {
    catch-up): the stream below delivers changes in seconds, but a wall that
    can't hold a stream open must never be worse off than the old 60s poll. */
 let lnLastPoll = 0;   // lnWake skips the refetch when a poll JUST ran
+/* Bumped by every poll start AND every stream event. A poll reply lands only
+   if nothing newer happened while it was in flight: a 60s poll answering
+   after a stream update would otherwise repaint the older machine state
+   (and a wake refetch racing the beat, the older of two polls). */
+let lnEpoch = 0;
 async function fetchLaundry() {
   lnLastPoll = Date.now();
+  const epoch = ++lnEpoch;
   try {
     const data = await j('/api/tiles/laundry');
+    if (epoch !== lnEpoch) return;   // superseded by a stream event or a newer poll
     laundryFails = 0;
     applyLaundry(data);
   } catch (e) {
+    if (epoch !== lnEpoch) return;   // something newer already reported the feed
     laundryFails += 1;
     if (!laundryData || laundryFails >= TILE_FAIL_LIMIT) {
       applyLaundry({ available: false });
@@ -2946,9 +3097,11 @@ function lnConnect() {
   try {
     lnStream = new EventSource('/api/laundry/stream');
     lnStream.onmessage = (ev) => {
-      laundryFails = 0;   // a live stream IS the feed being healthy — don't
-      try {               // let 3 unlucky poll instants blank a correct card
-        applyLaundry(JSON.parse(ev.data));
+      try {
+        const data = JSON.parse(ev.data);
+        lnEpoch += 1;       // newer than any poll still in flight (see fetchLaundry)
+        laundryFails = 0;   // a live stream IS the feed being healthy — don't
+        applyLaundry(data); // let 3 unlucky poll instants blank a correct card
       } catch (e) {
         // comment keepalives never reach onmessage, so this is a genuinely
         // malformed data event — dropping it silently would let a broken
@@ -3263,24 +3416,28 @@ setInterval(() => {
 /* True while the wall is showing something the user is mid-interaction with, so
    the auto-reload defers instead of yanking it away. */
 function wallBusy() {
-  const hasClass = (id, cls) => {
-    const el = document.getElementById(id);
-    return !!(el && el.classList.contains(cls));
-  };
-  const shown = (id) => {
-    const el = document.getElementById(id);
-    return !!(el && !el.classList.contains('hidden'));
-  };
-  return hasClass('overlay', 'open') || hasClass('theme-pop', 'open')
-    || Object.keys(MODAL_CLOSERS).some(shown)   // same modal set closeAllOverlays closes
+  // surfaceOpen: the overlay, the popover, and the same MODAL_CLOSERS set the
+  // idle return closes, so anything that holds off a reload also drifts home.
+  return surfaceOpen()
     // a direct tap on the bare wall (e.g. a chore toggle) opens no overlay, so
     // defer the reload for a short quiet window after any recent interaction
     || (Date.now() - lastInteraction < INTERACTION_QUIET_MS);
 }
 
+/* Polls overlap: the 60s beat and a post-tap refresh can both be in flight,
+   and the older one can answer last. Each poll takes a number; a reply older
+   than the newest one already applied is dropped, success or failure, so a
+   pre-tap payload can't repaint a checked chore as undone for a minute (and
+   reset lastPeople, which fired the confetti a second time). */
+let pollSeq = 0;
+let pollApplied = 0;
+
 async function poll() {
+  const seq = ++pollSeq;
   try {
     const data = await j('/api/hub');
+    if (seq < pollApplied) return;
+    pollApplied = seq;
     hubData = data;
     // Auto-reload when a deploy changes the baked frontend (the server's build
     // token changes), so the kiosk picks up updates without a manual refresh —
@@ -3304,6 +3461,7 @@ async function poll() {
     document.body.dataset.conn = 'up';
     document.getElementById('conn-word').textContent = 'live';
   } catch (e) {
+    if (seq < pollApplied) return;   // a newer poll already answered: the hub is up
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
   }
@@ -3415,6 +3573,7 @@ async function toggleChore(id, done) {
 
 function closeChoreEditor() {
   document.getElementById('chore-modal').classList.add('hidden');
+  dialogClosed('chore-modal');
   document.getElementById('chore-editor').innerHTML = '';   // drop the old form
 }
 
@@ -3478,7 +3637,8 @@ async function openChoreEditor(seed) {
   }
   buildChoreForm(host, model, label, onsubmit, state.people);
   document.getElementById('chore-modal').classList.remove('hidden');
-  if (openView) armIdle();   // keep the overlay alive while the editor is up
+  dialogOpened('chore-modal', document.getElementById('chore-card').querySelector('.chore-close'));
+  armIdle();   // keep the overlay alive while the editor is up
 }
 
 /* ------------------------------------------- people editor (add / edit) */
@@ -3611,7 +3771,8 @@ function openPersonEditor(seed) {
   }
   buildPersonForm(host, model, label, onsubmit, opts);
   document.getElementById('chore-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('chore-modal', document.getElementById('chore-card').querySelector('.chore-close'));
+  armIdle();
 }
 
 /* Deactivate / reactivate a person (the reversible alternative to delete). */
@@ -3663,7 +3824,8 @@ function openDeleteConfirm(cid) {
   document.getElementById('confirm-sub').textContent =
     'It stays on past days; it’s removed from today on.';
   document.getElementById('confirm-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('confirm-modal', document.getElementById('confirm-card').querySelector('[data-confirm-cancel]'));
+  armIdle();
 }
 
 /* Person hard-delete confirm — a distinct, blunter warning than chore delete:
@@ -3676,12 +3838,14 @@ function openPersonDeleteConfirm(pid) {
   document.getElementById('confirm-sub').textContent =
     'Removed for good. Past days keep their record. To pause instead, use Deactivate.';
   document.getElementById('confirm-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('confirm-modal', document.getElementById('confirm-card').querySelector('[data-confirm-cancel]'));
+  armIdle();
 }
 
 function closeDeleteConfirm() {
   pendingDelete = null;
   document.getElementById('confirm-modal').classList.add('hidden');
+  dialogClosed('confirm-modal');
 }
 
 /* Confirmed: DELETE the chore or person, then refresh staying in edit mode. On
@@ -3867,8 +4031,38 @@ document.addEventListener('click', (e) => {
   if (day && !openView) { openOverlay('calendar'); return; }
   if (e.target.closest('#overlay-home')) { closeAllOverlays(); }
 });
+// Any touch restarts the idle countdown while something is open (armIdle is a
+// no-op on the bare wall), popover and home-feed event card included.
 ['pointerdown', 'touchstart', 'keydown'].forEach((evt) =>
-  document.addEventListener(evt, () => { noteInteraction(); if (openView) armIdle(); }, { passive: true }));
+  document.addEventListener(evt, () => { noteInteraction(); armIdle(); }, { passive: true }));
+
+/* Keyboard access: the calendar's event rows, month day cells and "+N more"
+   chips are focusable <div>/<span>s (role="button"), not real buttons, so the
+   browser gives them no Enter/Space activation of its own. Route both keys
+   through click(), which bubbles into the delegated click handler above, so a
+   key press does exactly what a tap does. Real buttons are left alone (the
+   browser already clicks them; a second click would double-activate). Timing
+   matches a native button: Enter on keydown, Space on keyup. Clicking on the
+   Space keydown moved focus onto the new card's close button before the
+   keyup, and Firefox (the wall) clicks a focused button on a Space keyup, so
+   the card could close the instant it opened. */
+const KEY_ACTIVATE_SEL = '[data-eid], .mg-day, .mg-more';
+const keyActivatable = (t) => !!t && t.tagName !== 'BUTTON'
+  && typeof t.matches === 'function' && t.matches(KEY_ACTIVATE_SEL);
+let spaceDownOn = null;   // the element a Space press started on
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  if (!keyActivatable(e.target)) return;
+  e.preventDefault();   // Space would otherwise scroll the page
+  if (e.key === 'Enter') e.target.click();
+  else spaceDownOn = e.target;
+});
+document.addEventListener('keyup', (e) => {
+  if (e.key !== ' ') return;
+  const t = spaceDownOn;
+  spaceDownOn = null;
+  if (t && t === e.target && keyActivatable(t)) { e.preventDefault(); t.click(); }
+});
 document.addEventListener('submit', (e) => {
   if (e.target && e.target.id === 'todo-add-form') {
     e.preventDefault();
@@ -4516,6 +4710,8 @@ function caldavIntegration() {
 function renderCaldavPanel() {
   const host = document.getElementById('caldav-panel');
   if (!host) return;
+  const userInput = document.getElementById('caldav-user-input');
+  if (userInput) caldavUi.user = userInput.value;   // keep the typed Apple ID
   host.innerHTML = caldavPanelHtml(caldavIntegration(), caldavUi);
 }
 
@@ -4599,7 +4795,11 @@ async function connectCaldav() {
   }
   // The password's only job was to reach that POST body. Blank it the instant
   // the request succeeds; never rely solely on the next render to clear it.
-  if (pwInput) pwInput.value = '';
+  // The Connecting… redraw replaced both inputs, so blank the live ones too,
+  // and drop the Apple ID draft: nothing should prefill a later form.
+  [pwInput, document.getElementById('caldav-pw-input'),
+    document.getElementById('caldav-user-input')].forEach((el) => { if (el) el.value = ''; });
+  caldavUi.user = '';
   caldavUi.connecting = false;
   await poll();   // hubData.integrations now carries icloud_caldav + its account
   renderCaldavPanel();
@@ -4665,7 +4865,7 @@ document.addEventListener('click', (e) => {
   if (gear && pop) {
     const open = pop.classList.toggle('open');
     gear.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) reflectThemeControls();
+    if (open) { reflectThemeControls(); armIdle(); }   // a popover left open drifts shut too
     return;
   }
   // Any [data-open-settings] control: the popover's "All settings" row (close
@@ -4705,7 +4905,7 @@ document.addEventListener('click', (e) => {
   // it OFF clears the pending return-home timer (and ON re-arms it) immediately,
   // not only on the next interaction.
   const ir = e.target.closest('.theme-ctl [data-idle-set]');
-  if (ir) { setIdleReturn(ir.dataset.idleSet); reflectThemeControls(); if (openView) armIdle(); return; }
+  if (ir) { setIdleReturn(ir.dataset.idleSet); reflectThemeControls(); armIdle(); return; }
   // Seasonal looks: Off/On (popover + Settings), and a look tile (Settings),
   // which picks that season's look and turns seasons on.
   const ss = e.target.closest('.theme-ctl [data-season-set]');
@@ -4734,11 +4934,23 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Escape also dismisses the gear popover (T5a) — parity with the outside-tap.
+// Escape closes the topmost layer, one per press: the gear popover (T5a,
+// parity with the outside-tap; it floats above everything), then the delete
+// confirm, the chore/person editor and the event card (stacked in that order
+// over the overlay), then the full-screen overlay itself.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const pop = document.getElementById('theme-pop');
-  if (pop && pop.classList.contains('open')) closeThemePop();
+  if (pop && pop.classList.contains('open')) {
+    closeThemePop();
+    const gear = document.getElementById('wall-gear');
+    if (gear) { try { gear.focus({ preventScroll: true }); } catch (err) { /* not focusable */ } }
+    return;
+  }
+  if (modalShown('confirm-modal')) { closeDeleteConfirm(); return; }
+  if (modalShown('chore-modal')) { closeChoreEditor(); return; }
+  if (modalShown('ev-modal')) { closeEventDetail(); return; }
+  if (openView) closeAllOverlays();
 });
 
 /* ---- Version readout (debug/ops) --------------------------------------

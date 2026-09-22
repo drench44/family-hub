@@ -2,6 +2,7 @@ import datetime as dt
 import importlib
 import json
 import logging
+import re
 import sqlite3
 
 import pytest
@@ -256,14 +257,51 @@ def test_hub_theme_season_survives(tmp_path, monkeypatch):
 def test_seasonal_art_revalidates(tmp_path, monkeypatch):
     """The seasonal photos are referenced from inside styles.css, where no ?v=
     reaches them, and a photo can be swapped under the same name: they must revalidate
-    or phones keep stale art after a release. Other static assets keep their
-    existing (?v=-busted) caching."""
+    or phones keep stale art after a release. Plain images outside /seasons/
+    (the favicon, the home-screen icon) keep their default caching."""
     appmod = _reload_with(tmp_path, monkeypatch, {})
     with TestClient(appmod.app) as c:
         r = c.get("/seasons/fall-aspen-grove.webp")
         assert r.status_code == 200
         assert r.headers.get("cache-control") == "no-cache"
-        assert "cache-control" not in c.get("/theme.js").headers
+        assert "cache-control" not in c.get("/apple-touch-icon.png").headers
+
+
+def test_hub_build_token_tracks_the_served_config(tmp_path, monkeypatch):
+    """Cameras and panels are built ONCE per page load on the wall, so a config
+    change (a new camera, a moved panel) never reached an open wall: the build
+    token hashed only the static assets, the deploy restart kept it the same, and
+    the wall never reloaded. The token now folds in the loaded config, so a
+    config change reloads the wall through the same idle-reload path a deploy
+    uses. Same config => same token (no reload loop); /api/version agrees."""
+    cams_a = {"go2rtc_base": "http://cam", "cameras": [{"src": "a", "label": "A"}]}
+    cams_b = {"go2rtc_base": "http://cam", "cameras": [{"src": "b", "label": "B"}]}
+    appmod = _reload_with(tmp_path, monkeypatch, cams_a)
+    with TestClient(appmod.app) as c:
+        build_a = c.get("/api/hub").json()["build"]
+        assert c.get("/api/version").json()["build"] == build_a
+    appmod = _reload_with(tmp_path, monkeypatch, cams_a)
+    with TestClient(appmod.app) as c:
+        assert c.get("/api/hub").json()["build"] == build_a, \
+            "an unchanged config must keep the token, or every restart reloads the wall"
+    appmod = _reload_with(tmp_path, monkeypatch, cams_b)
+    with TestClient(appmod.app) as c:
+        build_b = c.get("/api/hub").json()["build"]
+    assert re.fullmatch(r"[0-9a-f]{12}", build_b)
+    assert build_b != build_a, "a config change must change the reload token"
+
+
+def test_config_fingerprint_failure_logs_and_keeps_a_token(app_mod, caplog):
+    """An unserializable config must never take the app down at import: it
+    logs a warning (the config half of the token is lost, and says so) and
+    the build token is still a well-formed asset hash."""
+    class Weird:
+        pass
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        fp = app_mod._config_fingerprint(Weird())   # not a dataclass: asdict raises
+    assert fp == ""
+    assert any("not fingerprinted" in r.getMessage() for r in caplog.records)
+    assert re.fullmatch(r"[0-9a-f]{12}", app_mod._compute_build(fp))
 
 
 def test_hub_theme_new_modes_survive(tmp_path, monkeypatch):
@@ -1270,12 +1308,31 @@ def test_camera_snapshot_allows_camera_page_only_streams(tmp_path, monkeypatch):
 
 def test_html_is_never_heuristically_cached(client):
     """Phones cached a stale index.html past a deploy (2026-08-13, missing tab
-    bar): the HTML must say no-cache so browsers revalidate; busted assets
-    (?v=N) and API JSON are left alone."""
+    bar): the HTML must say no-cache so browsers revalidate. API JSON is left
+    alone."""
     r = client.get("/")
     assert r.status_code == 200
     assert r.headers.get("cache-control") == "no-cache"
-    assert "cache-control" not in {k.lower() for k in client.get("/styles.css").headers}
+    assert "cache-control" not in {k.lower() for k in client.get("/health").headers}
+
+
+def test_scripts_and_styles_always_revalidate(client):
+    """The ?v= busters only move on a release, so a hub.js or styles.css change
+    shipped without a version bump kept the old URL: the deploy reload fetched
+    fresh HTML but the browser could serve the old script from its heuristic
+    cache (no Cache-Control plus a Last-Modified), leaving the wall on stale JS
+    under a new build token. Every script, stylesheet and the manifest must
+    revalidate; a 304 costs the wall almost nothing on the LAN."""
+    for path in ("/hub.js?v=1.6.0", "/common.js", "/osk.js", "/theme.js",
+                 "/styles.css?v=1.6.0", "/manifest.webmanifest"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers.get("cache-control") == "no-cache", path
+    # and a revalidation really is cheap: the ETag round-trips to a 304
+    r = client.get("/hub.js")
+    etag = r.headers.get("etag")
+    assert etag, "static files must carry an ETag so no-cache revalidates to a 304"
+    assert client.get("/hub.js", headers={"If-None-Match": etag}).status_code == 304
 
 
 def test_retired_admin_page_route_is_gone(client):

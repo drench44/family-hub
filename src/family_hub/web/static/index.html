@@ -173,18 +173,18 @@
   </nav>
 
   <!-- Full-screen overlays. Iframe URLs are injected from /api/hub at runtime. -->
-  <div class="overlay" id="overlay">
+  <div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-label="Full-screen view" tabindex="-1">
     <button class="overlay-home" id="overlay-home" type="button">⌂ home</button>
     <div class="overlay-content" id="overlay-content"></div>
   </div>
 
   <!-- Event detail card (filled by hub.js; sits above everything) -->
-  <div class="ev-modal hidden" id="ev-modal"><div class="ev-card" id="ev-card"></div></div>
+  <div class="ev-modal hidden" id="ev-modal" role="dialog" aria-modal="true" aria-label="Event details" tabindex="-1"><div class="ev-card" id="ev-card"></div></div>
 
   <!-- Chore add/edit editor: the shared chore form, opened from the all-chores
        overlay's edit mode. Layered above #overlay (like #ev-modal) so it floats
        over the chores view; dismissed by the ✕ or a backdrop tap. -->
-  <div class="chore-modal hidden" id="chore-modal">
+  <div class="chore-modal hidden" id="chore-modal" role="dialog" aria-modal="true" aria-label="Editor" tabindex="-1">
     <div class="chore-card" id="chore-card">
       <button class="chore-close" type="button" aria-label="Close">✕</button>
       <div id="chore-editor"></div>
@@ -195,7 +195,7 @@
        against policy). Layered above the overlay like the editor; it names the
        chore. Cancel dismisses with no write; Delete fires DELETE /api/admin/
        chores/{id}. Filled + toggled by hub.js. -->
-  <div class="confirm-modal hidden" id="confirm-modal">
+  <div class="confirm-modal hidden" id="confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-msg" aria-describedby="confirm-sub" tabindex="-1">
     <div class="confirm-card" id="confirm-card">
       <div class="confirm-msg" id="confirm-msg"></div>
       <div class="confirm-sub" id="confirm-sub">It stays on past days; it&rsquo;s removed from today on.</div>

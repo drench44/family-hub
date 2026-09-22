@@ -48,6 +48,39 @@ rolls that section to a dated version via `python scripts/release.py`.
   on the washer and dryer, which was about two thirds of it.
 - Every container's log is now capped (5 files of 10 MB), and the camera
   relay gets 256 MB of memory instead of 128 MB, which it kept running out of.
+- A config change (a new camera, a moved panel) now reaches a wall that is
+  already open: the wall reloads itself once it is idle, the same way it does
+  after a deploy. Before, cameras and panels kept their old setup until
+  someone refreshed by hand.
+- After a deploy the wall always loads the new scripts and styles, even when
+  the release number did not change. Before, the browser could keep running
+  the old script from its cache.
+- In the All chores view, a slow answer for a day you already paged away
+  from no longer shows up under the wrong day. Before, it could, and a tap
+  on it checked off a chore on the wrong day.
+- Checking off a chore and then paging to another day before it saves no
+  longer shows today's chores under that other day.
+- A checked chore no longer flips back to undone for up to a minute when an
+  older refresh answers late, and finishing your chores shows the confetti
+  once, not twice. The same late-answer fix covers the full to-do list and
+  the washer and dryer card.
+- Tapping Done twice while a to-do is still saving no longer adds it twice,
+  and the box clears once it is added. A different item submitted in that
+  moment gets a short note to tap Add again, instead of vanishing.
+- An event card opened from the home screen, or the display settings
+  popover, now closes by itself after a while like the full-screen views do.
+  Before, one left open stayed up for good and also held off the automatic
+  reload after a deploy.
+- Keyboard use: calendar events and days open with Enter or Space, Escape
+  closes the top layer (popover, confirm, editor, event card, then the
+  full-screen view), focus moves into a card when it opens and back when it
+  closes, and screen readers now hear each layer as a dialog.
+- The iCloud connect form keeps the Apple ID you typed when it shows an
+  error or a sign-in fails, so you only retype the password. The password
+  is still never kept.
+- The wall's on-screen keyboard now goes away when the box it was typing
+  into disappears, for example when a full-screen view closes by itself.
+  Before, it could stay docked over the home screen.
 
 ## [1.7.0] — 2026-09-22
 
