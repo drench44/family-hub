@@ -579,14 +579,13 @@ def _laundry_error_code(event: dict | None, status_since: str | None) -> str | N
         return None
     if not status_since:
         return None          # can't tell this episode from an old one
-    if status_since:
-        try:
-            gap = (dt.datetime.fromisoformat(status_since)
-                   - dt.datetime.fromisoformat(fired)).total_seconds() / 60.0
-        except TypeError:        # one naive, one aware: can't be ordered
-            return None
-        if gap > LAUNDRY_ERROR_EVENT_WINDOW_MIN:
-            return None
+    try:
+        gap = (dt.datetime.fromisoformat(status_since)
+               - dt.datetime.fromisoformat(fired)).total_seconds() / 60.0
+    except TypeError:        # one naive, one aware: can't be ordered
+        return None
+    if gap > LAUNDRY_ERROR_EVENT_WINDOW_MIN:
+        return None
     return code
 
 

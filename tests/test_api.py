@@ -3694,6 +3694,54 @@ def test_laundry_placeholder_fix_leaves_real_estimates_alone(client, monkeypatch
     assert client.get("/api/tiles/laundry").json()["machines"][1]["finishes_at"] == iso(5)
 
 
+def test_laundry_cycle_begun_during_an_ha_outage_is_not_a_watched_start(
+        client, monkeypatch):
+    # the dryer was idle, HA went blind (the lg_thinq MQTT freeze), the load
+    # started unseen; on reconnect last_changed is FRESH. Not a start we saw
+    # (review wave 2): no placeholder rewrite of its real 5-min finish.
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    for d in (off, ("offline", None, None, None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, d))
+        client.get("/api/tiles/laundry")
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("running", "cooling", iso(-0.2), iso(5), 60)))
+    assert client.get("/api/tiles/laundry").json()["machines"][1]["finishes_at"] == iso(5)
+
+
+def test_laundry_start_after_a_hub_gap_is_not_a_watched_start(client, monkeypatch):
+    # the hub was down; it comes back 1 min after a sub-status change of a
+    # cycle it never saw begin (review wave 2)
+    import family_hub.app as appmod
+    from family_hub import db as fdb_mod
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, off))
+    client.get("/api/tiles/laundry")
+    fdb_mod.kv_set(appmod._db(), "laundry_last_tick", iso(-40))   # the gap
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("running", "cooling", iso(-1), iso(5), 60)))
+    assert client.get("/api/tiles/laundry").json()["machines"][1]["finishes_at"] == iso(5)
+
+
+def test_laundry_error_then_resume_keeps_the_watched_start(client, monkeypatch):
+    import family_hub.app as appmod
+    from family_hub import db as fdb_mod
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    start = iso(-0.5)
+    _watched_start(client, monkeypatch, off, ("running", "running", start, iso(50), 54))
+    assert fdb_mod.kv_get(appmod._db(), "laundry_start_dryer") == start
+    for d in (("error", "error", iso(0), None, None),
+              ("running", "running", iso(0), iso(49), 54)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, d))
+        client.get("/api/tiles/laundry")
+    assert fdb_mod.kv_get(appmod._db(), "laundry_start_dryer") == start
+
+
 def test_laundry_placeholder_fix_ignores_a_large_time_left(client, monkeypatch):
     # washer load sensing cuts a default 48-min course to 26; if total_time
     # lags a poll, the large, real time left must not be pushed back out
