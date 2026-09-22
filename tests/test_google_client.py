@@ -129,10 +129,8 @@ def test_creds_failed_rewrite_keeps_the_old_token(tmp_path):
          mock.patch("family_hub.calendar_sync.os.replace",
                     side_effect=OSError("disk full")):
         Creds.from_authorized_user_file.return_value = fake
-        try:
-            GoogleCalendarClient(str(token))._creds()
-        except OSError:
-            pass
+        result = GoogleCalendarClient(str(token))._creds()   # must not raise
+    assert result is fake
     assert token.read_text() == '{"old": true}'
     assert sorted(p.name for p in tmp_path.iterdir()) == ["token.json"]
 

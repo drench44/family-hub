@@ -448,6 +448,11 @@ test('attemptToggle sends the shown date: POST body and DELETE query', async () 
     assert.equal(await sandbox.attemptToggle(7, true, '2026-09-21'), true);
     assert.equal(calls[1][0], '/api/chores/7/complete?date=2026-09-21');
     assert.equal(calls[1][1].method, 'DELETE');
+    // no date known yet (before the first poll): fall back to the server's day
+    await sandbox.attemptToggle(8, false);
+    assert.deepEqual(JSON.parse(calls[2][1].body), {});
+    await sandbox.attemptToggle(8, true);
+    assert.equal(calls[3][0], '/api/chores/8/complete');
   } finally {
     sandbox.j = orig;
   }
