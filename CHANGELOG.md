@@ -27,6 +27,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The washer and dryer watcher no longer writes to the database every five
   seconds when nothing changed (about 35,000 needless writes a day), and its
   database work no longer holds up the rest of the hub while it runs.
+- An iCloud reminder edited on the wall at the same moment a sync pulls it
+  can no longer be quietly thrown away. The edit now always waits to be sent.
 
 ## [1.7.0] — 2026-09-22
 
