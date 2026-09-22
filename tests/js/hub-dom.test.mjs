@@ -8225,3 +8225,59 @@ test('closing a dialog never re-focuses a text field (no keyboard pops up after 
   sandbox.closeEventDetail();
   assert.notEqual(document.activeElement, field);
 });
+
+// ---- iCloud connect form keeps the typed Apple ID (frontend audit) ----
+
+test('connectCaldav: the "enter both" error keeps the Apple ID that was typed', async () => {
+  const { document, sandbox } = newHub();
+  const host = seedCaldavPanel(document);
+  vm.runInContext('hubData = { integrations: [] };', sandbox);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = 'me@example.com';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = '';
+  document.body.appendChild(p);
+  await sandbox.connectCaldav();
+  assert.match(host.innerHTML, /Enter both the Apple ID/);
+  assert.match(host.innerHTML, /id="caldav-user-input"[^>]*value="me@example\.com"/,
+    'the redraw puts the typed Apple ID back');
+});
+
+test('connectCaldav: a failed connect keeps the Apple ID but never the password', async () => {
+  const { document, sandbox } = newHub();
+  const host = seedCaldavPanel(document);
+  vm.runInContext('hubData = { integrations: [] };', sandbox);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = 'bot@example.com';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = 'wrong-pw';
+  document.body.appendChild(p);
+  sandbox.fetch = async () => { throw new Error('401: sign-in rejected'); };
+  await sandbox.connectCaldav();
+  assert.match(host.innerHTML, /id="caldav-user-input"[^>]*value="bot@example\.com"/);
+  assert.doesNotMatch(host.innerHTML, /wrong-pw/, 'the password is never written into markup');
+  assert.doesNotMatch(JSON.stringify(vm.runInContext('caldavUi', sandbox)), /wrong-pw/,
+    'nor kept in the panel state');
+});
+
+test('the Apple ID draft is dropped on a fresh Settings open and after connecting', async () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("caldavUi.user = 'old@example.com';", sandbox);
+  sandbox.openOverlay('settings');
+  assert.equal(vm.runInContext('caldavUi.user', sandbox), '', 'a fresh open starts clean');
+
+  const host = seedCaldavPanel(document);
+  vm.runInContext('hubData = { integrations: [] };', sandbox);
+  const u = document.createElement('input'); u._id = 'caldav-user-input'; u.value = 'bot@example.com';
+  document.body.appendChild(u);
+  const p = document.createElement('input'); p._id = 'caldav-pw-input'; p.value = 'pw';
+  document.body.appendChild(p);
+  sandbox.fetch = async (url) => {
+    if (String(url) === '/api/hub') {
+      return okResp({ integrations: [{ id: 'icloud_caldav', enabled: true, account: 'bot@example.com' }] });
+    }
+    return okResp({ ok: true });
+  };
+  await sandbox.connectCaldav();
+  assert.match(host.innerHTML, /Connected as/);
+  assert.equal(vm.runInContext('caldavUi.user', sandbox), '',
+    'after a good connect nothing is kept to prefill a later form');
+});

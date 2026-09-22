@@ -72,6 +72,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   closes the top layer (popover, confirm, editor, event card, then the
   full-screen view), focus moves into a card when it opens and back when it
   closes, and screen readers now hear each layer as a dialog.
+- The iCloud connect form keeps the Apple ID you typed when it shows an
+  error or a sign-in fails, so you only retype the password. The password
+  is still never kept.
 
 ## [1.7.0] — 2026-09-22
 

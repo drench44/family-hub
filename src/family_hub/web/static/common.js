@@ -1250,7 +1250,8 @@ function caldavCollectionsHtml(collections, opts) {
    `integ` is the icloud_caldav entry from /api/hub's `integrations` list, or
    null/undefined when no credentials are stored yet (the not-connected form).
    `ui` is the transient view state hub.js keeps between polls: {connecting,
-   testing, testResult, formError, collections, collectionsError}, NEVER the
+   testing, testResult, formError, collections, collectionsError, user (the
+   typed Apple ID, put back into its field after a redraw)}, NEVER the
    password itself. The password only ever lives in the password input's own
    value; it is read at submit time, sent once in the POST body, and never
    stored in JS state, a DOM attribute/dataset, or a log/toast. */
@@ -1268,6 +1269,7 @@ function caldavPanelHtml(integ, ui) {
   if (!integ) {
     return `<div class="field"><label>Apple ID</label>`
       + `<input class="txt-input" id="caldav-user-input" type="text" `
+      + `value="${escapeHtml(st.user || '')}" `
       + `autocomplete="off" autocapitalize="off" spellcheck="false" ${dis(st.connecting)}></div>`
       + `<div class="field"><label>App-specific password</label>`
       + `<input class="txt-input" id="caldav-pw-input" type="password" `
