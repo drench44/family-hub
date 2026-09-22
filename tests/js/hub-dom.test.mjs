@@ -3141,7 +3141,7 @@ test('renderTodosFull: fetches the endpoint that matches the active source', asy
       ? { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true }
       : { now: [], soon: [], later: [] });
   };
-  vm.runInContext("hubData = { todo_source: 'icloud' };", sandbox);
+  vm.runInContext("hubData = { todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: true }] };", sandbox);
   await sandbox.renderTodosFull();
   assert.ok(urls.includes('/api/reminders') && !urls.includes('/api/todos'), 'iCloud -> /api/reminders');
   urls.length = 0;
@@ -3153,7 +3153,7 @@ test('renderTodosFull: fetches the endpoint that matches the active source', asy
 test('renderTodosFull: a failed refresh toasts only when data was already loaded (not on first load)', async () => {
   const { document, sandbox } = newHub();
   sandbox.fetch = async () => { throw new Error('down'); };
-  vm.runInContext("hubData = { todo_source: 'icloud' }; todoState.reminders = null;", sandbox);
+  vm.runInContext("hubData = { todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: true }] }; todoState.reminders = null;", sandbox);
   await sandbox.renderTodosFull();
   assert.equal(document.getElementById('toast'), null, 'no toast on the first, empty load');
   vm.runInContext("todoState.reminders = { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true };", sandbox);
@@ -6347,17 +6347,17 @@ test('todoDigest: guarantees soon and later each show >=1 row behind a long now 
   assert.equal(by.later.moreOpen, 4);
 });
 
-test('todoDigest: done-today lingerers fill only leftover budget and are never counted as more', () => {
+test('todoDigest: just-checked lingerers fill only leftover budget and are never counted as more', () => {
   const { sandbox } = newHub();
   const g = sandbox.todoDigest({ now: [...tOpen(2, 'now'), ...tDone(3, 'now')], soon: [], later: [] }, DIGEST_BUDGET);
   assert.equal(g.length, 1);
-  assert.equal(g[0].rows.length, 5, 'shows the 2 open + 3 done-today rows');
+  assert.equal(g[0].rows.length, 5, 'shows the 2 open + 3 just-checked rows');
   assert.equal(g[0].openCount, 2, 'the header count is open items only');
   assert.equal(g[0].moreOpen, 0, 'a hidden done item is not advertised as more');
   assert.equal(g[0].rows.filter((t) => t.done_at).length, 3, 'the done rows linger');
 });
 
-test('todoDigest: open items win the budget over another tier\'s done-today lingerers', () => {
+test('todoDigest: open items win the budget over another tier\'s just-checked lingerers', () => {
   const { sandbox } = newHub();
   const g = sandbox.todoDigest(
     { now: [...tOpen(2, 'now'), ...tDone(7, 'now')], soon: tOpen(5, 'soon'), later: [] },
@@ -6426,7 +6426,7 @@ test('todoDigest: a missing/empty payload yields no groups (never throws)', () =
   assert.deepEqual([...sandbox.todoDigest({}, DIGEST_BUDGET)], []);
 });
 
-test('todoDigest: "+N more" counts only hidden OPEN items even when a tier also has done-today rows', () => {
+test('todoDigest: "+N more" counts only hidden OPEN items even when a tier also has just-checked rows', () => {
   const { sandbox } = newHub();
   // now alone, over budget, with open AND done items in the same tier. Open
   // items sort first, so the budget shows 9 open and folds the rest; the done
@@ -6438,7 +6438,7 @@ test('todoDigest: "+N more" counts only hidden OPEN items even when a tier also 
   assert.equal(g[0].moreOpen, 3, 'overflow = 12 open - 9 shown, done items excluded');
 });
 
-test('todoCardHtml: a tier that is only done-today lingerers shows its label without a "0" count', () => {
+test('todoCardHtml: a tier that is only just-checked lingerers shows its label without a "0" count', () => {
   const { sandbox } = newHub();
   // now has no open work left today, just one completed item lingering; soon/
   // later empty so the budget has room to show the lingerer (phase 2).
@@ -7244,7 +7244,11 @@ function walkRecorder(sandbox, document, opts = {}) {
 }
 
 const xy = (m) => {
-  const t = m.frames[1].transform.match(/translate3d\((-?[\d.]+)px, (-?[\d.]+)px, 0\) rotate\((-?[\d.]+)deg\)/);
+  // numbers as JS prints them, exponents included: a rotation that rounds
+  // to -2.8e-14 deg made this parser flake on CI (main, 2026-09-22)
+  const n = '(-?[\\d.]+(?:e[-+]?\\d+)?)';
+  const t = m.frames[1].transform.match(
+    new RegExp(`translate3d\\(${n}px, ${n}px, 0\\) rotate\\(${n}deg\\)`));
   assert.ok(t, `unreadable transform: ${m.frames[1].transform}`);
   return { x: +t[1], y: +t[2], deg: +t[3] };
 };
@@ -7575,4 +7579,91 @@ test('Season on, out of season: the note says when the next season starts', () =
   document.documentElement.setAttribute('data-season', 'off');
   sandbox.reflectThemeControls();
   assert.equal(note.hidden, true);
+});
+
+
+/* ------------------------------ to-do archive + source + idle refresh (2026-09-22) */
+
+test('todoSourceOf: iCloud counts only while its integration is listed AND on', () => {
+  const { sandbox } = newHub();
+  const src = (d) => sandbox.todoSourceOf(d);
+  assert.equal(src(null), 'local');
+  assert.equal(src({ todo_source: 'local' }), 'local');
+  assert.equal(src({ todo_source: 'icloud', integrations: [] }), 'local', 'not configured');
+  assert.equal(src({ todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: false }] }),
+    'local', 'switched off in Settings: never strand on an empty iCloud card');
+  assert.equal(src({ todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: true }] }),
+    'icloud');
+});
+
+test('renderTodoSlot: iCloud switched off shows the LOCAL list, not an empty iCloud card', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderTodoSlot({
+    todo_source: 'icloud', todos_ok: true,
+    integrations: [{ id: 'icloud_caldav', enabled: false }],
+    todos: { now: [{ id: 1, title: 'Fix the chairs', bucket: 'now', created_at: 'x', done_at: null }], soon: [], later: [] },
+    reminders: { overdue: [], today: [], upcoming: [], no_date: [] },
+  });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /Fix the chairs/, 'the real local list shows');
+  assert.doesNotMatch(html, /iCloud/, 'no iCloud chip');
+});
+
+test('toggleTodo: checking an item off schedules ONE refresh for when its grace ends', async () => {
+  const { sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp(url === '/api/todos' ? { buckets: {}, recent_done: [] } : { ok: true }); };
+  await sandbox.toggleTodo(7, false);
+  const grace = timers.filter((t) => t.ms === 5 * 60000 + 2000);
+  assert.equal(grace.length, 1, 'one archive refresh armed');
+  urls.length = 0;
+  grace[0].fn();
+  await flush();
+  assert.ok(urls.includes('/api/hub'), 'the refresh re-reads the wall payload');
+});
+
+test('toggleTodo: an undo, or a failed check, arms no archive refresh', async () => {
+  const { sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+  sandbox.fetch = async () => okResp({ ok: true });
+  await sandbox.toggleTodo(7, true);            // un-check
+  assert.equal(timers.filter((t) => t.ms === 5 * 60000 + 2000).length, 0, 'undo: none');
+  sandbox.fetch = async () => { throw new Error('offline'); };
+  await sandbox.toggleTodo(7, false);           // check that fails
+  assert.equal(timers.filter((t) => t.ms === 5 * 60000 + 2000).length, 0, 'failed write: none');
+});
+
+test('refreshIdleTodosView: an open, idle full view refetches on the beat', async () => {
+  const { document, sandbox } = newHub();
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp({ buckets: { now: [], soon: [], later: [] }, recent_done: [] }); };
+  vm.runInContext("hubData = { todo_source: 'local' }; openView = 'todos'; todoState.openId = null;", sandbox);
+  document.body.dataset.conn = 'up';
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, ['/api/todos'], 'a phone parked on the list sees wall check-offs');
+});
+
+test('refreshIdleTodosView: never repaints over someone using the view, or while offline', async () => {
+  const { document, sandbox } = newHub();
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp({ buckets: { now: [], soon: [], later: [] }, recent_done: [] }); };
+  vm.runInContext("hubData = { todo_source: 'local' }; openView = 'todos'; todoState.openId = null;", sandbox);
+  document.body.dataset.conn = 'down';
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'offline: no toast-per-beat refetch');
+  document.body.dataset.conn = 'up';
+  vm.runInContext('todoState.openId = 3;', sandbox);
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'a row action strip is open');
+  vm.runInContext('todoState.openId = null;', sandbox);
+  const inp = document.createElement('input');
+  inp.id = 'todo-add-input'; inp.value = 'half typed';
+  document.body.appendChild(inp);
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'a draft in the add box');
+  vm.runInContext("openView = null;", sandbox);
+  inp.value = '';
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'no full view showing');
 });
