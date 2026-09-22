@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import access_log
 from . import chores as chlogic
 from . import db as fdb
 from . import demo as fdemo
@@ -56,6 +57,9 @@ log = logging.getLogger("family_hub")
 # failed upstream fetch is also logged by our own code where it is handled.
 for _noisy in ("httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+# The same for our own access log: drop successful camera probes, tile polls
+# and health checks, keep their errors and every other request (access_log.py).
+access_log.install()
 
 cfg = load_config(os.environ.get("CONFIG_PATH", "config.json"))
 # Server-side camera fetches reach go2rtc over the shared compose network
