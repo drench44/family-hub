@@ -1418,7 +1418,15 @@ def caldav_test_connection():
     client = _get_caldav_client()
     if client is None:
         return {"ok": False, "error": "no credentials"}
-    return caldav_sync.sync_once(client, _db(), cfg, _now_local())
+    # Wait for a background sync already in flight rather than running a
+    # second one beside it; a sync that never finishes gets an honest error.
+    if not _caldav_sync_lock.acquire(timeout=CALDAV_TEST_WAIT_S):
+        return {"ok": False,
+                "error": "a sync is already running; try again in a minute"}
+    try:
+        return caldav_sync.sync_once(client, _db(), cfg, _now_local())
+    finally:
+        _caldav_sync_lock.release()
 
 
 @app.get("/api/integrations/icloud_caldav/collections")
@@ -2863,6 +2871,15 @@ async def tile_camera(src: str = "cam"):
 
 _caldav_client = None
 _caldav_client_built = False
+# Every CalDAV sync (the background tick and settings' "Test connection") runs
+# under this lock. Each uses its own connection, so without it two syncs could
+# pull and push the same outbox at once: double PUTs, and one sync's writes
+# landing over the other's.
+_caldav_sync_lock = threading.Lock()
+# How long "Test connection" waits for a background sync that is mid-run.
+# Kept well under the wall's 12s request timeout (J_TIMEOUT_MS in common.js),
+# so a busy lock reads as "already running", not as a generic failed request.
+CALDAV_TEST_WAIT_S = 5
 
 
 def _get_caldav_client():
@@ -2891,7 +2908,8 @@ def _sync_tick(client, conn, cfg):
         try:
             cdav = _get_caldav_client()
             if cdav is not None:
-                caldav_sync.sync_once(cdav, conn, cfg, _now_local())
+                with _caldav_sync_lock:
+                    caldav_sync.sync_once(cdav, conn, cfg, _now_local())
         except Exception:
             log.exception("caldav sync tick error (non-fatal)")
         return conn

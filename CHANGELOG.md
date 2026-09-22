@@ -29,6 +29,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   database work no longer holds up the rest of the hub while it runs.
 - An iCloud reminder edited on the wall at the same moment a sync pulls it
   can no longer be quietly thrown away. The edit now always waits to be sent.
+- "Test connection" for iCloud no longer runs a second sync on top of the
+  one already running in the background. It waits its turn, or says a sync
+  is already running.
 
 ## [1.7.0] — 2026-09-22
 
