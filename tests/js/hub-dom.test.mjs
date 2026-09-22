@@ -7244,7 +7244,11 @@ function walkRecorder(sandbox, document, opts = {}) {
 }
 
 const xy = (m) => {
-  const t = m.frames[1].transform.match(/translate3d\((-?[\d.]+)px, (-?[\d.]+)px, 0\) rotate\((-?[\d.]+)deg\)/);
+  // numbers as JS prints them, exponents included: a rotation that rounds
+  // to -2.8e-14 deg made this parser flake on CI (main, 2026-09-22)
+  const n = '(-?[\\d.]+(?:e[-+]?\\d+)?)';
+  const t = m.frames[1].transform.match(
+    new RegExp(`translate3d\\(${n}px, ${n}px, 0\\) rotate\\(${n}deg\\)`));
   assert.ok(t, `unreadable transform: ${m.frames[1].transform}`);
   return { x: +t[1], y: +t[2], deg: +t[3] };
 };
