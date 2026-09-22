@@ -64,6 +64,14 @@ rolls that section to a dated version via `python scripts/release.py`.
   the washer and dryer card.
 - Tapping Done twice while a to-do is still saving no longer adds it twice,
   and the box clears once it is added.
+- An event card opened from the home screen, or the display settings
+  popover, now closes by itself after a while like the full-screen views do.
+  Before, one left open stayed up for good and also held off the automatic
+  reload after a deploy.
+- Keyboard use: calendar events and days open with Enter or Space, Escape
+  closes the top layer (popover, confirm, editor, event card, then the
+  full-screen view), focus moves into a card when it opens and back when it
+  closes, and screen readers now hear each layer as a dialog.
 
 ## [1.7.0] — 2026-09-22
 
