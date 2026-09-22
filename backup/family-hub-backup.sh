@@ -217,7 +217,43 @@ PY
 # exit 23) even though the data copies fine -- which would false-trip the exit-2
 # REMOTE FAIL every run. We only need content + mtimes off-box, so copy those
 # and let the target own the perms: -r -t, and explicitly --no-owner/group/perms.
+#
+# MOUNT CHECK first: if the NAS mount drops, the mountpoint is just an empty
+# folder on this box's own disk, and rsync would "mirror" into it and report
+# OK while nothing left the box. FH_REMOTE_MOUNT names the mountpoint the
+# target must sit under; unset (or "auto"), the script finds the mount the
+# target lives on and refuses the root filesystem, which is never off-box.
+# "none" turns the check off. A 'host:/path' rsync target has no local mount
+# and is not checked. A failed check counts as a failed remote copy.
 if [ -n "$REMOTE" ] && [ "$SKIP_REMOTE" != "1" ]; then
+  case "$REMOTE" in
+    /*|./*|../*) remote_is_local=1 ;;
+    *:*) remote_is_local=0 ;;
+    *) remote_is_local=1 ;;
+  esac
+  if [ "$remote_is_local" = "1" ] && ! mount_err="$(python3 - "$REMOTE" "${FH_REMOTE_MOUNT:-auto}" 2>&1 <<'PY'
+import os, sys
+remote, mode = os.path.realpath(sys.argv[1]), sys.argv[2]
+if mode == "none":
+    sys.exit(0)
+if mode == "auto":
+    mnt = remote
+    while not os.path.ismount(mnt):
+        mnt = os.path.dirname(mnt)
+    if mnt == "/":
+        sys.exit("target is on the root filesystem, not a mounted share")
+    sys.exit(0)
+mnt = os.path.realpath(mode)
+if not os.path.ismount(mnt):
+    sys.exit(f"{mode} is not a mountpoint")
+if not (remote + "/").startswith(mnt.rstrip("/") + "/"):
+    sys.exit(f"target is not under {mode}")
+PY
+)"; then
+    echo "family-hub-backup REMOTE FAIL (not mounted: $mount_err): $REMOTE $(date -u +%FT%TZ)" >&2
+    record_remote false
+    exit 2
+  fi
   if ! rsync -rt --delete --no-owner --no-group --no-perms "$OUT/" "$REMOTE/"; then
     echo "family-hub-backup REMOTE FAIL: $REMOTE $(date -u +%FT%TZ)" >&2
     record_remote false

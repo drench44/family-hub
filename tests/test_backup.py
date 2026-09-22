@@ -38,6 +38,9 @@ def _run(db, out, *, now="202608180930", remote=None, skip_remote=False,
     }
     if remote is not None:
         env["FH_REMOTE"] = str(remote)
+        # A temp dir is never a mounted share, so tests about other behavior
+        # switch the mount check off; the mount tests below set it explicitly.
+        env["FH_REMOTE_MOUNT"] = "none"
     if skip_remote:
         env["FH_SKIP_REMOTE"] = "1"
     if extra_env:
@@ -404,6 +407,76 @@ def test_skip_remote_keeps_the_last_remote_outcome(tmp_path):
     assert rec["remote_ok"] is False
     assert rec["remote_at"] == "2026-08-17T00:00:00+00:00"
     assert rec["at"] != "2000-01-01T00:00:00+00:00"
+
+
+# --- the NAS share must actually be mounted -------------------------------
+# If the mount drops, the mountpoint is just an empty folder on the box's own
+# disk. rsync then "mirrors" into it happily and the run said REMOTE OK, while
+# nothing left the box.
+
+def _mount_of(path: Path) -> str:
+    import os
+    p = os.path.realpath(path)
+    while not os.path.ismount(p):
+        p = os.path.dirname(p)
+    return p
+
+
+def test_remote_not_on_the_named_mount_fails_and_writes_nothing(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    share = tmp_path / "nas"            # an ordinary folder: the mount dropped
+    share.mkdir()
+    remote = share / "family-hub"
+    r = _run(db, tmp_path / "out", remote=remote, check=False,
+             extra_env={"FH_REMOTE_MOUNT": str(share)})
+    assert r.returncode == 2, r.stderr
+    assert "not mounted" in r.stderr
+    assert not remote.exists(), "nothing may be copied onto the local disk"
+    rec = _status(db)
+    assert rec["remote_ok"] is False, "the badge must see the failed copy"
+    assert _snaps(tmp_path / "out", "hourly"), "the local snapshot still lands"
+
+
+def test_remote_on_a_real_mount_is_mirrored(tmp_path):
+    # Name the mount the temp dir really lives on, so the check passes.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    remote = tmp_path / "nas"
+    _run(db, tmp_path / "out", remote=remote,
+         extra_env={"FH_REMOTE_MOUNT": _mount_of(tmp_path)})
+    assert _snaps(remote, "hourly")
+    assert _status(db)["remote_ok"] is True
+
+
+def test_default_mount_check_refuses_the_root_filesystem(tmp_path):
+    # With no FH_REMOTE_MOUNT the script finds the mount the target sits on.
+    # The root filesystem is never an off-box share, so a target there (what a
+    # dropped mount leaves behind) fails; any other mount is accepted.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    remote = tmp_path / "nas"
+    r = _run(db, tmp_path / "out", remote=remote, check=False,
+             extra_env={"FH_REMOTE_MOUNT": "auto"})
+    if _mount_of(tmp_path) == "/":
+        assert r.returncode == 2 and "not mounted" in r.stderr
+        assert not remote.exists()
+    else:
+        assert r.returncode == 0, r.stderr
+        assert _snaps(remote, "hourly")
+
+
+def test_rsync_host_targets_skip_the_mount_check(tmp_path):
+    # 'host:/path' goes over ssh; there is no local mount to check. The copy
+    # itself fails here (no such host), and that is reported as a remote
+    # failure, never as "not mounted".
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    r = _run(db, tmp_path / "out", remote="nosuchhost.invalid:/srv/x",
+             check=False, extra_env={"FH_REMOTE_MOUNT": "auto",
+                                     "RSYNC_RSH": "false"})
+    assert r.returncode == 2
+    assert "not mounted" not in r.stderr
 
 
 def test_no_remote_configured_clears_remote_fields(tmp_path):
