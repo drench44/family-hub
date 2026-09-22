@@ -39,6 +39,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   saw, in the cycle's first minutes, so a hub restarted mid-cycle never moves
   a real finish time, and a dryer's wrinkle-care tumble never counts as a
   new load.
+- Laundry: a cycle that began while Home Assistant was unreachable, or
+  while the hub was restarting, is not mistaken for one the hub saw start.
 
 ## [1.6.1] — 2026-09-22
 

@@ -2377,6 +2377,16 @@ def _laundry_annotate(t: dict) -> dict:
     machines = [dict(m) for m in t.get("machines", [])]
     try:
         c = _db()
+        # Was the hub watching just now? The previous annotate pass left its
+        # time here; a gap longer than the start window (a restart, a
+        # wedged watcher) means a "fresh" status change can't be trusted to
+        # be a cycle's start (see the start stamp below).
+        last_tick = _laundry_dt(fdb.kv_get(c, "laundry_last_tick"))
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        watching = (last_tick is not None and
+                    (now_utc - last_tick).total_seconds() / 60
+                    <= LAUNDRY_START_EXACT_MIN)
+        fdb.kv_set(c, "laundry_last_tick", now_utc.isoformat())
         for m in machines:
             done_key = f"laundry_done_{m['id']}"
             phase_key = f"laundry_phase_{m['id']}"
@@ -2495,7 +2505,8 @@ def _laundry_annotate(t: dict) -> dict:
                 if (wait_key and phase != "done"
                         and fdb.kv_get(c, wait_key)):
                     fdb.kv_set(c, wait_key, None)
-            if (phase == "running" and came_from not in ("running", "paused")
+            if (phase == "running"
+                    and came_from not in ("running", "paused", "error")
                     and m.get("status") != "wrinkle_care"):
                 # A cycle began. Remembered so a dryer START can tell a
                 # waiting washer load that it was moved, and so the
@@ -2514,8 +2525,17 @@ def _laundry_annotate(t: dict) -> dict:
                 # could "clear" a wash that finished after it really began
                 # (review, 2026-09-22). An unwatched start is stored as
                 # unknown, and both uses skip it.
+                #
+                # Three conditions, each closing a real hole (review waves
+                # 1 and 2, 2026-09-22): the PREVIOUS observation itself was a
+                # rest state (not the offline-bridged came_from: a cycle that
+                # began during an HA outage reappears with a fresh
+                # last_changed); the hub was watching continuously right up
+                # to now (a restart can land moments after a sub-status
+                # change); and the status changed moments ago.
                 since = _laundry_dt(m.get("status_since"))
-                exact = (came_from in ("idle", "done", "reserved")
+                exact = (prev in ("idle", "done", "reserved")
+                         and watching
                          and since is not None
                          and abs(tiles._laundry_minutes_to(m["status_since"]))
                          <= LAUNDRY_START_EXACT_MIN)
