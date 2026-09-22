@@ -14,7 +14,7 @@ import uvicorn.config
 from family_hub import access_log
 
 
-def _record(method, path, status, client="10.0.0.9:5000"):
+def _record(method, path, status, client="127.0.0.1:5000"):
     """A record shaped exactly like uvicorn's own access-log call:
     '%s - "%s %s HTTP/%s" %d' with (client, method, path+query, http, status)."""
     return logging.LogRecord(
@@ -144,8 +144,11 @@ def test_real_uvicorn_access_lines_are_filtered():
         server = uvicorn.Server(uvicorn.Config(
             asgi, log_config=None, lifespan="off", access_log=True))
         task = asyncio.create_task(server.serve(sockets=[sock]))
-        while not server.started:
+        for _ in range(1000):                  # up to ~10s, never forever
+            if server.started or task.done():
+                break
             await asyncio.sleep(0.01)
+        assert server.started, "uvicorn did not start"
         base = f"http://127.0.0.1:{port}"
         async with httpx.AsyncClient() as c:
             await c.get(base + "/api/tiles/camera.jpg?src=cam&probe=1")
