@@ -163,6 +163,11 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       clock at "12:59:59pm". A one-digit hour hid an 8px sideways overflow.
 - [ ] **Reduced motion and night are states too.** Look at them. Anything
       that animates over the UI must not rest over text when stilled.
+      A paused animation is only paused where you named it: check pseudo-
+      elements too (a far bat hung mid-sky every night, still flapping).
+- [ ] **The wall runs Firefox ESR.** Automation screenshots of Firefox skip
+      `backdrop-filter`, so check glass in Chromium, and look at the wall
+      itself for anything Firefox-specific.
 - [ ] **Open every menu over the new UI.** A new layer (backdrop-filter,
       transform, opacity) makes a stacking context, and the gear popover
       once opened underneath the cards.

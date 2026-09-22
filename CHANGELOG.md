@@ -10,6 +10,17 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- Fall leaves drift sideways and tip in 3D as they fall, instead of sliding
+  down straight lanes flat to the glass.
+- Halloween's spider on a thread now hangs head-down from its abdomen, the
+  way real ones do, with its legs still while the silk pays out and working
+  on the climb back. One bat's wingbeat was slowed so it no longer stutters.
+
+### Fixed
+- At night some far bats hung frozen mid-sky with their wings still beating.
+  They now go at night, like the rest of the moving layer.
+
 ## [1.6.0] — 2026-09-19
 
 ### Added

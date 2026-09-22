@@ -7281,6 +7281,24 @@ test('the crawler walks: legs tied to its pace, turns the short way, stays on sc
   assert.ok(!el.classList.contains('walking'), 'and it ends up still');
 });
 
+test('the dangler drops with its legs still and climbs back hand over hand', async () => {
+  // A spider on silk lets the thread pay out: its legs do nothing on the way
+  // down. Only the climb back is leg work. (It used to "walk" down the air.)
+  const { document, sandbox } = newHub();
+  const { el, moves } = walkRecorder(sandbox, document, { stopAfter: 40 });
+  sandbox.spiderDrop();
+  await settle(600);
+  const y = (t) => +t.match(/translate3d\(-?[\d.]+px, (-?[\d.]+)px/)[1];
+  // the silk moves (the bounce on the thread has its own easings)
+  const silk = moves.filter((m) => m.opts.easing === 'cubic-bezier(.4, 0, .5, 1)');
+  const down = silk.filter((m) => y(m.frames[1].transform) > y(m.frames[0].transform));
+  const up = silk.filter((m) => y(m.frames[1].transform) < y(m.frames[0].transform));
+  assert.ok(down.length >= 2 && up.length >= 1, `a whole visit must run (down ${down.length}, up ${up.length})`);
+  for (const m of down) assert.ok(!m.walking, 'no legs cycle while the silk pays out');
+  for (const m of up) assert.ok(m.walking, 'the climb back is leg work');
+  assert.ok(!el.classList.contains('walking'), 'and it ends up still');
+});
+
 test('the crawler keeps its whole self on screen even when it wants to go far', async () => {
   // every hop as long as the code allows, in every direction: the layer
   // clips, so a spider walked past the edge comes back sliced
