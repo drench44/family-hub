@@ -3279,6 +3279,55 @@ def _laundry_tile_with(phase, status, since, finishes=None):
     return tile
 
 
+def test_laundry_steady_state_writes_nothing(client, monkeypatch):
+    """The watcher annotates every 5s. A machine sitting in the same phase
+    used to rewrite its last-phase key on every tick: ~35k SQLite commits a
+    day on the event loop for no change at all. A repeat of the same state
+    must not write."""
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    writes = []
+    real = fdb.kv_set
+    monkeypatch.setattr(fdb, "kv_set",
+                        lambda c, k, v: (writes.append(k), real(c, k, v)))
+    for phase, status in (("running", "running"), ("idle", "power_off"),
+                          ("done", "end")):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                            _laundry_tile_with(phase, status, now))
+        client.get("/api/tiles/laundry")            # the transition writes
+        writes.clear()
+        for _ in range(3):
+            assert client.get("/api/tiles/laundry").status_code == 200
+        assert writes == [], f"steady {phase} rewrote {writes}"
+
+
+def test_laundry_annotate_runs_off_the_event_loop(app_mod, monkeypatch):
+    """_laundry_annotate does blocking SQLite work. Called straight from the
+    async watcher and route it stalled the event loop (every stream, every
+    request) on each tick. It must run in a worker thread."""
+    import asyncio
+    import threading
+    seen = []
+
+    def spy(t):
+        seen.append(threading.get_ident())
+        return t
+    monkeypatch.setattr(app_mod, "_laundry_annotate", spy)
+
+    async def fake_tile(*a, **kw):
+        return {"available": True, "machines": []}
+    monkeypatch.setattr(app_mod.tiles, "laundry_tile", fake_tile)
+    monkeypatch.setattr(app_mod, "_laundry_snapshot", None)
+
+    async def run():
+        loop_thread = threading.get_ident()
+        await app_mod._laundry_watch_tick()
+        monkeypatch.setattr(app_mod, "_laundry_snapshot", None)
+        await app_mod._laundry_payload()                  # inline fallback
+        return loop_thread
+    loop_thread = asyncio.run(run())
+    assert len(seen) == 2 and loop_thread not in seen
+
+
 def test_tiles_laundry_observed_finish_holds_done_through_auto_power_off(
         client, monkeypatch):
     # LG machines turn THEMSELVES off 30-90s after "end" with the load still

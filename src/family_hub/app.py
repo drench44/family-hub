@@ -2185,7 +2185,7 @@ async def _laundry_watch_tick() -> None:
         return
     if t.get("available"):
         try:
-            snap = _laundry_annotate(t)
+            snap = await _laundry_annotate_off_loop(t)
             if _laundry_annotate_failures >= LAUNDRY_ANNOTATE_STRIKES:
                 log.warning("laundry: completion history is working again")
             _laundry_annotate_failures = 0
@@ -2336,7 +2336,7 @@ async def _laundry_payload() -> dict:
     t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
     if not t.get("available"):
         return t
-    return _laundry_annotate(t)
+    return await _laundry_annotate_off_loop(t)
 
 
 @app.get("/api/tiles/laundry")
@@ -2399,6 +2399,25 @@ async def laundry_stream():
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
+
+
+# One annotation at a time. On the event loop the watcher and the route's
+# inline fallback were serialized for free; in worker threads (each with its
+# own per-thread connection) two of them could both read the same previous
+# phase and log the same transition twice.
+_laundry_annotate_lock = threading.Lock()
+
+
+def _laundry_annotate_serial(t: dict) -> dict:
+    with _laundry_annotate_lock:
+        return _laundry_annotate(t)
+
+
+async def _laundry_annotate_off_loop(t: dict) -> dict:
+    """Run _laundry_annotate in a worker thread. It does blocking SQLite reads
+    and commits (with a 5s busy timeout), and on the event loop every tick of
+    the 5s watcher stalled every open stream and async request with it."""
+    return await asyncio.to_thread(_laundry_annotate_serial, t)
 
 
 def _laundry_annotate(t: dict) -> dict:
@@ -2617,7 +2636,11 @@ def _laundry_annotate(t: dict) -> dict:
                                 "advancing the transition anyway",
                                 m["id"], exc_info=True)
                 fdb.kv_set(c, phase_key, phase)
-            if phase and phase != "offline":
+            # Write only on change: this runs every 5s per machine, and an
+            # unconditional write was ~35k commits a day for a phase that
+            # had not moved.
+            if (phase and phase != "offline"
+                    and fdb.kv_get(c, nonoff_key) != phase):
                 fdb.kv_set(c, nonoff_key, phase)
             if phase == "idle":
                 # A person powering the machine on is the one human-contact
