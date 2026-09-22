@@ -75,6 +75,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The iCloud connect form keeps the Apple ID you typed when it shows an
   error or a sign-in fails, so you only retype the password. The password
   is still never kept.
+- The wall's on-screen keyboard now goes away when the box it was typing
+  into disappears, for example when a full-screen view closes by itself.
+  Before, it could stay docked over the home screen.
 
 ## [1.7.0] — 2026-09-22
 

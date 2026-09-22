@@ -424,10 +424,18 @@
   // lists repaint. It only walks element additions (nodeType 1), and the
   // synchronous focusin backstop below covers correctness even if a mutation is
   // missed - so this is a cheap safety net, not a correctness dependency.
+  //
+  // It also retires the keyboard when its field leaves the DOM. Firefox fires
+  // no blur or focusout for a focused field that is removed, so an overlay or
+  // editor closed under it (the idle auto-return, a Home tap, a save) left the
+  // keyboard docked over the home wall with nothing to type into. A repaint
+  // that swaps in a new field is safe: the new field's focusin re-points
+  // activeInput before this callback runs.
   new MutationObserver((muts) => {
     muts.forEach((m) => m.addedNodes && m.addedNodes.forEach((n) => {
       if (n.nodeType === 1) stampTree(n);
     }));
+    if (activeInput && activeInput.isConnected === false) hide();
   }).observe(document.body, { childList: true, subtree: true });
 
   // FOCUS PRESERVATION: pressing a key must not steal focus from the input (a
