@@ -94,6 +94,23 @@ def test_health_reads_the_file_not_just_select_1(client, app_mod, monkeypatch,
     assert client.get("/health").status_code == 503
 
 
+def test_health_fails_when_hub_db_was_deleted_under_an_open_connection(
+        client, app_mod, monkeypatch, tmp_path):
+    """A pooled connection opened before the file vanished still reads the
+    unlinked file happily, so the path itself is checked."""
+    monkeypatch.setattr(app_mod, "DB_PATH", str(tmp_path / "gone" / "hub.db"))
+    assert client.get("/health").status_code == 503
+
+
+def test_health_fails_on_the_empty_file_a_missing_db_leaves(
+        client, app_mod, monkeypatch, tmp_path):
+    """If hub.db is deleted, the next connect quietly creates an empty file
+    with no tables. That must read unhealthy, not ok."""
+    empty = sqlite3.connect(str(tmp_path / "fresh.db"), check_same_thread=False)
+    monkeypatch.setattr(app_mod, "_db", lambda: empty)
+    assert client.get("/health").status_code == 503
+
+
 def test_hub_carries_a_stable_build_token(client):
     """/api/hub exposes a `build` token — a 12-char hex hash of the baked frontend
     assets — that the wall diffs across polls to auto-reload after a deploy. It must
@@ -2055,6 +2072,18 @@ def test_away_back_same_day_cancels_the_period(client, app_mod, monkeypatch):
     hub = client.get("/api/hub").json()
     assert next(p for p in hub["people"]
                 if p["person"]["id"] == p1)["away"] is False
+
+
+def test_away_back_on_a_planned_future_trip_still_refuses(client, app_mod,
+                                                         monkeypatch):
+    """Only a period that started TODAY is cancelled by a plain tap. A trip
+    planned for later must not be deleted by one tap on the wrong button."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    pid = client.post("/api/admin/away", json={
+        "person_id": p1, "start_date": "2026-08-20"}).json()["id"]
+    assert client.post(f"/api/admin/away/{pid}/back").status_code == 422
+    assert fdb.get_away_period(app_mod._db(), pid) is not None
 
 
 def test_away_back_same_day_explicit_end_still_closes(client, app_mod,

@@ -796,11 +796,18 @@ def _config_panel_links() -> list[dict]:
 def health():
     """Liveness for the container healthcheck, and it means the hub can use its
     database. It used to return ok without touching the db, so a missing or
-    corrupt hub.db read healthy while every real request failed. One schema
-    read on the same per-thread connection the routes use: it reads page 1 of
-    the file (SELECT 1 alone never does) and stays sub-millisecond."""
+    corrupt hub.db read healthy while every real request failed. One read of a
+    table the app always has, on the same per-thread connection the routes
+    use. SELECT 1 alone never reads the file, and a schema count passes on the
+    empty file sqlite quietly creates when hub.db has gone missing. Stays
+    sub-millisecond."""
     try:
-        _db().execute("SELECT count(*) FROM sqlite_master").fetchone()
+        _db().execute("SELECT 1 FROM kv LIMIT 1").fetchone()
+        # A connection opened before hub.db was deleted keeps reading the
+        # unlinked file, so check the path too (after _db(), which creates the
+        # file on a fresh install).
+        if not os.path.exists(DB_PATH):
+            raise FileNotFoundError("hub.db is missing")
     except Exception as e:
         log.error("health: database unusable: %s", e)
         return JSONResponse({"status": "error", "db": type(e).__name__},
@@ -954,6 +961,10 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         # freezes the real plan.
         if d == today and away_ok:
             _freeze_day(c, d_str, rows)
+        elif d == today:
+            log.warning("today's chore log not saved (away overlay failed); "
+                        "if it keeps failing, %s drops out of chore history",
+                        d_str)
 
     completed_ids = {r["chore_id"]
                      for r in fdb.completions_between(c, d_str, d_str)}
@@ -2004,10 +2015,11 @@ def admin_away_back(pid: int, a: AwayBackIn | None = None):
     if row is None:
         raise HTTPException(404, "unknown away period")
     explicit = bool(a and a.end_date)
-    if not explicit and row["start_date"] >= _today().isoformat():
-        # "Going away" then "I'm back" on the same day (or before a planned
-        # start): the default end, yesterday, falls before the start, so the
-        # period never took effect. Remove it instead of 422ing every tap.
+    if not explicit and row["start_date"] == _today().isoformat():
+        # "Going away" then "I'm back" on the same day: the default end,
+        # yesterday, falls before the start, so the period never took effect.
+        # Remove it instead of 422ing every tap. A trip planned for a LATER
+        # start still 422s below: one tap must not quietly delete a plan.
         fdb.delete_away_period(c, pid)
         return {"ok": True}
     end = (_valid_date(a.end_date) if explicit

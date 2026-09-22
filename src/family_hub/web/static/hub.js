@@ -3390,9 +3390,16 @@ async function toggleChore(id, done) {
   // as undone, so a silent catch makes the tap look like it did nothing.
   // data_date is the day these rows were rendered for; the server credits
   // that day, not whatever its clock says by the time the tap arrives.
-  const ok = await attemptToggle(id, done, data_date || undefined);
-  if (!ok) showToast('Couldn’t save — check the hub and tap again.');
+  const shown = data_date;
+  const ok = await attemptToggle(id, done, shown || undefined);
   await poll();
+  // A refused tap on a day that has since rolled over will never succeed on
+  // retry, so don't tell anyone to tap again: say the day has ended.
+  if (!ok) {
+    showToast(shown && data_date && data_date !== shown
+      ? 'That day has ended, so it can’t be changed now.'
+      : 'Couldn’t save — check the hub and tap again.');
+  }
   // keep the full-screen chores view in step when it's open on today
   if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
 }

@@ -16,6 +16,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   person as the owner for good.
 - Checking off a chore just after midnight now counts for the day the wall
   is showing. Before, it landed on the new day and the tick disappeared.
+- If a chore tap is for a day that can no longer be changed, the wall says
+  the day has ended instead of asking you to tap again.
 - Tapping "I'm back" on the same day as "Going away" now works. The away
   time never started, so it is simply removed. Before, it failed every time.
 - An iCloud reminder due at a set time in the evening now shows under the

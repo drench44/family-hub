@@ -1071,6 +1071,8 @@ async function attemptToggle(id, done, date) {
     }
     return true;
   } catch (e) {
+    // the caller only shows a generic toast; keep the server's reason findable
+    console.warn('chore toggle failed:', e && e.message);
     return false;
   }
 }
