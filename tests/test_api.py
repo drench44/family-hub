@@ -2663,6 +2663,30 @@ def test_reminders_api_and_hub_block(tmp_path, monkeypatch):
         assert tc.get("/api/hub").json()["reminders"]["upcoming"] == []
 
 
+def test_reminders_timed_due_buckets_by_the_hubs_local_day(tmp_path,
+                                                           monkeypatch):
+    """A reminder due at 11:30pm tonight is stored as 06:30Z tomorrow. Both the
+    hub block and the full list must file it under today, in the hub's zone."""
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        today = appmod._today()
+        tonight = dt.datetime(today.year, today.month, today.day, 23, 30,
+                              tzinfo=appmod.TZ).astimezone(dt.timezone.utc)
+        assert tonight.date() != today      # the UTC form names tomorrow
+        _seed_reminder_object(appmod, c, "caldav:x", "r1", "Bins out",
+                              due=tonight)
+        full = tc.get("/api/reminders").json()["buckets"]
+        assert [r["title"] for r in full["today"]] == ["Bins out"]
+        assert full["upcoming"] == []
+        assert full["today"][0]["due"][:10] == today.isoformat()
+        hub = tc.get("/api/hub").json()["reminders"]
+        assert [r["title"] for r in hub["today"]] == ["Bins out"]
+
+
 def test_reminders_api_not_configured_without_creds(tmp_path, monkeypatch):
     monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
     monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
