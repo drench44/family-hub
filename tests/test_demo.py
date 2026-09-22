@@ -395,6 +395,10 @@ def test_demo_laundry_tile_is_canned_and_live_shaped(demo_client):
         > dt.datetime.now(dt.timezone.utc)
     assert (d["id"], d["kind"], d["phase"]) == ("dryer", "dryer", "done")
     assert d["last_done"] == d["status_since"]
+    # every key the live tile carries, so the demo can't drift from it
+    for m in (w, d):
+        assert {"total_min", "starts_at", "error"} <= set(m), m
+    assert w["total_min"] > 0     # the demo ring shows real progress
     ids = {i["id"]: i for i in
            demo_client.get("/api/hub").json()["integrations"]}
     assert "laundry" in ids and ids["laundry"]["enabled"] is True

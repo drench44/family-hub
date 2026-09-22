@@ -34,10 +34,15 @@
     "machines": [
       { "id": "washer", "label": "Washer", "kind": "washer",
         "status_entity": "sensor.washer_current_status",
-        "remaining_entity": "sensor.washer_remaining_time" },
+        "remaining_entity": "sensor.washer_remaining_time",
+        "total_entity": "sensor.washer_total_time",
+        "start_entity": "sensor.washer_delayed_start",
+        "error_entity": "event.washer_error" },
       { "id": "dryer", "label": "Dryer", "kind": "dryer",
         "status_entity": "sensor.dryer_current_status",
-        "remaining_entity": "sensor.dryer_remaining_time" }
+        "remaining_entity": "sensor.dryer_remaining_time",
+        "total_entity": "sensor.dryer_total_time",
+        "error_entity": "event.dryer_error" }
     ]
   },
   "theme": { "mode": "grey", "accent": "green", "columns": "none" },

@@ -2569,13 +2569,38 @@ function lnMinutesLeft(iso, now = Date.now()) {
   return Math.max(0, Math.ceil((t - now) / 60000));
 }
 
-/* The machine's raw status as a plain word: 'wrinkle_care' -> 'Wrinkle care'.
-   Statuses that just restate the phase ('running', 'end', ...) render as the
-   phase's own copy instead (see lnLines). */
+/* The machine's raw status as plain words. The lg_thinq enum is terse
+   ('detecting', 'add_drain', 'frozen_prevent_running'); the ones a family
+   actually sees get real words, anything else is de-underscored:
+   'wrinkle_care' -> 'Wrinkle care'. Statuses that just restate the phase
+   ('running', 'end', ...) render as the phase's own copy instead (lnLines). */
+const LN_STATUS_WORDS = {
+  detecting: 'Sensing load', prewash: 'Pre-wash', add_drain: 'Draining',
+  detergent_amount: 'Measuring soap', cooling: 'Cooling down',
+  frozen_prevent_running: 'Freeze guard', frozen_prevent_pause: 'Freeze guard',
+  rinse_hold: 'Rinse hold',
+};
 function lnStatusWord(status) {
-  const s = String(status || '').replace(/_/g, ' ').trim();
+  const key = String(status || '').trim();
+  if (LN_STATUS_WORDS[key]) return LN_STATUS_WORDS[key];
+  const s = key.replace(/_/g, ' ');
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
 }
+
+/* What went wrong, from the machine's own error event (tiles.py passes the
+   lg_thinq event type only when it belongs to the CURRENT error). Phrased
+   as the thing to go and look at; unknown codes fall back to the generic
+   line rather than guessing. */
+const LN_ERRORS = {
+  water_drain_error: 'won\u2019t drain', out_of_balance_error: 'load is unbalanced',
+  door_open_error: 'door is open', unable_to_lock_error: 'door won\u2019t lock',
+  water_supply_error: 'no water coming in', overfill_error: 'too much water',
+  locked_motor_error: 'drum is stuck', power_fail_error: 'power was cut',
+  temperature_sensor_error: 'temperature sensor fault',
+  water_level_sensor_error: 'water level sensor fault',
+  high_power_supply_error: 'power supply fault',
+  power_code_connection_error: 'check the power cord',
+};
 
 /* What the two text lines under a porthole say, per phase. Returns
    {big, unit, sub}: `big` is the glanceable line (a minute count while
@@ -2590,6 +2615,15 @@ function lnLines(m, now = Date.now()) {
       // 'Drying' beats 'Running' when the machine says so; the generic
       // statuses collapse to the phase word.
       const word = (m.status === 'running' || !status) ? 'Running' : status;
+      // Load sensing lasts under a minute and its time is the course
+      // DEFAULT, 15-20 min longer than the real one on this washer (live
+      // log, 2026-08/09): don't flash a number that's about to jump.
+      if (m.status === 'detecting') return { big: 'Starting', sub: 'sensing the load' };
+      // Sensor-dry end game: LG holds "1 min left" for up to ten minutes
+      // while the dryer cools (live history 2026-09-12). Say what it's doing.
+      if (m.status === 'cooling' && mins !== null && mins <= 1) {
+        return { big: 'Cooling', sub: 'almost done' };
+      }
       if (mins === null) return { big: word, sub: 'time unknown' };
       if (mins === 0) return { big: 'Any minute', sub: word };
       return { big: String(mins), unit: 'min', sub: `${word} · done ${done}` };
@@ -2597,14 +2631,21 @@ function lnLines(m, now = Date.now()) {
     case 'paused':
       return { big: 'Paused', sub: mins !== null ? `about ${mins} min left` : '' };
     case 'reserved':
-      // No time claim: what lg_thinq's remaining-time sensor holds during a
-      // delayed start (start moment? end moment?) is unverified — say only
-      // what's certain until a real delayed cycle is observed.
-      return { big: 'Scheduled', sub: 'delayed start' };
+      // starts_at is the delayed-start sensor (lg_thinq makes it now + the
+      // time-to-start, verified in its sensor.py). The remaining-time sensor
+      // is still unverified during a delay, so it makes no claim here.
+      return { big: 'Scheduled',
+               sub: m.starts_at && lnMinutesLeft(m.starts_at, now) > 0
+                 ? `starts ${lnWhen(m.starts_at, now)}` : 'delayed start' };
     case 'done':
       return { big: 'Done', sub: m.status_since ? `at ${lnWhen(m.status_since, now)}` : '' };
+    case 'waiting':
+      // A finished wash nobody has moved: the dryer hasn't started since and
+      // the washer hasn't been turned on (see app._laundry_present_waiting).
+      return { big: 'Waiting',
+               sub: m.status_since ? `done ${lnWhen(m.status_since, now)}` : 'load inside' };
     case 'error':
-      return { big: 'Error', sub: 'check the machine' };
+      return { big: 'Error', sub: LN_ERRORS[m.error] || 'check the machine' };
     case 'offline':
       return { big: '—', sub: 'not reporting' };
     default:   // idle
@@ -2613,12 +2654,25 @@ function lnLines(m, now = Date.now()) {
   }
 }
 
+/* How much of the ring is lit. Running/paused: the share of the cycle
+   still to go, against the machine's own cycle length (total_min) when HA
+   has one; a 110-minute wash used to sit on a full, frozen 60-minute dial
+   for its first 50 minutes. Without a length it falls back to that 60-min
+   dial. Done and waiting: a full ring. */
+function lnRingFrac(m, now = Date.now()) {
+  if (m.phase === 'done' || m.phase === 'waiting') return 1;
+  if (m.phase !== 'running' && m.phase !== 'paused') return 0;
+  const mins = lnMinutesLeft(m.finishes_at, now);
+  if (mins === null) return 0;
+  const total = Number(m.total_min);
+  return Math.min(1, mins / (Number.isFinite(total) && total > 0 ? total : 60));
+}
+
 /* The porthole: a front-loader door drawn as SVG — brushed-steel bezel,
    dark curved glass, the stainless drum behind it. The thin illuminated
-   halo OUTSIDE the steel is the data ring: minutes left mapped onto a
-   60-minute dial (a >1h cycle shows a full ring that starts draining
-   inside the final hour), a breathing full ring while a finished load
-   waits. The drum shows the state: the heap + a cascade of tumbling
+   halo OUTSIDE the steel is the data ring (lnRingFrac): how much of the
+   cycle is left, a breathing full ring while a finished load waits to be
+   seen, a steady amber one while a washed load waits to be moved. The drum shows the state: the heap + a cascade of tumbling
    pieces while running (see the tumble-physics CSS), the lit resting
    load + a check when done, empty when idle. Washer loads run water-
    cool, dryers warm — via the ln-washer / ln-dryer machine class. */
@@ -2631,12 +2685,7 @@ const LN_RING_C = 2 * Math.PI * LN_RING_R;
 
 function lnPortholeSvg(m, now = Date.now()) {
   const R = LN_RING_R, C = LN_RING_C;   // data ring: a thin halo outside the steel
-  const mins = lnMinutesLeft(m.finishes_at, now);
-  let frac = 0;
-  if (m.phase === 'done') frac = 1;
-  else if ((m.phase === 'running' || m.phase === 'paused') && mins !== null) {
-    frac = Math.min(1, mins / 60);
-  }
+  const frac = lnRingFrac(m, now);
   const arc = frac > 0
     ? `<circle class="ln-arc" cx="50" cy="50" r="${R}"`
       + ` stroke-dasharray="${(frac * C).toFixed(1)} ${C.toFixed(1)}"/>`
@@ -2725,6 +2774,10 @@ function lnPortholeSvg(m, now = Date.now()) {
     inner = `<circle class="ln-donewash" cx="50" cy="50" r="37"/>` + drum
       + heap
       + `<path class="ln-check" d="M36 51 L46 61 L65 40"/>`;
+  } else if (m.phase === 'waiting') {
+    // the wet load, lying still in a dark drum: no glow, no check (it isn't
+    // "done" in the way that matters until it's moved)
+    inner = drum + heap;
   } else if (m.phase === 'error') {
     inner = drum + `<text class="ln-bang" x="50" y="60" text-anchor="middle">!</text>`;
   } else {
@@ -2835,10 +2888,10 @@ function laundryTick(now = Date.now()) {
       else bigEl.innerHTML = lnBigHtml(lines);   // count <-> word shape change
     }
     const arc = el.querySelector('.ln-arc');
-    const mins = lnMinutesLeft(m.finishes_at, now);
-    if (arc && (m.phase === 'running' || m.phase === 'paused') && mins !== null) {
+    const frac = lnRingFrac(m, now);
+    if (arc && frac > 0) {
       arc.setAttribute('stroke-dasharray',
-        `${(Math.min(1, mins / 60) * LN_RING_C).toFixed(1)} ${LN_RING_C.toFixed(1)}`);
+        `${(frac * LN_RING_C).toFixed(1)} ${LN_RING_C.toFixed(1)}`);
     }
   });
 }

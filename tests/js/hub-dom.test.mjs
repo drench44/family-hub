@@ -7667,3 +7667,82 @@ test('refreshIdleTodosView: never repaints over someone using the view, or while
   await sandbox.refreshIdleTodosView();
   assert.deepEqual(urls, [], 'no full view showing');
 });
+
+/* ------------------------ laundry: real-data refinements (2026-09-22) */
+
+test('lnLines: waiting names when the wash finished; the new status words read plainly', () => {
+  const { sandbox } = newHub();
+  const L = (m) => ({ ...sandbox.lnLines(m, LN_NOW) });
+  assert.deepEqual(L({ id: 'w', phase: 'waiting', status_since: lnIso(-95) }),
+    { big: 'Waiting', sub: 'done 12:25pm' });
+  assert.deepEqual(L({ id: 'w', phase: 'waiting', status_since: null }),
+    { big: 'Waiting', sub: 'load inside' });
+  // load sensing: no number (its time is the course default, 15-20 min long)
+  assert.deepEqual(L({ ...LN_WASHER_RUNNING, status: 'detecting' }),
+    { big: 'Starting', sub: 'sensing the load' });
+  // sensor-dry end game: "1 min" held while cooling reads as what it is
+  assert.deepEqual(L({ ...LN_WASHER_RUNNING, status: 'cooling', finishes_at: lnIso(1) }),
+    { big: 'Cooling', sub: 'almost done' });
+  assert.deepEqual(L({ ...LN_WASHER_RUNNING, status: 'cooling', finishes_at: lnIso(-3) }),
+    { big: 'Cooling', sub: 'almost done' });
+  // cooling with real time left still counts down, in words
+  assert.equal(L({ ...LN_WASHER_RUNNING, status: 'cooling', finishes_at: lnIso(8) }).sub,
+    'Cooling down · done 2:08pm');
+  assert.equal(L({ ...LN_WASHER_RUNNING, status: 'add_drain' }).sub, 'Draining · done 2:23pm');
+});
+
+test('lnLines: error names the fault when the machine said which; delayed start says when', () => {
+  const { sandbox } = newHub();
+  const L = (m) => ({ ...sandbox.lnLines(m, LN_NOW) });
+  assert.deepEqual(L({ id: 'w', phase: 'error', error: 'water_drain_error' }),
+    { big: 'Error', sub: 'won’t drain' });
+  assert.deepEqual(L({ id: 'w', phase: 'error', error: 'out_of_balance_error' }),
+    { big: 'Error', sub: 'load is unbalanced' });
+  assert.deepEqual(L({ id: 'w', phase: 'error', error: 'something_new_error' }),
+    { big: 'Error', sub: 'check the machine' }, 'unknown code: no guessing');
+  assert.deepEqual(L({ id: 'w', phase: 'reserved', starts_at: lnIso(120) }),
+    { big: 'Scheduled', sub: 'starts 4:00pm' });
+  assert.deepEqual(L({ id: 'w', phase: 'reserved', starts_at: lnIso(-5) }),
+    { big: 'Scheduled', sub: 'delayed start' }, 'a past start time makes no claim');
+});
+
+test('lnRingFrac: share of the cycle left when HA knows the length, else the 60-min dial', () => {
+  const { sandbox } = newHub();
+  const F = (m) => sandbox.lnRingFrac(m, LN_NOW);
+  // a 110-min wash, 90 left: 82% lit (the old 60-min dial sat frozen at 100%)
+  assert.ok(Math.abs(F({ ...LN_WASHER_RUNNING, finishes_at: lnIso(90), total_min: 110 }) - 90 / 110) < 0.01);
+  assert.ok(Math.abs(F({ ...LN_WASHER_RUNNING, finishes_at: lnIso(30), total_min: null }) - 0.5) < 0.01);
+  assert.equal(F({ ...LN_WASHER_RUNNING, finishes_at: lnIso(90), total_min: 0 }), 1, 'bad length: dial');
+  assert.equal(F({ ...LN_WASHER_RUNNING, finishes_at: lnIso(70), total_min: 60 }), 1, 'clamped');
+  assert.equal(F({ id: 'w', phase: 'waiting' }), 1);
+  assert.equal(F({ id: 'w', phase: 'done' }), 1);
+  assert.equal(F({ id: 'w', phase: 'idle' }), 0);
+});
+
+test('laundry card: a waiting washer shows the still, wet load with an amber ring and no check', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.laundryCardHtml({ available: true, machines: [
+    { id: 'washer', label: 'Washer', kind: 'washer', phase: 'waiting',
+      status: 'power_off', finishes_at: null, status_since: lnIso(-95) }] }, LN_NOW);
+  assert.match(html, /ln-m ln-washer ln-ph-waiting/);
+  assert.match(html, /class="ln-heap"/, 'the load is still in the drum');
+  assert.doesNotMatch(html, /ln-check/, 'not "done" in the way that matters');
+  assert.doesNotMatch(html, /ln-tumble|ln-halo/, 'still, and no breathing glow');
+  assert.match(html, /class="ln-arc"/, 'full ring');
+  assert.equal((html.match(/<g[\s>]/g) || []).length,
+    (html.match(/<\/g>/g) || []).length, 'unbalanced <g> groups');
+  assert.equal((html.match(/class="ln-heap"/g) || []).length, 1, 'exactly one heap');
+});
+
+test('laundryTick: the ring drains against the cycle length between polls', async () => {
+  const running = { ...LN_WASHER_RUNNING, finishes_at: lnIso(100), total_min: 110 };
+  const payload = { available: true, machines: [running] };
+  const { slot, sandbox } = renderLaundryHtml(payload);
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => payload });
+  await sandbox.fetchLaundry();
+  sandbox.renderLaundry(payload, LN_NOW);
+  sandbox.laundryTick(LN_NOW + 45 * 60000);
+  const [len, circ] = slot.querySelectorAll('.ln-m')[0].querySelector('.ln-arc')
+    .getAttribute('stroke-dasharray').split(' ').map(Number);
+  assert.ok(Math.abs(len / circ - 55 / 110) < 0.01, 'half the cycle left, half the ring');
+});
