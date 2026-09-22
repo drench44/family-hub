@@ -26,6 +26,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The backup badge now warns when the copy to the NAS fails or goes stale.
   Before, it only looked at the local snapshot, so it read healthy even when
   every NAS copy was failing.
+- The backup now checks that the NAS is actually mounted before copying to
+  it. If the mount had dropped, it used to copy onto the box's own disk and
+  report success. Now that counts as a failed NAS copy.
 - The washer and dryer watcher no longer writes to the database every five
   seconds when nothing changed (about 35,000 needless writes a day), and its
   database work no longer holds up the rest of the hub while it runs.

@@ -43,6 +43,9 @@ FH_OUT=/srv/backup/family-hub
 ```
 
 Other knobs (all optional): `FH_REMOTE`, `FH_SKIP_REMOTE=1` (local only),
+`FH_REMOTE_MOUNT` (the mountpoint `FH_REMOTE` must sit under; by default the
+script refuses a target on the root filesystem, which is what a dropped NAS
+mount leaves behind; `none` turns the check off),
 `HOURLY_KEEP`/`DAILY_KEEP`/`WEEKLY_KEEP`/`MONTHLY_KEEP`, and `FH_NOW`
 (`YYYYmmddHHMM`, for tests).
 
