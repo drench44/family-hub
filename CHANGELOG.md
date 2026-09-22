@@ -35,6 +35,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The Google Calendar sign-in file is now saved all at once, readable only by
   its owner. A crash or full disk while saving can no longer leave half a
   file that looks like the calendar was never connected.
+- The health check now makes sure the database can be read. Before, it said
+  "ok" even when the database was missing or broken.
 
 ## [1.7.0] — 2026-09-22
 

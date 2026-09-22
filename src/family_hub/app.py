@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -788,6 +788,17 @@ def _config_panel_links() -> list[dict]:
 
 @app.get("/health")
 def health():
+    """Liveness for the container healthcheck, and it means the hub can use its
+    database. It used to return ok without touching the db, so a missing or
+    corrupt hub.db read healthy while every real request failed. One schema
+    read on the same per-thread connection the routes use: it reads page 1 of
+    the file (SELECT 1 alone never does) and stays sub-millisecond."""
+    try:
+        _db().execute("SELECT count(*) FROM sqlite_master").fetchone()
+    except Exception as e:
+        log.error("health: database unusable: %s", e)
+        return JSONResponse({"status": "error", "db": type(e).__name__},
+                            status_code=503)
     return {"status": "ok"}
 
 
