@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import access_log
 from . import chores as chlogic
 from . import db as fdb
 from . import demo as fdemo
@@ -56,6 +57,9 @@ log = logging.getLogger("family_hub")
 # failed upstream fetch is also logged by our own code where it is handled.
 for _noisy in ("httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+# The same for our own access log: drop successful camera probes, tile polls
+# and health checks, keep their errors and every other request (access_log.py).
+access_log.install()
 
 cfg = load_config(os.environ.get("CONFIG_PATH", "config.json"))
 # Server-side camera fetches reach go2rtc over the shared compose network
@@ -1568,7 +1572,13 @@ def reminders_toggle(body: ReminderToggle):
         raise HTTPException(404, "unknown reminder")
     now = dt.datetime.now(dt.timezone.utc)
     ics = remlogic.set_completed(obj["raw_ics"], body.completed, now)
-    fdb.queue_cal_object_update(c, body.id, ics, obj["summary"], now.isoformat())
+    if not fdb.queue_cal_object_update(c, body.id, ics, obj["summary"],
+                                       now.isoformat()):
+        # deleted since it was read (or queued for delete): nothing was queued,
+        # so don't answer as if the tap worked. 'unknown reminder' is the
+        # string common.js reminderFailMessage turns into its "already changed
+        # on another device" toast.
+        raise HTTPException(404, "unknown reminder (deleted)")
     return {"id": body.id, "completed": body.completed}
 
 

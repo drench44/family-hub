@@ -81,6 +81,21 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The wall's on-screen keyboard now goes away when the box it was typing
   into disappears, for example when a full-screen view closes by itself.
   Before, it could stay docked over the home screen.
+- An iCloud reminder edited on the wall while the hub is still sending the
+  previous change is no longer lost. The newer edit now waits and goes out
+  on the next sync. The same holds for a reminder deleted or re-added
+  mid-send: a deleted one no longer comes back, and a re-added one is kept
+  without a second copy in iCloud. If iCloud also changed the reminder at
+  that moment, a delete made on the wall still goes through.
+- Checking off an iCloud reminder that was just deleted (from a second
+  screen) no longer brings it back. The wall says it was already changed on
+  another device, instead of acting as if the tap worked.
+- A reminder just added on the wall is no longer thrown away when iCloud
+  refuses it but has no copy of it either. The hub keeps it and tries again
+  on the next sync.
+- The hub's log no longer writes a line for every routine check that went
+  fine: camera checks, card refreshes, and health checks. These were most of
+  the log. Failed checks, changes, and every other request are still logged.
 
 ## [1.7.0] — 2026-09-22
 
