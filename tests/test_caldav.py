@@ -580,6 +580,82 @@ def test_upsert_cal_object_synced_never_clobbers_pending(conn):
     assert [o["id"] for o in fdb.caldav_pending(conn)] == ["caldav:x/u1"]  # in the outbox
 
 
+class _RacyConn:
+    """Wraps a connection and runs `hook` (another connection's write) at the
+    first point this connection holds no open transaction: right after the
+    first statement or commit. That is exactly where a wall edit from a
+    request thread can land while the sync thread is mid-upsert."""
+
+    def __init__(self, real, hook):
+        self._real, self._hook, self._fired = real, hook, False
+
+    def _maybe(self):
+        if not self._fired and not self._real.in_transaction:
+            self._fired = True
+            self._hook()
+
+    def execute(self, *a):
+        cur = self._real.execute(*a)
+        self._maybe()
+        return cur
+
+    def commit(self):
+        self._real.commit()
+        self._maybe()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_upsert_cal_object_synced_cannot_lose_a_racing_local_edit(tmp_path):
+    """The pull checked sync_state, then wrote in a second statement. A wall
+    edit committed from another thread in between was stomped back to SYNCED
+    with the server copy, and the edit never reached iCloud. The check and the
+    write must be one atomic statement."""
+    path = str(tmp_path / "hub.db")
+    sync_conn = fdb.connect(path)
+    fdb.ensure_schema(sync_conn)
+    wall_conn = fdb.connect(path)
+    oid = "caldav:x/u1"
+    fdb.upsert_cal_object_synced(sync_conn, {"id": oid, "collection_id": "caldav:x",
+        "comp_type": "VTODO", "uid": "u1", "summary": "old", "raw_ics": "O",
+        "etag": "e1"})
+
+    def wall_edit():
+        fdb.queue_cal_object_update(wall_conn, oid, "L", "local edit",
+                                    "2026-08-17T12:00:00+00:00")
+
+    fdb.upsert_cal_object_synced(_RacyConn(sync_conn, wall_edit), {
+        "id": oid, "collection_id": "caldav:x", "comp_type": "VTODO",
+        "uid": "u1", "summary": "server", "raw_ics": "S", "etag": "e2"})
+    row = fdb.get_cal_object(sync_conn, oid)
+    assert row["sync_state"] == "PENDING_UPDATE", "the local edit was stomped"
+    assert row["summary"] == "local edit"
+    assert [o["id"] for o in fdb.caldav_pending(sync_conn)] == [oid]
+    sync_conn.close()
+    wall_conn.close()
+
+
+def test_upsert_cal_object_synced_resets_sync_bookkeeping(conn):
+    """A server-wins (force) or plain pull adopts the server copy wholesale:
+    the old retry count, error and local-edit stamp must not survive it."""
+    oid = "caldav:x/u1"
+    conn.execute("INSERT INTO cal_objects(id, collection_id, comp_type, uid, "
+                 "summary, sync_state, local_modified_at, sync_attempts, "
+                 "last_sync_error, href) VALUES(?, 'caldav:x', 'VTODO', 'u1', "
+                 "'local', 'PENDING_UPDATE', 't', 4, 'boom', 'h/old')", (oid,))
+    conn.commit()
+    fdb.upsert_cal_object_synced(conn, {"id": oid, "collection_id": "caldav:x",
+        "comp_type": "VTODO", "uid": "u1", "summary": "server", "raw_ics": "S",
+        "etag": "e9", "href": "h/new", "sequence": 3}, force=True)
+    row = fdb.get_cal_object(conn, oid)
+    assert row["sync_state"] == "SYNCED" and row["summary"] == "server"
+    assert row["etag"] == row["base_etag"] == "e9" and row["href"] == "h/new"
+    assert row["sequence"] == 3
+    assert row["sync_attempts"] == 0 and row["last_sync_error"] is None
+    assert row["local_modified_at"] is None
+
+
 def test_caldav_credentials_file_storage(tmp_path):
     import os
     import stat

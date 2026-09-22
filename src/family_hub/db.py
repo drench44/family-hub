@@ -983,19 +983,31 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False) -> None:
     a routine pull can't stomp a queued edit. `force=True` is the conflict
     resolver's server-wins path: a 412 means the server changed under our edit, so
     we deliberately adopt the server copy over the losing local edit. base_etag is
-    set to the server etag (the base a future edit builds on)."""
-    row = conn.execute("SELECT sync_state FROM cal_objects WHERE id = ?",
-                       (obj["id"],)).fetchone()
-    if row is not None and row["sync_state"] != "SYNCED" and not force:
-        return
+    set to the server etag (the base a future edit builds on).
+
+    ONE statement, so the pending check and the write are atomic. The sync
+    thread and the wall's request threads use separate connections; a separate
+    SELECT-then-write let a wall edit commit in between and be stomped back to
+    SYNCED, so it never reached iCloud. The update resets the sync bookkeeping
+    columns the way the old INSERT OR REPLACE did."""
     conn.execute(
-        "INSERT OR REPLACE INTO cal_objects(id, collection_id, comp_type, uid, "
+        "INSERT INTO cal_objects(id, collection_id, comp_type, uid, "
         "href, etag, base_etag, summary, raw_ics, sequence, last_modified, "
-        "sync_state) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SYNCED')",
+        "sync_state) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SYNCED') "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "collection_id = excluded.collection_id, "
+        "comp_type = excluded.comp_type, uid = excluded.uid, "
+        "href = excluded.href, etag = excluded.etag, "
+        "base_etag = excluded.base_etag, summary = excluded.summary, "
+        "raw_ics = excluded.raw_ics, sequence = excluded.sequence, "
+        "last_modified = excluded.last_modified, sync_state = 'SYNCED', "
+        "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
+        "WHERE cal_objects.sync_state = 'SYNCED' OR ?",
         (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
          obj.get("href"), obj.get("etag"), obj.get("etag"),
          obj.get("summary", ""), obj.get("raw_ics"),
-         int(obj.get("sequence") or 0), obj.get("last_modified")))
+         int(obj.get("sequence") or 0), obj.get("last_modified"),
+         1 if force else 0))
     conn.commit()
 
 
