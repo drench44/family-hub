@@ -2178,3 +2178,12 @@ def test_the_leaf_rock_has_depth():
     squash and the leaf stops reading as tipping in the air."""
     leaf = re.search(r"(?m)^\.sn-leaf \{([^}]*)\}", CSS)
     assert leaf and "perspective:" in leaf.group(1)
+def test_todo_done_grace_matches_the_server_window():
+    # The wall schedules its own refresh for the moment a checked item is
+    # archived; if the two numbers drift, the row either vanishes early (the
+    # server still returns it) or lingers for a whole extra poll.
+    import re
+    from family_hub import todos
+    m = re.search(r"const TODO_DONE_GRACE_MS = (\d+) \* 60000;", ALL_JS)
+    assert m, "TODO_DONE_GRACE_MS not found in hub.js"
+    assert int(m.group(1)) == todos.DONE_GRACE_MIN

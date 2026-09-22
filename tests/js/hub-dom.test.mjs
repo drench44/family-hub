@@ -6347,17 +6347,17 @@ test('todoDigest: guarantees soon and later each show >=1 row behind a long now 
   assert.equal(by.later.moreOpen, 4);
 });
 
-test('todoDigest: done-today lingerers fill only leftover budget and are never counted as more', () => {
+test('todoDigest: just-checked lingerers fill only leftover budget and are never counted as more', () => {
   const { sandbox } = newHub();
   const g = sandbox.todoDigest({ now: [...tOpen(2, 'now'), ...tDone(3, 'now')], soon: [], later: [] }, DIGEST_BUDGET);
   assert.equal(g.length, 1);
-  assert.equal(g[0].rows.length, 5, 'shows the 2 open + 3 done-today rows');
+  assert.equal(g[0].rows.length, 5, 'shows the 2 open + 3 just-checked rows');
   assert.equal(g[0].openCount, 2, 'the header count is open items only');
   assert.equal(g[0].moreOpen, 0, 'a hidden done item is not advertised as more');
   assert.equal(g[0].rows.filter((t) => t.done_at).length, 3, 'the done rows linger');
 });
 
-test('todoDigest: open items win the budget over another tier\'s done-today lingerers', () => {
+test('todoDigest: open items win the budget over another tier\'s just-checked lingerers', () => {
   const { sandbox } = newHub();
   const g = sandbox.todoDigest(
     { now: [...tOpen(2, 'now'), ...tDone(7, 'now')], soon: tOpen(5, 'soon'), later: [] },
@@ -6426,7 +6426,7 @@ test('todoDigest: a missing/empty payload yields no groups (never throws)', () =
   assert.deepEqual([...sandbox.todoDigest({}, DIGEST_BUDGET)], []);
 });
 
-test('todoDigest: "+N more" counts only hidden OPEN items even when a tier also has done-today rows', () => {
+test('todoDigest: "+N more" counts only hidden OPEN items even when a tier also has just-checked rows', () => {
   const { sandbox } = newHub();
   // now alone, over budget, with open AND done items in the same tier. Open
   // items sort first, so the budget shows 9 open and folds the rest; the done
@@ -6438,7 +6438,7 @@ test('todoDigest: "+N more" counts only hidden OPEN items even when a tier also 
   assert.equal(g[0].moreOpen, 3, 'overflow = 12 open - 9 shown, done items excluded');
 });
 
-test('todoCardHtml: a tier that is only done-today lingerers shows its label without a "0" count', () => {
+test('todoCardHtml: a tier that is only just-checked lingerers shows its label without a "0" count', () => {
   const { sandbox } = newHub();
   // now has no open work left today, just one completed item lingering; soon/
   // later empty so the budget has room to show the lingerer (phase 2).

@@ -1020,7 +1020,7 @@ def hub():
     # 500 there is visible and correct, since it's a direct read of that data.
     todos_ok = True
     try:
-        todos_block = tdlogic.group(fdb.list_todos(c), today)
+        todos_block = tdlogic.group(fdb.list_todos(c))
     except Exception:
         # A real bug (bad row, read failure) — not an expected "empty list", so
         # log at ERROR. Empty buckets look identical to "nothing to do", which
@@ -1235,7 +1235,7 @@ def todos_list():
     c = _db()
     today = _today()
     rows = fdb.list_todos(c)
-    return {"buckets": tdlogic.group(rows, today),
+    return {"buckets": tdlogic.group(rows),
             "recent_done": tdlogic.recent_done(rows, today)}
 
 
