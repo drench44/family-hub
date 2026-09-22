@@ -86,11 +86,27 @@ DEMO = os.environ.get("DEMO", "") == "1"
 BACKUP_STALE_S = int(os.environ.get("BACKUP_STALE_HOURS", "36")) * 3600
 
 
-def _compute_build() -> str:
+def _config_fingerprint(config) -> str:
+    """A stable text form of the loaded config, folded into BUILD. The wall builds
+    its camera tiles and panels ONCE per page load, so without this a config
+    change (a new camera, a moved panel) restarted the app with the same asset
+    hash and never reached an open wall. Never raises: an unserializable config
+    logs and contributes nothing, which only loses the config half of the token."""
+    try:
+        return json.dumps(dataclasses.asdict(config), sort_keys=True, default=str)
+    except Exception as e:   # noqa: BLE001 - import-time, must not take the app down
+        log.warning("build hash: config not fingerprinted (%s); a config change "
+                    "will not reload open walls", e)
+        return ""
+
+
+def _compute_build(config_fp: str = "") -> str:
     """Short token that changes whenever any baked frontend asset changes, so the
     wall can auto-reload after a deploy. The frontend is BAKED into the image and a
     deploy rebuilds + restarts the container, so hashing the served asset files at
-    startup yields a fresh value each deploy (and a stable one between deploys)."""
+    startup yields a fresh value each deploy (and a stable one between deploys).
+    `config_fp` (see _config_fingerprint) folds the loaded config in too: a config
+    change also restarts the app, and must reload the wall the same way."""
     import glob
     import hashlib
     h = hashlib.sha256()
@@ -124,10 +140,13 @@ def _compute_build() -> str:
         # token that freezes auto-reload with no signal at all. Shout instead.
         log.error("build hash: NO static assets readable under %s — the frontend "
                   "bake is broken; deploy auto-reload is disabled", STATIC_DIR)
+    if config_fp:
+        h.update(b"\0config\0")
+        h.update(config_fp.encode())
     return h.hexdigest()[:12]
 
 
-BUILD = _compute_build()
+BUILD = _compute_build(_config_fingerprint(cfg))
 # The human-facing release identity (distinct from BUILD, the asset-content
 # hash): the SemVer from VERSION. Read once at import like BUILD — a deploy
 # restarts the process and picks up the new version.
@@ -3022,18 +3041,26 @@ def _sync_enabled() -> bool:
 if _sync_enabled():
     threading.Thread(target=sync_loop, daemon=True).start()
 
-# HTML must always revalidate (no-cache still allows ETag 304s): the ?v=N
-# busters version the css/js, but the HTML that references them has no
-# buster of its own — heuristic caching served phones a stale page on
+# HTML must always revalidate (no-cache still allows ETag 304s): the HTML
+# has no buster of its own — heuristic caching served phones a stale page on
 # 2026-08-13 (no tab bar) after a deploy.
+# Scripts, stylesheets and the manifest revalidate too. Their ?v= busters only
+# move on a release, so a hub.js change deployed without a version bump kept
+# its old URL, and the deploy reload could run the browser's heuristically
+# cached old script under the new build token.
 # The seasonal art under /seasons/ is referenced from INSIDE styles.css, where
 # no ?v= reaches it, and a photo can be swapped under the same name, so it
-# revalidates too (a 304 costs a phone almost nothing).
+# revalidates too. A 304 costs a phone or the wall almost nothing.
+_REVALIDATE_SUFFIXES = (".js", ".css", ".webmanifest")
+
+
 @app.middleware("http")
 async def html_no_cache(request, call_next):
     resp = await call_next(request)
+    path = request.url.path
     if resp.headers.get("content-type", "").startswith("text/html") \
-            or request.url.path.startswith("/seasons/"):
+            or path.startswith("/seasons/") \
+            or (not path.startswith("/api/") and path.endswith(_REVALIDATE_SUFFIXES)):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
 

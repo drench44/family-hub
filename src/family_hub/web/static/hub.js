@@ -1751,7 +1751,7 @@ function armIdle() {
 /* --------------------------------------------------------------- polling */
 
 let hubData = null;
-let loadedBuild = null;   // /api/hub build token at page load; a change => deploy => reload
+let loadedBuild = null;   // /api/hub build token at page load; a change => deploy or config change => reload
 let lastInteraction = 0;  // ms of the last user touch/keypress (see noteInteraction)
 const INTERACTION_QUIET_MS = 4000;
 // Records a user touch/keypress so the deploy auto-reload defers for a few
