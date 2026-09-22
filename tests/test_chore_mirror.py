@@ -127,7 +127,8 @@ def test_reconcile_completions_records_ios_checkoff_add_only(conn):
     coll = oid.split("/", 1)[0]
     utcnow = _NOW.replace(tzinfo=dt.timezone.utc)
     # simulate: reminder pushed, then completed in iOS, stored SYNCED by the pull
-    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1")
+    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1",
+                               fdb.get_cal_object(conn, oid)["local_rev"])
     done = rem.set_completed(fdb.get_cal_object(conn, oid)["raw_ics"], True, utcnow)
     fdb.upsert_cal_object_synced(conn, {
         "id": oid, "collection_id": coll, "comp_type": "VTODO", "uid": m["uid"],
@@ -165,7 +166,8 @@ def _complete_in_ios(conn, m, title="Dishes"):
     from family_hub import reminders as rem
     oid = m["cal_object_id"]
     coll = oid.split("/", 1)[0]
-    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1")
+    fdb.mark_cal_object_pushed(conn, oid, "https://x/" + m["uid"] + ".ics", "e1",
+                               fdb.get_cal_object(conn, oid)["local_rev"])
     done = rem.set_completed(fdb.get_cal_object(conn, oid)["raw_ics"], True,
                              _NOW.replace(tzinfo=dt.timezone.utc))
     fdb.upsert_cal_object_synced(conn, {
@@ -263,7 +265,8 @@ def test_push_completion_on_synced_object_bumps_to_pending_update(conn):
     pid, cid = _mirrored(conn)
     today = _NOW.date().isoformat()
     m = fdb.get_chore_mirror(conn, cid, today)
-    fdb.mark_cal_object_pushed(conn, m["cal_object_id"], "https://x", "e1")
+    fdb.mark_cal_object_pushed(conn, m["cal_object_id"], "https://x", "e1",
+                               fdb.get_cal_object(conn, m["cal_object_id"])["local_rev"])
     assert chore_mirror.push_completion(conn, cid, today, True) is True
     obj = fdb.get_cal_object(conn, m["cal_object_id"])
     assert obj["sync_state"] == "PENDING_UPDATE" and "STATUS:COMPLETED" in obj["raw_ics"]

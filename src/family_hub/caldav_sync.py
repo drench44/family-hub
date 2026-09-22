@@ -166,6 +166,22 @@ def _resolve_conflict(client, conn, col, row) -> None:
                 row["id"])
 
 
+def _remove_orphaned_upload(client, col, oid: str, href: str, etag) -> None:
+    """The wall deleted a reminder while its create was still uploading, so the
+    local row is gone but the upload put a copy in iCloud. Delete that copy, or
+    the next pull brings the deleted reminder back. Any failure (a conflict
+    included: there is no local row left to resolve against) is raised as a
+    plain error so the flush reports it instead of counting a clean push."""
+    try:
+        client.delete_object(col, href, base_etag=etag)
+    except Exception as e:
+        raise RuntimeError(
+            f"deleted on the wall during upload, but removing the iCloud copy "
+            f"failed (it may come back on the next sync): {e}") from e
+    log.info("caldav %s was deleted during its upload; removed the iCloud copy",
+             oid)
+
+
 def flush_pending(client, conn, collections, now_iso: str) -> dict:
     """Push the outbox — locally-edited cal_objects (wall edits) — to iCloud: PUT
     creates/updates (conditional on If-Match/If-None-Match), DELETE removals. Only
@@ -194,7 +210,12 @@ def flush_pending(client, conn, collections, now_iso: str) -> dict:
                 else:
                     log.warning("caldav delete of %s had no href; dropped locally",
                                 row["id"])
-                fdb.delete_cal_object_row(conn, row["id"])
+                # only drop the row if nothing re-queued it while the DELETE
+                # was in flight; a re-create must survive (as a fresh create)
+                if fdb.finish_cal_object_delete(
+                        conn, row["id"], row["local_rev"]) == "superseded":
+                    log.info("caldav %s changed during its delete; kept queued",
+                             row["id"])
             else:   # PENDING_CREATE | PENDING_UPDATE
                 res = client.put_object(col, row.get("href"), row["raw_ics"],
                                         base_etag=row.get("base_etag"),
@@ -205,7 +226,16 @@ def flush_pending(client, conn, collections, now_iso: str) -> dict:
                     # SYNCED — a later delete would then skip the server and
                     # silently drop it. Keep PENDING_CREATE and retry.
                     raise RuntimeError("create returned no href")
-                fdb.mark_cal_object_pushed(conn, row["id"], href, res.get("etag"))
+                outcome = fdb.mark_cal_object_pushed(
+                    conn, row["id"], href, res.get("etag"), row["local_rev"])
+                if outcome == "superseded":
+                    # a wall edit landed mid-upload: it stays queued (built on
+                    # the etag just earned) and goes out on the next flush
+                    log.info("caldav %s changed during its upload; kept queued",
+                             row["id"])
+                elif outcome == "gone":
+                    _remove_orphaned_upload(client, col, row["id"], href,
+                                            res.get("etag"))
             pushed += 1
         except CalDavConflict:
             try:
