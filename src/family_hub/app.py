@@ -984,34 +984,64 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
     return plan, away_ok
 
 
-def _backup_status(last_success, now, stale_s):
+def _backup_status(last_success, now, stale_s, remote=None):
     """Pure: (last-success datetime or None, now, threshold secs) -> the /api/hub
     `backup` block. 'known' is False before any heartbeat exists, so a fresh
-    deploy shows a muted 'unknown', never a false alarm."""
+    deploy shows a muted 'unknown', never a false alarm.
+
+    `remote` is None when no off-box mirror is configured, else
+    {"ok": last attempt succeeded, "last_ok": datetime of the last good copy or
+    None}. A failing last attempt, or no good copy within the threshold, marks
+    the remote unhealthy: the local snapshot alone is not a healthy backup when
+    the operator asked for an off-box one."""
+    remote_block = None
+    if remote is not None:
+        last_ok = remote.get("last_ok")
+        r_age = int((now - last_ok).total_seconds()) if last_ok else None
+        remote_block = {
+            "ok": bool(remote.get("ok")),
+            "last_ok": last_ok.isoformat() if last_ok else None,
+            "age_s": r_age,
+            "stale": r_age is None or r_age > stale_s,
+            "failing": not remote.get("ok"),
+        }
     if last_success is None:
         return {"known": False, "last_success": None, "age_s": None,
-                "stale": False, "threshold_s": stale_s}
+                "stale": False, "threshold_s": stale_s, "remote": remote_block}
     age = int((now - last_success).total_seconds())
     return {"known": True, "last_success": last_success.isoformat(), "age_s": age,
-            "stale": age > stale_s, "threshold_s": stale_s}
+            "stale": age > stale_s, "threshold_s": stale_s,
+            "remote": remote_block}
+
+
+def _heartbeat_ts(value):
+    """An ISO timestamp from the heartbeat, as an aware UTC datetime, or None
+    when missing or unparseable (fails safe to 'unknown', never false-fresh)."""
+    if not value:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=dt.timezone.utc)
 
 
 def _build_backup(conn, now=None, stale_s=BACKUP_STALE_S):
     """Read the 'backup_status' heartbeat the backup script writes into hub.db on
     every successful snapshot ({"at": ISO, ...}) and derive staleness. family-hub
     `kv` has no updated_at column, so the timestamp lives in the value. A stale
-    heartbeat also catches 'backups stopped running at all'."""
+    heartbeat also catches 'backups stopped running at all'. When an off-box
+    mirror is configured the script also records its outcome (remote_ok,
+    remote_ok_at); the key's presence is what says a mirror is configured."""
     now = now or dt.datetime.now(dt.timezone.utc)
     rec = fdb.kv_get(conn, "backup_status")
-    last = None
-    if isinstance(rec, dict) and rec.get("at"):
-        try:
-            last = dt.datetime.fromisoformat(rec["at"])
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=dt.timezone.utc)
-        except (ValueError, TypeError):
-            last = None
-    return _backup_status(last, now, stale_s)
+    if not isinstance(rec, dict):
+        return _backup_status(None, now, stale_s)
+    remote = None
+    if "remote_ok" in rec:
+        remote = {"ok": rec.get("remote_ok") is True,
+                  "last_ok": _heartbeat_ts(rec.get("remote_ok_at"))}
+    return _backup_status(_heartbeat_ts(rec.get("at")), now, stale_s, remote)
 
 
 @app.get("/api/hub")

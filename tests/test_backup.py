@@ -341,3 +341,78 @@ def test_heartbeat_not_written_when_backup_fails(tmp_path):
     c.close()
     assert val["at"] == "2000-01-01T00:00:00+00:00", \
         "a failed backup must not advance the heartbeat (no false-green badge)"
+
+
+# --- off-box outcome in the heartbeat -------------------------------------
+# The heartbeat used to be written BEFORE the NAS copy ran, so the wall's
+# badge read healthy while every off-box copy failed. The script now records
+# the remote outcome in the same record and the badge reads it.
+
+def _make_kv_db(path: Path, status=None):
+    c = sqlite3.connect(path)
+    c.execute("create table todos (id integer primary key, title text)")
+    c.execute("insert into todos (title) values ('t')")
+    c.execute("create table kv (key text primary key, value text not null)")
+    if status is not None:
+        c.execute("insert into kv (key, value) values ('backup_status', ?)",
+                  (json.dumps(status),))
+    c.commit()
+    c.close()
+
+
+def _status(db: Path) -> dict:
+    c = sqlite3.connect(db)
+    row = c.execute("select value from kv where key='backup_status'").fetchone()
+    c.close()
+    return json.loads(row[0])
+
+
+def test_heartbeat_records_a_good_remote_copy(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    _run(db, tmp_path / "out", remote=tmp_path / "nas")
+    rec = _status(db)
+    assert rec["remote_ok"] is True
+    assert rec["remote_at"] and rec["remote_ok_at"] == rec["remote_at"]
+    assert rec["snapshot"].startswith("hub-")
+
+
+def test_heartbeat_records_a_failed_remote_copy(tmp_path):
+    db = tmp_path / "hub.db"
+    old_ok = "2026-08-01T00:00:00+00:00"
+    _make_kv_db(db, {"at": "2000-01-01T00:00:00+00:00", "remote_ok": True,
+                     "remote_at": old_ok, "remote_ok_at": old_ok})
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")
+    r = _run(db, tmp_path / "out", remote=blocker / "nas", check=False)
+    assert r.returncode == 2
+    rec = _status(db)
+    assert rec["remote_ok"] is False, "a failed NAS copy must not read healthy"
+    assert rec["remote_at"] != old_ok, "the failed attempt is timestamped"
+    assert rec["remote_ok_at"] == old_ok, "the last GOOD copy time is kept"
+    assert rec["at"] != "2000-01-01T00:00:00+00:00", "local snapshot still counts"
+
+
+def test_skip_remote_keeps_the_last_remote_outcome(tmp_path):
+    # The pre-deploy snapshot runs local-only; it must not erase (or fake) the
+    # NAS result from the last real run.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db, {"at": "2000-01-01T00:00:00+00:00", "remote_ok": False,
+                     "remote_at": "2026-08-17T00:00:00+00:00"})
+    _run(db, tmp_path / "out", remote=tmp_path / "nas", skip_remote=True)
+    rec = _status(db)
+    assert rec["remote_ok"] is False
+    assert rec["remote_at"] == "2026-08-17T00:00:00+00:00"
+    assert rec["at"] != "2000-01-01T00:00:00+00:00"
+
+
+def test_no_remote_configured_clears_remote_fields(tmp_path):
+    # Turning FH_REMOTE off must not leave an old NAS result to go stale and
+    # nag forever: no remote configured means no remote fields at all.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db, {"at": "2000-01-01T00:00:00+00:00", "remote_ok": False,
+                     "remote_at": "2026-08-17T00:00:00+00:00"})
+    _run(db, tmp_path / "out")
+    rec = _status(db)
+    assert not any(k.startswith("remote") for k in rec)
+    assert rec["at"] != "2000-01-01T00:00:00+00:00"

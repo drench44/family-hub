@@ -21,6 +21,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 - An iCloud reminder due at a set time in the evening now shows under the
   right day. Times are read in the hub's own time zone, so a 7pm reminder no
   longer shows up as tomorrow's.
+- The backup badge now warns when the copy to the NAS fails or goes stale.
+  Before, it only looked at the local snapshot, so it read healthy even when
+  every NAS copy was failing.
 
 ## [1.7.0] — 2026-09-22
 
