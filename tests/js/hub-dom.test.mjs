@@ -3141,7 +3141,7 @@ test('renderTodosFull: fetches the endpoint that matches the active source', asy
       ? { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true }
       : { now: [], soon: [], later: [] });
   };
-  vm.runInContext("hubData = { todo_source: 'icloud' };", sandbox);
+  vm.runInContext("hubData = { todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: true }] };", sandbox);
   await sandbox.renderTodosFull();
   assert.ok(urls.includes('/api/reminders') && !urls.includes('/api/todos'), 'iCloud -> /api/reminders');
   urls.length = 0;
@@ -3153,7 +3153,7 @@ test('renderTodosFull: fetches the endpoint that matches the active source', asy
 test('renderTodosFull: a failed refresh toasts only when data was already loaded (not on first load)', async () => {
   const { document, sandbox } = newHub();
   sandbox.fetch = async () => { throw new Error('down'); };
-  vm.runInContext("hubData = { todo_source: 'icloud' }; todoState.reminders = null;", sandbox);
+  vm.runInContext("hubData = { todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: true }] }; todoState.reminders = null;", sandbox);
   await sandbox.renderTodosFull();
   assert.equal(document.getElementById('toast'), null, 'no toast on the first, empty load');
   vm.runInContext("todoState.reminders = { buckets: { overdue: [], today: [], upcoming: [], no_date: [] }, configured: true, writable: true };", sandbox);
@@ -7575,4 +7575,91 @@ test('Season on, out of season: the note says when the next season starts', () =
   document.documentElement.setAttribute('data-season', 'off');
   sandbox.reflectThemeControls();
   assert.equal(note.hidden, true);
+});
+
+
+/* ------------------------------ to-do archive + source + idle refresh (2026-09-22) */
+
+test('todoSourceOf: iCloud counts only while its integration is listed AND on', () => {
+  const { sandbox } = newHub();
+  const src = (d) => sandbox.todoSourceOf(d);
+  assert.equal(src(null), 'local');
+  assert.equal(src({ todo_source: 'local' }), 'local');
+  assert.equal(src({ todo_source: 'icloud', integrations: [] }), 'local', 'not configured');
+  assert.equal(src({ todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: false }] }),
+    'local', 'switched off in Settings: never strand on an empty iCloud card');
+  assert.equal(src({ todo_source: 'icloud', integrations: [{ id: 'icloud_caldav', enabled: true }] }),
+    'icloud');
+});
+
+test('renderTodoSlot: iCloud switched off shows the LOCAL list, not an empty iCloud card', () => {
+  const { document, sandbox } = newHub();
+  sandbox.renderTodoSlot({
+    todo_source: 'icloud', todos_ok: true,
+    integrations: [{ id: 'icloud_caldav', enabled: false }],
+    todos: { now: [{ id: 1, title: 'Fix the chairs', bucket: 'now', created_at: 'x', done_at: null }], soon: [], later: [] },
+    reminders: { overdue: [], today: [], upcoming: [], no_date: [] },
+  });
+  const html = document.getElementById('todo-slot').innerHTML;
+  assert.match(html, /Fix the chairs/, 'the real local list shows');
+  assert.doesNotMatch(html, /iCloud/, 'no iCloud chip');
+});
+
+test('toggleTodo: checking an item off schedules ONE refresh for when its grace ends', async () => {
+  const { sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp(url === '/api/todos' ? { buckets: {}, recent_done: [] } : { ok: true }); };
+  await sandbox.toggleTodo(7, false);
+  const grace = timers.filter((t) => t.ms === 5 * 60000 + 2000);
+  assert.equal(grace.length, 1, 'one archive refresh armed');
+  urls.length = 0;
+  grace[0].fn();
+  await flush();
+  assert.ok(urls.includes('/api/hub'), 'the refresh re-reads the wall payload');
+});
+
+test('toggleTodo: an undo, or a failed check, arms no archive refresh', async () => {
+  const { sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+  sandbox.fetch = async () => okResp({ ok: true });
+  await sandbox.toggleTodo(7, true);            // un-check
+  assert.equal(timers.filter((t) => t.ms === 5 * 60000 + 2000).length, 0, 'undo: none');
+  sandbox.fetch = async () => { throw new Error('offline'); };
+  await sandbox.toggleTodo(7, false);           // check that fails
+  assert.equal(timers.filter((t) => t.ms === 5 * 60000 + 2000).length, 0, 'failed write: none');
+});
+
+test('refreshIdleTodosView: an open, idle full view refetches on the beat', async () => {
+  const { document, sandbox } = newHub();
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp({ buckets: { now: [], soon: [], later: [] }, recent_done: [] }); };
+  vm.runInContext("hubData = { todo_source: 'local' }; openView = 'todos'; todoState.openId = null;", sandbox);
+  document.body.dataset.conn = 'up';
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, ['/api/todos'], 'a phone parked on the list sees wall check-offs');
+});
+
+test('refreshIdleTodosView: never repaints over someone using the view, or while offline', async () => {
+  const { document, sandbox } = newHub();
+  const urls = [];
+  sandbox.fetch = async (url) => { urls.push(url); return okResp({ buckets: { now: [], soon: [], later: [] }, recent_done: [] }); };
+  vm.runInContext("hubData = { todo_source: 'local' }; openView = 'todos'; todoState.openId = null;", sandbox);
+  document.body.dataset.conn = 'down';
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'offline: no toast-per-beat refetch');
+  document.body.dataset.conn = 'up';
+  vm.runInContext('todoState.openId = 3;', sandbox);
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'a row action strip is open');
+  vm.runInContext('todoState.openId = null;', sandbox);
+  const inp = document.createElement('input');
+  inp.id = 'todo-add-input'; inp.value = 'half typed';
+  document.body.appendChild(inp);
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'a draft in the add box');
+  vm.runInContext("openView = null;", sandbox);
+  inp.value = '';
+  await sandbox.refreshIdleTodosView();
+  assert.deepEqual(urls, [], 'no full view showing');
 });

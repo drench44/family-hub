@@ -1,4 +1,5 @@
-"""Pure to-do visibility and grouping logic. Stdlib only, no I/O.
+"""Pure to-do visibility and grouping logic. Stdlib only, no I/O (beyond one
+warning per unusable done_at).
 
 Conventions:
 - A todo dict carries created_at (ISO-8601 UTC), done_at (ISO-8601 UTC or
@@ -16,6 +17,9 @@ Conventions:
 from __future__ import annotations
 
 import datetime as dt
+import logging
+
+log = logging.getLogger(__name__)
 
 BUCKETS = ("now", "soon", "later")
 
@@ -24,18 +28,33 @@ BUCKETS = ("now", "soon", "later")
 DONE_GRACE_MIN = 5
 
 
+# A done_at a little ahead of the server clock is tolerated (clock steps);
+# anything further ahead can't be aged honestly and is hidden like garbage.
+_FUTURE_SKEW = dt.timedelta(minutes=1)
+# ids already warned about, so a bad row logs once, not every 60s poll
+_warned_bad: set = set()
+
+
 def is_visible(todo: dict, now: dt.datetime) -> bool:
     """Open items always; a done item only inside its grace window. `now` must
-    be timezone-aware. An unparseable or naive done_at hides the row (it is
-    still in recent_done by its done_date) rather than pinning it forever."""
+    be timezone-aware. A done_at that can't be aged (unparseable, naive, or
+    in the future) hides the row rather than pinning it on the wall; it stays
+    restorable from recent_done by its done_date. Logged once per row."""
     done_at = todo.get("done_at")
     if done_at is None:
         return True
     try:
         t = dt.datetime.fromisoformat(done_at)
     except (TypeError, ValueError):
-        return False
-    if t.tzinfo is None:
+        t = None
+    if t is None or t.tzinfo is None or t - now > _FUTURE_SKEW:
+        tid = todo.get("id")
+        if tid not in _warned_bad:
+            _warned_bad.add(tid)
+            log.warning("todos: item %s has an unusable done_at %r; hiding "
+                        "it from the list (restorable from recently done "
+                        "if its done_date %r is valid)",
+                        tid, done_at, todo.get("done_date"))
         return False
     return now - t < dt.timedelta(minutes=DONE_GRACE_MIN)
 
