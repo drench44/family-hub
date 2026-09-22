@@ -291,6 +291,19 @@ def test_hub_build_token_tracks_the_served_config(tmp_path, monkeypatch):
     assert build_b != build_a, "a config change must change the reload token"
 
 
+def test_config_fingerprint_failure_logs_and_keeps_a_token(app_mod, caplog):
+    """An unserializable config must never take the app down at import: it
+    logs a warning (the config half of the token is lost, and says so) and
+    the build token is still a well-formed asset hash."""
+    class Weird:
+        pass
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        fp = app_mod._config_fingerprint(Weird())   # not a dataclass: asdict raises
+    assert fp == ""
+    assert any("not fingerprinted" in r.getMessage() for r in caplog.records)
+    assert re.fullmatch(r"[0-9a-f]{12}", app_mod._compute_build(fp))
+
+
 def test_hub_theme_new_modes_survive(tmp_path, monkeypatch):
     """All five wall modes (light/soft/dark/grey/black) round-trip through config
     validation. Regression: _THEME_AXES['mode'] listed only light/dark, so a
