@@ -53,6 +53,11 @@ const celebrated = new Set();
 let caldavUi = {
   connecting: false, testing: false, testResult: null, formError: '',
   collections: [], collectionsError: false,
+  // The Apple ID typed into the not-connected form, carried across the
+  // panel's redraws (the "enter both" error, Connecting…, a failed connect all
+  // rebuild the inputs and used to wipe it). Never the password: that field
+  // simply comes back empty after a redraw.
+  user: '',
 };
 
 /* ----------------------------------------------------------- clock + night */
@@ -1740,6 +1745,7 @@ function openOverlay(view) {
   } else if (view === 'settings') {
     content.innerHTML = `<div class="overlay-panel"><div id="settings-full"></div></div>`;
     caldavUi.formError = '';   // a stale validation message shouldn't outlive a reopen
+    caldavUi.user = '';        // nor a half-typed Apple ID from an earlier visit
     renderSettingsFull();      // instant paint from cache (hubData / lastIntegrations)
   }
   overlay().classList.add('open');
@@ -4676,6 +4682,8 @@ function caldavIntegration() {
 function renderCaldavPanel() {
   const host = document.getElementById('caldav-panel');
   if (!host) return;
+  const userInput = document.getElementById('caldav-user-input');
+  if (userInput) caldavUi.user = userInput.value;   // keep the typed Apple ID
   host.innerHTML = caldavPanelHtml(caldavIntegration(), caldavUi);
 }
 
@@ -4759,7 +4767,11 @@ async function connectCaldav() {
   }
   // The password's only job was to reach that POST body. Blank it the instant
   // the request succeeds; never rely solely on the next render to clear it.
-  if (pwInput) pwInput.value = '';
+  // The Connecting… redraw replaced both inputs, so blank the live ones too,
+  // and drop the Apple ID draft: nothing should prefill a later form.
+  [pwInput, document.getElementById('caldav-pw-input'),
+    document.getElementById('caldav-user-input')].forEach((el) => { if (el) el.value = ''; });
+  caldavUi.user = '';
   caldavUi.connecting = false;
   await poll();   // hubData.integrations now carries icloud_caldav + its account
   renderCaldavPanel();
