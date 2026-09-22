@@ -2116,6 +2116,9 @@ LAUNDRY_WATCH_S = 5.0
 # enough for a watcher that was a few ticks late, far narrower than any
 # sub-status (sensing ~1 min is the only one this short, and it IS the start).
 LAUNDRY_START_EXACT_MIN = 2.0
+# How stale the persisted "last watcher tick" may get before it is rewritten.
+# Well under LAUNDRY_START_EXACT_MIN, so the gap check above stays meaningful.
+LAUNDRY_TICK_PERSIST_S = 30.0
 # The placeholder finish only appears in a cycle's first minutes (live
 # history: 1 to 6 min); past this, a disagreement is the machine revising
 # its own estimate and is left alone.
@@ -2489,7 +2492,15 @@ def _laundry_annotate(t: dict) -> dict:
         watching = (last_tick is not None and
                     (now_utc - last_tick).total_seconds() / 60
                     <= LAUNDRY_START_EXACT_MIN)
-        fdb.kv_set(c, "laundry_last_tick", now_utc.isoformat())
+        # Refresh the stamp only once it is LAUNDRY_TICK_PERSIST_S old, not
+        # on every 5s tick (that alone was ~17k commits a day). The stored
+        # time then trails the real last tick by at most that much, so a
+        # gap can only read slightly LONGER than it was: the safe direction
+        # (not a watched start), and far inside the 2 min window.
+        if (last_tick is None or last_tick > now_utc
+                or (now_utc - last_tick).total_seconds()
+                >= LAUNDRY_TICK_PERSIST_S):
+            fdb.kv_set(c, "laundry_last_tick", now_utc.isoformat())
         for m in machines:
             done_key = f"laundry_done_{m['id']}"
             phase_key = f"laundry_phase_{m['id']}"

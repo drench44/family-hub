@@ -3417,6 +3417,27 @@ def test_laundry_steady_state_writes_nothing(client, monkeypatch):
         assert writes == [], f"steady {phase} rewrote {writes}"
 
 
+def test_laundry_watch_stamp_is_refreshed_once_it_ages(client, monkeypatch):
+    """The "was the hub watching" stamp is rewritten only once it is
+    LAUNDRY_TICK_PERSIST_S old, so a steady watcher does not commit every
+    tick, yet the stamp never trails far enough to fake a gap."""
+    import family_hub.app as appmod
+    now = dt.datetime.now(dt.timezone.utc)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_tile_with("idle", "power_off", now.isoformat()))
+    c = appmod._db()
+    fresh = (now - dt.timedelta(seconds=5)).isoformat()
+    fdb.kv_set(c, "laundry_last_tick", fresh)
+    client.get("/api/tiles/laundry")
+    assert fdb.kv_get(c, "laundry_last_tick") == fresh, "rewritten too soon"
+    aged = (now - dt.timedelta(
+        seconds=appmod.LAUNDRY_TICK_PERSIST_S + 1)).isoformat()
+    fdb.kv_set(c, "laundry_last_tick", aged)
+    client.get("/api/tiles/laundry")
+    assert fdb.kv_get(c, "laundry_last_tick") > aged
+    assert appmod.LAUNDRY_TICK_PERSIST_S < appmod.LAUNDRY_START_EXACT_MIN * 60
+
+
 def test_laundry_annotations_never_run_side_by_side(app_mod, monkeypatch):
     """The watcher and the route's inline fallback both annotate in worker
     threads now. Run together, both could read the same previous phase and
