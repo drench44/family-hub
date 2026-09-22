@@ -1572,7 +1572,13 @@ def reminders_toggle(body: ReminderToggle):
         raise HTTPException(404, "unknown reminder")
     now = dt.datetime.now(dt.timezone.utc)
     ics = remlogic.set_completed(obj["raw_ics"], body.completed, now)
-    fdb.queue_cal_object_update(c, body.id, ics, obj["summary"], now.isoformat())
+    if not fdb.queue_cal_object_update(c, body.id, ics, obj["summary"],
+                                       now.isoformat()):
+        # deleted since it was read (or queued for delete): nothing was queued,
+        # so don't answer as if the tap worked. 'unknown reminder' is the
+        # string common.js reminderFailMessage turns into its "already changed
+        # on another device" toast.
+        raise HTTPException(404, "unknown reminder (deleted)")
     return {"id": body.id, "completed": body.completed}
 
 

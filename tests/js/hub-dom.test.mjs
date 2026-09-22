@@ -7155,8 +7155,8 @@ function seededRandom(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-// Seed 15 is chosen on purpose: its crawler walk makes a turn that lands at
-// 5.7e-14deg, the path that used to flake, so it now runs on every run.
+// Seed 15 is chosen on purpose: its crawler walk makes a turn printed as
+// 5.7e-14deg (exponent form), the path that used to flake, so it runs every time.
 const SPIDER_SEED = 15;
 
 // A fake creature: one <span class="sn-crawl"> inside .sn-haunt inside
@@ -7348,6 +7348,10 @@ test('the crawler walks: legs tied to its pace, turns the short way, stays on sc
   }
   // ...and the pace is drawn fresh each time, so the cycle time varies: a
   // fixed cycle is exactly the skating the class exists to prevent
+  // SPIDER_SEED is picked so this walk hits a turn printed in exponent form;
+  // if a change to the walker moves the seed off that path, pick a new one
+  assert.ok(moves.some((m) => /e-\d+deg/.test(m.frames[1].transform)),
+    'the seeded walk no longer covers a turn printed in exponent form');
   const cycles = new Set(moves.map((m) => m.walkMs));
   assert.ok(cycles.size >= 2, `the leg cycle never changed (${[...cycles].join()}), so it is not tied to the pace`);
   assert.ok(!el.classList.contains('walking'), 'and it ends up still');

@@ -108,7 +108,13 @@ CREATE TABLE IF NOT EXISTS cal_objects(
   local_modified_at TEXT,
   sync_attempts INTEGER NOT NULL DEFAULT 0,
   last_sync_error TEXT,
-  local_rev INTEGER NOT NULL DEFAULT 0); -- bumped by every queued wall change
+  local_rev INTEGER NOT NULL DEFAULT 0); -- fresh value on every queued wall change
+-- The one counter local_rev values come from (one row, id = 1), so a revision
+-- is never handed out twice, even to a row deleted and re-created under the
+-- same id. Seeded in ensure_schema.
+CREATE TABLE IF NOT EXISTS cal_rev(
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  n INTEGER NOT NULL);
 -- Discovered CalDAV collections (Fable rec 2). One row per iCloud calendar /
 -- reminders list, so the settings "calendar picker" has a persistent per-
 -- collection visibility toggle (`enabled`) that survives sync, plus the metadata
@@ -274,6 +280,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE cal_objects ADD COLUMN local_rev "
                      "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+    # Seed the local_rev counter once, above any revision already stored.
+    conn.execute("INSERT OR IGNORE INTO cal_rev(id, n) "
+                 "SELECT 1, COALESCE(MAX(local_rev), 0) FROM cal_objects")
+    conn.commit()
 
 
 def _drop_completions_chore_fk(conn: sqlite3.Connection) -> None:
@@ -987,7 +997,8 @@ def set_integration_enabled(conn, iid: str, enabled: bool) -> bool:
 
 # --- caldav object store (two-way foundation) -----------------------------
 
-def upsert_cal_object_synced(conn, obj: dict, force: bool = False) -> None:
+def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
+                             expected_rev: int | None = None) -> bool:
     """Store an object pulled from the server as SYNCED. By default NEVER
     overwrites a row that has un-pushed local changes (sync_state PENDING_*), so
     a routine pull can't stomp a queued edit. `force=True` is the conflict
@@ -999,8 +1010,12 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False) -> None:
     thread and the wall's request threads use separate connections; a separate
     SELECT-then-write let a wall edit commit in between and be stomped back to
     SYNCED, so it never reached iCloud. The update resets the sync bookkeeping
-    columns the way the old INSERT OR REPLACE did."""
-    conn.execute(
+    columns the way the old INSERT OR REPLACE did.
+
+    `expected_rev` limits the forced path to the version the conflicting push
+    sent: a wall change queued since then is newer than the conflict and is
+    left alone. Returns True if the row was written."""
+    cur = conn.execute(
         "INSERT INTO cal_objects(id, collection_id, comp_type, uid, "
         "href, etag, base_etag, summary, raw_ics, sequence, last_modified, "
         "sync_state) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SYNCED') "
@@ -1012,13 +1027,15 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False) -> None:
         "raw_ics = excluded.raw_ics, sequence = excluded.sequence, "
         "last_modified = excluded.last_modified, sync_state = 'SYNCED', "
         "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
-        "WHERE cal_objects.sync_state = 'SYNCED' OR ?",
+        "WHERE cal_objects.sync_state = 'SYNCED' "
+        "OR (? AND (? IS NULL OR cal_objects.local_rev = ?))",
         (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
          obj.get("href"), obj.get("etag"), obj.get("etag"),
          obj.get("summary", ""), obj.get("raw_ics"),
          int(obj.get("sequence") or 0), obj.get("last_modified"),
-         1 if force else 0))
+         1 if force else 0, expected_rev, expected_rev))
     conn.commit()
+    return cur.rowcount > 0
 
 
 def list_cal_objects(conn, comp_type: str | None = None) -> list[dict]:
@@ -1062,27 +1079,42 @@ def get_cal_object(conn, oid: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def _next_cal_rev(conn) -> int:
+    """A fresh value for cal_objects.local_rev, never handed out before.
+
+    One counter for every row, not a per-row count, so a row deleted and
+    re-created under the same id can never repeat the revision an upload in
+    flight is holding (a per-row count restarts at 1). The UPDATE also takes
+    the write lock, so the caller's next statement runs in the same
+    transaction as the bump."""
+    return conn.execute(
+        "UPDATE cal_rev SET n = n + 1 WHERE id = 1 RETURNING n").fetchone()[0]
+
+
 def queue_cal_object_update(conn, oid: str, raw_ics: str, summary: str,
                             now_iso: str) -> bool:
     """Mark an existing pulled object as edited-locally (PENDING_UPDATE) so the
     next sync PUTs it. Keeps base_etag (the If-Match the push builds on). No-op
-    (returns False) if the row is gone. A row already mid-create (PENDING_CREATE)
-    stays a create; we only overwrite its body, so a quick edit after add
-    doesn't turn into an update against a server object that doesn't exist yet.
+    (returns False) if the row is gone, or already queued for delete: an edit
+    from a stale screen must not bring a deleted reminder back. A row already
+    mid-create (PENDING_CREATE) stays a create; we only overwrite its body, so
+    a quick edit after add doesn't turn into an update against a server object
+    that doesn't exist yet.
 
-    ONE statement, so the state it keeps is the state at the moment of the
-    write: the sync thread may flip a PENDING_CREATE to pushed in between a
-    separate read and write. Bumps local_rev so an upload already in flight
-    knows this row changed under it (mark_cal_object_pushed)."""
-    cur = conn.execute(
-        "UPDATE cal_objects SET raw_ics = ?, summary = ?, "
-        "sync_state = CASE WHEN sync_state = 'PENDING_CREATE' "
-        "THEN 'PENDING_CREATE' ELSE 'PENDING_UPDATE' END, "
-        "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL, "
-        "local_rev = local_rev + 1 WHERE id = ?",
-        (raw_ics, summary, now_iso, oid))
-    conn.commit()
-    return cur.rowcount > 0
+    The state check and the write are one statement: the sync thread may flip a
+    PENDING_CREATE to pushed between a separate read and write. Takes a fresh
+    local_rev so an upload already in flight knows this row changed under it
+    (mark_cal_object_pushed)."""
+    with conn:
+        rev = _next_cal_rev(conn)
+        cur = conn.execute(
+            "UPDATE cal_objects SET raw_ics = ?, summary = ?, "
+            "sync_state = CASE WHEN sync_state = 'PENDING_CREATE' "
+            "THEN 'PENDING_CREATE' ELSE 'PENDING_UPDATE' END, "
+            "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL, "
+            "local_rev = ? WHERE id = ? AND sync_state != 'PENDING_DELETE'",
+            (raw_ics, summary, now_iso, rev, oid))
+        return cur.rowcount > 0
 
 
 def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
@@ -1098,25 +1130,26 @@ def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
     and a later delete that skipped the server because the row had no href.
 
     ONE upsert, so the href it keeps is the href at the moment of the write (a
-    push landing between a separate read and write had its href wiped). Bumps
-    local_rev like every queued change."""
-    conn.execute(
-        "INSERT INTO cal_objects(id, collection_id, comp_type, uid, summary, "
-        "raw_ics, sync_state, local_modified_at, sync_attempts, "
-        "last_sync_error, local_rev) "
-        "VALUES(?, ?, ?, ?, ?, ?, 'PENDING_CREATE', ?, 0, NULL, 1) "
-        "ON CONFLICT(id) DO UPDATE SET "
-        "collection_id = excluded.collection_id, "
-        "comp_type = excluded.comp_type, uid = excluded.uid, "
-        "summary = excluded.summary, raw_ics = excluded.raw_ics, "
-        "last_modified = NULL, "
-        "sync_state = CASE WHEN cal_objects.href IS NOT NULL "
-        "THEN 'PENDING_UPDATE' ELSE 'PENDING_CREATE' END, "
-        "local_modified_at = excluded.local_modified_at, sync_attempts = 0, "
-        "last_sync_error = NULL, local_rev = cal_objects.local_rev + 1",
-        (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
-         obj.get("summary", ""), obj.get("raw_ics"), now_iso))
-    conn.commit()
+    push landing between a separate read and write had its href wiped). Takes a
+    fresh local_rev like every queued change."""
+    with conn:
+        rev = _next_cal_rev(conn)
+        conn.execute(
+            "INSERT INTO cal_objects(id, collection_id, comp_type, uid, summary, "
+            "raw_ics, sync_state, local_modified_at, sync_attempts, "
+            "last_sync_error, local_rev) "
+            "VALUES(?, ?, ?, ?, ?, ?, 'PENDING_CREATE', ?, 0, NULL, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "collection_id = excluded.collection_id, "
+            "comp_type = excluded.comp_type, uid = excluded.uid, "
+            "summary = excluded.summary, raw_ics = excluded.raw_ics, "
+            "last_modified = NULL, "
+            "sync_state = CASE WHEN cal_objects.href IS NOT NULL "
+            "THEN 'PENDING_UPDATE' ELSE 'PENDING_CREATE' END, "
+            "local_modified_at = excluded.local_modified_at, sync_attempts = 0, "
+            "last_sync_error = NULL, local_rev = excluded.local_rev",
+            (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
+             obj.get("summary", ""), obj.get("raw_ics"), now_iso, rev))
 
 
 def queue_cal_object_delete(conn, oid: str, now_iso: str) -> bool:
@@ -1129,18 +1162,54 @@ def queue_cal_object_delete(conn, oid: str, now_iso: str) -> bool:
     a create the sync thread just pushed is queued for a server DELETE instead
     of being dropped locally and left behind in iCloud. If the drop happens
     while that create is still uploading, the flush sees the row gone and
-    removes the server copy itself (flush_pending)."""
+    queues the server copy for delete itself (queue_orphan_cal_delete)."""
     with conn:
         cur = conn.execute(
             "DELETE FROM cal_objects WHERE id = ? "
             "AND sync_state = 'PENDING_CREATE'", (oid,))
         if cur.rowcount:
             return True
+        rev = _next_cal_rev(conn)
         cur = conn.execute(
             "UPDATE cal_objects SET sync_state = 'PENDING_DELETE', "
             "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL, "
-            "local_rev = local_rev + 1 WHERE id = ?", (now_iso, oid))
+            "local_rev = ? WHERE id = ?", (now_iso, rev, oid))
         return cur.rowcount > 0
+
+
+def queue_orphan_cal_delete(conn, row: dict, href: str, etag,
+                            now_iso: str) -> int | None:
+    """The wall deleted a row while its create was uploading (or conflicting),
+    so the row is gone but iCloud now holds a copy at `href`. Put the row back
+    as PENDING_DELETE for that copy, so the normal delete path removes it with
+    retries, error counts and the pending total, and a pull can't bring the
+    reminder back meanwhile (pulls never overwrite a PENDING row).
+
+    Returns the new row's local_rev, or None if the id is already in use again
+    (re-created in the meantime; that row owns the server copy now)."""
+    with conn:
+        rev = _next_cal_rev(conn)
+        cur = conn.execute(
+            "INSERT INTO cal_objects(id, collection_id, comp_type, uid, href, "
+            "etag, base_etag, summary, raw_ics, sync_state, local_modified_at, "
+            "local_rev) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_DELETE', ?, ?) "
+            "ON CONFLICT(id) DO NOTHING",
+            (row["id"], row["collection_id"], row["comp_type"], row["uid"],
+             href, etag, etag, row.get("summary", ""), row.get("raw_ics"),
+             now_iso, rev))
+        return rev if cur.rowcount else None
+
+
+def adopt_server_copy_for_delete(conn, oid: str, href, etag) -> bool:
+    """A queued delete whose object moved on the server (a 412): point it at
+    the server's current copy so the next DELETE's If-Match matches. The
+    delete is the newest wish, so it goes ahead. False if the row is no
+    longer a queued delete."""
+    cur = conn.execute(
+        "UPDATE cal_objects SET href = ?, etag = ?, base_etag = ? "
+        "WHERE id = ? AND sync_state = 'PENDING_DELETE'", (href, etag, etag, oid))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def mark_cal_object_pushed(conn, oid: str, href, etag, pushed_rev: int) -> str:
@@ -1173,25 +1242,24 @@ def mark_cal_object_pushed(conn, oid: str, href, etag, pushed_rev: int) -> str:
 
 
 def finish_cal_object_delete(conn, oid: str, deleted_rev: int) -> str:
-    """After a successful server DELETE: drop the row, but ONLY if it is still
-    the version whose delete was sent (local_rev == deleted_rev).
+    """After a successful server DELETE (or once the server copy is known to be
+    gone): drop the row if it is still the version whose delete was sent, or
+    is still a queued delete (a second tap on delete changes nothing: the
+    server copy is gone either way).
 
-    If the wall (or the chore mirror) re-created it while the DELETE was in
-    flight, dropping the row lost that change. The server copy it pointed at is
-    gone now, so the row forgets href/etag/base_etag and a queued re-create
-    goes out as a fresh create. Returns 'deleted' or 'superseded'."""
+    If the wall (or the chore mirror) re-created or edited it while the DELETE
+    was in flight, dropping the row lost that change. The server copy it
+    pointed at is gone now, so the row forgets href/etag/base_etag and goes
+    out as a fresh create. Returns 'deleted' or 'superseded'."""
     with conn:
-        cur = conn.execute(
-            "DELETE FROM cal_objects WHERE id = ? AND local_rev = ?",
-            (oid, deleted_rev))
-        if cur.rowcount:
-            return "deleted"
         conn.execute(
+            "DELETE FROM cal_objects WHERE id = ? "
+            "AND (local_rev = ? OR sync_state = 'PENDING_DELETE')",
+            (oid, deleted_rev))
+        cur = conn.execute(
             "UPDATE cal_objects SET href = NULL, etag = NULL, base_etag = NULL, "
-            "sync_state = CASE WHEN sync_state = 'PENDING_DELETE' "
-            "THEN 'PENDING_DELETE' ELSE 'PENDING_CREATE' END "
-            "WHERE id = ?", (oid,))
-    return "superseded"
+            "sync_state = 'PENDING_CREATE' WHERE id = ?", (oid,))
+    return "superseded" if cur.rowcount else "deleted"
 
 
 def delete_cal_object_row(conn, oid: str) -> None:

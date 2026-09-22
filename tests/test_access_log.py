@@ -3,15 +3,19 @@ tile refreshes, the laundry stream, the health check) and keeps everything
 else: errors on those paths, every write, and every other request."""
 import asyncio
 import logging
-import logging.config
+import os
 import socket
+import subprocess
+import sys
+from pathlib import Path
 
 import httpx
 import pytest
 import uvicorn
-import uvicorn.config
 
 from family_hub import access_log
+
+SRC = str(Path(__file__).resolve().parents[1] / "src")
 
 
 def _record(method, path, status, client="127.0.0.1:5000"):
@@ -87,28 +91,24 @@ def test_unexpected_record_shapes_are_kept():
 def test_install_is_idempotent_and_survives_uvicorns_log_config():
     """uvicorn applies its own dictConfig to uvicorn.access. The filter must
     still be attached after that, and installing twice must not stack it."""
-    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
-    saved = {n: (list(lg.filters), list(lg.handlers), lg.level, lg.propagate)
-             for n in names for lg in [logging.getLogger(n)]}
-    logger = logging.getLogger("uvicorn.access")
-    try:
-        logger.filters[:] = [f for f in logger.filters
-                             if not isinstance(f, access_log.QuietPollFilter)]
-        access_log.install()
-        access_log.install()
-        ours = [f for f in logger.filters
-                if isinstance(f, access_log.QuietPollFilter)]
-        assert len(ours) == 1
-        logging.config.dictConfig(uvicorn.config.LOGGING_CONFIG)
-        assert any(isinstance(f, access_log.QuietPollFilter)
-                   for f in logger.filters)
-    finally:
-        for n, (filters, handlers, level, propagate) in saved.items():
-            lg = logging.getLogger(n)
-            lg.filters[:] = filters
-            lg.handlers[:] = handlers
-            lg.setLevel(level)
-            lg.propagate = propagate
+    # In a child process: dictConfig flushes and closes every handler in the
+    # process, which would reach pytest's own logging if run in here.
+    script = (
+        "import logging, logging.config, uvicorn.config\n"
+        "from family_hub import access_log\n"
+        "lg = logging.getLogger('uvicorn.access')\n"
+        "access_log.install(); access_log.install()\n"
+        "ours = lambda: sum(isinstance(f, access_log.QuietPollFilter)"
+        " for f in lg.filters)\n"
+        "assert ours() == 1, 'installed twice'\n"
+        "logging.config.dictConfig(uvicorn.config.LOGGING_CONFIG)\n"
+        "assert ours() == 1, 'lost to dictConfig'\n"
+        "print('ok')\n")
+    env = {**os.environ,
+           "PYTHONPATH": os.pathsep.join(filter(None, [SRC, os.environ.get("PYTHONPATH")]))}
+    out = subprocess.run([sys.executable, "-c", script], env=env,
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and out.stdout.strip() == "ok", out.stderr
 
 
 def test_real_uvicorn_access_lines_are_filtered():

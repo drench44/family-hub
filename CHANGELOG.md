@@ -85,6 +85,11 @@ rolls that section to a dated version via `python scripts/release.py`.
   previous change is no longer lost. The newer edit now waits and goes out
   on the next sync. The same holds for a reminder deleted or re-added
   mid-send: a deleted one no longer comes back, and a re-added one is kept.
+  If iCloud also changed the reminder at that moment, the wall's newer
+  change still wins over the old one being sent.
+- Checking off an iCloud reminder that was just deleted (from a second
+  screen) no longer brings it back. The wall says it was already changed on
+  another device, instead of acting as if the tap worked.
 - The hub's log no longer writes a line for every routine check that went
   fine: camera checks, card refreshes, and health checks. These were most of
   the log. Failed checks, changes, and every other request are still logged.
