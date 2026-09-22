@@ -55,6 +55,15 @@ rolls that section to a dated version via `python scripts/release.py`.
 - After a deploy the wall always loads the new scripts and styles, even when
   the release number did not change. Before, the browser could keep running
   the old script from its cache.
+- In the All chores view, a slow answer for a day you already paged away
+  from no longer shows up under the wrong day. Before, it could, and a tap
+  on it checked off a chore on the wrong day.
+- A checked chore no longer flips back to undone for up to a minute when an
+  older refresh answers late, and finishing your chores shows the confetti
+  once, not twice. The same late-answer fix covers the full to-do list and
+  the washer and dryer card.
+- Tapping Done twice while a to-do is still saving no longer adds it twice,
+  and the box clears once it is added.
 
 ## [1.7.0] — 2026-09-22
 
