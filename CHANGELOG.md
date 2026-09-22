@@ -48,6 +48,13 @@ rolls that section to a dated version via `python scripts/release.py`.
   on the washer and dryer, which was about two thirds of it.
 - Every container's log is now capped (5 files of 10 MB), and the camera
   relay gets 256 MB of memory instead of 128 MB, which it kept running out of.
+- A config change (a new camera, a moved panel) now reaches a wall that is
+  already open: the wall reloads itself once it is idle, the same way it does
+  after a deploy. Before, cameras and panels kept their old setup until
+  someone refreshed by hand.
+- After a deploy the wall always loads the new scripts and styles, even when
+  the release number did not change. Before, the browser could keep running
+  the old script from its cache.
 
 ## [1.7.0] — 2026-09-22
 
