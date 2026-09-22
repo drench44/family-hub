@@ -14,6 +14,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - When the away list can't be read, the wall no longer saves that day's
   chore plan into history. A plan built without it could record the wrong
   person as the owner for good.
+- Checking off a chore just after midnight now counts for the day the wall
+  is showing. Before, it landed on the new day and the tick disappeared.
 
 ## [1.7.0] — 2026-09-22
 

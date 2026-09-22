@@ -3388,7 +3388,9 @@ async function toggleChore(id, done) {
   // with a toast instead of swallowing: under a PERSISTENT write failure (full
   // disk / read-only SD card on a kiosk) the poll() below re-renders the chore
   // as undone, so a silent catch makes the tap look like it did nothing.
-  const ok = await attemptToggle(id, done);
+  // data_date is the day these rows were rendered for; the server credits
+  // that day, not whatever its clock says by the time the tap arrives.
+  const ok = await attemptToggle(id, done, data_date || undefined);
   if (!ok) showToast('Couldn’t save — check the hub and tap again.');
   await poll();
   // keep the full-screen chores view in step when it's open on today

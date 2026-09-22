@@ -1539,6 +1539,40 @@ def test_complete_rejects_out_of_range_dates(client, app_mod):
     assert r.status_code == 422
 
 
+def test_uncomplete_rejects_bad_and_out_of_range_dates(client, app_mod):
+    """DELETE takes the same date the wall sends on POST, so it validates it
+    the same way: a garbled or far-off date is a 422, not a silent no-op."""
+    pid, cid = _seed_person_chore(client)
+    far = (app_mod._today() - dt.timedelta(days=400)).isoformat()
+    assert client.delete(
+        f"/api/chores/{cid}/complete?date=nope").status_code == 422
+    assert client.delete(
+        f"/api/chores/{cid}/complete?date={far}").status_code == 422
+
+
+def test_tap_just_after_midnight_lands_on_the_day_the_wall_showed(
+        client, app_mod, monkeypatch):
+    """The wall polls every so often, so for a minute after midnight it still
+    shows yesterday's chores. A tap then sends the date it is showing, and the
+    server must credit THAT day, not its own new date."""
+    c = app_mod._db()
+    pid, cid = _seed_person_chore(client)
+    shown = app_mod._today()
+    client.get("/api/hub")                       # the wall served (and froze) it
+    monkeypatch.setattr(app_mod, "_today",
+                        lambda: shown + dt.timedelta(days=1))
+    r = client.post(f"/api/chores/{cid}/complete",
+                    json={"date": shown.isoformat()})
+    assert r.status_code == 200
+    s = shown.isoformat()
+    n = (shown + dt.timedelta(days=1)).isoformat()
+    assert [x["chore_id"] for x in fdb.completions_between(c, s, s)] == [cid]
+    assert fdb.completions_between(c, n, n) == []
+    assert client.delete(
+        f"/api/chores/{cid}/complete?date={s}").status_code == 200
+    assert fdb.completions_between(c, s, s) == []
+
+
 def test_legacy_db_backfills_occurrence_log_once(app_mod):
     """A pre-log deployment (completions but an empty occurrence_log) gets its
     recent history reconstructed from current definitions on first boot, so

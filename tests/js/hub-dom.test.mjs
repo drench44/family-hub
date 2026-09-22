@@ -878,6 +878,17 @@ test('toggleChore surfaces the "couldn’t save" toast when the write fails', as
   assert.match(el.textContent, /tap again/);
 });
 
+test('toggleChore sends the date the wall is showing, not the server\'s', async () => {
+  const { sandbox } = newHub();
+  const seen = [];
+  sandbox.attemptToggle = async (id, done, date) => { seen.push([id, done, date]); return true; };
+  vm.runInContext("data_date = '2026-09-21';", sandbox);
+
+  await sandbox.toggleChore(42, false);
+
+  assert.deepEqual(seen[0], [42, false, '2026-09-21']);
+});
+
 test('toggleChore shows NO toast when the write succeeds', async () => {
   const { document, sandbox } = newHub();
   sandbox.attemptToggle = async () => true;

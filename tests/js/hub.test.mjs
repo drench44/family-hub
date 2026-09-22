@@ -431,6 +431,28 @@ test('reminderListBody: a list id maps through; "" and null clear to null', () =
   assert.deepEqual({ ...sandbox.reminderListBody(undefined) }, { reminder_list_id: null });
 });
 
+// --- chore toggle carries the day the wall is showing.
+// Just after midnight the wall still shows yesterday until its next poll. A tap
+// with no date landed on the server's NEW day, so the check-off vanished.
+
+test('attemptToggle sends the shown date: POST body and DELETE query', async () => {
+  const orig = sandbox.j;
+  const calls = [];
+  sandbox.j = async (url, opts) => { calls.push([url, opts]); return {}; };
+  try {
+    assert.equal(await sandbox.attemptToggle(7, false, '2026-09-21'), true);
+    assert.equal(calls[0][0], '/api/chores/7/complete');
+    assert.equal(calls[0][1].method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0][1].body), { date: '2026-09-21' });
+    assert.equal(calls[0][1].headers['Content-Type'], 'application/json');
+    assert.equal(await sandbox.attemptToggle(7, true, '2026-09-21'), true);
+    assert.equal(calls[1][0], '/api/chores/7/complete?date=2026-09-21');
+    assert.equal(calls[1][1].method, 'DELETE');
+  } finally {
+    sandbox.j = orig;
+  }
+});
+
 // --- chore toggle failure detection (drives the "couldn't save" toast).
 
 test('attemptToggle returns false when the write fails', async () => {

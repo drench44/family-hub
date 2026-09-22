@@ -1037,10 +1037,22 @@ function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
 /* Attempt a chore check-off/uncheck; returns true on success, false if the
    write failed. Separated from the DOM (hub.js toggleChore shows a toast when
    this returns false) so the failure-detection half is testable — a persistent
-   write failure must be DETECTED, not swallowed. */
-async function attemptToggle(id, done) {
+   write failure must be DETECTED, not swallowed.
+   `date` is the day the wall is showing. Send it: just after midnight the wall
+   still shows yesterday until its next poll, and a dateless tap would land on
+   the server's new day and vanish from the row that was tapped. */
+async function attemptToggle(id, done, date) {
+  const url = `/api/chores/${id}/complete`;
   try {
-    await j(`/api/chores/${id}/complete`, { method: done ? 'DELETE' : 'POST' });
+    if (done) {
+      await j(date ? `${url}?date=${encodeURIComponent(date)}` : url, { method: 'DELETE' });
+    } else {
+      await j(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(date ? { date } : {}),
+      });
+    }
     return true;
   } catch (e) {
     return false;
