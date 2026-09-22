@@ -3299,6 +3299,27 @@ def test_reminder_add_bad_due_is_422(tmp_path, monkeypatch):
         assert r.status_code == 422
 
 
+def test_reminder_toggle_of_a_deleted_reminder_is_404_and_stays_deleted(
+        tmp_path, monkeypatch):
+    """A stale second screen checks off a reminder that was just deleted. The
+    toggle must not bring it back (it used to turn the queued delete into an
+    update), and must not answer as if it worked."""
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        assert tc.post("/api/reminders/delete",
+                       json={"id": "caldav:rem/t1"}).status_code == 200
+        r = tc.post("/api/reminders/toggle",
+                    json={"id": "caldav:rem/t1", "completed": True})
+        assert r.status_code == 404
+        # the substring the wall's toast keys on (common.js reminderFailMessage)
+        assert "unknown reminder" in r.json()["detail"]
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:rem/t1")["sync_state"] == "PENDING_DELETE"
+        c.close()
+
+
 def test_reminder_toggle_unknown_id_is_404(tmp_path, monkeypatch):
     _caldav_env(monkeypatch)
     appmod = _reload_with(tmp_path, monkeypatch, {})

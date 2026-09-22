@@ -455,6 +455,25 @@ def test_cal_objects_local_rev_migration_keeps_old_rows(tmp_path):
     c.close()
 
 
+def test_cal_rev_counter_starts_above_every_stored_revision(tmp_path):
+    """The shared revision counter is seeded once from the highest stored
+    local_rev, so a queued change never repeats a revision an upload holds."""
+    c = fdb.connect(str(tmp_path / "hub.db"))
+    fdb.ensure_schema(c)
+    c.execute("DROP TABLE cal_rev")
+    c.execute("INSERT INTO cal_objects(id, collection_id, comp_type, uid, "
+              "raw_ics, sync_state, local_rev) VALUES('caldav:rem/a', "
+              "'caldav:rem', 'VTODO', 'a', 'ICS', 'PENDING_UPDATE', 7)")
+    c.commit()
+    fdb.ensure_schema(c)
+    fdb.ensure_schema(c)                      # a second boot keeps the counter
+    fdb.queue_cal_object_create(c, {
+        "id": "caldav:rem/b", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": "b", "summary": "x", "raw_ics": "I"}, "t")
+    assert fdb.get_cal_object(c, "caldav:rem/b")["local_rev"] == 8
+    c.close()
+
+
 def test_occurrence_log_between(conn):
     fdb.replace_day_log(conn, "2026-08-12", [_row(1, 7)])
     fdb.replace_day_log(conn, "2026-08-13", [_row(1, 8)])
