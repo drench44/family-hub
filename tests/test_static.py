@@ -1983,7 +1983,9 @@ def test_halloween_creatures_are_sized_off_one_scale_so_a_phone_can_shrink_them(
     covered the whole first card). Every creature is sized through --sn-k, and
     the phone block sets it below 1, scoped so a forced-Desktop TV keeps the
     wall's sizes."""
-    for sel in (r"\.sn-bat \{", r"\.sn-crawl \{", r"\.sn-dangle \{", r"\.sn-web \{"):
+    # each creature's OWN rule (anchored at a line start): an unanchored
+    # search took the first rule that merely ended in ".sn-bat {"
+    for sel in (r"(?m)^\.sn-bat \{", r"(?m)^\.sn-crawl \{", r"(?m)^\.sn-dangle \{", r"(?m)^\.sn-web \{"):
         m = re.search(sel + r"([^}]*)\}", CSS)
         assert m and "var(--sn-k, 1)" in m.group(1), f"{sel} must size itself through --sn-k"
     phone = re.search(r'@media \(max-width: 1000px\) \{[^{}]*:root:not\(\[data-layout="desktop"\]\)'
@@ -2123,3 +2125,56 @@ def test_the_preview_tile_paints_halloween_and_holds_still():
                 continue
             assert ".look-swatch" in sel or "body > .season" in sel, \
                 f"{sel} places a web without saying whether it means the wall or a tile"
+
+
+def test_night_takes_the_far_bats():
+    """Paused at night, a third of the far bats stopped mid-sky with their
+    wingbeat (on b::before, which the pause never reached) still going: a
+    bat hanging in the air flapping on the spot. They go at night."""
+    assert re.search(r'(?m)^:root\[data-look\]:not\(\[data-look="none"\]\) body\.is-night > \.season \.sn-bat \{ display: none; \}', CSS)
+
+
+def test_leaves_rock_and_drift_as_they_fall():
+    """A leaf falling in a dead-straight lane, flat to the glass, read as a
+    shape on a conveyor. Each one drifts sideways on its own --drift and
+    rocks in 3D on the `rotate` property (so it stacks with the sway's
+    transform instead of replacing it), and the rock stays short of edge-on
+    so a leaf never blinks out."""
+    fall = re.search(r"@keyframes sn-fall \{[^\n]*\}", CSS).group(0)
+    assert "var(--drift" in fall, "the fall must carry the leaf's sideways drift"
+    rock = re.search(r"@keyframes sn-rock \{([^\n]*)\}", CSS)
+    assert rock and "rotate:" in rock.group(1) and "transform" not in rock.group(1), \
+        "the rock must animate `rotate`, or it would replace the sway"
+    for deg in re.findall(r"(-?\d+)deg", rock.group(1)):
+        assert abs(int(deg)) < 80, "a rock near 90deg turns the leaf edge-on and it vanishes"
+    anim = re.search(r"\.sn-leaf\.fall b \{ animation:([^}]*)\}", CSS).group(1)
+    assert "sn-sway" in anim and "sn-rock" in anim
+    drifts = re.findall(r"(?m)^\.(?:sn-leaves\.back \.)?sn-leaf:nth-child\(\d\) \{[^}]*--drift: (-?\d+)px", CSS)
+    assert len(drifts) == 12 and len(set(drifts)) > 6, "every leaf gets its own drift"
+
+
+def test_the_dangling_spider_hangs_head_down():
+    """A spider on silk hangs from the tip of its abdomen, head down. The
+    drawing faces up, so the dangler turns over, and the thread ends near
+    the top of its box, where the abdomen now is (not in its middle)."""
+    assert re.search(r"(?m)^\.sn-dangle b \{ transform: rotate\(180deg\); \}", CSS)
+    thread = re.search(r"\.sn-dangle i::before \{([^}]*)\}", CSS).group(1)
+    assert int(re.search(r"bottom: (\d+)%", thread).group(1)) >= 80
+
+
+def test_no_wingbeat_steps_faster_than_the_screen_draws():
+    """A bat once stepped its 15 drawn frames in 0.19s: 79 frames a second,
+    faster than the screen draws, so frames dropped and the wingbeat
+    stuttered. Every bat's --flap keeps the strip at or under 60 a second."""
+    frames = int(re.search(r"animation: sn-bat-flap [^;]*steps\((\d+)", CSS).group(1))
+    flaps = re.findall(r"--flap: (\d*\.?\d+)s", CSS)
+    assert flaps, "no bat sets its wingbeat"
+    for v in flaps:
+        assert frames / float(v) <= 60, f"--flap {v}s steps the wingbeat faster than the screen draws"
+
+
+def test_the_leaf_rock_has_depth():
+    """Without perspective on the leaf, the 3D rock flattens into a plain
+    squash and the leaf stops reading as tipping in the air."""
+    leaf = re.search(r"(?m)^\.sn-leaf \{([^}]*)\}", CSS)
+    assert leaf and "perspective:" in leaf.group(1)

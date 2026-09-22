@@ -4117,7 +4117,9 @@ async function spiderDrop() {
     const from = m.at();
     const speed = snRnd(SPIDER_DROP_SPEED[0], SPIDER_DROP_SPEED[1]);
     try {
-      m.step(speed * 0.5); // the legs work slower than the silk pays out
+      // going down it just lets the silk pay out, legs still; climbing back
+      // it hauls itself up hand over hand
+      if (to < from.y) m.step(speed * 0.5);
       await m.go({ x: 0, y: to }, Math.abs(to - from.y) / speed * 1000, 'cubic-bezier(.4, 0, .5, 1)');
     } finally {
       m.still();

@@ -200,6 +200,30 @@ a bug. Read them before the next season.
   top of the gear menu) purely because the browser had cached the old
   stylesheet. Clear the cache before believing any seasonal bug.
 
+### Lessons from the review pass (2026-09-22)
+
+A second look at both seasons, after they shipped, found these:
+
+- **The wall runs Firefox ESR, not Chrome.** Every earlier check was done in
+  Chromium. Automation screenshots of Firefox (Playwright, headless or not)
+  never paint `backdrop-filter`, so the glass looks unblurred there even on
+  a bare test page: judge the glass in Chromium, and judge Firefox by
+  looking at the wall itself.
+- **Pausing a creature is not stopping it.** The night rule paused the far
+  bats' flight, but the wingbeat runs on `b::before`, which the pause never
+  named. Some bats hung mid-sky, flapping on the spot, every night. At
+  night they now go, like the near layer.
+- **Check how the real animal moves.** A spider on silk hangs head-down
+  from the tip of its abdomen, and its legs are still while the silk pays
+  out; the climb back is leg work. Ours hung head-up and "walked"
+  down the air.
+- **Mind the frame rate.** One bat stepped 15 frames in 0.19s, faster than
+  the screen draws, so it dropped frames and stuttered. Keep a sprite's
+  cycle at or under about 60 frames a second.
+- **Leaves on a straight lane read as a conveyor.** Real leaves drift and
+  tip. The rock is on `rotate`, not `transform`, so it stacks with the
+  sway instead of replacing it.
+
 ## 3. What other products do
 
 Surveyed before settling on this design (2026-09):
@@ -283,11 +307,17 @@ the cards, kept few, small and slow (see Motion below).
   drift over the cards, and six far leaves (16 to 24px, slower, no shadow)
   fall inside the photo layer, behind the glass, so a card they pass behind
   blurs them. Size, speed and blur together read as depth.
+- **How a leaf moves:** it falls, drifts a little sideways on its own
+  `--drift` (no dead-straight lanes), sways, and rocks in 3D on the CSS
+  `rotate` property (`sn-rock`), timed apart from the sway so the two never
+  lock into one beat. The rock stops short of edge-on, so a leaf never
+  blinks out.
 - **Night:** the near layer is hidden (the night dim makes `.wrap` its own
   stacking layer, which would put the top bar and gear menu under the
-  leaves) and the far ones pause. **Reduced motion:** the near layer is
-  hidden (still leaves would rest on the same words) and the far ones rest
-  behind the glass.
+  leaves) and the far leaves pause. Halloween's far bats go at night too
+  (paused, some stopped mid-sky with their wings still beating).
+  **Reduced motion:** the near layer is hidden (still leaves would rest on
+  the same words) and the far ones rest behind the glass.
 - The near leaves drift **over the cards** in their own layer (`.season-fx`, last in
   `<body>`). Behind the glass they were nearly invisible ("the leaves
   falling are a bit hard to see"), and the same gold as the photo hid them
