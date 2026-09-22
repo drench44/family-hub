@@ -43,6 +43,9 @@ FH_OUT=/srv/backup/family-hub
 ```
 
 Other knobs (all optional): `FH_REMOTE`, `FH_SKIP_REMOTE=1` (local only),
+`FH_REMOTE_MOUNT` (the mountpoint `FH_REMOTE` must sit under; by default the
+script refuses a target on the root filesystem, which is what a dropped NAS
+mount leaves behind; `none` turns the check off),
 `HOURLY_KEEP`/`DAILY_KEEP`/`WEEKLY_KEEP`/`MONTHLY_KEEP`, and `FH_NOW`
 (`YYYYmmddHHMM`, for tests).
 
@@ -82,4 +85,6 @@ configure on the box — they never belong in this repo.
 3. Verify: `sudo systemctl start family-hub-backup.service` then check the NAS
    path holds the tiered tree. A NAS outage later exits the run non-zero (loud
    in `journalctl -u family-hub-backup`) **after** the local snapshot is safely
-   written, so it never costs you the local backup.
+   written, so it never costs you the local backup. Each run also records the
+   NAS result in the hub's backup heartbeat, and the wall header shows an
+   "Off-box backup failing" (or "stale") badge until a copy succeeds again.

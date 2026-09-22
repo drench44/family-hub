@@ -87,6 +87,54 @@ def test_creds_refreshes_and_rewrites_token_when_expired(tmp_path):
     assert result is fake_creds
 
 
+def _expired_creds(new_json):
+    fake = mock.MagicMock()
+    fake.expired = True
+    fake.refresh_token = "rt"
+    fake.to_json.return_value = new_json
+    return fake
+
+
+def test_creds_rewrite_is_atomic_and_owner_only(tmp_path):
+    """token.json was truncated and rewritten in place: a crash or full disk
+    mid-write left a half file, which reads as "not connected" until someone
+    re-runs setup. It must be written to a temp file and swapped in whole,
+    and a secret stays mode 600."""
+    import os
+    import stat
+    token = tmp_path / "token.json"
+    token.write_text('{"old": true}')
+    os.chmod(token, 0o644)
+    before = os.stat(token).st_ino
+    with mock.patch("google.oauth2.credentials.Credentials") as Creds, \
+         mock.patch("google.auth.transport.requests.Request"):
+        Creds.from_authorized_user_file.return_value = _expired_creds('{"new": 1}')
+        GoogleCalendarClient(str(token))._creds()
+    assert token.read_text() == '{"new": 1}'
+    assert stat.S_IMODE(os.stat(token).st_mode) == 0o600
+    assert os.stat(token).st_ino != before, "swapped in, not rewritten in place"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["token.json"], \
+        "no temp file left behind"
+
+
+def test_creds_failed_rewrite_keeps_the_old_token(tmp_path):
+    """If the swap fails, the previous (still refreshable) token must be left
+    exactly as it was, with no temp file littering the data dir. The refreshed
+    creds are still returned for this tick."""
+    token = tmp_path / "token.json"
+    token.write_text('{"old": true}')
+    fake = _expired_creds('{"new": 1}')
+    with mock.patch("google.oauth2.credentials.Credentials") as Creds, \
+         mock.patch("google.auth.transport.requests.Request"), \
+         mock.patch("family_hub.calendar_sync.os.replace",
+                    side_effect=OSError("disk full")):
+        Creds.from_authorized_user_file.return_value = fake
+        result = GoogleCalendarClient(str(token))._creds()   # must not raise
+    assert result is fake
+    assert token.read_text() == '{"old": true}'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["token.json"]
+
+
 def test_creds_does_not_rewrite_when_still_valid(tmp_path):
     token = tmp_path / "token.json"
     original = '{"still": "valid"}'

@@ -150,18 +150,64 @@ echo "family-hub-backup OK: hub-$HOURLY.db ($BYTES bytes) $(date -u +%FT%TZ)"
 # log) instead of swallowing it -- while keeping stderr clean and rc 0. A fresh
 # install whose hub.db has no kv table yet reads as this same skipped note.
 # python3 (already required above) keeps it dependency-free (no sqlite3 CLI).
-if ! hb_err="$(python3 - "$DB" "hub-$HOURLY.db" "$BYTES" 2>&1 <<'PY'
+#
+# The same record carries the OFF-BOX outcome (remote_ok, remote_at = last
+# attempt, remote_ok_at = last good copy), filled in by record_remote below
+# once the mirror has run. This local write keeps whatever remote result is
+# already there (a FH_SKIP_REMOTE run says nothing about the NAS), except when
+# no remote is configured at all: then the remote fields are dropped, so an
+# old NAS result can't go stale and nag forever.
+if [ -z "$REMOTE" ] && [ "$SKIP_REMOTE" != "1" ]; then REMOTE_MODE=clear; else REMOTE_MODE=keep; fi
+if ! hb_err="$(python3 - "$DB" "hub-$HOURLY.db" "$BYTES" "$REMOTE_MODE" 2>&1 <<'PY'
 import sqlite3, sys, json, datetime as dt
-db, name, nbytes = sys.argv[1], sys.argv[2], int(sys.argv[3])
+db, name, nbytes, mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 c = sqlite3.connect(db, timeout=5)
+row = c.execute("SELECT value FROM kv WHERE key='backup_status'").fetchone()
+try:
+    old = json.loads(row[0]) if row else {}
+except ValueError:
+    old = {}
+rec = {k: v for k, v in (old if isinstance(old, dict) else {}).items()
+       if k.startswith("remote_") and mode == "keep"}
+rec.update({"at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "snapshot": name, "bytes": nbytes})
 c.execute("INSERT OR REPLACE INTO kv(key, value) VALUES('backup_status', ?)",
-          (json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(),
-                       "snapshot": name, "bytes": nbytes}),))
+          (json.dumps(rec),))
 c.commit(); c.close()
 PY
 )"; then
   echo "family-hub-backup: heartbeat write skipped (snapshot OK): $(printf '%s' "$hb_err" | tail -1)"
 fi
+
+# Record the off-box outcome into the heartbeat. Best-effort like the write
+# above: it never changes the run's exit code, but a failure to record is
+# printed, not swallowed.
+record_remote() {  # <true|false>
+  local err
+  if ! err="$(python3 - "$DB" "$1" 2>&1 <<'PY'
+import sqlite3, sys, json, datetime as dt
+db, ok = sys.argv[1], sys.argv[2] == "true"
+c = sqlite3.connect(db, timeout=5)
+row = c.execute("SELECT value FROM kv WHERE key='backup_status'").fetchone()
+try:
+    rec = json.loads(row[0]) if row else {}
+except ValueError:
+    rec = {}
+if not isinstance(rec, dict):
+    rec = {}
+now = dt.datetime.now(dt.timezone.utc).isoformat()
+rec["remote_ok"] = ok
+rec["remote_at"] = now
+if ok:
+    rec["remote_ok_at"] = now
+c.execute("INSERT OR REPLACE INTO kv(key, value) VALUES('backup_status', ?)",
+          (json.dumps(rec),))
+c.commit(); c.close()
+PY
+)"; then
+    echo "family-hub-backup: remote status write skipped: $(printf '%s' "$err" | tail -1)"
+  fi
+}
 
 # Off-box mirror of the whole tiered tree, unless suppressed (FH_SKIP_REMOTE=1,
 # used by the pre-deploy snapshot which only needs a local restore point).
@@ -171,8 +217,48 @@ fi
 # exit 23) even though the data copies fine -- which would false-trip the exit-2
 # REMOTE FAIL every run. We only need content + mtimes off-box, so copy those
 # and let the target own the perms: -r -t, and explicitly --no-owner/group/perms.
+#
+# MOUNT CHECK first: if the NAS mount drops, the mountpoint is just an empty
+# folder on this box's own disk, and rsync would "mirror" into it and report
+# OK while nothing left the box. FH_REMOTE_MOUNT names the mountpoint the
+# target must sit under; unset (or "auto"), the script finds the mount the
+# target lives on and refuses the root filesystem, which is never off-box.
+# "none" turns the check off. A 'host:/path' rsync target has no local mount
+# and is not checked. A failed check counts as a failed remote copy.
 if [ -n "$REMOTE" ] && [ "$SKIP_REMOTE" != "1" ]; then
-  rsync -rt --delete --no-owner --no-group --no-perms "$OUT/" "$REMOTE/" \
-    || { echo "family-hub-backup REMOTE FAIL: $REMOTE $(date -u +%FT%TZ)" >&2; exit 2; }
+  case "$REMOTE" in
+    /*|./*|../*) remote_is_local=1 ;;
+    *:*) remote_is_local=0 ;;
+    *) remote_is_local=1 ;;
+  esac
+  if [ "$remote_is_local" = "1" ] && ! mount_err="$(python3 - "$REMOTE" "${FH_REMOTE_MOUNT:-auto}" 2>&1 <<'PY'
+import os, sys
+remote, mode = os.path.realpath(sys.argv[1]), sys.argv[2]
+if mode == "none":
+    sys.exit(0)
+if mode == "auto":
+    mnt = remote
+    while not os.path.ismount(mnt):
+        mnt = os.path.dirname(mnt)
+    if mnt == "/":
+        sys.exit("target is on the root filesystem, not a mounted share")
+    sys.exit(0)
+mnt = os.path.realpath(mode)
+if not os.path.ismount(mnt):
+    sys.exit(f"{mode} is not a mountpoint")
+if not (remote + "/").startswith(mnt.rstrip("/") + "/"):
+    sys.exit(f"target is not under {mode}")
+PY
+)"; then
+    echo "family-hub-backup REMOTE FAIL (not mounted: $mount_err): $REMOTE $(date -u +%FT%TZ)" >&2
+    record_remote false
+    exit 2
+  fi
+  if ! rsync -rt --delete --no-owner --no-group --no-perms "$OUT/" "$REMOTE/"; then
+    echo "family-hub-backup REMOTE FAIL: $REMOTE $(date -u +%FT%TZ)" >&2
+    record_remote false
+    exit 2
+  fi
+  record_remote true
   echo "family-hub-backup REMOTE OK: $REMOTE"
 fi

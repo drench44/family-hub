@@ -38,6 +38,9 @@ def _run(db, out, *, now="202608180930", remote=None, skip_remote=False,
     }
     if remote is not None:
         env["FH_REMOTE"] = str(remote)
+        # A temp dir is never a mounted share, so tests about other behavior
+        # switch the mount check off; the mount tests below set it explicitly.
+        env["FH_REMOTE_MOUNT"] = "none"
     if skip_remote:
         env["FH_SKIP_REMOTE"] = "1"
     if extra_env:
@@ -341,3 +344,148 @@ def test_heartbeat_not_written_when_backup_fails(tmp_path):
     c.close()
     assert val["at"] == "2000-01-01T00:00:00+00:00", \
         "a failed backup must not advance the heartbeat (no false-green badge)"
+
+
+# --- off-box outcome in the heartbeat -------------------------------------
+# The heartbeat used to be written BEFORE the NAS copy ran, so the wall's
+# badge read healthy while every off-box copy failed. The script now records
+# the remote outcome in the same record and the badge reads it.
+
+def _make_kv_db(path: Path, status=None):
+    c = sqlite3.connect(path)
+    c.execute("create table todos (id integer primary key, title text)")
+    c.execute("insert into todos (title) values ('t')")
+    c.execute("create table kv (key text primary key, value text not null)")
+    if status is not None:
+        c.execute("insert into kv (key, value) values ('backup_status', ?)",
+                  (json.dumps(status),))
+    c.commit()
+    c.close()
+
+
+def _status(db: Path) -> dict:
+    c = sqlite3.connect(db)
+    row = c.execute("select value from kv where key='backup_status'").fetchone()
+    c.close()
+    return json.loads(row[0])
+
+
+def test_heartbeat_records_a_good_remote_copy(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    _run(db, tmp_path / "out", remote=tmp_path / "nas")
+    rec = _status(db)
+    assert rec["remote_ok"] is True
+    assert rec["remote_at"] and rec["remote_ok_at"] == rec["remote_at"]
+    assert rec["snapshot"].startswith("hub-")
+
+
+def test_heartbeat_records_a_failed_remote_copy(tmp_path):
+    db = tmp_path / "hub.db"
+    old_ok = "2026-08-01T00:00:00+00:00"
+    _make_kv_db(db, {"at": "2000-01-01T00:00:00+00:00", "remote_ok": True,
+                     "remote_at": old_ok, "remote_ok_at": old_ok})
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")
+    r = _run(db, tmp_path / "out", remote=blocker / "nas", check=False)
+    assert r.returncode == 2
+    rec = _status(db)
+    assert rec["remote_ok"] is False, "a failed NAS copy must not read healthy"
+    assert rec["remote_at"] != old_ok, "the failed attempt is timestamped"
+    assert rec["remote_ok_at"] == old_ok, "the last GOOD copy time is kept"
+    assert rec["at"] != "2000-01-01T00:00:00+00:00", "local snapshot still counts"
+
+
+def test_skip_remote_keeps_the_last_remote_outcome(tmp_path):
+    # The pre-deploy snapshot runs local-only; it must not erase (or fake) the
+    # NAS result from the last real run.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db, {"at": "2000-01-01T00:00:00+00:00", "remote_ok": False,
+                     "remote_at": "2026-08-17T00:00:00+00:00"})
+    _run(db, tmp_path / "out", remote=tmp_path / "nas", skip_remote=True)
+    rec = _status(db)
+    assert rec["remote_ok"] is False
+    assert rec["remote_at"] == "2026-08-17T00:00:00+00:00"
+    assert rec["at"] != "2000-01-01T00:00:00+00:00"
+
+
+# --- the NAS share must actually be mounted -------------------------------
+# If the mount drops, the mountpoint is just an empty folder on the box's own
+# disk. rsync then "mirrors" into it happily and the run said REMOTE OK, while
+# nothing left the box.
+
+def _mount_of(path: Path) -> str:
+    import os
+    p = os.path.realpath(path)
+    while not os.path.ismount(p):
+        p = os.path.dirname(p)
+    return p
+
+
+def test_remote_not_on_the_named_mount_fails_and_writes_nothing(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    share = tmp_path / "nas"            # an ordinary folder: the mount dropped
+    share.mkdir()
+    remote = share / "family-hub"
+    r = _run(db, tmp_path / "out", remote=remote, check=False,
+             extra_env={"FH_REMOTE_MOUNT": str(share)})
+    assert r.returncode == 2, r.stderr
+    assert "not mounted" in r.stderr
+    assert not remote.exists(), "nothing may be copied onto the local disk"
+    rec = _status(db)
+    assert rec["remote_ok"] is False, "the badge must see the failed copy"
+    assert _snaps(tmp_path / "out", "hourly"), "the local snapshot still lands"
+
+
+def test_remote_on_a_real_mount_is_mirrored(tmp_path):
+    # Name the mount the temp dir really lives on, so the check passes.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    remote = tmp_path / "nas"
+    _run(db, tmp_path / "out", remote=remote,
+         extra_env={"FH_REMOTE_MOUNT": _mount_of(tmp_path)})
+    assert _snaps(remote, "hourly")
+    assert _status(db)["remote_ok"] is True
+
+
+def test_default_mount_check_refuses_the_root_filesystem(tmp_path):
+    # With no FH_REMOTE_MOUNT the script finds the mount the target sits on.
+    # The root filesystem is never an off-box share, so a target there (what a
+    # dropped mount leaves behind) fails; any other mount is accepted.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    remote = tmp_path / "nas"
+    r = _run(db, tmp_path / "out", remote=remote, check=False,
+             extra_env={"FH_REMOTE_MOUNT": "auto"})
+    if _mount_of(tmp_path) == "/":
+        assert r.returncode == 2 and "not mounted" in r.stderr
+        assert not remote.exists()
+    else:
+        assert r.returncode == 0, r.stderr
+        assert _snaps(remote, "hourly")
+
+
+def test_rsync_host_targets_skip_the_mount_check(tmp_path):
+    # 'host:/path' goes over ssh; there is no local mount to check. The copy
+    # itself fails here (no such host), and that is reported as a remote
+    # failure, never as "not mounted".
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    r = _run(db, tmp_path / "out", remote="nosuchhost.invalid:/srv/x",
+             check=False, extra_env={"FH_REMOTE_MOUNT": "auto",
+                                     "RSYNC_RSH": "false"})
+    assert r.returncode == 2
+    assert "not mounted" not in r.stderr
+
+
+def test_no_remote_configured_clears_remote_fields(tmp_path):
+    # Turning FH_REMOTE off must not leave an old NAS result to go stale and
+    # nag forever: no remote configured means no remote fields at all.
+    db = tmp_path / "hub.db"
+    _make_kv_db(db, {"at": "2000-01-01T00:00:00+00:00", "remote_ok": False,
+                     "remote_at": "2026-08-17T00:00:00+00:00"})
+    _run(db, tmp_path / "out")
+    rec = _status(db)
+    assert not any(k.startswith("remote") for k in rec)
+    assert rec["at"] != "2000-01-01T00:00:00+00:00"

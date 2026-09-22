@@ -431,6 +431,33 @@ test('reminderListBody: a list id maps through; "" and null clear to null', () =
   assert.deepEqual({ ...sandbox.reminderListBody(undefined) }, { reminder_list_id: null });
 });
 
+// --- chore toggle carries the day the wall is showing.
+// Just after midnight the wall still shows yesterday until its next poll. A tap
+// with no date landed on the server's NEW day, so the check-off vanished.
+
+test('attemptToggle sends the shown date: POST body and DELETE query', async () => {
+  const orig = sandbox.j;
+  const calls = [];
+  sandbox.j = async (url, opts) => { calls.push([url, opts]); return {}; };
+  try {
+    assert.equal(await sandbox.attemptToggle(7, false, '2026-09-21'), true);
+    assert.equal(calls[0][0], '/api/chores/7/complete');
+    assert.equal(calls[0][1].method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0][1].body), { date: '2026-09-21' });
+    assert.equal(calls[0][1].headers['Content-Type'], 'application/json');
+    assert.equal(await sandbox.attemptToggle(7, true, '2026-09-21'), true);
+    assert.equal(calls[1][0], '/api/chores/7/complete?date=2026-09-21');
+    assert.equal(calls[1][1].method, 'DELETE');
+    // no date known yet (before the first poll): fall back to the server's day
+    await sandbox.attemptToggle(8, false);
+    assert.deepEqual(JSON.parse(calls[2][1].body), {});
+    await sandbox.attemptToggle(8, true);
+    assert.equal(calls[3][0], '/api/chores/8/complete');
+  } finally {
+    sandbox.j = orig;
+  }
+});
+
 // --- chore toggle failure detection (drives the "couldn't save" toast).
 
 test('attemptToggle returns false when the write fails', async () => {
@@ -1076,6 +1103,43 @@ test('backupBadge: amber with age when a known backup is stale', () => {
   assert.equal(b.level, 'warn');
   assert.match(b.text, /Backup stale/);
   assert.match(b.text, /40h/);   // 144000s
+});
+
+// The local snapshot can be fresh while every off-box copy fails. That used to
+// read as a healthy backup; a failing or stale remote now shows the badge.
+test('backupBadge: a healthy remote (or none configured) stays hidden', () => {
+  const ok = { ok: true, last_ok: 'x', age_s: 3600, stale: false, failing: false };
+  assert.equal(backupBadge({ known: true, stale: false, age_s: 60, remote: ok }).show, false);
+  assert.equal(backupBadge({ known: true, stale: false, age_s: 60, remote: null }).show, false);
+});
+
+test('backupBadge: amber when the off-box copy is failing', () => {
+  const b = backupBadge({ known: true, stale: false, age_s: 60, threshold_s: 129600,
+    remote: { ok: false, last_ok: 'x', age_s: 7200, stale: false, failing: true } });
+  assert.equal(b.show, true);
+  assert.equal(b.level, 'warn');
+  assert.match(b.text, /Off-box backup failing/);
+  assert.match(b.title, /2h/);          // last good copy 7200s ago
+});
+
+test('backupBadge: amber with age when the off-box copy is stale', () => {
+  const b = backupBadge({ known: true, stale: false, age_s: 60, threshold_s: 129600,
+    remote: { ok: true, last_ok: 'x', age_s: 144000, stale: true, failing: false } });
+  assert.equal(b.show, true);
+  assert.match(b.text, /Off-box backup stale \(40h\)/);
+});
+
+test('backupBadge: a remote that never succeeded says so', () => {
+  const b = backupBadge({ known: true, stale: false, age_s: 60, threshold_s: 129600,
+    remote: { ok: false, last_ok: null, age_s: null, stale: true, failing: true } });
+  assert.equal(b.show, true);
+  assert.match(b.title, /never/i);
+});
+
+test('backupBadge: a stale LOCAL backup still wins the badge text', () => {
+  const b = backupBadge({ known: true, stale: true, age_s: 144000, threshold_s: 129600,
+    remote: { ok: false, last_ok: null, age_s: null, stale: true, failing: true } });
+  assert.match(b.text, /^⚠ Backup stale/);
 });
 
 /* ---- month lanes (the Google-style spanning bars) ---- */

@@ -2,6 +2,7 @@ import datetime as dt
 import importlib
 import json
 import logging
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,6 +58,57 @@ def _today():
 
 def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def test_httpx_request_lines_are_quiet_but_its_warnings_are_not(app_mod):
+    """httpx logs every request at INFO. With the laundry watcher polling Home
+    Assistant every 5s that was two thirds of the hub's log (~19 MB a day).
+    Its INFO lines are dropped; its warnings and errors still come through."""
+    for name in ("httpx", "httpcore"):
+        lg = logging.getLogger(name)
+        assert not lg.isEnabledFor(logging.INFO), name
+        assert lg.isEnabledFor(logging.WARNING), name
+        assert lg.level == logging.WARNING, f"{name} is pinned, not inherited"
+
+
+def test_health_fails_when_the_db_cannot_open(client, app_mod, monkeypatch):
+    """/health never touched the database, so a hub whose hub.db was gone or
+    locked out stayed "healthy" to Docker while every request 500ed."""
+    def boom():
+        raise sqlite3.OperationalError("unable to open database file")
+    monkeypatch.setattr(app_mod, "_db", boom)
+    r = client.get("/health")
+    assert r.status_code == 503
+    assert r.json()["status"] == "error"
+
+
+def test_health_reads_the_file_not_just_select_1(client, app_mod, monkeypatch,
+                                                 tmp_path):
+    """SELECT 1 never reads the file, so it passes even on a corrupt db. The
+    check must read a real page (the schema) to mean anything."""
+    junk = tmp_path / "junk.db"
+    junk.write_bytes(b"this is not a sqlite database" * 200)
+    bad = sqlite3.connect(str(junk), check_same_thread=False)
+    assert bad.execute("SELECT 1").fetchone() == (1,)   # the weak check passes
+    monkeypatch.setattr(app_mod, "_db", lambda: bad)
+    assert client.get("/health").status_code == 503
+
+
+def test_health_fails_when_hub_db_was_deleted_under_an_open_connection(
+        client, app_mod, monkeypatch, tmp_path):
+    """A pooled connection opened before the file vanished still reads the
+    unlinked file happily, so the path itself is checked."""
+    monkeypatch.setattr(app_mod, "DB_PATH", str(tmp_path / "gone" / "hub.db"))
+    assert client.get("/health").status_code == 503
+
+
+def test_health_fails_on_the_empty_file_a_missing_db_leaves(
+        client, app_mod, monkeypatch, tmp_path):
+    """If hub.db is deleted, the next connect quietly creates an empty file
+    with no tables. That must read unhealthy, not ok."""
+    empty = sqlite3.connect(str(tmp_path / "fresh.db"), check_same_thread=False)
+    monkeypatch.setattr(app_mod, "_db", lambda: empty)
+    assert client.get("/health").status_code == 503
 
 
 def test_hub_carries_a_stable_build_token(client):
@@ -1539,6 +1591,40 @@ def test_complete_rejects_out_of_range_dates(client, app_mod):
     assert r.status_code == 422
 
 
+def test_uncomplete_rejects_bad_and_out_of_range_dates(client, app_mod):
+    """DELETE takes the same date the wall sends on POST, so it validates it
+    the same way: a garbled or far-off date is a 422, not a silent no-op."""
+    pid, cid = _seed_person_chore(client)
+    far = (app_mod._today() - dt.timedelta(days=400)).isoformat()
+    assert client.delete(
+        f"/api/chores/{cid}/complete?date=nope").status_code == 422
+    assert client.delete(
+        f"/api/chores/{cid}/complete?date={far}").status_code == 422
+
+
+def test_tap_just_after_midnight_lands_on_the_day_the_wall_showed(
+        client, app_mod, monkeypatch):
+    """The wall polls every so often, so for a minute after midnight it still
+    shows yesterday's chores. A tap then sends the date it is showing, and the
+    server must credit THAT day, not its own new date."""
+    c = app_mod._db()
+    pid, cid = _seed_person_chore(client)
+    shown = app_mod._today()
+    client.get("/api/hub")                       # the wall served (and froze) it
+    monkeypatch.setattr(app_mod, "_today",
+                        lambda: shown + dt.timedelta(days=1))
+    r = client.post(f"/api/chores/{cid}/complete",
+                    json={"date": shown.isoformat()})
+    assert r.status_code == 200
+    s = shown.isoformat()
+    n = (shown + dt.timedelta(days=1)).isoformat()
+    assert [x["chore_id"] for x in fdb.completions_between(c, s, s)] == [cid]
+    assert fdb.completions_between(c, n, n) == []
+    assert client.delete(
+        f"/api/chores/{cid}/complete?date={s}").status_code == 200
+    assert fdb.completions_between(c, s, s) == []
+
+
 def test_legacy_db_backfills_occurrence_log_once(app_mod):
     """A pre-log deployment (completions but an empty occurrence_log) gets its
     recent history reconstructed from current definitions on first boot, so
@@ -1656,6 +1742,32 @@ def test_away_overlay_build_fails_soft(client, app_mod, monkeypatch, caplog):
     assert body["away_ok"] is False
     assert any("away overlay" in rec.getMessage()
                for rec in caplog.records if rec.levelno >= logging.ERROR)
+
+
+def test_failed_away_overlay_never_freezes_todays_log(client, app_mod,
+                                                      monkeypatch):
+    """Today's plan is frozen into the occurrence log on every serve, and that
+    log becomes permanent history. If the away overlay failed, the plan was
+    built as if nobody were away, so freezing it would record the wrong owner
+    forever. A degraded serve must leave the log alone: no first write, and no
+    overwrite of a good record frozen earlier in the day."""
+    c = app_mod._db()
+    today = app_mod._today().isoformat()
+    pid, cid = _seed_person_chore(client, title="Dishes")
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated away_map failure")
+    monkeypatch.setattr(app_mod.fdb, "away_map", boom)
+    assert client.get("/api/hub").json()["away_ok"] is False
+    assert fdb.day_log(c, today) == [], "a degraded plan must not be frozen"
+
+    # A good record frozen earlier (here: a backup owned it) survives too.
+    other = client.post("/api/admin/people",
+                        json={"name": "Kit", "color": "#E0A030"}).json()["id"]
+    _log(c, today, cid, other)
+    client.get("/api/hub")
+    client.get(f"/api/chores/day?date={today}")
+    assert [r["person_id"] for r in fdb.day_log(c, today)] == [other]
 
 
 def test_hub_away_ok_by_default(client, app_mod):
@@ -1945,16 +2057,47 @@ def test_open_period_mid_day_keeps_the_backups_day_whole(
     assert b2["week"][-2] == "done" and b2["streak"] == 1
 
 
-def test_away_back_rejects_end_before_start(client, app_mod, monkeypatch):
-    """S2: the fast 'Going away' (start=today) then immediate 'I'm back' (end
-    defaults to yesterday) double-tap must 422, not silently void the period."""
+def test_away_back_same_day_cancels_the_period(client, app_mod, monkeypatch):
+    """'Going away' (start=today) then 'I'm back' the same day used to 422
+    every time: the default end (yesterday) falls before the start. The period
+    never took effect, so the plain tap removes it and succeeds. The wall
+    treats the person as present again straight away."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
     p1 = _make_person(client, "Remy")
     pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
+    r = client.post(f"/api/admin/away/{pid}/back")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert fdb.get_away_period(app_mod._db(), pid) is None
+    assert client.get("/api/admin/away").json()["away_periods"] == []
+    hub = client.get("/api/hub").json()
+    assert next(p for p in hub["people"]
+                if p["person"]["id"] == p1)["away"] is False
+
+
+def test_away_back_on_a_planned_future_trip_still_refuses(client, app_mod,
+                                                         monkeypatch):
+    """Only a period that started TODAY is cancelled by a plain tap. A trip
+    planned for later must not be deleted by one tap on the wrong button."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    pid = client.post("/api/admin/away", json={
+        "person_id": p1, "start_date": "2026-08-20"}).json()["id"]
     assert client.post(f"/api/admin/away/{pid}/back").status_code == 422
-    # an explicit end on/after start still works
+    assert fdb.get_away_period(app_mod._db(), pid) is not None
+
+
+def test_away_back_same_day_explicit_end_still_closes(client, app_mod,
+                                                      monkeypatch):
+    """An explicit end_date keeps the old meaning: close the period on that
+    day (here: away for today only), and an end before the start is a 422."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
+    p1 = _make_person(client, "Remy")
+    pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
+    assert client.post(f"/api/admin/away/{pid}/back",
+                       json={"end_date": "2026-08-16"}).status_code == 422
     assert client.post(f"/api/admin/away/{pid}/back",
                        json={"end_date": "2026-08-17"}).status_code == 200
+    assert fdb.get_away_period(app_mod._db(), pid)["end_date"] == "2026-08-17"
 
 
 def test_away_patch_rejects_end_before_start(client, app_mod, monkeypatch):
@@ -2584,6 +2727,30 @@ def test_reminders_api_and_hub_block(tmp_path, monkeypatch):
         assert tc.get("/api/hub").json()["reminders"]["upcoming"] == []
 
 
+def test_reminders_timed_due_buckets_by_the_hubs_local_day(tmp_path,
+                                                           monkeypatch):
+    """A reminder due at 11:30pm tonight is stored as 06:30Z tomorrow. Both the
+    hub block and the full list must file it under today, in the hub's zone."""
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        today = appmod._today()
+        tonight = dt.datetime(today.year, today.month, today.day, 23, 30,
+                              tzinfo=appmod.TZ).astimezone(dt.timezone.utc)
+        assert tonight.date() != today      # the UTC form names tomorrow
+        _seed_reminder_object(appmod, c, "caldav:x", "r1", "Bins out",
+                              due=tonight)
+        full = tc.get("/api/reminders").json()["buckets"]
+        assert [r["title"] for r in full["today"]] == ["Bins out"]
+        assert full["upcoming"] == []
+        assert full["today"][0]["due"][:10] == today.isoformat()
+        hub = tc.get("/api/hub").json()["reminders"]
+        assert [r["title"] for r in hub["today"]] == ["Bins out"]
+
+
 def test_reminders_api_not_configured_without_creds(tmp_path, monkeypatch):
     monkeypatch.delenv("ICLOUD_CALDAV_USER", raising=False)
     monkeypatch.delenv("ICLOUD_CALDAV_APP_PASSWORD", raising=False)
@@ -2829,6 +2996,59 @@ def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
     with TestClient(appmod.app) as tc:
         st = tc.post("/api/integrations/icloud_caldav/test").json()
         assert st["ok"] is True and st["events"] == 1
+
+
+def test_caldav_test_connection_never_overlaps_the_background_sync(
+        tmp_path, monkeypatch):
+    """"Test connection" ran a full CalDAV sync in a request thread while the
+    background thread could be mid-sync on its own connection: two pulls and
+    two pushes of the same outbox at once (double PUTs, stomped rows). A lock
+    must keep every CalDAV sync one at a time."""
+    import threading
+    import time as _time
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    active = {"now": 0, "max": 0}
+    guard = threading.Lock()
+
+    started = threading.Event()
+
+    def fake_sync_once(client, conn, cfg, now):
+        with guard:
+            active["now"] += 1
+            active["max"] = max(active["max"], active["now"])
+        started.set()
+        _time.sleep(0.2)
+        with guard:
+            active["now"] -= 1
+        return {"ok": True}
+    monkeypatch.setattr(appmod.caldav_sync, "sync_once", fake_sync_once)
+    monkeypatch.setattr(appmod, "sync_once", lambda *a, **k: None)   # google
+    monkeypatch.setattr(appmod, "_get_caldav_client", lambda: object())
+    with TestClient(appmod.app) as tc:
+        bg = threading.Thread(
+            target=lambda: appmod._sync_tick(None, appmod._db(), appmod.cfg))
+        bg.start()
+        assert started.wait(5), "the background sync never started"
+        assert tc.post("/api/integrations/icloud_caldav/test").json() \
+            == {"ok": True}
+        bg.join()
+    assert active["max"] == 1, "two CalDAV syncs ran at the same time"
+
+
+def test_caldav_test_connection_reports_a_wedged_sync(tmp_path, monkeypatch):
+    """A background sync that never lets go must not hang the settings button
+    forever: it waits a bounded time, then says so."""
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    monkeypatch.setattr(appmod, "CALDAV_TEST_WAIT_S", 0.05)
+    monkeypatch.setattr(appmod, "_get_caldav_client", lambda: object())
+    ran = []
+    monkeypatch.setattr(appmod.caldav_sync, "sync_once",
+                        lambda *a: ran.append(1) or {"ok": True})
+    with TestClient(appmod.app) as tc:
+        with appmod._caldav_sync_lock:
+            st = tc.post("/api/integrations/icloud_caldav/test").json()
+    assert st["ok"] is False and "already running" in st["error"]
+    assert ran == []
 
 
 def test_caldav_readonly_mode_toggle(tmp_path, monkeypatch):
@@ -3174,6 +3394,103 @@ def _laundry_tile_with(phase, status, since, finishes=None):
              "phase": phase, "status": status, "finishes_at": finishes,
              "status_since": since}]}
     return tile
+
+
+def test_laundry_steady_state_writes_nothing(client, monkeypatch):
+    """The watcher annotates every 5s. A machine sitting in the same phase
+    used to rewrite its last-phase key on every tick: ~35k SQLite commits a
+    day on the event loop for no change at all. A repeat of the same state
+    must not write."""
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    writes = []
+    real = fdb.kv_set
+    monkeypatch.setattr(fdb, "kv_set",
+                        lambda c, k, v: (writes.append(k), real(c, k, v)))
+    for phase, status in (("running", "running"), ("idle", "power_off"),
+                          ("done", "end")):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                            _laundry_tile_with(phase, status, now))
+        client.get("/api/tiles/laundry")            # the transition writes
+        writes.clear()
+        for _ in range(3):
+            assert client.get("/api/tiles/laundry").status_code == 200
+        assert writes == [], f"steady {phase} rewrote {writes}"
+
+
+def test_laundry_watch_stamp_is_refreshed_once_it_ages(client, monkeypatch):
+    """The "was the hub watching" stamp is rewritten only once it is
+    LAUNDRY_TICK_PERSIST_S old, so a steady watcher does not commit every
+    tick, yet the stamp never trails far enough to fake a gap."""
+    import family_hub.app as appmod
+    now = dt.datetime.now(dt.timezone.utc)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile",
+                        _laundry_tile_with("idle", "power_off", now.isoformat()))
+    c = appmod._db()
+    fresh = (now - dt.timedelta(seconds=5)).isoformat()
+    fdb.kv_set(c, "laundry_last_tick", fresh)
+    client.get("/api/tiles/laundry")
+    assert fdb.kv_get(c, "laundry_last_tick") == fresh, "rewritten too soon"
+    aged = (now - dt.timedelta(
+        seconds=appmod.LAUNDRY_TICK_PERSIST_S + 1)).isoformat()
+    fdb.kv_set(c, "laundry_last_tick", aged)
+    client.get("/api/tiles/laundry")
+    assert fdb.kv_get(c, "laundry_last_tick") > aged
+    assert appmod.LAUNDRY_TICK_PERSIST_S < appmod.LAUNDRY_START_EXACT_MIN * 60
+
+
+def test_laundry_annotations_never_run_side_by_side(app_mod, monkeypatch):
+    """The watcher and the route's inline fallback both annotate in worker
+    threads now. Run together, both could read the same previous phase and
+    log one finished load twice. The lock keeps them one at a time."""
+    import threading
+    import time as _time
+    active = {"now": 0, "max": 0}
+    guard = threading.Lock()
+
+    def slow(t):
+        with guard:
+            active["now"] += 1
+            active["max"] = max(active["max"], active["now"])
+        _time.sleep(0.1)
+        with guard:
+            active["now"] -= 1
+        return t
+    monkeypatch.setattr(app_mod, "_laundry_annotate", slow)
+    threads = [threading.Thread(target=app_mod._laundry_annotate_serial,
+                                args=({"machines": []},)) for _ in range(3)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert active["max"] == 1
+
+
+def test_laundry_annotate_runs_off_the_event_loop(app_mod, monkeypatch):
+    """_laundry_annotate does blocking SQLite work. Called straight from the
+    async watcher and route it stalled the event loop (every stream, every
+    request) on each tick. It must run in a worker thread."""
+    import asyncio
+    import threading
+    seen = []
+
+    def spy(t):
+        seen.append(threading.get_ident())
+        return t
+    monkeypatch.setattr(app_mod, "_laundry_annotate", spy)
+
+    async def fake_tile(*a, **kw):
+        return {"available": True, "machines": []}
+    monkeypatch.setattr(app_mod.tiles, "laundry_tile", fake_tile)
+    monkeypatch.setattr(app_mod, "_laundry_snapshot", None)
+
+    async def run():
+        loop_thread = threading.get_ident()
+        await app_mod._laundry_watch_tick()
+        monkeypatch.setattr(app_mod, "_laundry_snapshot", None)
+        await app_mod._laundry_payload()                  # inline fallback
+        return loop_thread
+    loop_thread = asyncio.run(run())
+    assert len(seen) == 2 and loop_thread not in seen
 
 
 def test_tiles_laundry_observed_finish_holds_done_through_auto_power_off(
@@ -4893,7 +5210,52 @@ _BT0 = dt.datetime(2026, 8, 18, 12, 0, tzinfo=dt.timezone.utc)
 def test_backup_status_unknown(app_mod):
     assert app_mod._backup_status(None, _BT0, 129600) == {
         "known": False, "last_success": None, "age_s": None,
-        "stale": False, "threshold_s": 129600}
+        "stale": False, "threshold_s": 129600, "remote": None}
+
+
+def _kv_backup(app_mod, tmp_path, rec):
+    conn = fdb.connect(str(tmp_path / "rb.db"))
+    fdb.ensure_schema(conn)
+    fdb.kv_set(conn, "backup_status", rec)
+    return app_mod._build_backup(conn, now=_BT0, stale_s=129600)
+
+
+def test_build_backup_without_remote_has_no_remote_block(app_mod, tmp_path):
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": (_BT0 - dt.timedelta(hours=1)).isoformat()})
+    assert s["remote"] is None and s["stale"] is False
+
+
+def test_build_backup_good_remote(app_mod, tmp_path):
+    ok_at = (_BT0 - dt.timedelta(hours=1)).isoformat()
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": ok_at, "remote_ok": True, "remote_at": ok_at,
+                    "remote_ok_at": ok_at})
+    assert s["remote"] == {"ok": True, "last_ok": ok_at, "age_s": 3600,
+                           "stale": False, "failing": False}
+
+
+def test_build_backup_failing_remote_is_not_healthy(app_mod, tmp_path):
+    """The local snapshot is fresh but the NAS copy failed: that used to read
+    as a healthy backup. It must now surface as failing."""
+    fresh = (_BT0 - dt.timedelta(hours=1)).isoformat()
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": fresh, "remote_ok": False, "remote_at": fresh,
+                    "remote_ok_at": (_BT0 - dt.timedelta(hours=2)).isoformat()})
+    assert s["stale"] is False                       # local is fine
+    assert s["remote"]["failing"] is True and s["remote"]["ok"] is False
+
+
+def test_build_backup_remote_never_succeeded_or_old_is_stale(app_mod, tmp_path):
+    fresh = (_BT0 - dt.timedelta(hours=1)).isoformat()
+    never = _kv_backup(app_mod, tmp_path,
+                       {"at": fresh, "remote_ok": False, "remote_at": fresh})
+    assert never["remote"]["stale"] is True and never["remote"]["last_ok"] is None
+    old = (_BT0 - dt.timedelta(hours=40)).isoformat()
+    s = _kv_backup(app_mod, tmp_path,
+                   {"at": fresh, "remote_ok": True, "remote_at": old,
+                    "remote_ok_at": old})
+    assert s["remote"]["stale"] is True and s["remote"]["failing"] is False
 
 
 def test_backup_status_fresh(app_mod):

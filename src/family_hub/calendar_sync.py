@@ -11,9 +11,11 @@ module imports without the libraries installed.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import logging
 import os
+import tempfile
 
 from . import db as fdb
 
@@ -135,6 +137,27 @@ def _rfc3339(d: dt.datetime) -> str:
     return d.isoformat()
 
 
+def _write_secret_atomic(path: str, text: str) -> None:
+    """Replace `path` with `text` all at once, owner-only (mode 600). Written to
+    a temp file in the same directory, flushed to disk, then swapped in with
+    os.replace, so a crash or full disk mid-write can never leave a half token
+    behind (which reads as "not connected" until setup is re-run). The temp
+    file is removed if anything fails."""
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".token-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 class GoogleCalendarClient:
     def __init__(self, token_path: str):
         self.token_path = token_path
@@ -171,8 +194,15 @@ class GoogleCalendarClient:
         creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            with open(self.token_path, "w", encoding="utf-8") as f:
-                f.write(creds.to_json())
+            try:
+                _write_secret_atomic(self.token_path, creds.to_json())
+            except OSError:
+                # The refreshed creds still work for this tick, and the old
+                # file keeps its refresh token, so the next tick refreshes
+                # again. Say so rather than failing the sync over it.
+                log.warning("could not save the refreshed token to %s; "
+                            "keeping the old file", self.token_path,
+                            exc_info=True)
         return creds
 
     def fetch_calendar_colors(self) -> dict:
