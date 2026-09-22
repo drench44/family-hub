@@ -3653,6 +3653,8 @@ def test_laundry_start_of_cycle_placeholder_finish_is_replaced(client, monkeypat
     off = ("idle", "power_off", iso(-300), None, None)
     get = lambda: {m["id"]: m for m in
                    client.get("/api/tiles/laundry").json()["machines"]}
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, off))
+    get()                                          # the dryer at rest
     start = now - dt.timedelta(minutes=1)
     monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
         off, ("running", "running", start.isoformat(), iso(1), 54)))
@@ -3667,15 +3669,202 @@ def test_laundry_start_of_cycle_placeholder_finish_is_replaced(client, monkeypat
     monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
         off, ("running", "running", start.isoformat(), real, 54)))
     assert get()["dryer"]["finishes_at"] == real
-    # end-game sensor dry (09-12 17:30: total 60, "1 min left" repeated
-    # while cooling): at minute 59 of a 60-min cycle "1 min" IS consistent
-    late = (now - dt.timedelta(minutes=59)).isoformat()
+
+
+def _watched_start(client, monkeypatch, off, spec):
+    """Rest, then the running spec, so the hub watches the start."""
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, off))
+    client.get("/api/tiles/laundry")
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, spec))
+    return {m["id"]: m for m in client.get("/api/tiles/laundry").json()["machines"]}
+
+
+def test_laundry_placeholder_fix_leaves_real_estimates_alone(client, monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    # a hub that was DOWN when the cycle began first sees it mid-cycle: the
+    # status changed 2 min ago (a sub-status), finish in 5, length 60. Not a
+    # start we watched, so no claim (review, 2026-09-22: this used to push
+    # the finish out ~38 min for the rest of the cycle)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, off))
+    client.get("/api/tiles/laundry")
     monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
-        off, off))
-    get()                                   # the dryer ends that cycle
+        off, ("running", "cooling", iso(-5), iso(5), 60)))
+    assert client.get("/api/tiles/laundry").json()["machines"][1]["finishes_at"] == iso(5)
+
+
+def test_laundry_placeholder_fix_ignores_a_large_time_left(client, monkeypatch):
+    # washer load sensing cuts a default 48-min course to 26; if total_time
+    # lags a poll, the large, real time left must not be pushed back out
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    d = _watched_start(client, monkeypatch, off,
+                       ("running", "running", iso(-1), iso(26), 60))
+    assert d["dryer"]["finishes_at"] == iso(26)
+
+
+def test_laundry_wrinkle_care_after_a_finish_is_not_a_dryer_start(client, monkeypatch):
+    # wrinkle care tumbles a FINISHED dryer load now and then; it must not
+    # tell a waiting wash that it was moved into the dryer
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-45)
+    dry_done = ("done", "end", iso(-50), None, None)
+    for w in (("running", "spinning", iso(-80), t_end, 35),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-44), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, dry_done))
+        get()
     monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
-        off, ("running", "cooling", late, iso(1), 60)))
-    assert get()["dryer"]["finishes_at"] == iso(1)
+        ("idle", "power_off", iso(-44), None, None),
+        ("running", "wrinkle_care", iso(0), None, None)))
+    assert get()["washer"]["phase"] == "waiting"
+
+
+def test_laundry_dryer_first_seen_mid_cycle_does_not_clear_a_wait(client, monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-45)
+    for w in (("running", "spinning", iso(-80), t_end, 35),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-44), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, off))
+        get()
+    # the dryer is seen running, but its status changed 30 min ago: we did
+    # not watch it start, so it can't prove the wash went in it
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(-44), None, None),
+        ("running", "running", iso(-30), iso(20), 60)))
+    assert get()["washer"]["phase"] == "waiting"
+
+
+def test_laundry_power_on_inside_the_hold_clears_the_wait_too(client, monkeypatch):
+    # the real LG sequence: end, then the machine turns itself off within
+    # 90 s (auto_off_hold), then someone powers it on inside the half hour
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-5)
+    for w in (("running", "spinning", iso(-40), t_end, 35),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-4), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, off))
+        get()
+    assert get()["washer"]["phase"] == "done"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "initial", iso(0), None, None), off))
+    assert get()["washer"]["phase"] == "idle"
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "hold_cleared_by_power_on"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(0), None, None), off))
+    assert get()["washer"]["phase"] == "idle", "no wait survives the power-on"
+
+
+def test_laundry_power_on_after_the_hold_logs_the_wait_not_the_hold(
+        client, monkeypatch):
+    # the REAL sequence: auto_off_hold sets the missed key, which outlives
+    # its window; a power-on hours later ended the WAIT (review, 2026-09-22)
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    from family_hub import db as fdb_mod
+    t_end = iso(-5)
+    for w in (("running", "spinning", iso(-40), t_end, 35),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-4), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, off))
+        get()
+    # age both stamps two hours back, as if the family came back later
+    import family_hub.app as appmod
+    c = appmod._db()
+    old = iso(-120)
+    for k in ("laundry_missed_washer", "laundry_wait_washer", "laundry_done_washer"):
+        fdb_mod.kv_set(c, k, old)
+    assert get()["washer"]["phase"] == "waiting"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "initial", iso(0), None, None), off))
+    assert get()["washer"]["phase"] == "idle"
+    assert client.get("/api/laundry/log").json()["entries"][0]["note"] \
+        == "wait_cleared_by_power_on"
+
+
+def test_laundry_waiting_survives_an_ha_blip(client, monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-45)
+    for w in (("running", "spinning", iso(-80), t_end, 35),
+              ("done", "end", t_end, None, None),
+              ("idle", "power_off", iso(-44), None, None)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, off))
+        get()
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("offline", None, None, None, None), off))
+    assert get()["washer"]["phase"] == "offline"
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        ("idle", "power_off", iso(0), None, None), off))
+    assert get()["washer"]["phase"] == "waiting"
+
+
+def test_laundry_new_wash_straight_from_done_clears_the_old_wait(client, monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    get = lambda: {m["id"]: m for m in
+                   client.get("/api/tiles/laundry").json()["machines"]}
+    t_end = iso(-45)
+    for w in (("running", "spinning", iso(-80), t_end, 35),
+              ("done", "end", t_end, None, None),
+              ("running", "detecting", iso(0), iso(48), 48)):
+        monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(w, off))
+        get()
+    import family_hub.app as appmod
+    from family_hub import db as fdb_mod
+    assert fdb_mod.kv_get(appmod._db(), "laundry_wait_washer") is None
+
+
+def test_laundry_reserved_then_running_is_a_watched_start(client, monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("reserved", "reserved", iso(-60), None, None)))
+    client.get("/api/tiles/laundry")
+    start = now - dt.timedelta(minutes=1)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(
+        off, ("running", "running", start.isoformat(), iso(1), 54)))
+    d = client.get("/api/tiles/laundry").json()["machines"][1]
+    fixed = dt.datetime.fromisoformat(d["finishes_at"])
+    assert abs((fixed - (start + dt.timedelta(minutes=54))).total_seconds()) < 1
+
+
+def test_laundry_unusable_wait_stamp_is_dropped(client, monkeypatch, caplog):
+    import family_hub.app as appmod
+    from family_hub import db as fdb_mod
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda m: (now + dt.timedelta(minutes=m)).isoformat()
+    off = ("idle", "power_off", iso(-300), None, None)
+    monkeypatch.setattr("family_hub.tiles.laundry_tile", _laundry_pair(off, off))
+    client.get("/api/tiles/laundry")
+    fdb_mod.kv_set(appmod._db(), "laundry_wait_washer", "2026-01-01T00:00:00")
+    assert client.get("/api/tiles/laundry").json()["machines"][0]["phase"] == "idle"
+    assert fdb_mod.kv_get(appmod._db(), "laundry_wait_washer") is None
+    assert "unusable wait stamp" in caplog.text
 
 
 def test_laundry_placeholder_fix_leaves_a_long_paused_cycle_alone(client, monkeypatch):

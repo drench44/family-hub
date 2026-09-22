@@ -2187,3 +2187,14 @@ def test_todo_done_grace_matches_the_server_window():
     m = re.search(r"const TODO_DONE_GRACE_MS = (\d+) \* 60000;", ALL_JS)
     assert m, "TODO_DONE_GRACE_MS not found in hub.js"
     assert int(m.group(1)) == todos.DONE_GRACE_MIN
+def test_laundry_waiting_load_lies_still():
+    # the wet load in a waiting washer must not slosh: both longhands, same
+    # trap as the done rule (.ln-washer .ln-heap re-sets animation-name)
+    assert re.search(r"\.ln-ph-waiting \.ln-heap\s*\{[^}]*animation:\s*none;[^}]*"
+                     r"animation-play-state:\s*paused", CSS) or re.search(
+        r"\.ln-ph-done \.ln-heap, \.ln-ph-waiting \.ln-heap\s*\{\s*animation:\s*none;"
+        r"\s*animation-play-state:\s*paused", CSS), \
+        "the waiting heap must be stilled like the done heap"
+    for rule in (r"\.ln-ph-waiting \.ln-arc\s*\{[^}]*var\(--warn\)",
+                 r"\.ln-ph-waiting \.ln-big\s*\{[^}]*var\(--warn\)"):
+        assert re.search(rule, CSS), rule

@@ -577,6 +577,8 @@ def _laundry_error_code(event: dict | None, status_since: str | None) -> str | N
     code = attrs.get("event_type") if isinstance(attrs, dict) else None
     if not fired or not isinstance(code, str) or not _ERROR_CODE_RE.match(code):
         return None
+    if not status_since:
+        return None          # can't tell this episode from an old one
     if status_since:
         try:
             gap = (dt.datetime.fromisoformat(status_since)
