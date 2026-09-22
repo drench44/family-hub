@@ -757,8 +757,7 @@ function renderTodoSlot(data) {
   // iCloud Reminders (settings picker). Render whichever the operator chose —
   // but fall back to local if iCloud is no longer available (e.g. disconnected
   // out-of-band) so it never strands on a reassuring-but-empty iCloud card.
-  const caldavAvail = (data.integrations || []).some((i) => i.id === 'icloud_caldav');
-  if (data.todo_source === 'icloud' && caldavAvail) {
+  if (todoSourceOf(data) === 'icloud') {
     host.innerHTML = reminderCardHtml(data.reminders, !!data.reminders_writable);
     return;
   }
@@ -769,6 +768,18 @@ function renderTodoSlot(data) {
 }
 
 /* ---------------------------------------------------------------- to-dos */
+
+/* Which list backs the To-Do surface RIGHT NOW: the saved choice, except that
+   iCloud only counts while its integration is listed AND switched on. Turning
+   iCloud off in Settings keeps the saved choice (switching it back on restores
+   it) but must not strand the wall on an empty iCloud card that hides the
+   real local list. The wall card, the overlay and the phone tab all ask here,
+   so they can never disagree about the source. */
+function todoSourceOf(data) {
+  if (!data || data.todo_source !== 'icloud') return 'local';
+  const ic = (data.integrations || []).find((i) => i.id === 'icloud_caldav');
+  return ic && ic.enabled !== false ? 'icloud' : 'local';
+}
 
 /* One shared household list, no people linkage. The wall card renders from
    the hub payload every poll; the full view (overlay on the wall, To-Dos tab
@@ -815,8 +826,8 @@ const TODO_CARD_BUDGET = 9;
      guaranteed at least one visible row (so a long Now list can't bury Soon/
      Later entirely). `moreOpen` is the count of open items folded away — that's
      what the "+N more" control advertises.
-   - Done-today lingerers (items completed today still shown struck-through for
-     the rest of the day, see todos.py) only fill budget LEFT OVER after every
+   - Just-checked lingerers (shown struck-through for a few minutes after
+     they're checked, see todos.py) only fill budget LEFT OVER after every
      tier's open items are placed. They never displace actionable work and are
      never counted in `moreOpen`. */
 function todoDigest(buckets, budget) {
@@ -839,7 +850,7 @@ function todoDigest(buckets, budget) {
     t.showOpen = Math.min(t.open.length, Math.max(1, remaining - reserveForRest));
     remaining -= t.showOpen;
   });
-  // Phase 2 — spend whatever's left on done-today lingerers, same priority.
+  // Phase 2: spend whatever's left on just-checked lingerers, same priority.
   tiers.forEach((t) => {
     t.showDone = Math.min(t.done.length, Math.max(0, remaining));
     remaining -= t.showDone;
@@ -866,9 +877,9 @@ function todoCardHtml(todos, ok = true) {
     body = groups.length
       ? groups.map((g) => {
         const label = g.bucket[0].toUpperCase() + g.bucket.slice(1);
-        // Omit the count on a tier that's only done-today lingerers (0 open):
+        // Omit the count on a tier that's only just-checked lingerers (0 open):
         // "Now 0" above struck-through rows reads oddly on the wall. The label
-        // + struck rows still say "you finished these today".
+        // + struck rows still say "you just finished these".
         const count = g.openCount > 0 ? `<span class="todo-grp-count">${g.openCount}</span>` : '';
         const more = g.moreOpen > 0
           // A tap-through to the full list, where the folded items live. Reuses
@@ -1095,7 +1106,7 @@ function renderTodosPaint() {
 async function renderTodosFull() {
   // The full view follows the same source as the home card. Read it from the
   // last hub payload so the fetch below hits the right endpoint.
-  const source = (hubData && hubData.todo_source) || 'local';
+  const source = todoSourceOf(hubData);
   todoState.source = source;
   const icloud = source === 'icloud';
   const had = icloud ? todoState.reminders != null : todoState.data != null;
@@ -1122,10 +1133,18 @@ async function refreshTodos() {
   if (todosViewActive()) await renderTodosFull(); // full view, when showing
 }
 
+/* A checked item stays up, struck through, for this long, then the server
+   archives it into "recently done". MUST equal todos.DONE_GRACE_MIN (a test
+   pins the two together). */
+const TODO_DONE_GRACE_MS = 5 * 60000;
+
 async function toggleTodo(id, done) {
   const r = await attemptTodo(`/api/todos/${id}/complete`, done ? 'DELETE' : 'POST');
   if (!r.ok) showToast(todoFailMessage(r.error));
   await refreshTodos();
+  // The device that checked it off drops the row the moment its grace ends,
+  // instead of up to a whole poll later. Other screens catch up on their poll.
+  if (r.ok && !done) setTimeout(refreshTodos, TODO_DONE_GRACE_MS + 2000);
 }
 
 async function addTodo() {
@@ -1662,7 +1681,7 @@ function openOverlay(view) {
     renderChoresFull(hubData ? hubData.people : null);  // instant paint, today
   } else if (view === 'todos') {
     content.innerHTML = `<div class="overlay-panel"><div id="todos-full"></div></div>`;
-    todoState.source = (hubData && hubData.todo_source) || 'local';
+    todoState.source = todoSourceOf(hubData);
     const cache = todoState.source === 'icloud' ? todoState.reminders : todoState.data;
     if (cache) renderTodosPaint();           // instant paint from cache
     renderTodosFull();                       // then refresh from the API
@@ -3260,7 +3279,26 @@ let scheduledPollInFlight = false;
 function scheduledPoll() {
   if (scheduledPollInFlight) return;
   scheduledPollInFlight = true;
-  poll().finally(() => { scheduledPollInFlight = false; });
+  poll()
+    .then(refreshIdleTodosView)
+    .finally(() => { scheduledPollInFlight = false; });
+}
+
+/* An open to-do full view (the wall overlay, or a phone parked on the To-Dos
+   tab) used to fetch only on entry and after its OWN writes, so an item
+   checked off on the wall stayed open on the phone, and stayed up long after
+   it had been archived. Refresh it on the scheduled beat too, but only while
+   nobody is using it: no draft in the add box, no focus there, no row's
+   action strip open. A repaint mid-edit would eat the draft or the strip. */
+function refreshIdleTodosView() {
+  if (!todosViewActive()) return undefined;
+  // the poll just failed (it swallows its error and marks the wall offline):
+  // a refetch now would only toast "couldn't refresh" every beat of an outage
+  if (document.body.dataset.conn !== 'up') return undefined;
+  const inp = document.getElementById('todo-add-input');
+  if (inp && (inp.value || document.activeElement === inp)) return undefined;
+  if (todoState.openId != null) return undefined;
+  return renderTodosFull();
 }
 
 // Same guard, same reason, for the camera probe interval: probeOneCamera's

@@ -1,33 +1,72 @@
-"""Pure to-do visibility and grouping logic. Stdlib only, no I/O.
+"""Pure to-do visibility and grouping logic. Stdlib only, no I/O (beyond one
+warning per unusable done_at).
 
 Conventions:
 - A todo dict carries created_at (ISO-8601 UTC), done_at (ISO-8601 UTC or
   None) and done_date (local 'YYYY-MM-DD' or None). The two done fields are
   always set together or cleared together (db.set_todo_done /
   db.clear_todo_done enforce this).
-- Done items linger on the main views for the rest of their local done_date,
-  then drop off; recent_done keeps a 30-day restore window.
+- A checked-off item stays on the main views, struck through, for
+  DONE_GRACE_MIN after it was checked (long enough to see it land and tap it
+  again to undo a mis-tap), then drops off into recent_done, the 30-day
+  restore window ("recently done" in the full view). It used to linger until
+  local midnight, which on a wall read as "checking it off did nothing"
+  (operator report, 2026-09-22: an item checked at 10am was still up at
+  noon).
 """
 from __future__ import annotations
 
 import datetime as dt
+import logging
+
+log = logging.getLogger(__name__)
 
 BUCKETS = ("now", "soon", "later")
 
 
-def is_visible(todo: dict, today: dt.date) -> bool:
-    if todo.get("done_at") is None:
+# How long a checked item stays on the main views before it is archived.
+DONE_GRACE_MIN = 5
+
+
+# A done_at a little ahead of the server clock is tolerated (clock steps);
+# anything further ahead can't be aged honestly and is hidden like garbage.
+_FUTURE_SKEW = dt.timedelta(minutes=1)
+# ids already warned about, so a bad row logs once, not every 60s poll
+_warned_bad: set = set()
+
+
+def is_visible(todo: dict, now: dt.datetime) -> bool:
+    """Open items always; a done item only inside its grace window. `now` must
+    be timezone-aware. A done_at that can't be aged (unparseable, naive, or
+    in the future) hides the row rather than pinning it on the wall; it stays
+    restorable from recent_done by its done_date. Logged once per row."""
+    done_at = todo.get("done_at")
+    if done_at is None:
         return True
-    return todo.get("done_date") == today.isoformat()
+    try:
+        t = dt.datetime.fromisoformat(done_at)
+    except (TypeError, ValueError):
+        t = None
+    if t is None or t.tzinfo is None or t - now > _FUTURE_SKEW:
+        tid = todo.get("id")
+        if tid not in _warned_bad:
+            _warned_bad.add(tid)
+            log.warning("todos: item %s has an unusable done_at %r; hiding "
+                        "it from the list (restorable from recently done "
+                        "if its done_date %r is valid)",
+                        tid, done_at, todo.get("done_date"))
+        return False
+    return now - t < dt.timedelta(minutes=DONE_GRACE_MIN)
 
 
-def group(todos: list[dict], today: dt.date) -> dict:
-    """Visible items by bucket. Within a bucket: open items before done-today
-    items, each oldest-first (created_at, then id). Rows with an unrecognized
-    bucket are dropped, never crash."""
+def group(todos: list[dict], now: dt.datetime | None = None) -> dict:
+    """Visible items by bucket. Within a bucket: open items before
+    just-checked items, each oldest-first (created_at, then id). Rows with an
+    unrecognized bucket are dropped, never crash."""
+    now = now or dt.datetime.now(dt.timezone.utc)
     out: dict[str, list[dict]] = {b: [] for b in BUCKETS}
     for t in todos:
-        if is_visible(t, today) and t.get("bucket") in out:
+        if is_visible(t, now) and t.get("bucket") in out:
             out[t["bucket"]].append(t)
     for b in BUCKETS:
         out[b].sort(key=lambda t: (t["done_at"] is not None,

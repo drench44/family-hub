@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from family_hub import db as fdb
 from family_hub import tiles as ftiles
+from family_hub import todos as tdlogic
 
 
 def _write_cfg(tmp_path):
@@ -1360,20 +1361,25 @@ def test_todos_patch_moves_bucket_and_renames(client):
                         json={"bucket": "whenever"}).status_code == 422
 
 
-def test_todos_complete_lingers_today_then_hides(client, app_mod, monkeypatch):
+def test_todos_complete_lingers_briefly_then_archives(client, app_mod):
     tid = client.post("/api/todos", json={"title": "Water plants"}).json()["id"]
     assert client.post(f"/api/todos/{tid}/complete").json() == {"ok": True}
 
-    # done today: still visible in buckets, struck via done_at, in recent_done
+    # just checked: still visible in buckets, struck via done_at, in recent_done
     data = client.get("/api/todos").json()
     assert [t["id"] for t in data["buckets"]["now"]] == [tid]
     assert data["buckets"]["now"][0]["done_at"] is not None
     assert [t["id"] for t in data["recent_done"]] == [tid]
+    assert [t["id"] for t in client.get("/api/hub").json()["todos"]["now"]] == [tid]
 
-    # the next local day: gone from buckets (and hub), still restorable
-    real_today = app_mod._today()
-    monkeypatch.setattr(app_mod, "_today",
-                        lambda: real_today + dt.timedelta(days=1))
+    # age the REAL stored stamp past the grace window, same day: gone from
+    # buckets and the wall, still restorable (operator report 2026-09-22: a
+    # checked item sat on the wall all day, so checking it off looked broken)
+    c = app_mod._db()
+    aged = (dt.datetime.now(dt.timezone.utc)
+            - dt.timedelta(minutes=tdlogic.DONE_GRACE_MIN, seconds=5)).isoformat()
+    c.execute("UPDATE todos SET done_at = ? WHERE id = ?", (aged, tid))
+    c.commit()
     data = client.get("/api/todos").json()
     assert data["buckets"]["now"] == []
     assert [t["id"] for t in data["recent_done"]] == [tid]
