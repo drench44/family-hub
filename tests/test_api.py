@@ -2,6 +2,7 @@ import datetime as dt
 import importlib
 import json
 import logging
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,6 +58,29 @@ def _today():
 
 def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def test_health_fails_when_the_db_cannot_open(client, app_mod, monkeypatch):
+    """/health never touched the database, so a hub whose hub.db was gone or
+    locked out stayed "healthy" to Docker while every request 500ed."""
+    def boom():
+        raise sqlite3.OperationalError("unable to open database file")
+    monkeypatch.setattr(app_mod, "_db", boom)
+    r = client.get("/health")
+    assert r.status_code == 503
+    assert r.json()["status"] == "error"
+
+
+def test_health_reads_the_file_not_just_select_1(client, app_mod, monkeypatch,
+                                                 tmp_path):
+    """SELECT 1 never reads the file, so it passes even on a corrupt db. The
+    check must read a real page (the schema) to mean anything."""
+    junk = tmp_path / "junk.db"
+    junk.write_bytes(b"this is not a sqlite database" * 200)
+    bad = sqlite3.connect(str(junk), check_same_thread=False)
+    assert bad.execute("SELECT 1").fetchone() == (1,)   # the weak check passes
+    monkeypatch.setattr(app_mod, "_db", lambda: bad)
+    assert client.get("/health").status_code == 503
 
 
 def test_hub_carries_a_stable_build_token(client):
