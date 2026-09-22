@@ -60,6 +60,17 @@ def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
+def test_httpx_request_lines_are_quiet_but_its_warnings_are_not(app_mod):
+    """httpx logs every request at INFO. With the laundry watcher polling Home
+    Assistant every 5s that was two thirds of the hub's log (~19 MB a day).
+    Its INFO lines are dropped; its warnings and errors still come through."""
+    for name in ("httpx", "httpcore"):
+        lg = logging.getLogger(name)
+        assert not lg.isEnabledFor(logging.INFO), name
+        assert lg.isEnabledFor(logging.WARNING), name
+        assert lg.level == logging.WARNING, f"{name} is pinned, not inherited"
+
+
 def test_health_fails_when_the_db_cannot_open(client, app_mod, monkeypatch):
     """/health never touched the database, so a hub whose hub.db was gone or
     locked out stayed "healthy" to Docker while every request 500ed."""
