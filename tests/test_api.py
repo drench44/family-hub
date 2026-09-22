@@ -2934,6 +2934,56 @@ def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
         assert st["ok"] is True and st["events"] == 1
 
 
+def test_caldav_test_connection_never_overlaps_the_background_sync(
+        tmp_path, monkeypatch):
+    """"Test connection" ran a full CalDAV sync in a request thread while the
+    background thread could be mid-sync on its own connection: two pulls and
+    two pushes of the same outbox at once (double PUTs, stomped rows). A lock
+    must keep every CalDAV sync one at a time."""
+    import threading
+    import time as _time
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    active = {"now": 0, "max": 0}
+    guard = threading.Lock()
+
+    def fake_sync_once(client, conn, cfg, now):
+        with guard:
+            active["now"] += 1
+            active["max"] = max(active["max"], active["now"])
+        _time.sleep(0.2)
+        with guard:
+            active["now"] -= 1
+        return {"ok": True}
+    monkeypatch.setattr(appmod.caldav_sync, "sync_once", fake_sync_once)
+    monkeypatch.setattr(appmod, "sync_once", lambda *a, **k: None)   # google
+    monkeypatch.setattr(appmod, "_get_caldav_client", lambda: object())
+    with TestClient(appmod.app) as tc:
+        bg = threading.Thread(
+            target=lambda: appmod._sync_tick(None, appmod._db(), appmod.cfg))
+        bg.start()
+        _time.sleep(0.05)                     # the background sync is running
+        assert tc.post("/api/integrations/icloud_caldav/test").json() \
+            == {"ok": True}
+        bg.join()
+    assert active["max"] == 1, "two CalDAV syncs ran at the same time"
+
+
+def test_caldav_test_connection_reports_a_wedged_sync(tmp_path, monkeypatch):
+    """A background sync that never lets go must not hang the settings button
+    forever: it waits a bounded time, then says so."""
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    monkeypatch.setattr(appmod, "CALDAV_TEST_WAIT_S", 0.05)
+    monkeypatch.setattr(appmod, "_get_caldav_client", lambda: object())
+    ran = []
+    monkeypatch.setattr(appmod.caldav_sync, "sync_once",
+                        lambda *a: ran.append(1) or {"ok": True})
+    with TestClient(appmod.app) as tc:
+        with appmod._caldav_sync_lock:
+            st = tc.post("/api/integrations/icloud_caldav/test").json()
+    assert st["ok"] is False and "already running" in st["error"]
+    assert ran == []
+
+
 def test_caldav_readonly_mode_toggle(tmp_path, monkeypatch):
     monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
     monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "x")
