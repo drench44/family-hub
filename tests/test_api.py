@@ -2,8 +2,8 @@ import datetime as dt
 import importlib
 import json
 import logging
-import sqlite3
 import re
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
