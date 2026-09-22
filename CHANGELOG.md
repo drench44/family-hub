@@ -37,6 +37,10 @@ rolls that section to a dated version via `python scripts/release.py`.
   file that looks like the calendar was never connected.
 - The health check now makes sure the database can be read. Before, it said
   "ok" even when the database was missing or broken.
+- The hub's log is much smaller. It no longer writes a line for every check
+  on the washer and dryer, which was about two thirds of it.
+- Every container's log is now capped (5 files of 10 MB), and the camera
+  relay gets 256 MB of memory instead of 128 MB, which it kept running out of.
 
 ## [1.7.0] — 2026-09-22
 

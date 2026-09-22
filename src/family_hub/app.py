@@ -50,6 +50,12 @@ logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("family_hub")
+# httpx (and httpcore under it) log every request at INFO. The laundry watcher
+# polls Home Assistant every 5s, so those lines were two thirds of the hub's
+# log, ~19 MB a day. Their warnings and errors still come through, and every
+# failed upstream fetch is also logged by our own code where it is handled.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 cfg = load_config(os.environ.get("CONFIG_PATH", "config.json"))
 # Server-side camera fetches reach go2rtc over the shared compose network
