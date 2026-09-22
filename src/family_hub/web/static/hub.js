@@ -574,12 +574,15 @@ async function renderChoresFull(prefetched) {
   const seq = ++choresFullSeq;
   const day = choreState.day;
   const stale = () => seq !== choresFullSeq || choreState.day !== day;
-  let people = prefetched;
+  // A prefetched list is always TODAY's (hubData.people), so it only stands in
+  // for the fetch when today is the day on screen. A chore tap that finishes
+  // after the user paged away must not paint today's rows under that day.
+  let people = prefetched && day === data_date ? prefetched : null;
   // Same degraded-state flag renderPeople reads: when the server's away overlay
   // build failed it ships the day with NOBODY marked away, so the view owes a
   // note rather than presenting a genuinely-away person as present. A prefetched
   // day is today's hub payload, which carries the flag itself.
-  let awayOk = prefetched && hubData ? hubData.away_ok : undefined;
+  let awayOk = people && hubData ? hubData.away_ok : undefined;
   if (!people) {
     try {
       const got = await j(`/api/chores/day?date=${day}`);
@@ -1184,7 +1187,17 @@ async function toggleTodo(id, done) {
    in the new one, and a second Done added it twice. The guard drops that
    second submit; clearAddedText then clears whichever field is on screen now,
    but only if it still holds exactly what was added (never newer typing). */
-let todoAddInFlight = false;
+let todoAddInFlight = null;   // the title being added, or null
+
+/* A submit that lands while an add is in flight: the same text is the
+   duplicate the guard exists for, dropped silently; different text is a new
+   item typed meanwhile, so say so rather than drop it without a word (it stays
+   in the box to submit again). */
+function addBusy(title) {
+  if (todoAddInFlight === null) return false;
+  if (title && title !== todoAddInFlight) showToast('Still adding the last one, tap Add again in a moment.');
+  return true;
+}
 
 function clearAddedText(title, input) {
   [input, document.getElementById('todo-add-input')].forEach((el) => {
@@ -1193,18 +1206,18 @@ function clearAddedText(title, input) {
 }
 
 async function addTodo() {
-  if (todoAddInFlight) return;
   const input = document.getElementById('todo-add-input');
   const title = ((input && input.value) || '').trim();
+  if (addBusy(title)) return;
   if (!title) return;
-  todoAddInFlight = true;
+  todoAddInFlight = title;
   try {
     const r = await attemptTodo('/api/todos', 'POST',
       { title, bucket: todoState.addBucket });
     if (!r.ok) { showToast(todoFailMessage(r.error)); return; }
     clearAddedText(title, input);
   } finally {
-    todoAddInFlight = false;
+    todoAddInFlight = null;
   }
   await refreshTodos();
 }
@@ -1247,21 +1260,21 @@ async function toggleReminder(id, completed) {
 }
 
 async function addReminder() {
-  if (todoAddInFlight) return;                     // same one-add-at-a-time guard as addTodo
   const input = document.getElementById('todo-add-input');
   const title = ((input && input.value) || '').trim();
+  if (addBusy(title)) return;                      // same one-add-at-a-time guard as addTodo
   if (!title) return;
   const lists = (hubData && hubData.reminder_lists) || [];
   if (!lists.length) return;                       // no target list -> nothing to do
   const sel = document.getElementById('todo-list-select');
   const listId = sel ? sel.value : lists[0].id;    // single list needs no picker
-  todoAddInFlight = true;
+  todoAddInFlight = title;
   try {
     const r = await attemptTodo('/api/reminders/add', 'POST', { list_id: listId, title });
     if (!r.ok) { showToast(reminderFailMessage(r.error)); return; }
     clearAddedText(title, input);
   } finally {
-    todoAddInFlight = false;
+    todoAddInFlight = null;
   }
   await refreshTodos();
 }
@@ -1796,25 +1809,34 @@ function closeAllOverlays() {
 /* Is anything up that the idle return should close? The overlay, any
    MODAL_CLOSERS modal, or the gear popover: the same set wallBusy() treats as
    busy, so anything that can hold off a deploy reload also drifts home. */
+/* Is the element with this id present and carrying `cls`? / not .hidden? */
+function hasClassOn(id, cls) {
+  const el = document.getElementById(id);
+  return !!(el && el.classList.contains(cls));
+}
+function modalShown(id) {
+  const el = document.getElementById(id);
+  return !!(el && !el.classList.contains('hidden'));
+}
+
+function overlayOpen() {
+  return !!openView || hasClassOn('overlay', 'open');
+}
+
 function surfaceOpen() {
-  const has = (id, cls) => {
-    const el = document.getElementById(id);
-    return !!(el && el.classList.contains(cls));
-  };
-  const shown = (id) => {
-    const el = document.getElementById(id);
-    return !!(el && !el.classList.contains('hidden'));
-  };
-  return !!openView || has('overlay', 'open') || has('theme-pop', 'open')
-    || Object.keys(MODAL_CLOSERS).some(shown);
+  return overlayOpen() || hasClassOn('theme-pop', 'open')
+    || Object.keys(MODAL_CLOSERS).some(modalShown);
 }
 
 /* The idle timer's callback. Re-checks first: a card closed by hand leaves its
-   timer behind, and closeOverlay's scroll-to-top must not yank a page nobody
-   left anything open on. */
+   timer behind. And only a full-screen overlay coming home scrolls the page to
+   the top (closeOverlay): a phone scrolled down its Calendar tab with just an
+   event card or the popover up keeps its place when that closes. */
 function idleReturnHome() {
   idleTimer = null;
-  if (surfaceOpen()) closeAllOverlays();
+  if (overlayOpen()) { closeAllOverlays(); return; }
+  Object.values(MODAL_CLOSERS).forEach((close) => close());
+  closeThemePop();
 }
 
 /* Dialog focus: opening a dialog moves focus onto `target` (its close/home
@@ -3075,10 +3097,11 @@ function lnConnect() {
   try {
     lnStream = new EventSource('/api/laundry/stream');
     lnStream.onmessage = (ev) => {
-      lnEpoch += 1;       // newer than any poll still in flight (see fetchLaundry)
-      laundryFails = 0;   // a live stream IS the feed being healthy — don't
-      try {               // let 3 unlucky poll instants blank a correct card
-        applyLaundry(JSON.parse(ev.data));
+      try {
+        const data = JSON.parse(ev.data);
+        lnEpoch += 1;       // newer than any poll still in flight (see fetchLaundry)
+        laundryFails = 0;   // a live stream IS the feed being healthy — don't
+        applyLaundry(data); // let 3 unlucky poll instants blank a correct card
       } catch (e) {
         // comment keepalives never reach onmessage, so this is a genuinely
         // malformed data event — dropping it silently would let a broken
@@ -3393,16 +3416,9 @@ setInterval(() => {
 /* True while the wall is showing something the user is mid-interaction with, so
    the auto-reload defers instead of yanking it away. */
 function wallBusy() {
-  const hasClass = (id, cls) => {
-    const el = document.getElementById(id);
-    return !!(el && el.classList.contains(cls));
-  };
-  const shown = (id) => {
-    const el = document.getElementById(id);
-    return !!(el && !el.classList.contains('hidden'));
-  };
-  return hasClass('overlay', 'open') || hasClass('theme-pop', 'open')
-    || Object.keys(MODAL_CLOSERS).some(shown)   // same modal set closeAllOverlays closes
+  // surfaceOpen: the overlay, the popover, and the same MODAL_CLOSERS set the
+  // idle return closes, so anything that holds off a reload also drifts home.
+  return surfaceOpen()
     // a direct tap on the bare wall (e.g. a chore toggle) opens no overlay, so
     // defer the reload for a short quiet window after any recent interaction
     || (Date.now() - lastInteraction < INTERACTION_QUIET_MS);
@@ -4025,15 +4041,27 @@ document.addEventListener('click', (e) => {
    browser gives them no Enter/Space activation of its own. Route both keys
    through click(), which bubbles into the delegated click handler above, so a
    key press does exactly what a tap does. Real buttons are left alone (the
-   browser already clicks them; a second click would double-activate). */
+   browser already clicks them; a second click would double-activate). Timing
+   matches a native button: Enter on keydown, Space on keyup. Clicking on the
+   Space keydown moved focus onto the new card's close button before the
+   keyup, and Firefox (the wall) clicks a focused button on a Space keyup, so
+   the card could close the instant it opened. */
 const KEY_ACTIVATE_SEL = '[data-eid], .mg-day, .mg-more';
+const keyActivatable = (t) => !!t && t.tagName !== 'BUTTON'
+  && typeof t.matches === 'function' && t.matches(KEY_ACTIVATE_SEL);
+let spaceDownOn = null;   // the element a Space press started on
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
-  const t = e.target;
-  if (!t || t.tagName === 'BUTTON' || typeof t.matches !== 'function'
-      || !t.matches(KEY_ACTIVATE_SEL)) return;
+  if (!keyActivatable(e.target)) return;
   e.preventDefault();   // Space would otherwise scroll the page
-  t.click();
+  if (e.key === 'Enter') e.target.click();
+  else spaceDownOn = e.target;
+});
+document.addEventListener('keyup', (e) => {
+  if (e.key !== ' ') return;
+  const t = spaceDownOn;
+  spaceDownOn = null;
+  if (t && t === e.target && keyActivatable(t)) { e.preventDefault(); t.click(); }
 });
 document.addEventListener('submit', (e) => {
   if (e.target && e.target.id === 'todo-add-form') {
@@ -4919,13 +4947,9 @@ document.addEventListener('keydown', (e) => {
     if (gear) { try { gear.focus({ preventScroll: true }); } catch (err) { /* not focusable */ } }
     return;
   }
-  const shown = (id) => {
-    const el = document.getElementById(id);
-    return !!(el && !el.classList.contains('hidden'));
-  };
-  if (shown('confirm-modal')) { closeDeleteConfirm(); return; }
-  if (shown('chore-modal')) { closeChoreEditor(); return; }
-  if (shown('ev-modal')) { closeEventDetail(); return; }
+  if (modalShown('confirm-modal')) { closeDeleteConfirm(); return; }
+  if (modalShown('chore-modal')) { closeChoreEditor(); return; }
+  if (modalShown('ev-modal')) { closeEventDetail(); return; }
   if (openView) closeAllOverlays();
 });
 

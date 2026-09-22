@@ -3042,7 +3042,7 @@ if _sync_enabled():
     threading.Thread(target=sync_loop, daemon=True).start()
 
 # HTML must always revalidate (no-cache still allows ETag 304s): the HTML
-# has no buster of its own — heuristic caching served phones a stale page on
+# has no buster of its own: heuristic caching served phones a stale page on
 # 2026-08-13 (no tab bar) after a deploy.
 # Scripts, stylesheets and the manifest revalidate too. Their ?v= busters only
 # move on a release, so a hub.js change deployed without a version bump kept

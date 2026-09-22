@@ -7985,7 +7985,8 @@ test('addTodo: a second Done while the add is in flight adds nothing, and the li
   first.remove();
   const second = document.createElement('input'); second._id = 'todo-add-input'; second.value = 'Milk';
   document.body.appendChild(second);
-  await sandbox.addTodo();                        // the second Done
+  sandbox.addTodo();                              // the second Done (not awaited:
+  await flush();                                  // unguarded it would hang on its POST)
   const posts = net.pending.filter((p) => p.url === '/api/todos' && p.opts && p.opts.method === 'POST');
   assert.equal(posts.length, 1, 'only one POST: the second Done is ignored while the first is in flight');
   // the refresh after it: let the poll + GET fail fast, they are not under test
@@ -8021,6 +8022,63 @@ test('addTodo: text typed during the in-flight add is kept, not wiped', async ()
   assert.equal(input.value, 'Bread', 'only the text that was added is cleared');
 });
 
+test('addTodo: different text submitted during an in-flight add says so instead of vanishing', async () => {
+  const { document, sandbox } = newHub();
+  const input = document.createElement('input'); input._id = 'todo-add-input'; input.value = 'Milk';
+  document.body.appendChild(input);
+  vm.runInContext("hubData = { todo_source: 'local' }; todoState.source = 'local';", sandbox);
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  sandbox.addTodo();
+  input.value = 'Bread';
+  sandbox.addTodo();
+  await flush();
+  assert.equal(net.pending.filter((p) => p.opts && p.opts.method === 'POST').length, 1);
+  const toast = document.getElementById('toast');
+  assert.ok(toast && /Still adding/.test(toast.textContent), 'a toast explains the dropped tap');
+  assert.equal(input.value, 'Bread', 'the new text stays in the box');
+});
+
+test('chores view: a chore tap finishing after the user paged away does not paint today under that day', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  const net = deferredFetch();
+  ctx.sandbox.fetch = net.fetch;
+  ctx.tap('[data-chore="10"]');                   // toggle write in flight
+  ctx.tap('[data-chnav="prev"]');                 // pages to 08-13 meanwhile
+  net.take(/\/complete/).resolve(okResp({}));
+  await flush();
+  net.take(/\/api\/hub/).reject(new Error('slow poll gave up'));
+  await flush();
+  // toggleChore's repaint must fetch the day on screen, not paint today's rows
+  const reqs = net.pending.filter((p) => /date=2026-08-13/.test(p.url));
+  assert.ok(reqs.length >= 1, 'the repaint asks for the day on screen');
+  reqs.forEach((r) => r.resolve(okResp({ date: '2026-08-13', people: OTHER_DAY_PEOPLE, away_ok: true })));
+  net.pending.length = 0;
+  await flush();
+  assert.match(ctx.choresFull.innerHTML, /Mow lawn/, "yesterday's reply paints");
+  assert.doesNotMatch(ctx.choresFull.innerHTML, /Feed cat/,
+    "today's rows never sit under yesterday's date");
+});
+
+test('laundry: an unparseable stream event does not throw away a good poll reply', async () => {
+  const { sandbox } = newHub();
+  class FakeES {
+    constructor(url) { this.url = url; this.readyState = 1; FakeES.last = this; }
+  }
+  FakeES.CLOSED = 2;
+  sandbox.window.EventSource = FakeES;
+  sandbox.EventSource = FakeES;
+  sandbox.console = { warn() {} };
+  sandbox.lnConnect();
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const poll = sandbox.fetchLaundry();
+  FakeES.last.onmessage({ data: '{not json' });
+  net.take(/laundry/).resolve(okResp({ available: true, machines: [{ id: 'w', status: 'done' }] }));
+  await poll;
+  assert.equal(vm.runInContext('laundryData.machines[0].status', sandbox), 'done');
+});
+
 test('addReminder: a second Done while the add is in flight adds nothing', async () => {
   const { document, sandbox } = newHub();
   const input = document.createElement('input'); input._id = 'todo-add-input'; input.value = 'Eggs';
@@ -8030,7 +8088,8 @@ test('addReminder: a second Done while the add is in flight adds nothing', async
   const net = deferredFetch();
   sandbox.fetch = net.fetch;
   const adding = sandbox.addReminder();
-  await sandbox.addReminder();
+  sandbox.addReminder();
+  await flush();
   assert.equal(net.pending.filter((p) => p.url === '/api/reminders/add').length, 1);
   const post = net.take(/\/api\/reminders\/add/);
   sandbox.fetch = async () => { throw new Error('offline in test'); };
@@ -8108,6 +8167,21 @@ test('idle return: a timer outliving a hand-closed card does nothing (no scroll 
     'nothing was open, so the return home must not scroll the page to the top');
 });
 
+test('idle return: closing a home event card or the popover on idle keeps the page scroll', () => {
+  // Only a full-screen overlay coming home scrolls to the top. A phone
+  // scrolled down its Calendar tab keeps its place when a card closes.
+  const { document, sandbox, timers, fire } = idleWall();
+  const { pop, gear } = seedGear(document);
+  sandbox.openEventDetail('e1');
+  fire('click', { target: { closest: (s) => (s === '#wall-gear' ? gear : null) } });
+  sandbox.scrollCalls.length = 0;
+  const idle = nextTimer(timers, sandbox.idleReturnMs(null));
+  idle.done = true; idle.fn();
+  assert.ok(document.getElementById('ev-modal').classList.contains('hidden'), 'card closed');
+  assert.ok(!pop.classList.contains('open'), 'popover closed');
+  assert.equal(sandbox.scrollCalls.length, 0, 'no scroll-to-top without an overlay');
+});
+
 test('idle return OFF still leaves a hand-opened card alone', () => {
   const { document, sandbox, timers } = idleWall();
   document.documentElement.setAttribute('data-idle-return', 'off');
@@ -8157,16 +8231,28 @@ test('Enter and Space activate a focused calendar row or day cell', () => {
   assert.equal(row.clicks(), 1, 'Enter activates the row like a tap');
   const space = keyEvent(' ', row.node);
   fire('keydown', space.ev);
-  assert.equal(row.clicks(), 2, 'Space does too');
+  assert.equal(row.clicks(), 1, 'Space waits for keyup, like a native button');
   assert.ok(space.prevented(), 'and Space does not scroll the page');
+  fire('keyup', keyEvent(' ', row.node).ev);
+  assert.equal(row.clicks(), 2, 'Space activates on keyup');
+  // Space pressed on the row but released elsewhere (focus moved) does nothing
+  fire('keydown', keyEvent(' ', row.node).ev);
+  fire('keyup', keyEvent(' ', { tagName: 'BUTTON' }).ev);
+  assert.equal(row.clicks(), 2, 'a keyup somewhere else is not a click');
   const day = keyTarget(new QueryNode('div', { class: 'mg-day', 'data-date': '2026-08-14', tabindex: '0' }));
   fire('keydown', keyEvent('Enter', day.node).ev);
+  fire('keyup', keyEvent('Enter', day.node).ev);
   assert.equal(day.clicks(), 1, 'a month day cell opens on Enter');
   fire('keydown', keyEvent('a', row.node).ev);
   assert.equal(row.clicks(), 2, 'other keys do nothing');
-  const btn = keyTarget(new QueryNode('button', { class: 'cal-nav-btn', 'data-calnav': 'next' }));
+  const btn = keyTarget(new QueryNode('button', { class: 'mg-more', 'data-eid': 'x' }));
   fire('keydown', keyEvent('Enter', btn.node).ev);
+  fire('keydown', keyEvent(' ', btn.node).ev);
+  fire('keyup', keyEvent(' ', btn.node).ev);
   assert.equal(btn.clicks(), 0, 'a real button is left to the browser (no double activation)');
+  const more = keyTarget(new QueryNode('span', { class: 'mg-more', 'data-date': '2026-08-14', tabindex: '0' }));
+  fire('keydown', keyEvent('Enter', more.node).ev);
+  assert.equal(more.clicks(), 1, 'a "+N more" chip opens on Enter');
 });
 
 test('Escape closes the topmost dialog first, then the next', () => {
@@ -8280,4 +8366,129 @@ test('the Apple ID draft is dropped on a fresh Settings open and after connectin
   assert.match(host.innerHTML, /Connected as/);
   assert.equal(vm.runInContext('caldavUi.user', sandbox), '',
     'after a good connect nothing is kept to prefill a later form');
+});
+
+// ---- review follow-ups: the remaining branches of the fixes above ----
+
+test('chores day browser: two loads of the SAME day, the older reply is dropped', async () => {
+  // The day check alone can't catch this: both replies are for the day on
+  // screen, only the request number tells the pre-tap one apart.
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  ctx.read('choreState.day = "2026-08-13";');
+  const net = deferredFetch();
+  ctx.sandbox.fetch = net.fetch;
+  const older = ctx.sandbox.renderChoresFull();
+  const newer = ctx.sandbox.renderChoresFull();
+  const [a, b] = [net.take(/date=2026-08-13/), net.take(/date=2026-08-13/)];
+  b.resolve(okResp({ date: '2026-08-13', people: OTHER_DAY_PEOPLE, away_ok: true }));
+  await newer;
+  a.resolve(okResp({ date: '2026-08-13', people: SAMPLE_PEOPLE, away_ok: true }));
+  await older;
+  assert.match(ctx.choresFull.innerHTML, /Mow lawn/);
+  assert.doesNotMatch(ctx.choresFull.innerHTML, /Feed cat/, 'the older reply never paints');
+});
+
+test('renderTodosFull: an older load FAILING after a newer success shows no error', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div'); host._id = 'todos-full'; document.body.appendChild(host);
+  vm.runInContext("hubData = { todo_source: 'local' }; openView = 'todos';"
+    + " todoState.data = { buckets: { now: [], soon: [], later: [] }, recent_done: [] };", sandbox);
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const older = sandbox.renderTodosFull();
+  const newer = sandbox.renderTodosFull();
+  const [a, b] = [net.take(/\/api\/todos/), net.take(/\/api\/todos/)];
+  b.resolve(okResp({ buckets: { now: [{ id: 1, title: 'Fresh', bucket: 'now', done_at: null }],
+    soon: [], later: [] }, recent_done: [] }));
+  await newer;
+  a.reject(new Error('timed out'));
+  await older;
+  assert.equal(document.getElementById('toast'), null, 'no "couldn\u2019t refresh" toast');
+  assert.match(host.innerHTML, /Fresh/);
+});
+
+test('laundry: a stale poll FAILURE does not count toward blanking a good card', async () => {
+  const { sandbox } = newHub();
+  const net = deferredFetch();
+  sandbox.fetch = net.fetch;
+  const older = sandbox.fetchLaundry();
+  const newer = sandbox.fetchLaundry();
+  const [a, b] = [net.take(/laundry/), net.take(/laundry/)];
+  b.resolve(okResp({ available: true, machines: [] }));
+  await newer;
+  a.reject(new Error('timed out'));
+  await older;
+  assert.equal(vm.runInContext('laundryFails', sandbox), 0);
+});
+
+test('Escape with the popover open over an overlay closes only the popover and focuses the gear', () => {
+  const { document, sandbox, fire } = idleWall();
+  const { pop, gear } = seedGear(document);
+  sandbox.openOverlay('chores');
+  fire('click', { target: { closest: (s) => (s === '#wall-gear' ? gear : null) } });
+  fire('keydown', { key: 'Escape', target: document.body });
+  assert.ok(!pop.classList.contains('open'), 'popover closed');
+  assert.ok(document.getElementById('overlay').classList.contains('open'), 'overlay stays');
+  assert.equal(document.activeElement, gear, 'focus back on the gear');
+});
+
+test('stacked dialogs hand focus back layer by layer (overlay, editor, confirm)', async () => {
+  const { document, sandbox } = idleWall();
+  const card = document.getElementById('chore-card');
+  document.getElementById('chore-modal').appendChild(card);
+  card.innerHTML = '<button class="chore-close" type="button">x</button>';
+  const confirmCard = document.getElementById('confirm-card');
+  document.getElementById('confirm-modal').appendChild(confirmCard);
+  confirmCard.innerHTML = '<button class="confirm-cancel" data-confirm-cancel="1">Cancel</button>';
+  sandbox.openOverlay('chores');
+  const trigger = document.createElement('button');
+  document.activeElement = trigger;               // the "+ Add person" row
+  sandbox.openPersonEditor({ mode: 'add' });
+  const close = card.querySelector('.chore-close');
+  assert.equal(document.activeElement, close, 'focus in the editor');
+  sandbox.openDeleteConfirm(10);
+  assert.equal(document.activeElement, confirmCard.querySelector('[data-confirm-cancel]'),
+    'the confirm focuses Cancel, the safe choice');
+  sandbox.closeDeleteConfirm();
+  assert.equal(document.activeElement, close, 'closing the confirm returns to the editor');
+  sandbox.closeChoreEditor();
+  assert.equal(document.activeElement, trigger, 'closing the editor returns to what opened it');
+});
+
+test('closing a dialog leaves focus alone once the user has moved it elsewhere', () => {
+  const { document, sandbox } = idleWall();
+  document.getElementById('ev-modal').appendChild(document.getElementById('ev-card'));
+  const row = document.createElement('div');
+  document.activeElement = row;
+  sandbox.openEventDetail('e1');
+  const elsewhere = document.createElement('button');
+  document.activeElement = elsewhere;             // focus left the card already
+  sandbox.closeEventDetail();
+  assert.equal(document.activeElement, elsewhere, 'focus is not pulled back');
+});
+
+test('idle return: the editor and the delete confirm arm the timer, a bare-wall touch does not', () => {
+  const { document, sandbox, timers, fire } = idleWall();
+  fire('pointerdown');
+  assert.ok(!nextTimer(timers, sandbox.idleReturnMs(null)), 'nothing open: no countdown');
+  sandbox.openPersonEditor({ mode: 'add' });
+  assert.ok(nextTimer(timers, sandbox.idleReturnMs(null)), 'the editor arms it');
+  sandbox.closeChoreEditor();
+  sandbox.openDeleteConfirm(10);
+  assert.ok(nextTimer(timers, sandbox.idleReturnMs(null)), 'the delete confirm arms it');
+});
+
+test('Enter on a real calendar row opens its event card (end to end, no stubbed handler)', () => {
+  const { document, sandbox, fire } = idleWall();
+  const holder = new QueryNode('div', {});
+  holder.innerHTML = sandbox.eventRow({ id: 'e1', title: 'Dentist', all_day: false,
+    start_ts: '2026-08-14T09:00:00', end_ts: '2026-08-14T10:00:00' }, '2026-08-14');
+  const row = holder.querySelector('.cal-ev');
+  row.closest = (sel) => (selectorMatches(row, sel) ? row : null);
+  row.matches = (sel) => sel.split(',').some((x) => selectorMatches(row, x));
+  // click() dispatches to the real delegated click handlers, as a browser would
+  row.click = () => fire('click', { target: row });
+  fire('keydown', { key: 'Enter', target: row, preventDefault() {} });
+  assert.ok(!document.getElementById('ev-modal').classList.contains('hidden'), 'the card opened');
+  assert.match(document.getElementById('ev-card').innerHTML, /Dentist/);
 });

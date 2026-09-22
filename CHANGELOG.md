@@ -58,12 +58,15 @@ rolls that section to a dated version via `python scripts/release.py`.
 - In the All chores view, a slow answer for a day you already paged away
   from no longer shows up under the wrong day. Before, it could, and a tap
   on it checked off a chore on the wrong day.
+- Checking off a chore and then paging to another day before it saves no
+  longer shows today's chores under that other day.
 - A checked chore no longer flips back to undone for up to a minute when an
   older refresh answers late, and finishing your chores shows the confetti
   once, not twice. The same late-answer fix covers the full to-do list and
   the washer and dryer card.
 - Tapping Done twice while a to-do is still saving no longer adds it twice,
-  and the box clears once it is added.
+  and the box clears once it is added. A different item submitted in that
+  moment gets a short note to tap Add again, instead of vanishing.
 - An event card opened from the home screen, or the display settings
   popover, now closes by itself after a while like the full-screen views do.
   Before, one left open stayed up for good and also held off the automatic
