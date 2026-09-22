@@ -83,6 +83,12 @@ function makeClassList() {
 // in this file keeps reading raw HTML, unaffected by the new parsing.
 const VOID_TAGS = new Set(['input', 'br', 'img', 'hr', 'meta', 'link']);
 
+// focus() on any fake node records it as the CURRENT sandbox document's
+// activeElement (newHub points this at its document), so the dialog focus
+// tests can see where focus went without a real focus model.
+let focusDoc = null;
+function fakeFocus(node) { if (focusDoc) focusDoc.activeElement = node; }
+
 function parseTagAttrs(attrStr) {
   const attrs = {};
   const re = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*(?:=\s*("([^"]*)"|'([^']*)'|[^\s"'=<>`]+))?/g;
@@ -121,6 +127,7 @@ function datasetFromAttrs(attrs) {
 // attributes.
 function selectorMatches(node, sel) {
   sel = sel.trim();
+  if (sel === '*') return true;        // any node (the fake contains() walks with it)
   if (/\s/.test(sel)) return false;   // gap (1): combinator selectors never match
   const m = /^([a-zA-Z][a-zA-Z0-9]*)?((?:[.#][a-zA-Z0-9_-]+|\[[a-zA-Z0-9_-]+(?:="[^"]*")?\])*)$/.exec(sel);
   if (!m || (!m[1] && !m[2])) throw new Error(`unsupported selector in fake DOM: ${sel}`);
@@ -220,6 +227,10 @@ class QueryNode {
 
   addEventListener() {}
 
+  focus() { fakeFocus(this); }
+
+  contains(n) { return n === this || queryAll(this.children, '*').includes(n); }
+
   // Real attribute access backed by the parsed `attrs` bag (FakeEl's
   // setAttribute is an inert stub; here laundryTick genuinely reads back
   // what it wrote — the timer arc's stroke-dasharray).
@@ -292,6 +303,15 @@ class FakeEl {
   addEventListener() {}
 
   setAttribute() {}
+
+  focus() { fakeFocus(this); }
+
+  // Appended children and parsed-markup descendants both count as inside.
+  contains(n) {
+    if (n === this) return true;
+    if (queryAll(this._queryChildren, '*').includes(n)) return true;
+    return this.children.some((c) => c === n || (c.contains && c.contains(n)));
+  }
 }
 
 // A fresh sandbox per test: hub.js's load-time side effects run once per load,
@@ -330,6 +350,7 @@ function newHub(opts = {}) {
     registry[id] = el;
   });
   document.body = new FakeEl(registry, 'body');
+  focusDoc = document;
   // Scroll targets scrollPageToTop() zeroes on iOS (besides window.scrollTo);
   // seeded non-zero so a test can prove each one gets reset to the top.
   document.scrollingElement = { scrollTop: 0 };
@@ -6703,8 +6724,8 @@ test('monthHtml: past MONTH_MAX_LANES events are not drawn and each day shows it
   const week = html.split('<div class="mg-week">').find((w) => w.includes('data-date="2026-08-26"'));
   assert.equal((week.match(/data-eid=/g) || []).length, 4, 'exactly MONTH_MAX_LANES events drawn');
   assert.match(week, /data-eid="two"/, 'the longest bar always makes the cut');
-  assert.match(week, /class="mg-more" data-date="2026-08-26" tabindex="0" style="grid-column:4;grid-row:6">\+3 more</);
-  assert.doesNotMatch(week, /data-date="2026-08-27" tabindex="0" style="grid-column:5;grid-row:6"/, 'the 2-day bar is drawn, so the 27th has nothing hidden');
+  assert.match(week, /class="mg-more" data-date="2026-08-26" role="button" tabindex="0" style="grid-column:4;grid-row:6">\+3 more</);
+  assert.doesNotMatch(week, /data-date="2026-08-27" role="button" tabindex="0" style="grid-column:5;grid-row:6"/, 'the 2-day bar is drawn, so the 27th has nothing hidden');
   assert.doesNotMatch(week, /class="mg-more" data-date="2026-08-25"/);
   const hidden = evs.filter((e) => !week.includes(`data-eid="${e.id}"`));
   assert.equal(hidden.length, 3);
@@ -6719,9 +6740,9 @@ test('monthHtml: bars land on the right columns/lanes and carry continuation cla
   const weeks = html.split('<div class="mg-week">');
   const w1 = weeks.find((w) => w.includes('data-date="2099-08-26"'));
   const w2 = weeks.find((w) => w.includes('data-date="2099-08-30"'));
-  assert.match(w1, /class="mg-bar mg-bar-contr" data-eid="fair" tabindex="0" style="grid-column:4 \/ 8;grid-row:2;/);
-  assert.match(w2, /class="mg-bar mg-bar-contl" data-eid="fair" tabindex="0" style="grid-column:1 \/ 3;grid-row:2;/);
-  assert.match(w1, /class="mg-ev" data-eid="d" tabindex="0" style="grid-column:4 \/ 5;grid-row:3"/, 'timed event sits in the lane under the bar');
+  assert.match(w1, /class="mg-bar mg-bar-contr" data-eid="fair" role="button" tabindex="0" style="grid-column:4 \/ 8;grid-row:2;/);
+  assert.match(w2, /class="mg-bar mg-bar-contl" data-eid="fair" role="button" tabindex="0" style="grid-column:1 \/ 3;grid-row:2;/);
+  assert.match(w1, /class="mg-ev" data-eid="d" role="button" tabindex="0" style="grid-column:4 \/ 5;grid-row:3"/, 'timed event sits in the lane under the bar');
   assert.match(w1, /class="mg-ev-time num">8am</);
   assert.equal((html.match(/data-eid="fair"/g) || []).length, 2, 'once per week it touches');
   // A timed event whose end is in the past carries the `ended` class (it dims);
@@ -8016,4 +8037,191 @@ test('addReminder: a second Done while the add is in flight adds nothing', async
   post.resolve(okResp({ id: 'caldav:g/1' }));
   await adding;
   assert.equal(input.value, '');
+});
+
+// ---- idle return covers every modal + the gear popover (frontend audit) ----
+//
+// The idle auto-return only ran with a full-screen overlay open, so an event
+// card opened from the home feed, or the gear popover, left open on the wall
+// never closed, and wallBusy() counted them as busy forever: the deploy
+// auto-reload never happened.
+
+function idleWall() {
+  const h = newHub();
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) =>
+    h.document.getElementById(id).classList.add('hidden'));
+  h.sandbox.noteInteraction(0);
+  h.timers = captureTimers(h.sandbox);
+  vm.runInContext("evIndex.e1 = { id: 'e1', title: 'Dentist', all_day: false,"
+    + " start_ts: '2026-08-14T09:00:00', end_ts: '2026-08-14T10:00:00' };", h.sandbox);
+  return h;
+}
+
+function seedGear(document) {
+  const pop = document.createElement('div'); pop._id = 'theme-pop'; document.body.appendChild(pop);
+  const gear = document.createElement('button'); gear._id = 'wall-gear'; document.body.appendChild(gear);
+  return { pop, gear };
+}
+
+test('idle return: an event card opened from the home wall (no overlay) closes on idle', () => {
+  const { document, sandbox, timers } = idleWall();
+  sandbox.openEventDetail('e1');
+  assert.ok(!document.getElementById('ev-modal').classList.contains('hidden'), 'card is up');
+  assert.ok(sandbox.wallBusy(), 'the open card holds off a deploy reload');
+  const idle = nextTimer(timers, sandbox.idleReturnMs(null));
+  assert.ok(idle, 'the idle return is armed with no overlay open');
+  idle.done = true; idle.fn();
+  assert.ok(document.getElementById('ev-modal').classList.contains('hidden'), 'the card closed');
+  assert.ok(!sandbox.wallBusy(), 'nothing left open, so the deploy reload can proceed');
+});
+
+test('idle return: the gear popover left open closes on idle', () => {
+  const { document, sandbox, timers, fire } = idleWall();
+  const { pop, gear } = seedGear(document);
+  fire('click', { target: { closest: (s) => (s === '#wall-gear' ? gear : null) } });
+  assert.ok(pop.classList.contains('open'), 'the popover opened');
+  const idle = nextTimer(timers, sandbox.idleReturnMs(null));
+  assert.ok(idle, 'opening the popover arms the idle return');
+  idle.done = true; idle.fn();
+  assert.ok(!pop.classList.contains('open'), 'the popover closed');
+  assert.ok(!sandbox.wallBusy(), 'and no longer blocks the deploy reload');
+});
+
+test('idle return: a touch while only the popover is open re-arms the timer', () => {
+  const { document, sandbox, timers, fire } = idleWall();
+  const { gear } = seedGear(document);
+  fire('click', { target: { closest: (s) => (s === '#wall-gear' ? gear : null) } });
+  const first = nextTimer(timers, sandbox.idleReturnMs(null));
+  fire('pointerdown');
+  assert.ok(first.done, 'the old countdown was cleared');
+  assert.ok(nextTimer(timers, sandbox.idleReturnMs(null)), 'and a fresh one armed');
+});
+
+test('idle return: a timer outliving a hand-closed card does nothing (no scroll yank)', () => {
+  const { sandbox, timers } = idleWall();
+  sandbox.openEventDetail('e1');
+  const idle = nextTimer(timers, sandbox.idleReturnMs(null));
+  sandbox.closeEventDetail();                     // closed by hand
+  sandbox.scrollCalls.length = 0;
+  if (!idle.done) { idle.done = true; idle.fn(); }
+  assert.equal(sandbox.scrollCalls.length, 0,
+    'nothing was open, so the return home must not scroll the page to the top');
+});
+
+test('idle return OFF still leaves a hand-opened card alone', () => {
+  const { document, sandbox, timers } = idleWall();
+  document.documentElement.setAttribute('data-idle-return', 'off');
+  sandbox.openEventDetail('e1');
+  assert.ok(!nextTimer(timers, sandbox.idleReturnMs(null)), 'an opted-out device arms nothing');
+});
+
+// ---- keyboard + dialog semantics (frontend audit) ----
+
+function keyTarget(node) {
+  let clicks = 0;
+  node.click = () => { clicks++; };
+  node.matches = (sel) => sel.split(',').some((s) => selectorMatches(node, s));
+  node.tagName = node.tagName || node._tag.toUpperCase();
+  return { node, clicks: () => clicks };
+}
+
+function keyEvent(key, target) {
+  let prevented = false;
+  return { ev: { key, target, preventDefault: () => { prevented = true; } }, prevented: () => prevented };
+}
+
+test('calendar rows and day cells are buttons to assistive tech, reachable by Tab', () => {
+  const { sandbox } = newHub();
+  const ev = { id: 'e1', title: 'Dentist', all_day: false, start_ts: '2026-08-14T09:00:00',
+    end_ts: '2026-08-14T10:00:00' };
+  const allDay = { id: 'e2', title: 'Fair', all_day: true, start_ts: '2026-08-14', end_ts: '2026-08-15' };
+  for (const html of [sandbox.eventRow(ev, '2026-08-14'), sandbox.eventRow(allDay, '2026-08-14')]) {
+    assert.match(html, /role="button"[^>]*tabindex="0"|tabindex="0"[^>]*role="button"/);
+  }
+  const month = sandbox.monthHtml(2026, 8, [ev, allDay], '2026-08-14', null);
+  const cells = month.match(/<div class="mg-day[^>]*>/g);
+  assert.ok(cells.length >= 28);
+  cells.forEach((c) => assert.match(c, /role="button"/, 'every day cell is a button'));
+  assert.match(month, /class="mg-ev[^"]*"[^>]*role="button"/);
+  assert.match(month, /class="mg-bar[^"]*"[^>]*role="button"/);
+});
+
+test('Enter and Space activate a focused calendar row or day cell', () => {
+  const { sandbox, fire } = newHub();
+  const holder = new QueryNode('div', {});
+  holder.innerHTML = sandbox.eventRow({ id: 'e1', title: 'Dentist', all_day: false,
+    start_ts: '2026-08-14T09:00:00', end_ts: '2026-08-14T10:00:00' }, '2026-08-14');
+  const row = keyTarget(holder.querySelector('.cal-ev'));
+  const enter = keyEvent('Enter', row.node);
+  fire('keydown', enter.ev);
+  assert.equal(row.clicks(), 1, 'Enter activates the row like a tap');
+  const space = keyEvent(' ', row.node);
+  fire('keydown', space.ev);
+  assert.equal(row.clicks(), 2, 'Space does too');
+  assert.ok(space.prevented(), 'and Space does not scroll the page');
+  const day = keyTarget(new QueryNode('div', { class: 'mg-day', 'data-date': '2026-08-14', tabindex: '0' }));
+  fire('keydown', keyEvent('Enter', day.node).ev);
+  assert.equal(day.clicks(), 1, 'a month day cell opens on Enter');
+  fire('keydown', keyEvent('a', row.node).ev);
+  assert.equal(row.clicks(), 2, 'other keys do nothing');
+  const btn = keyTarget(new QueryNode('button', { class: 'cal-nav-btn', 'data-calnav': 'next' }));
+  fire('keydown', keyEvent('Enter', btn.node).ev);
+  assert.equal(btn.clicks(), 0, 'a real button is left to the browser (no double activation)');
+});
+
+test('Escape closes the topmost dialog first, then the next', () => {
+  const { document, sandbox, fire } = idleWall();
+  sandbox.openOverlay('chores');
+  document.getElementById('chore-modal').classList.remove('hidden');
+  document.getElementById('confirm-modal').classList.remove('hidden');
+  fire('keydown', { key: 'Escape', target: document.body });
+  assert.ok(document.getElementById('confirm-modal').classList.contains('hidden'), 'confirm closes first');
+  assert.ok(!document.getElementById('chore-modal').classList.contains('hidden'), 'editor stays');
+  fire('keydown', { key: 'Escape', target: document.body });
+  assert.ok(document.getElementById('chore-modal').classList.contains('hidden'), 'then the editor');
+  assert.ok(document.getElementById('overlay').classList.contains('open'), 'overlay still up');
+  fire('keydown', { key: 'Escape', target: document.body });
+  assert.ok(!document.getElementById('overlay').classList.contains('open'), 'then the overlay');
+});
+
+test('Escape closes an event card opened from the home wall', () => {
+  const { document, sandbox, fire } = idleWall();
+  sandbox.openEventDetail('e1');
+  fire('keydown', { key: 'Escape', target: document.body });
+  assert.ok(document.getElementById('ev-modal').classList.contains('hidden'));
+});
+
+test('opening a dialog moves focus into it; closing returns focus to what opened it', () => {
+  const { document, sandbox } = idleWall();
+  document.getElementById('ev-modal').appendChild(document.getElementById('ev-card'));
+  const row = document.createElement('div');
+  let restored = 0;
+  row.focus = () => { restored++; document.activeElement = row; };
+  document.activeElement = row;                   // the row that was tapped / Entered
+  sandbox.openEventDetail('e1');
+  const close = document.getElementById('ev-card').querySelector('.ev-close');
+  assert.equal(document.activeElement, close, 'focus lands on the card close button');
+  sandbox.closeEventDetail();
+  assert.equal(restored, 1, 'focus goes back to the row');
+  assert.equal(document.activeElement, row);
+
+  // index.html nests the home button inside #overlay; mirror that nesting
+  document.getElementById('overlay').appendChild(document.getElementById('overlay-home'));
+  const expand = document.createElement('button');
+  document.activeElement = expand;
+  sandbox.openOverlay('chores');
+  assert.equal(document.activeElement, document.getElementById('overlay-home'),
+    'a full-screen overlay focuses its home button');
+  sandbox.closeOverlay();
+  assert.equal(document.activeElement, expand, 'and closing returns focus to the expand button');
+});
+
+test('closing a dialog never re-focuses a text field (no keyboard pops up after an idle close)', () => {
+  const { document, sandbox } = idleWall();
+  document.getElementById('ev-modal').appendChild(document.getElementById('ev-card'));
+  const field = document.createElement('input');
+  document.activeElement = field;
+  sandbox.openEventDetail('e1');
+  sandbox.closeEventDetail();
+  assert.notEqual(document.activeElement, field);
 });

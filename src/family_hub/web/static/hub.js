@@ -142,14 +142,14 @@ function eventRow(ev, day) {
       const n = days.indexOf(day) + 1;
       if (n > 0) tag = `<span class="cal-spantag">day ${n} of ${total}</span>`;
     }
-    return `<div class="cal-ev cal-ev-allday" data-eid="${escapeHtml(ev.id)}" tabindex="0"`
+    return `<div class="cal-ev cal-ev-allday" data-eid="${escapeHtml(ev.id)}" role="button" tabindex="0"`
       + ` style="--evc:${escapeHtml(color)};--evi:${inkFor(color)}">`
       + `<span class="cal-title">${escapeHtml(ev.title)}</span>${tag}</div>`;
   }
   const timeCell = continuation
     ? `<span class="cal-time num">→ ${escapeHtml(fmtTime(ev.end_ts))}</span>`
     : `<span class="cal-time num">${escapeHtml(fmtTime(ev.start_ts))}</span>`;
-  return `<div class="cal-ev${ended ? ' ended' : ''}" data-eid="${escapeHtml(ev.id)}" tabindex="0">`
+  return `<div class="cal-ev${ended ? ' ended' : ''}" data-eid="${escapeHtml(ev.id)}" role="button" tabindex="0">`
     + `<span class="cal-rail" style="background:${escapeHtml(color)}"></span>`
     + timeCell
     + `<span class="cal-title">${escapeHtml(ev.title)}</span>`
@@ -265,7 +265,7 @@ function monthCellHtml(cell, col, hasEvents, todayStr, win) {
   if (unsynced) cls.push('mg-unsynced');
   const dayNum = Number(cell.date.slice(8, 10));
   const label = dayNum === 1 ? `${MONTH_NAMES[Number(cell.date.slice(5, 7)) - 1].slice(0, 3)} 1` : String(dayNum);
-  return `<div class="${cls.join(' ')}" style="grid-column:${col + 1}" data-date="${cell.date}" tabindex="0">`
+  return `<div class="${cls.join(' ')}" style="grid-column:${col + 1}" data-date="${cell.date}" role="button" tabindex="0">`
     + `<span class="mg-num num">${label}</span>`
     + (unsynced ? `<span class="mg-unsynced-mark">not synced</span>` : '')
     + `</div>`;
@@ -297,18 +297,18 @@ function monthWeekHtml(cells, events, todayStr, win) {
       const cls = ['mg-bar'];
       if (it.contL) cls.push('mg-bar-contl');
       if (it.contR) cls.push('mg-bar-contr');
-      return `<span class="${cls.join(' ')}" data-eid="${eid}" tabindex="0"`
+      return `<span class="${cls.join(' ')}" data-eid="${eid}" role="button" tabindex="0"`
         + ` style="${place};--evc:${escapeHtml(color)};--evi:${inkFor(color)}">`
         + `<span class="mg-bar-title">${title}</span></span>`;
     }
     const ended = eventEnded(it.ev, Date.now());
-    return `<span class="mg-ev${ended ? ' ended' : ''}" data-eid="${eid}" tabindex="0" style="${place}">`
+    return `<span class="mg-ev${ended ? ' ended' : ''}" data-eid="${eid}" role="button" tabindex="0" style="${place}">`
       + `<span class="mg-dot" style="background:${escapeHtml(color)}"></span>`
       + `<span class="mg-ev-time num">${escapeHtml(fmtTime(it.ev.start_ts))}</span>`
       + `<span class="mg-ev-title">${title}</span></span>`;
   }).join('');
   const moreHtml = overflow.map((n, i) => n > 0
-    ? `<span class="mg-more" data-date="${days[i]}" tabindex="0" style="grid-column:${i + 1};grid-row:${MONTH_MAX_LANES + 2}">+${n} more</span>`
+    ? `<span class="mg-more" data-date="${days[i]}" role="button" tabindex="0" style="grid-column:${i + 1};grid-row:${MONTH_MAX_LANES + 2}">+${n} more</span>`
     : '').join('');
   return `<div class="mg-week">${cellHtml}${evHtml}${moreHtml}</div>`;
 }
@@ -430,17 +430,21 @@ function openEventDetail(eid) {
     ? `<span class="ev-chip" style="border-color:${escapeHtml(color)};color:${escapeHtml(color)}">${escapeHtml(ev.label)}</span>`
     : '';
   document.getElementById('ev-card').innerHTML =
-    `<button class="ev-close" type="button">✕</button>`
+    `<button class="ev-close" type="button" aria-label="Close">✕</button>`
     + `<div class="ev-rail" style="background:${escapeHtml(color)}"></div>`
     + `<div class="ev-title">${escapeHtml(ev.title)}</div>`
     + `<div class="ev-when num">${escapeHtml(dayLine)}</div>`
     + chip + loc + desc;
   document.getElementById('ev-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('ev-modal', document.getElementById('ev-card').querySelector('.ev-close'));
+  // Armed with or without an overlay: a card opened from the home feed and
+  // left up must still drift home, or wallBusy() holds off a deploy forever.
+  armIdle();
 }
 
 function closeEventDetail() {
   document.getElementById('ev-modal').classList.add('hidden');
+  dialogClosed('ev-modal');
 }
 
 /* --------------------------------------------------------------- people */
@@ -1746,6 +1750,7 @@ function openOverlay(view) {
   // Start + probe the grid streams now that the overlay is visible (offsetParent
   // is non-null once .open is set), so the live tiles connect and reveal.
   if (view === 'cameras-page' && (links.camera_page || []).length) probeCamera();
+  dialogOpened('overlay', document.getElementById('overlay-home'));
   armIdle();
 }
 
@@ -1755,6 +1760,7 @@ function closeOverlay() {
   document.getElementById('overlay-content').innerHTML = '';
   openView = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  dialogClosed('overlay');
   scrollPageToTop();   // coming home always lands at the top of the page
 }
 
@@ -1777,7 +1783,67 @@ const MODAL_CLOSERS = {
    "go home" paths can't drift apart again. */
 function closeAllOverlays() {
   Object.values(MODAL_CLOSERS).forEach((close) => close());
+  closeThemePop();   // the gear popover too: wallBusy() counts it as busy
   closeOverlay();
+}
+
+/* Is anything up that the idle return should close? The overlay, any
+   MODAL_CLOSERS modal, or the gear popover: the same set wallBusy() treats as
+   busy, so anything that can hold off a deploy reload also drifts home. */
+function surfaceOpen() {
+  const has = (id, cls) => {
+    const el = document.getElementById(id);
+    return !!(el && el.classList.contains(cls));
+  };
+  const shown = (id) => {
+    const el = document.getElementById(id);
+    return !!(el && !el.classList.contains('hidden'));
+  };
+  return !!openView || has('overlay', 'open') || has('theme-pop', 'open')
+    || Object.keys(MODAL_CLOSERS).some(shown);
+}
+
+/* The idle timer's callback. Re-checks first: a card closed by hand leaves its
+   timer behind, and closeOverlay's scroll-to-top must not yank a page nobody
+   left anything open on. */
+function idleReturnHome() {
+  idleTimer = null;
+  if (surfaceOpen()) closeAllOverlays();
+}
+
+/* Dialog focus: opening a dialog moves focus onto `target` (its close/home
+   button, or the dialog itself), so keyboard and screen-reader users land in
+   it; closing hands focus back to whatever had it before (the row or button
+   that opened it). Focus goes back only if it is still inside the closed
+   dialog or nowhere, and never to a text field: re-focusing one after an idle
+   close would pop the wall's on-screen keyboard, or a phone's. */
+const dialogReturnFocus = {};
+
+function isTextField(el) {
+  const tag = el && el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!(el && el.isContentEditable);
+}
+
+function dialogOpened(id, target) {
+  const root = document.getElementById(id);
+  if (!root) return;
+  const prev = document.activeElement;
+  if (prev && prev !== document.body && !(root.contains && root.contains(prev))) {
+    dialogReturnFocus[id] = prev;
+  }
+  const el = target || root;
+  try { el.focus({ preventScroll: true }); } catch (e) { /* detached or not focusable */ }
+}
+
+function dialogClosed(id) {
+  const prev = dialogReturnFocus[id];
+  delete dialogReturnFocus[id];
+  if (!prev || isTextField(prev) || prev.isConnected === false) return;
+  const root = document.getElementById(id);
+  const active = document.activeElement;
+  const lost = !active || active === document.body || !!(root && root.contains && root.contains(active));
+  if (!lost) return;
+  try { prev.focus({ preventScroll: true }); } catch (e) { /* gone */ }
 }
 
 /* Whether this device drifts back to the home wall after an idle timeout. The
@@ -1793,7 +1859,8 @@ function idleReturnEnabled() {
 function armIdle() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (!idleReturnEnabled()) return;   // this device opted out — never yank it home
-  idleTimer = setTimeout(closeAllOverlays, idleReturnMs(openView));
+  if (!surfaceOpen()) return;         // nothing up to return from
+  idleTimer = setTimeout(idleReturnHome, idleReturnMs(openView));
 }
 
 /* --------------------------------------------------------------- polling */
@@ -3484,6 +3551,7 @@ async function toggleChore(id, done) {
 
 function closeChoreEditor() {
   document.getElementById('chore-modal').classList.add('hidden');
+  dialogClosed('chore-modal');
   document.getElementById('chore-editor').innerHTML = '';   // drop the old form
 }
 
@@ -3547,7 +3615,8 @@ async function openChoreEditor(seed) {
   }
   buildChoreForm(host, model, label, onsubmit, state.people);
   document.getElementById('chore-modal').classList.remove('hidden');
-  if (openView) armIdle();   // keep the overlay alive while the editor is up
+  dialogOpened('chore-modal', document.getElementById('chore-card').querySelector('.chore-close'));
+  armIdle();   // keep the overlay alive while the editor is up
 }
 
 /* ------------------------------------------- people editor (add / edit) */
@@ -3680,7 +3749,8 @@ function openPersonEditor(seed) {
   }
   buildPersonForm(host, model, label, onsubmit, opts);
   document.getElementById('chore-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('chore-modal', document.getElementById('chore-card').querySelector('.chore-close'));
+  armIdle();
 }
 
 /* Deactivate / reactivate a person (the reversible alternative to delete). */
@@ -3732,7 +3802,8 @@ function openDeleteConfirm(cid) {
   document.getElementById('confirm-sub').textContent =
     'It stays on past days; it’s removed from today on.';
   document.getElementById('confirm-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('confirm-modal', document.getElementById('confirm-card').querySelector('[data-confirm-cancel]'));
+  armIdle();
 }
 
 /* Person hard-delete confirm — a distinct, blunter warning than chore delete:
@@ -3745,12 +3816,14 @@ function openPersonDeleteConfirm(pid) {
   document.getElementById('confirm-sub').textContent =
     'Removed for good. Past days keep their record. To pause instead, use Deactivate.';
   document.getElementById('confirm-modal').classList.remove('hidden');
-  if (openView) armIdle();
+  dialogOpened('confirm-modal', document.getElementById('confirm-card').querySelector('[data-confirm-cancel]'));
+  armIdle();
 }
 
 function closeDeleteConfirm() {
   pendingDelete = null;
   document.getElementById('confirm-modal').classList.add('hidden');
+  dialogClosed('confirm-modal');
 }
 
 /* Confirmed: DELETE the chore or person, then refresh staying in edit mode. On
@@ -3936,8 +4009,26 @@ document.addEventListener('click', (e) => {
   if (day && !openView) { openOverlay('calendar'); return; }
   if (e.target.closest('#overlay-home')) { closeAllOverlays(); }
 });
+// Any touch restarts the idle countdown while something is open (armIdle is a
+// no-op on the bare wall), popover and home-feed event card included.
 ['pointerdown', 'touchstart', 'keydown'].forEach((evt) =>
-  document.addEventListener(evt, () => { noteInteraction(); if (openView) armIdle(); }, { passive: true }));
+  document.addEventListener(evt, () => { noteInteraction(); armIdle(); }, { passive: true }));
+
+/* Keyboard access: the calendar's event rows, month day cells and "+N more"
+   chips are focusable <div>/<span>s (role="button"), not real buttons, so the
+   browser gives them no Enter/Space activation of its own. Route both keys
+   through click(), which bubbles into the delegated click handler above, so a
+   key press does exactly what a tap does. Real buttons are left alone (the
+   browser already clicks them; a second click would double-activate). */
+const KEY_ACTIVATE_SEL = '[data-eid], .mg-day, .mg-more';
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target;
+  if (!t || t.tagName === 'BUTTON' || typeof t.matches !== 'function'
+      || !t.matches(KEY_ACTIVATE_SEL)) return;
+  e.preventDefault();   // Space would otherwise scroll the page
+  t.click();
+});
 document.addEventListener('submit', (e) => {
   if (e.target && e.target.id === 'todo-add-form') {
     e.preventDefault();
@@ -4734,7 +4825,7 @@ document.addEventListener('click', (e) => {
   if (gear && pop) {
     const open = pop.classList.toggle('open');
     gear.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) reflectThemeControls();
+    if (open) { reflectThemeControls(); armIdle(); }   // a popover left open drifts shut too
     return;
   }
   // Any [data-open-settings] control: the popover's "All settings" row (close
@@ -4774,7 +4865,7 @@ document.addEventListener('click', (e) => {
   // it OFF clears the pending return-home timer (and ON re-arms it) immediately,
   // not only on the next interaction.
   const ir = e.target.closest('.theme-ctl [data-idle-set]');
-  if (ir) { setIdleReturn(ir.dataset.idleSet); reflectThemeControls(); if (openView) armIdle(); return; }
+  if (ir) { setIdleReturn(ir.dataset.idleSet); reflectThemeControls(); armIdle(); return; }
   // Seasonal looks: Off/On (popover + Settings), and a look tile (Settings),
   // which picks that season's look and turns seasons on.
   const ss = e.target.closest('.theme-ctl [data-season-set]');
@@ -4803,11 +4894,27 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Escape also dismisses the gear popover (T5a) — parity with the outside-tap.
+// Escape closes the topmost layer, one per press: the gear popover (T5a,
+// parity with the outside-tap; it floats above everything), then the delete
+// confirm, the chore/person editor and the event card (stacked in that order
+// over the overlay), then the full-screen overlay itself.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const pop = document.getElementById('theme-pop');
-  if (pop && pop.classList.contains('open')) closeThemePop();
+  if (pop && pop.classList.contains('open')) {
+    closeThemePop();
+    const gear = document.getElementById('wall-gear');
+    if (gear) { try { gear.focus({ preventScroll: true }); } catch (err) { /* not focusable */ } }
+    return;
+  }
+  const shown = (id) => {
+    const el = document.getElementById(id);
+    return !!(el && !el.classList.contains('hidden'));
+  };
+  if (shown('confirm-modal')) { closeDeleteConfirm(); return; }
+  if (shown('chore-modal')) { closeChoreEditor(); return; }
+  if (shown('ev-modal')) { closeEventDetail(); return; }
+  if (openView) closeAllOverlays();
 });
 
 /* ---- Version readout (debug/ops) --------------------------------------
