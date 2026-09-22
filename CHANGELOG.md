@@ -35,6 +35,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Laundry: the dryer no longer shows "1 min" (once, "6 min") for the first
   minutes of every load. That is LG's placeholder; the card now uses the
   cycle's real length until the machine reports a real finish time.
+- Laundry: the placeholder fix only acts on a cycle start the hub actually
+  saw, in the cycle's first minutes, so a hub restarted mid-cycle never moves
+  a real finish time, and a dryer's wrinkle-care tumble never counts as a
+  new load.
+
 ## [1.6.1] — 2026-09-22
 
 ### Changed

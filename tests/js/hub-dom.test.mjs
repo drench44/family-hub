@@ -7729,6 +7729,9 @@ test('laundry card: a waiting washer shows the still, wet load with an amber rin
   assert.doesNotMatch(html, /ln-check/, 'not "done" in the way that matters');
   assert.doesNotMatch(html, /ln-tumble|ln-halo/, 'still, and no breathing glow');
   assert.match(html, /class="ln-arc"/, 'full ring');
+  assert.equal((html.match(/<g[\s>]/g) || []).length,
+    (html.match(/<\/g>/g) || []).length, 'unbalanced <g> groups');
+  assert.equal((html.match(/class="ln-heap"/g) || []).length, 1, 'exactly one heap');
 });
 
 test('laundryTick: the ring drains against the cycle length between polls', async () => {

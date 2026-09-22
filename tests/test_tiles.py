@@ -1238,3 +1238,10 @@ def test_laundry_non_string_states_guarded():
     w, d = t["machines"]
     assert w["finishes_at"] is None and w["status_since"] is None
     assert d["phase"] == "done"
+
+
+def test_laundry_error_code_needs_a_comparable_episode_start():
+    ev = _err_event("2026-08-17T21:01:30+00:00", "water_drain_error")
+    assert tiles._laundry_error_code(ev, None) is None, "no episode start: no name"
+    assert tiles._laundry_error_code(ev, "2026-08-17T21:02:00") is None, "naive vs aware"
+    assert tiles._laundry_error_code(ev, "2026-08-17T21:02:00+00:00") == "water_drain_error"
