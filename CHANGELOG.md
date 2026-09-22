@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-09-22
+
 ### Added
 - Laundry: a finished wash now reads **Waiting** (amber) after its half hour
   as Done, until the load is moved: the dryer starting or the washer being
