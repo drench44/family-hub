@@ -815,8 +815,8 @@ const TODO_CARD_BUDGET = 9;
      guaranteed at least one visible row (so a long Now list can't bury Soon/
      Later entirely). `moreOpen` is the count of open items folded away — that's
      what the "+N more" control advertises.
-   - Done-today lingerers (items completed today still shown struck-through for
-     the rest of the day, see todos.py) only fill budget LEFT OVER after every
+   - Just-checked lingerers (shown struck-through for a few minutes after
+     they're checked, see todos.py) only fill budget LEFT OVER after every
      tier's open items are placed. They never displace actionable work and are
      never counted in `moreOpen`. */
 function todoDigest(buckets, budget) {
@@ -839,7 +839,7 @@ function todoDigest(buckets, budget) {
     t.showOpen = Math.min(t.open.length, Math.max(1, remaining - reserveForRest));
     remaining -= t.showOpen;
   });
-  // Phase 2 — spend whatever's left on done-today lingerers, same priority.
+  // Phase 2 — spend whatever's left on just-checked lingerers, same priority.
   tiers.forEach((t) => {
     t.showDone = Math.min(t.done.length, Math.max(0, remaining));
     remaining -= t.showDone;
@@ -866,9 +866,9 @@ function todoCardHtml(todos, ok = true) {
     body = groups.length
       ? groups.map((g) => {
         const label = g.bucket[0].toUpperCase() + g.bucket.slice(1);
-        // Omit the count on a tier that's only done-today lingerers (0 open):
+        // Omit the count on a tier that's only just-checked lingerers (0 open):
         // "Now 0" above struck-through rows reads oddly on the wall. The label
-        // + struck rows still say "you finished these today".
+        // + struck rows still say "you just finished these".
         const count = g.openCount > 0 ? `<span class="todo-grp-count">${g.openCount}</span>` : '';
         const more = g.moreOpen > 0
           // A tap-through to the full list, where the folded items live. Reuses
@@ -1122,10 +1122,18 @@ async function refreshTodos() {
   if (todosViewActive()) await renderTodosFull(); // full view, when showing
 }
 
+/* A checked item stays up, struck through, for this long, then the server
+   archives it into "recently done". MUST equal todos.DONE_GRACE_MIN (a test
+   pins the two together). */
+const TODO_DONE_GRACE_MS = 5 * 60000;
+
 async function toggleTodo(id, done) {
   const r = await attemptTodo(`/api/todos/${id}/complete`, done ? 'DELETE' : 'POST');
   if (!r.ok) showToast(todoFailMessage(r.error));
   await refreshTodos();
+  // The device that checked it off drops the row the moment its grace ends,
+  // instead of up to a whole poll later. Other screens catch up on their poll.
+  if (r.ok && !done) setTimeout(refreshTodos, TODO_DONE_GRACE_MS + 2000);
 }
 
 async function addTodo() {

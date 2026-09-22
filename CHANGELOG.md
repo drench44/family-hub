@@ -20,6 +20,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 ### Fixed
 - At night some far bats hung frozen mid-sky with their wings still beating.
   They now go at night, like the rest of the moving layer.
+- A checked-off to-do now leaves the list five minutes after it's checked
+  (tap it again inside that window to undo) and moves to "recently done",
+  instead of staying on the wall, struck through, until midnight.
 
 ## [1.6.0] — 2026-09-19
 

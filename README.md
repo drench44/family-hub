@@ -65,8 +65,9 @@ at one URL.
   and a one-shot confetti celebration when someone clears their day.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
-  carry over until done, checked items linger struck-through until midnight,
-  and a 30-day "recently done" list un-deletes mistakes.
+  carry over until done, a checked item stays struck-through for five minutes
+  (tap it again to undo) and then moves to a 30-day "recently done" list that
+  can restore it.
 - **Weather & climate:** a glanceable weather card (temperature, a 24h
   temperature curve, UV index, air quality, humidity, dew point, and a 5-day
   high/low strip) and a per-room indoor climate card (temp + humidity, with a
