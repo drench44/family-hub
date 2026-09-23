@@ -148,3 +148,47 @@ def test_creds_does_not_rewrite_when_still_valid(tmp_path):
         GoogleCalendarClient(str(token))._creds()
     fake_creds.refresh.assert_not_called()
     assert token.read_text() == original   # file untouched when the token is still good
+
+
+def _load_google_auth_script(monkeypatch, token_json):
+    """scripts/google-auth.py with the OAuth flow stubbed (no browser, no
+    network): the stub hands back credentials whose to_json() is `token_json`."""
+    import importlib.util
+    import sys
+    import types
+    from pathlib import Path
+
+    creds = mock.MagicMock()
+    creds.to_json.return_value = token_json
+    flow = mock.MagicMock()
+    flow.run_local_server.return_value = creds
+    fake = types.ModuleType("google_auth_oauthlib.flow")
+    fake.InstalledAppFlow = mock.MagicMock()
+    fake.InstalledAppFlow.from_client_secrets_file.return_value = flow
+    monkeypatch.setitem(sys.modules, "google_auth_oauthlib",
+                        types.ModuleType("google_auth_oauthlib"))
+    monkeypatch.setitem(sys.modules, "google_auth_oauthlib.flow", fake)
+    path = Path(__file__).resolve().parents[1] / "scripts" / "google-auth.py"
+    spec = importlib.util.spec_from_file_location("google_auth_script", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_google_auth_script_writes_token_owner_only(tmp_path, monkeypatch):
+    """token.json is a secret. It was written with the default umask (often
+    world-readable) and in place; it now goes through the same atomic 0600
+    writer the app uses when it refreshes the token."""
+    import os
+    import stat
+
+    mod = _load_google_auth_script(monkeypatch, '{"token": "t"}')
+    (tmp_path / "client_secret.json").write_text("{}")
+    tok = tmp_path / "token.json"
+    tok.write_text("old")
+    os.chmod(tok, 0o644)
+    monkeypatch.setattr(mod, "CLIENT_SECRET", str(tmp_path / "client_secret.json"))
+    monkeypatch.setattr(mod, "TOKEN", str(tok))
+    mod.main()
+    assert tok.read_text() == '{"token": "t"}'
+    assert stat.S_IMODE(os.stat(tok).st_mode) == 0o600

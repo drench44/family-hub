@@ -1,23 +1,25 @@
-"""CalDAV (iCloud) read sync: discover the account's collections, pull each
-VEVENT calendar's objects into the events table under the 'caldav:' source scope
+"""CalDAV (iCloud) sync: discover the account's collections, pull each VEVENT
+calendar's objects into the events table under the 'caldav:' source scope
 (reusing calendar_sync.ics_events for parse + recurrence expansion, exactly like
-public ICS feeds), and record each collection's color/name in kv for rendering.
+public ICS feeds), pull each reminder list (VTODO) into the cal_objects store
+the wall renders from, record each collection's color/name for rendering, and
+(two-way) push the outbox of wall edits back.
 
-Reminders (VTODO) are a later slice. Gated on the icloud_caldav integration
-toggle + credentials; takes an injected client (see caldav_service) so it is
-fully testable against a fake. Never raises — a failure records a caldav_status
-and keeps the last-good cache, matching the Google/ICS sync's fails-soft rule.
+Gated on the icloud_caldav integration toggle + credentials; takes an injected
+client (see caldav_service) so it is fully testable against a fake. Never raises
+(a failure records a caldav_status and keeps the last-good cache, matching the
+Google/ICS sync's fails-soft rule).
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
 import re
+import time
 
 from . import db as fdb
-from . import reminders as remlogic
-from .caldav_service import CalDavConflict
-from .calendar_sync import ics_events
+from .caldav_service import CalDavConflict, CalDavRejected
+from .calendar_sync import cached_ids_in_window, ics_events
 
 log = logging.getLogger("family_hub.caldav")
 
@@ -34,17 +36,75 @@ _EMPTY_KEEP_HOURS = 24
 # (needs_auth is surfaced immediately elsewhere — a dead app password won't heal.)
 _ERROR_SURFACE_HOURS = 6
 
+# A collection saved from an earlier sync that discover() stops returning
+# (deleted or unshared in iCloud) is dropped once it has been missing this
+# long, with its pulled reminders. Long enough that a partial discover during
+# an iCloud blip never drops a list the family still has.
+_LIST_GONE_HOURS = 24
+
+# The sync discovers every few minutes. A list's missing clock only runs while
+# good discovers keep seeing it missing: if the last sighting is older than
+# this, the syncs in between failed (or the hub was off), so nothing says the
+# list stayed gone, and the clock starts over. Without this a list seen
+# missing once, then a day of iCloud failures, was dropped on the next good
+# sync after only a second sighting.
+_MISSING_GAP_HOURS = 2
+
+# Why a row is parked when its list is gone. unpark_cal_objects matches on it
+# when the list comes back.
+_GONE_REASON = "its list is no longer in iCloud"
+
+# Wall-clock budget for one flush of the outbox. Each DAV request may take up
+# to CalDavClient.DAV_TIMEOUT_S, and the flush runs on the one sync thread the
+# Google sync also uses, so a half-down iCloud must not hold it for the whole
+# backlog. What is left waits for the next tick.
+FLUSH_BUDGET_S = 90
+
+# Save a reminder list's pulled changes in batches of this many writes: one
+# transaction per list rather than one per object, while a very large first
+# pull never holds the write lock long enough to time out a wall request
+# (busy_timeout is 5s).
+_PULL_BATCH = 200
+
+
+def _http_status(exc):
+    """The HTTP status an exception chain carries, read from its type and
+    fields, never from its message text: the message holds the URL, and chore
+    reminder URLs carry the chore id (familyhub-chore-403-...), so a text scan
+    read a 503 on chore 403 as a refusal. Our own CalDavHTTPError (and
+    CalDavRejected) carry `status`. The caldav library raises AuthorizationError
+    for both 401 and 403 with no status, only the server's reason phrase in its
+    `reason` field, so that field (not the message) tells them apart; an unknown
+    reason reads as 401, the dead-password case. None if nothing in the chain
+    says."""
+    e, seen = exc, 0
+    while e is not None and seen < 10:
+        status = getattr(e, "status", None)
+        if isinstance(status, int) and not isinstance(status, bool) and status:
+            return status
+        name = type(e).__name__
+        if name == "ForbiddenError":
+            return 403
+        if name == "AuthorizationError":
+            reason = str(getattr(e, "reason", "") or "").strip().lower()
+            return 403 if reason == "forbidden" else 401
+        e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+        seen += 1
+    return None
+
 
 def _is_auth_error(exc) -> bool:
     """True if the exception chain is a CalDAV authentication failure — a
-    revoked or expired app-specific password, or wrong credentials. Matched by
-    class name / 401 / 403 / 'unauthorized' / 'forbidden' so it works without the
-    caldav library imported and across its version churn (mirrors
-    calendar_sync._is_auth_error for Google). iCloud answers a dead app password
-    with 401 OR 403 depending on the path, so both must flag needs_auth. Distinct
-    from a transient network/throttle error: an auth failure is surfaced as
-    needs_auth so the wall shows 'Reconnect iCloud' and keeps serving the cached
-    view, instead of silently going stale.
+    revoked or expired app-specific password, or wrong credentials. Decided by
+    the status the chain carries (_http_status) when it has one. Otherwise it
+    falls back to matching the text: 401 / 403 / 'unauthorized' / 'forbidden',
+    so an untyped error from discovery still counts, across the caldav
+    library's version churn (mirrors calendar_sync._is_auth_error for Google).
+    iCloud answers a dead app password with 401 OR 403 depending on the path,
+    so both must flag needs_auth. Distinct from a transient network/throttle
+    error: an auth failure is surfaced as needs_auth so the wall shows
+    'Reconnect iCloud' and keeps serving the cached view, instead of silently
+    going stale.
 
     Known limitation: 403 is less clean than 401 — WebDAV can also return it for a
     permission-denied on one shared calendar the account can see but not read, so
@@ -53,17 +113,35 @@ def _is_auth_error(exc) -> bool:
     answers a dead app password with 403 on some paths, and a stuck banner is a
     better failure than silent staleness; revisit with a live-account error
     sample if false 'reconnect' prompts show up."""
+    status = _http_status(exc)
+    if status is not None:
+        return status in (401, 403)
     e, seen = exc, 0
     while e is not None and seen < 10:
-        name = type(e).__name__
         msg = str(e).lower()
-        if name in ("AuthorizationError", "ForbiddenError") \
-                or "unauthorized" in msg or "forbidden" in msg \
+        if "unauthorized" in msg or "forbidden" in msg \
                 or re.search(r"\b40[13]\b", msg):   # \b so an id like 'room4012' doesn't match
             return True
         e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
         seen += 1
     return False
+
+
+def _is_refusal(exc) -> bool:
+    """True if a PUSH failed because iCloud refuses that one write for good: a
+    CalDavRejected (a lasting 4xx) or a 403 anywhere in the chain (the caldav
+    library raises AuthorizationError for 403 too). Decided from the status
+    (_http_status), never the message text. Only asked of push errors:
+    discovery and the pull already worked with these credentials this tick, so
+    a 403 here is the list refusing the write (read-only or shared), not a dead
+    password, and 'Reconnect iCloud' would not help."""
+    e, seen = exc, 0
+    while e is not None and seen < 10:
+        if isinstance(e, CalDavRejected):
+            return True
+        e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+        seen += 1
+    return _http_status(exc) == 403
 
 
 def _apply_error_persistence(conn, st, now, hard_error: bool) -> None:
@@ -121,23 +199,40 @@ def _object_meta(raw_ics: str):
 
 
 def _store_object(conn, collection_id: str, comp_type: str, obj: dict,
-                  seen: set) -> None:
-    """Persist one CalDAV object into cal_objects (the round-trip store) and note
-    its id in `seen` for the prune. Best-effort: a parse failure here must never
-    break the render path, so it is caught and skipped."""
+                  seen: set, index: dict) -> str:
+    """Persist one pulled CalDAV object into cal_objects (the round-trip store)
+    and note its id in `seen` for the prune. Returns 'unchanged', 'stored' or
+    'failed'.
+
+    `index` (fdb.cal_object_index) maps each stored href to its id and ETag. An
+    object whose ETag matches is unchanged on the server: it is only marked
+    seen, never parsed or rewritten. Every tick used to re-parse and re-save
+    every reminder, and completed ones pile up by the thousand. The write is
+    left open in the current transaction; the caller saves the batch.
+
+    Best-effort: a parse failure must never break the render path, so it is
+    caught, logged and reported as 'failed'."""
+    known = index.get(obj.get("href")) if obj.get("href") else None
+    if known and obj.get("etag") and known["etag"] == obj["etag"]:
+        seen.add(known["id"])
+        return "unchanged"
     try:
         meta = _object_meta(obj["ics"])
         if not (meta and meta["uid"]):
-            return
+            log.warning("caldav object without a UID skipped (%s)", collection_id)
+            return "failed"
         oid = f"{collection_id}/{meta['uid']}"
         fdb.upsert_cal_object_synced(conn, {
             "id": oid, "collection_id": collection_id, "comp_type": comp_type,
             "uid": meta["uid"], "href": obj.get("href"), "etag": obj.get("etag"),
             "summary": meta["summary"], "raw_ics": obj["ics"],
-            "sequence": meta["sequence"], "last_modified": meta["last_modified"]})
+            "sequence": meta["sequence"], "last_modified": meta["last_modified"]},
+            commit=False)
         seen.add(oid)
+        return "stored"
     except Exception:
         log.warning("caldav object store skipped (%s)", collection_id, exc_info=True)
+        return "failed"
 
 
 def _resolve_conflict(client, conn, col, row, now_iso: str,
@@ -252,23 +347,68 @@ def _delete_orphaned_upload(client, conn, col, row, href: str, etag,
              row["id"])
 
 
-def flush_pending(client, conn, collections, now_iso: str) -> dict:
+def _record_push_failure(conn, row, what: str, exc, now_iso: str,
+                         errors: list) -> bool:
+    """Record one failed push. A lasting refusal (_is_refusal) counts toward
+    parking the row; anything else stays retryable. Returns True if the failure
+    was a 401 (the caller surfaces needs_auth). Both are read from the status
+    the error carries, never its text, so a URL like familyhub-chore-403-...
+    can't make a network error look like either."""
+    refused = _is_refusal(exc)
+    parked = fdb.record_cal_object_error(conn, row["id"], f"{what}{exc}", now_iso,
+                                         permanent=refused)
+    if parked:
+        errors.append(f"{row['id']}: iCloud refused this change; it is kept on "
+                      f"the wall and not retried: {exc}")
+        log.warning("caldav %s parked after %d refusals (kept on the wall, not "
+                    "retried): %s", row["id"], fdb.CAL_PARK_ATTEMPTS, exc)
+    else:
+        errors.append(f"{row['id']}: {what}{exc}")
+    return not refused and _http_status(exc) == 401
+
+
+def flush_pending(client, conn, collections, now_iso: str,
+                  budget_s: float = FLUSH_BUDGET_S, clock=time.monotonic) -> dict:
     """Push the outbox — locally-edited cal_objects (wall edits) — to iCloud: PUT
     creates/updates (conditional on If-Match/If-None-Match), DELETE removals. Only
     collections discovered this round are flushable; a row whose collection wasn't
-    seen this pull records why and waits for the next. Per-row failures are
-    isolated and recorded (the row stays PENDING and retries next sync); a 412 is
-    resolved server-wins; an auth failure is surfaced so the wall shows Reconnect.
-    Returns {pushed, conflicts, errors, needs_auth}. Never raises — a bad push
-    must not blank the calendar, same fails-soft rule as the read path."""
+    seen this pull records why and waits for the next (or is parked, if its list
+    is gone from iCloud). Per-row failures are isolated and recorded (the row
+    stays PENDING and retries next sync); a 412 is resolved server-wins; an auth
+    failure is surfaced so the wall shows Reconnect. A write iCloud refuses for
+    good (a 403 on a read-only list, another lasting 4xx) is parked after
+    CAL_PARK_ATTEMPTS tries and is never read as a dead password.
+
+    Stops once `budget_s` of `clock` time is spent; the rest waits for the next
+    tick untouched (`deferred`). Returns {pushed, conflicts, errors, needs_auth,
+    deferred}. Never raises: a bad push must not blank the calendar, same
+    fails-soft rule as the read path."""
     col_by_id = {"caldav:" + c["id"]: c for c in collections}
+    known = None
     pushed, conflicts, errors, needs_auth = 0, 0, [], False
-    for row in fdb.caldav_pending(conn):
+    rows = fdb.caldav_pending(conn)
+    start = clock()
+    deferred = 0
+    for i, row in enumerate(rows):
+        if clock() - start >= budget_s:
+            deferred = len(rows) - i
+            log.warning("caldav push stopped at its time budget (%ss); %d "
+                        "change(s) wait for the next sync", budget_s, deferred)
+            break
         col = col_by_id.get(row["collection_id"])
         if col is None:
-            # not discovered this round: record why so a permanently-unroutable
-            # row is VISIBLE (per-row error + it keeps counting toward the pending
-            # backlog) instead of silently optimistic forever. Retries next sync.
+            if known is None:
+                known = {c["id"] for c in fdb.list_caldav_collections(conn)}
+            if row["collection_id"] not in known:
+                # the list is gone from iCloud (dropped by the sync): nothing
+                # can ever take this change, so park it rather than count it
+                # as "not yet synced" forever. It stays, and is logged.
+                fdb.park_cal_object(conn, row["id"], _GONE_REASON, now_iso)
+                log.warning("caldav %s parked: %s", row["id"], _GONE_REASON)
+                continue
+            # not discovered this round: record why so a stuck row is VISIBLE
+            # (per-row error + it keeps counting toward the pending backlog)
+            # instead of silently optimistic. Retries next sync.
             fdb.record_cal_object_error(
                 conn, row["id"], "collection not discovered this sync", now_iso)
             continue
@@ -316,19 +456,137 @@ def flush_pending(client, conn, collections, now_iso: str) -> dict:
                                   conflict_href=e.args[0] if e.args else None)
                 conflicts += 1
             except Exception as e:
-                fdb.record_cal_object_error(
-                    conn, row["id"], f"conflict-resolve failed: {e}", now_iso)
-                errors.append(f"{row['id']}: conflict-resolve failed: {e}")
-                needs_auth = needs_auth or _is_auth_error(e)
                 log.warning("caldav conflict-resolve failed for %s", row["id"],
                             exc_info=True)
+                if _record_push_failure(conn, row, "conflict-resolve failed: ",
+                                        e, now_iso, errors):
+                    needs_auth = True
         except Exception as e:
-            fdb.record_cal_object_error(conn, row["id"], str(e), now_iso)
-            errors.append(f"{row['id']}: {e}")
-            needs_auth = needs_auth or _is_auth_error(e)
             log.warning("caldav push failed for %s", row["id"], exc_info=True)
+            if _record_push_failure(conn, row, "", e, now_iso, errors):
+                needs_auth = True
     return {"pushed": pushed, "conflicts": conflicts, "errors": errors,
-            "needs_auth": needs_auth}
+            "needs_auth": needs_auth, "deferred": deferred}
+
+
+def _resolve_kinds(conn, discovered: list[dict]) -> list[dict]:
+    """The discovered collections with every kind known. discover() reports
+    comp=None when a collection's supported-component set could not be read;
+    guessing VEVENT turned a reminder list into a calendar for a tick. Use the
+    kind stored for it instead, or, for one never seen before, skip it this
+    tick (logged); the next sync reads it again."""
+    stored = None
+    out = []
+    for col in discovered:
+        if "comp" in col and col["comp"] is None:
+            if stored is None:
+                stored = {c["id"]: c["comp_type"]
+                          for c in fdb.list_caldav_collections(conn)}
+            kind = stored.get("caldav:" + col["id"])
+            if kind is None:
+                log.warning("caldav %s: kind (calendar or reminders) unreadable "
+                            "and not known yet; skipped this sync",
+                            col.get("name") or col["id"])
+                continue
+            col = {**col, "comp": kind}
+        out.append(col)
+    return out
+
+
+def _drop_gone_lists(conn, discovered: list[dict], now: dt.datetime) -> None:
+    """Drop saved collections iCloud no longer returns (deleted or unshared).
+
+    A saved collection missing from a NON-empty discover starts a clock in kv
+    `caldav_missing_since` ({id: {"since", "last"}}: the first and the latest
+    sighting); once its sightings span _LIST_GONE_HOURS it is dropped with its
+    pulled objects. An empty discover is a blip and never counts, and a gap of
+    more than _MISSING_GAP_HOURS since the last sighting (failed syncs between)
+    starts the clock over. Unsent wall edits for a dropped list are kept and
+    parked with _GONE_REASON (logged), so they stop counting as "not yet
+    synced" but are not silently lost; they go out again if the list comes
+    back."""
+    if not discovered:
+        return
+    seen = {"caldav:" + c["id"] for c in discovered}
+    missing = fdb.kv_get(conn, "caldav_missing_since") or {}
+    if not isinstance(missing, dict):
+        # reading a clock off anything else would throw and fail every sync
+        log.warning("caldav_missing_since unreadable (%r); every missing "
+                    "clock starts over", missing)
+        missing = {}
+    now_iso = now.isoformat()
+    kept = {}
+    for col in fdb.list_caldav_collections(conn):
+        cid = col["id"]
+        if cid in seen:
+            continue
+        clock = missing.get(cid)
+        since_dt = last_dt = None
+        if isinstance(clock, dict):
+            try:
+                since, last = clock.get("since"), clock.get("last")
+                since_dt = dt.datetime.fromisoformat(since) if since else None
+                last_dt = dt.datetime.fromisoformat(last) if last else None
+                # a stamp with a zone can't be compared with a clock without
+                # one (or the reverse); the subtraction below would stop the
+                # whole sync every tick
+                for stamp in (since_dt, last_dt):
+                    if stamp is not None and \
+                            (stamp.tzinfo is None) != (now.tzinfo is None):
+                        raise ValueError("time zone does not match")
+                    # a stamp later than now reads as a negative age: the
+                    # list would never drop until real time caught up
+                    if stamp is not None and stamp > now:
+                        raise ValueError("stamp is in the future")
+            except Exception:
+                log.warning("caldav_missing_since for %s unparseable or in the "
+                            "future (%r); its missing clock starts over",
+                            cid, clock)
+                since_dt = last_dt = None
+        elif clock is not None and not isinstance(clock, str):
+            # a bare time string is the older version's clock (restarts
+            # below, quietly); anything else is garbled
+            log.warning("caldav_missing_since for %s unparseable (%r); "
+                        "its missing clock starts over", cid, clock)
+        # No last sighting (a first sighting, or a clock the older version
+        # saved as a bare time) or too long since it: start over.
+        if since_dt is None or last_dt is None or \
+                (now - last_dt).total_seconds() / 3600.0 > _MISSING_GAP_HOURS:
+            if clock is not None and since_dt is not None:
+                log.info("caldav %s: no sighting for a while (failed syncs); its "
+                         "missing clock starts over", cid)
+            since_dt = now
+        age_h = (now - since_dt).total_seconds() / 3600.0
+        if age_h < _LIST_GONE_HOURS:
+            kept[cid] = {"since": since_dt.isoformat(), "last": now_iso}
+            continue
+        name = col.get("display_name") or cid
+        unsent = fdb.drop_caldav_collection(conn, cid)
+        for row in unsent:
+            fdb.park_cal_object(conn, row["id"], _GONE_REASON, now_iso)
+        log.warning("caldav %s (%s) missing from iCloud for %.0fh: dropped it and "
+                    "its synced items; %d unsent wall change(s) kept and parked",
+                    name, cid, age_h, len(unsent))
+        mapped = [p["name"] for p in fdb.list_people(conn)
+                  if p.get("reminder_list_id") == cid]
+        if mapped:
+            log.warning("caldav %s was the chore list of %s; their chores are not "
+                        "mirrored until a new list is picked in settings",
+                        name, ", ".join(mapped))
+    fdb.kv_set(conn, "caldav_missing_since", kept)
+
+
+def _parked_status(conn) -> dict:
+    """Status fields for parked wall changes (fdb.CAL_PARK_ATTEMPTS): a count,
+    and while any exist a plain note saying they are kept but not sent."""
+    parked = fdb.caldav_parked(conn)
+    if not parked:
+        return {"parked": 0}
+    n = len(parked)
+    return {"parked": n,
+            "parked_note": (f"{n} wall change{'s' if n != 1 else ''} iCloud "
+                            "refused or can no longer take (its list is read-only "
+                            "or gone); kept but not sent")}
 
 
 def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
@@ -349,16 +607,39 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
 
         lo_dt = now - dt.timedelta(days=getattr(cfg, "calendar_past_days", 45))
         hi_dt = now + dt.timedelta(days=cfg.calendar_window_days)
-        collections = client.discover()
+        discovered = client.discover()
+        now_iso = now.isoformat()
+        collections = _resolve_kinds(conn, discovered)
         # Persist every discovered collection (calendars + reminder lists) so the
         # settings calendar picker has a per-collection visibility toggle; upsert
-        # keeps the operator's toggle across syncs. Never pruned — a discover blip
-        # must not drop the picker state.
-        now_iso = now.isoformat()
+        # keeps the operator's toggle across syncs. A saved one that stops being
+        # discovered is dropped only after _LIST_GONE_HOURS (_drop_gone_lists).
         for col in collections:
+            cid = "caldav:" + col["id"]
             fdb.upsert_caldav_collection(
-                conn, "caldav:" + col["id"], col.get("comp", "VEVENT"),
+                conn, cid, col.get("comp", "VEVENT"),
                 col.get("name", ""), col.get("color"), now_iso)
+            if col.get("comp") == "VTODO":
+                # Chore reminders never sent before the list went away were
+                # forgotten by the mirror meanwhile. It queues the days still
+                # wanted again this tick (same ids, so never twice); sending
+                # the old ones would bring past days back on the phone.
+                from . import chore_mirror
+                dropped = fdb.drop_untracked_parked_creates(
+                    conn, cid, _GONE_REASON, chore_mirror.UID_PREFIX)
+                if dropped:
+                    log.info("caldav %s is back in iCloud; %d unsent chore "
+                             "reminder(s) the mirror no longer tracks were "
+                             "dropped (it re-queues the days still wanted)",
+                             col.get("name") or cid, dropped)
+                if fdb.unpark_cal_objects(conn, cid, _GONE_REASON):
+                    log.info("caldav %s is back in iCloud; its parked wall "
+                             "changes will be sent again", col.get("name") or cid)
+        _drop_gone_lists(conn, discovered, now)
+        # Nothing reads VEVENT objects from the store (events render from the
+        # events table, and only reminders are written back), so the pull no
+        # longer saves them; this clears the rows an older version left.
+        fdb.delete_synced_cal_objects(conn, "VEVENT")
 
         events: list[dict] = []
         errors: list[str] = []
@@ -366,12 +647,10 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         needs_auth = False
         for col in (c for c in collections if c.get("comp", "VEVENT") == "VEVENT"):
             cal_id = "caldav:" + col["id"]
-            seen_objs: set = set()
             n_objs = n_skipped = 0
             try:
                 for obj in client.fetch_ics(col, lo_dt.date(), hi_dt.date()):
                     n_objs += 1
-                    _store_object(conn, cal_id, "VEVENT", obj, seen_objs)
                     try:
                         events.extend(ics_events(
                             obj["ics"], cal_id, lo_dt.date(), hi_dt.date(),
@@ -391,35 +670,36 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                     # cache is kept, instead of reporting a healthy-but-empty
                     # calendar and silently blanking it after the empty-guard TTL.
                     raise RuntimeError(f"parsed 0 of {n_objs} objects")
-                if seen_objs:   # prune only when the collection returned objects
-                    fdb.prune_cal_objects(conn, cal_id, seen_objs)
             except Exception as e:  # isolate one bad collection
                 errors.append(f"{col.get('name') or cal_id}: {e}")
                 failed.append(cal_id)
                 needs_auth = needs_auth or _is_auth_error(e)
 
-        # Reminders lists (VTODO). Read-only for now; stored whole in kv and
-        # grouped at render (reminders.group).
-        rem: list[dict] = []
+        # Reminders lists (VTODO) -> cal_objects, which the wall renders from
+        # (app._visible_reminders). Unchanged objects (same ETag) are skipped
+        # without a parse or a write, and a list's changes are saved in
+        # batches, not one commit per reminder.
         vtodo_failed: list[str] = []
         for col in (c for c in collections if c.get("comp") == "VTODO"):
             list_id = "caldav:" + col["id"]
             seen_todos: set = set()
-            n_todos = n_skipped = 0
+            n_todos = n_failed = n_writes = 0
             try:
-                for obj in client.fetch_todos(col):
+                todos = client.fetch_todos(col)
+                index = fdb.cal_object_index(conn, list_id)
+                for obj in todos:
                     n_todos += 1
-                    _store_object(conn, list_id, "VTODO", obj, seen_todos)
-                    try:
-                        rem.extend(remlogic.parse_vtodo(
-                            obj["ics"], list_id, col.get("name", "")))
-                    except Exception:
+                    outcome = _store_object(conn, list_id, "VTODO", obj,
+                                            seen_todos, index)
+                    if outcome == "failed":
                         # Skip one unparseable reminder rather than failing the
                         # whole list and freezing the rest behind an error.
-                        n_skipped += 1
-                        log.warning("caldav reminder parse skipped (%s)", list_id,
-                                    exc_info=True)
-                if n_todos and n_skipped == n_todos:
+                        n_failed += 1
+                    elif outcome == "stored":
+                        n_writes += 1
+                        if n_writes % _PULL_BATCH == 0:
+                            conn.commit()
+                if n_todos and n_failed == n_todos:
                     # Every todo failed to parse -> systematic break; flag the list
                     # (keeps its cache) rather than report it healthy-but-empty.
                     raise RuntimeError(f"parsed 0 of {n_todos} todos")
@@ -429,6 +709,8 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                 errors.append(f"{col.get('name') or list_id}: {e}")
                 vtodo_failed.append(list_id)
                 needs_auth = needs_auth or _is_auth_error(e)
+            finally:
+                conn.commit()        # what parsed before a failure is still good
 
         # Valid-but-empty guard (mirrors the Google/ICS path): a VEVENT
         # collection that synced ZERO events this round but HAD cached events is
@@ -437,9 +719,13 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         # report success.
         attempted = {"caldav:" + c["id"] for c in collections
                      if c.get("comp", "VEVENT") == "VEVENT"}
+        # Only cached rows INSIDE the new window make an empty answer suspicious
+        # (calendar_sync.cached_ids_in_window): a calendar whose last event
+        # aged out of the lookback returns nothing honestly.
         synced_ids = {e["calendar_id"] for e in events}
         cached_ids = {cid for cid in fdb.event_calendar_ids(conn)
                       if cid.startswith("caldav:")}
+        in_window = cached_ids_in_window(conn, lo_dt.date(), hi_dt.date())
         empty_since = fdb.kv_get(conn, "caldav_empty_since") or {}
         suspicious: list[str] = []
         if not collections and cached_ids:
@@ -451,8 +737,10 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                 if cid in failed or cid in synced_ids:
                     empty_since.pop(cid, None)      # returned events -> reset clock
                     continue
-                if cid not in cached_ids:
-                    continue                        # genuinely empty, never had rows
+                if cid not in in_window:
+                    # genuinely empty: never had rows, or none left in the window
+                    empty_since.pop(cid, None)
+                    continue
                 since = empty_since.get(cid)
                 if since is None:
                     empty_since[cid] = now.isoformat()
@@ -480,15 +768,11 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         fdb.kv_set(conn, "caldav_empty_since", empty_since)
 
         # Reminders keep last-good on a per-list fetch failure or an empty
-        # discover, rather than dropping them (they aren't in `rem`).
-        if not collections:
-            rem = fdb.kv_get(conn, "caldav_reminders") or []
-        elif vtodo_failed:
-            keep = set(vtodo_failed)
-            rem.extend(r for r in (fdb.kv_get(conn, "caldav_reminders") or [])
-                       if r.get("list_id") in keep)
-
-        fdb.kv_set(conn, "caldav_reminders", rem)
+        # discover without any work here: a list's rows are only pruned after
+        # it pulled cleanly. (The whole-list kv copy "caldav_reminders" that
+        # was rewritten every tick is gone; nothing read it. Emptied once.)
+        if fdb.kv_get(conn, "caldav_reminders") is not None:
+            fdb.kv_set(conn, "caldav_reminders", None)
         fdb.replace_events_caldav(
             conn, events, keep_ids=tuple(set(failed) | set(suspicious)))
 
@@ -521,7 +805,9 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                              "created": mres.get("created", 0),
                              "moved": mres.get("moved", 0),
                              "updated": mres.get("updated", 0),
-                             "deleted": mres.get("deleted", 0)}
+                             "deleted": mres.get("deleted", 0),
+                             # people left out: their chore list is gone
+                             "lists_gone": mres.get("lists_gone", [])}
             if mres.get("error"):
                 log.error("chore mirror reconcile reported a failed tick")
             fdb.kv_set(conn, "chore_mirror_status", mirror_status)
@@ -539,11 +825,18 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                           {"ok": True, "disabled": True, "at": now.isoformat()})
 
         st = {"ok": not errors, "last_sync": now.isoformat(),
-              "events": len(events), "reminders": remlogic.open_count(rem),
+              "events": len(events),
+              "reminders": fdb.count_open_vtodo_objects(conn),
               # outbox backlog after this flush: un-pushed wall edits still queued
               # (0 in the normal case). Non-zero + not moving => something stuck;
               # the settings menu can surface it instead of it being invisible.
-              "pending": len(fdb.caldav_pending(conn))}
+              "pending": len(fdb.caldav_pending(conn)),
+              **_parked_status(conn)}
+        # people whose chore list is gone: left out of the mirror until a new
+        # list is picked (named here so it is not only a log line)
+        from . import chore_mirror
+        st["lists_gone"] = [p["name"]
+                            for p in chore_mirror.people_with_gone_lists(conn)]
         if errors:
             st["error"] = "; ".join(errors)
         # Only FETCH-scope failures may hold coverage back. `errors` also
@@ -562,7 +855,7 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         # Only a genuine fetch/discover EXCEPTION (a collection or reminder list
         # that raised) feeds the sustained clock — not the empty-window / discover
         # "kept last-synced" soft states, which keep the cache and aren't a stuck
-        # feed. Push (outbox) failures surface via `pending`, not this banner.
+        # feed. Push (outbox) failures surface via `pending` and `parked`.
         _apply_error_persistence(conn, st, now,
                                  hard_error=bool(failed or vtodo_failed))
         fdb.kv_set(conn, "caldav_status", st)
@@ -574,7 +867,8 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
         st = {"ok": False, "error": str(e), "last_sync": prior.get("last_sync"),
               # carry the outbox depth even on a failed sync — a queued wall edit
               # is most worth surfacing exactly when syncing is broken.
-              "pending": len(fdb.caldav_pending(conn))}
+              "pending": len(fdb.caldav_pending(conn)),
+              **_parked_status(conn)}
         if _is_auth_error(e):
             st["needs_auth"] = True
         # reaching here means the whole sync raised — a hard error (unless it was

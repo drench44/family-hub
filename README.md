@@ -19,10 +19,11 @@ light or dark theme with an accent color you pick.
 
 ![family-hub on a phone](docs/phone.png)
 
-*The same page, reflowed to five phone tabs, carrying the same theme. The Chores tab is shown here.*
+*The same page, reflowed to six phone tabs, carrying the same theme. The Chores tab is shown here.*
 
-Runs on any always-on Linux box with Docker. No cloud, no accounts, no
-telemetry — your LAN only. Point a wall screen (or any browser, or a phone)
+Runs on any always-on Linux box with Docker. No cloud service of its own, no
+accounts, no telemetry: it lives on your LAN and only talks out to the
+calendars and services you connect. Point a wall screen (or any browser, or a phone)
 at one URL.
 
 ## What it looks like
@@ -128,6 +129,9 @@ Wall / phones ─► http://<your-server>:8138/       family-hub (FastAPI + SQLi
                           │ server-side sync/proxies
                           ├─► Google Calendar API   (read-only, polled every 5 min)
                           ├─► any ICS/webcal feeds  (iCloud, school, holidays…)
+                          ├─► iCloud CalDAV         (reminders + chore mirror, two-way, optional)
+                          ├─► Home Assistant        (laundry, optional)
+                          ├─► weather / climate / fleet feeds (tiles, optional)
                           ├─► go2rtc                (camera tiles, optional; proxied
                           │                          at /go2rtc/, never on the LAN)
                           └─► your own dashboards   (embedded panels, optional)
@@ -503,7 +507,7 @@ exactly `release: vX.Y.Z` commits that touch only `VERSION`, `CHANGELOG.md` and
 Four layers, no external services needed (Python 3.12):
 
 ```bash
-pip install -r requirements.txt pytest        # same deps CI + the image use, + pytest
+pip install -r requirements.txt -c requirements.lock pytest   # pinned deps CI + the image use, + pytest
 PYTHONPATH=src python3 -m pytest tests -q
 ```
 

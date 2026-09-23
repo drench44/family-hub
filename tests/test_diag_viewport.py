@@ -76,6 +76,30 @@ def test_a_declared_oversized_body_is_dropped_not_buffered(client):
     assert not recent, "an oversized report must be dropped, not stored"
 
 
+def test_a_chunked_oversized_body_is_dropped_too(client):
+    """A chunked body carries no Content-Length, so the header check above
+    can't see its size. The endpoint reads the stream itself and gives up at
+    the cap instead of buffering the whole thing first."""
+    def chunks():
+        yield b'{"reason": "ok", "junk": "'
+        for _ in range(40):
+            yield b"x" * 1024
+        yield b'"}'
+    r = client.post("/api/diag/viewport", content=chunks(),
+                    headers={"content-type": "application/json"})
+    assert r.status_code == 200
+    assert client.get("/api/diag/viewport").json()["recent"] == []
+
+    def small():
+        yield b'{"reason": "wake", '
+        yield b'"inner": 700}'
+    r = client.post("/api/diag/viewport", content=small(),
+                    headers={"content-type": "application/json"})
+    assert r.status_code == 200
+    recent = client.get("/api/diag/viewport").json()["recent"]
+    assert [e["inner"] for e in recent] == [700]
+
+
 def test_client_cannot_clobber_the_server_timestamp(client):
     client.post("/api/diag/viewport", json={"reason": "ok", "at": "1999-01-01T00:00:00"})
     at = client.get("/api/diag/viewport").json()["recent"][-1]["at"]

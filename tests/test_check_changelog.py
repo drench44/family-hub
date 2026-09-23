@@ -57,6 +57,27 @@ def test_gained_entry_false_when_only_a_released_section_changed():
     assert cc.gained_entry(BASE, head) is False
 
 
+def test_gained_entry_true_when_the_pr_also_cuts_the_release():
+    """The house habit: a PR adds its bullets and runs release.py before merge,
+    so its bullets land in a NEW dated section and [Unreleased] is empty."""
+    head = ("## [Unreleased]\n\n## [1.1.0] - 2026-08-18\n### Added\n- old line\n"
+            "- brand new line\n\n## [1.0.0] - 2026-08-17\n- x\n")
+    assert cc.gained_entry(BASE, head) is True
+
+
+def test_gained_entry_false_when_a_release_only_rolls_existing_bullets():
+    """Rolling bullets that were already written is not a new entry."""
+    head = ("## [Unreleased]\n\n## [1.1.0] - 2026-08-18\n### Added\n- old line\n"
+            "\n## [1.0.0] - 2026-08-17\n- x\n")
+    assert cc.gained_entry(BASE, head) is False
+
+
+def test_gained_entry_false_when_an_old_bullet_is_copied_into_a_new_section():
+    head = ("## [Unreleased]\n\n## [1.1.0] - 2026-08-18\n- x\n"
+            "\n## [1.0.0] - 2026-08-17\n- x\n")
+    assert cc.gained_entry(BASE, head) is False
+
+
 # --- main() integration: the actual BLOCK/PASS enforcement -------------------
 # The pure predicates above don't prove the guard blocks. These drive main() in
 # a throwaway git repo so a defanged guard (inverted condition, wrong ref,
@@ -83,6 +104,9 @@ def _repo(tmp_path):
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "T")
     _git(repo, "config", "commit.gpgsign", "false")
+    # Hermetic: a machine-wide core.hooksPath (a global pre-commit guard) must
+    # not judge the throwaway repo's fixture commits.
+    _git(repo, "config", "core.hooksPath", str(tmp_path / "no-hooks"))
     return repo
 
 
@@ -168,3 +192,77 @@ def test_release_diff_is_recognized():
 
 def test_non_release_src_change_is_not_a_release():
     assert cc.is_release(["src/family_hub/app.py", "CHANGELOG.md"]) is False
+
+
+def test_feature_diff_that_also_bumps_version_is_not_a_release():
+    """Touching VERSION alone used to exempt the whole diff, so a feature PR
+    that bumped VERSION skipped the changelog rule. Only a diff limited to the
+    files release.py writes is a release."""
+    assert cc.is_release(["VERSION", "CHANGELOG.md",
+                          "src/family_hub/web/static/index.html",
+                          "src/family_hub/app.py"]) is False
+    assert cc.is_release(["VERSION", "src/family_hub/app.py"]) is False
+
+
+def test_release_needs_version_among_the_release_files():
+    assert cc.is_release(["CHANGELOG.md",
+                          "src/family_hub/web/static/index.html"]) is False
+    assert cc.is_release(["VERSION"]) is True
+
+
+def test_release_file_list_matches_what_release_py_writes():
+    """The exemption must track release.py, or a real release would be judged
+    against a stale list."""
+    spec = importlib.util.spec_from_file_location(
+        "release", Path(__file__).resolve().parents[1] / "scripts" / "release.py")
+    rel = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rel)
+    written = {"VERSION", "CHANGELOG.md",
+               str(rel.INDEX_HTML.relative_to(rel.REPO_ROOT))}
+    assert set(cc.RELEASE_FILES) == written
+
+
+def test_main_staged_BLOCKS_version_bump_riding_on_a_src_change(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo, "CHANGELOG.md", _SEED)
+    _write(repo, "VERSION", "1.0.0\n")
+    _write(repo, "src/family_hub/app.py", "x = 1\n")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-q", "-m", "init")
+    _write(repo, "VERSION", "1.0.1\n")
+    _write(repo, "src/family_hub/app.py", "x = 2\n")   # no new bullet
+    _git(repo, "add", "-A")
+    monkeypatch.setattr(cc, "REPO_ROOT", repo)
+    assert cc.main(["--staged"]) == 1
+
+
+def test_main_staged_PASSES_a_real_release(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo, "CHANGELOG.md", _SEED)
+    _write(repo, "VERSION", "1.0.0\n")
+    _write(repo, "src/family_hub/web/static/index.html", "hub.js?v=1.0.0\n")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-q", "-m", "init")
+    _write(repo, "VERSION", "1.1.0\n")
+    _write(repo, "src/family_hub/web/static/index.html", "hub.js?v=1.1.0\n")
+    _write(repo, "CHANGELOG.md", "## [Unreleased]\n\n## [1.1.0] - 2026-08-18\n"
+           "### Added\n- seed\n\n## [1.0.0] - 2026-08-17\n### Added\n- base\n")
+    _git(repo, "add", "-A")
+    monkeypatch.setattr(cc, "REPO_ROOT", repo)
+    assert cc.main(["--staged"]) == 0
+
+
+def test_main_base_PASSES_a_feature_pr_that_cuts_its_own_release(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo, "CHANGELOG.md", _SEED)
+    _write(repo, "VERSION", "1.0.0\n")
+    _write(repo, "src/family_hub/app.py", "x = 1\n")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-q", "-m", "M")
+    default = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _write(repo, "src/family_hub/app.py", "x = 2\n")
+    _write(repo, "VERSION", "1.1.0\n")
+    _write(repo, "CHANGELOG.md",
+           "## [Unreleased]\n\n## [1.1.0] - 2026-08-18\n### Fixed\n- the new fix\n"
+           "### Added\n- seed\n\n## [1.0.0] - 2026-08-17\n### Added\n- base\n")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-q", "-m", "feature + release")
+    monkeypatch.setattr(cc, "REPO_ROOT", repo)
+    assert cc.main(["--base", default]) == 0

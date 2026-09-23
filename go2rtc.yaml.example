@@ -44,3 +44,27 @@ streams:
 webrtc:
   # Your box's LAN IP — browsers connect here for the live WebRTC streams.
   candidates: [ "192.168.1.50:8555" ]
+
+# LOCK DOWN THE API. The compose file already keeps go2rtc's API (:1984) off
+# the LAN (loopback only; browsers get the player through the hub's /go2rtc/
+# proxy) and mounts this file read-only. This block is the second lock, for
+# anything that can still reach :1984 (the box itself, the compose network):
+# go2rtc's own README warns that API access means full access to the box.
+# Only these paths are needed: "/" serves the player page and its scripts,
+# /api/ws carries the live stream, the /api/hls/* paths are the player's
+# fallback for phones that can't use the other modes, /api/streams lets the
+# hub's health check see which streams exist, and /api/frame.jpeg is the hub's
+# snapshot probe. /api/config, restart, the log and the rest stop answering.
+# GET /api/streams still lists each stream's source URL; go2rtc refuses
+# exec:, echo: and expr: sources on PUT there, so it can't run commands.
+api:
+  allow_paths: [ "/", "/api", "/api/ws", "/api/streams", "/api/frame.jpeg",
+                 "/api/hls/playlist.m3u8", "/api/hls/segment.ts",
+                 "/api/hls/segment.m4s", "/api/hls/init.mp4" ]
+
+# Only ffmpeg may be run as an exec: source...
+exec:
+  allow_paths: [ ffmpeg ]
+# ...and echo: may run nothing (the hub never uses it).
+echo:
+  allow_paths: []

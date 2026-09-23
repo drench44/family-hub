@@ -571,3 +571,52 @@ test('the default flag, not list order, picks the look a fresh device gets', () 
   win.FH_SEASONS[0].looks[1].default = false;
   assert.equal(win.refreshLook(day(4, 11)), 'spring-a', 'no default marked: the first look');
 });
+
+// ---- the house default before first paint (audit) ----
+// Nothing injects window.FH_THEME before theme.js runs; the house default
+// only arrived with the first /api/hub, so a fresh device painted the
+// hardcoded grey first and then flashed to the house theme. theme.js now
+// keeps the last house default hub.js handed it (rememberHouseTheme) under
+// its own key and paints from that at startup; the next poll corrects it.
+
+test('rememberHouseTheme caches the house default under fh.house, and a reload paints from it', () => {
+  const first = loadTheme();
+  first.win.rememberHouseTheme({ mode: 'dark', accent: 'amber', columns: 'wells', season: 'on' });
+  const cached = first.localStorage.getItem('fh.house');
+  assert.ok(cached, 'the house default was cached');
+  // the cache is NOT a device choice: the per-device keys stay empty
+  assert.equal(first.localStorage.getItem('fh.theme'), null);
+  assert.equal(first.localStorage.getItem('fh.season'), null);
+
+  const { root } = loadTheme({ storage: { 'fh.house': cached } });
+  assert.equal(root.getAttribute('data-theme'), 'dark', 'first paint uses the cached house theme');
+  assert.equal(root.getAttribute('data-accent'), 'amber');
+  assert.equal(root.getAttribute('data-cols'), 'wells');
+  assert.equal(root.getAttribute('data-season'), 'on');
+});
+
+test('a device choice still beats the cached house default', () => {
+  const { root } = loadTheme({ storage: {
+    'fh.theme': 'light', 'fh.house': JSON.stringify({ mode: 'dark', accent: 'amber' }),
+  } });
+  assert.equal(root.getAttribute('data-theme'), 'light');
+  assert.equal(root.getAttribute('data-accent'), 'amber', 'the cache fills what the device left open');
+});
+
+test('a corrupt or invalid cached house default falls back to the hardcoded default', () => {
+  assert.equal(loadTheme({ storage: { 'fh.house': '{not json' } }).root.getAttribute('data-theme'), 'grey');
+  assert.equal(loadTheme({ storage: { 'fh.house': '"dark"' } }).root.getAttribute('data-theme'), 'grey');
+  assert.equal(loadTheme({ storage: { 'fh.house': JSON.stringify({ mode: 'neon' }) } })
+    .root.getAttribute('data-theme'), 'grey');
+});
+
+test('storage that throws never breaks first paint or rememberHouseTheme', () => {
+  const root = makeRoot();
+  const boom = () => { throw new Error('storage blocked'); };
+  const win = { localStorage: { getItem: boom, setItem: boom } };
+  const sandbox = { window: win, document: { documentElement: root }, console: { warn() {} } };
+  vm.createContext(sandbox);
+  vm.runInContext(themeSrc, sandbox);
+  assert.equal(root.getAttribute('data-theme'), 'grey');
+  assert.doesNotThrow(() => win.rememberHouseTheme({ mode: 'dark' }));
+});

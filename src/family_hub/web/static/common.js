@@ -41,18 +41,29 @@ async function j(url, opts) {
   }
 }
 
-/* Same AbortController-timeout guard as j() above, for callers that only need
-   the raw Response (not j()'s JSON-decode + error-detail contract): the
-   camera snapshot probes in hub.js. Without this, a raw fetch to a connected-
-   but-unresponsive server never resolves, and probes stack up until the
-   browser's ~6-connection-per-origin budget is exhausted on a multi-day kiosk
-   uptime. Same platform guard as j(): falls back to a bare fetch when
-   AbortController isn't available (the vm test sandbox). */
-function fetchTimeout(url, ms = J_TIMEOUT_MS) {
-  if (typeof AbortController === 'undefined') return fetch(url);
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), ms);
-  return fetch(url, { signal: ac.signal }).finally(() => clearTimeout(timer));
+/* Is `url` answering? For the camera snapshot probes in hub.js, which only
+   need the status, not the image. Same AbortController-timeout guard as j()
+   above: without it, a raw fetch to a connected-but-unresponsive server never
+   resolves, and probes stack up until the browser's ~6-connection-per-origin
+   budget is exhausted on a multi-day kiosk uptime. After reading .ok the body
+   is cancelled: every 30s probe used to download a whole snapshot nobody
+   read. The abort timer stays armed until that cancel is done, so a server
+   that sends headers and then stalls can't hold the socket either. Rejects
+   on a network failure or timeout, like fetch. Same platform guard as j():
+   no timer when AbortController isn't available (the vm test sandbox). */
+async function probeOk(url, ms = J_TIMEOUT_MS) {
+  const ac = typeof AbortController === 'undefined' ? null : new AbortController();
+  const timer = ac ? setTimeout(() => ac.abort(), ms) : null;
+  try {
+    const r = await (ac ? fetch(url, { signal: ac.signal }) : fetch(url));
+    const ok = !!r.ok;
+    if (r.body && typeof r.body.cancel === 'function') {
+      try { await r.body.cancel(); } catch (e) { /* already closed or aborted */ }
+    }
+    return ok;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 /* Defense in depth for inline style="" sinks: colors reaching the DOM are all
@@ -942,7 +953,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
     model.rot.splice(Number(b.dataset.rem), 1);
     paintRotation();
   };
-  $('[data-submit]').onclick = () => {
+  $('[data-submit]').onclick = oneSaveAtATime($('[data-submit]'), () => {
     // Serialization lives in buildChorePayload above (pure, tested).
     const assign = model.repeat === 'once' ? 'fixed' : model.assign;
     const err = $('.f-error');
@@ -967,7 +978,28 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       rot: model.rot,
       date: $('.f-date').value,
     });
-    onsubmit(body, err);
+    return onsubmit(body, err);
+  });
+}
+
+/* Wrap a form's Save handler so it runs one write at a time. A double tap
+   (or the OSK Done key clicking Save while a tap's write is still out) used
+   to POST twice and create two chores or two people. The button is disabled
+   and a flag set until `run`'s promise settles; both come back either way,
+   so a failed save can be tried again (on success the form is closed). A
+   `run` that returns no promise (a validation stop, nothing sent) releases
+   at once. */
+function oneSaveAtATime(btn, run) {
+  let busy = false;
+  return () => {
+    if (busy) return undefined;
+    busy = true;
+    btn.disabled = true;
+    const release = () => { busy = false; btn.disabled = false; };
+    let p;
+    try { p = run(); } catch (e) { release(); throw e; }
+    if (!p || typeof p.then !== 'function') { release(); return p; }
+    return p.then(release, (e) => { release(); throw e; });
   };
 }
 
@@ -998,24 +1030,45 @@ function reminderListBody(value) {
 
 /* The iCloud-list mapping block for the person editor (edit mode only — a new
    person has no id to PATCH yet). `opts` carries {reminderLists, reminderListId,
-   twoWay}. With lists it renders a picker + the one-time sharing note; with no
-   lists it renders a single "connect iCloud" line instead of a dead dropdown.
-   Kept as an HTML string so buildPersonForm can drop it into the same template
-   pass (the live wiring + PATCH is added after). */
+   listGone, twoWay}. With lists it renders a picker + the one-time sharing note;
+   with no lists it renders a single "connect iCloud" line instead of a dead
+   dropdown, unless the person's list is gone (then iCloud IS connected and
+   every list went away, so say that). `listGone` comes from the server
+   (/api/admin/state people[].list_gone); an empty list array alone can't tell
+   "not connected" from "all gone". Kept as an HTML string so buildPersonForm
+   can drop it into the same template pass (the live wiring + PATCH is added
+   after). */
 function mirrorFieldHtml(opts) {
   if (!opts || !opts.edit) return '';
   const lists = opts.reminderLists || [];
   const listId = opts.reminderListId || '';
-  if (!lists.length) {
+  const gone = !!listId && !!opts.listGone;
+  if (!lists.length && !gone) {
     return `<div class="field"><label>iCloud chore list</label>`
       + `<div class="hint" data-plist-empty>Connect iCloud in Settings to mirror this person’s chores to a list.</div></div>`;
   }
   const options = `<option value=""${listId ? '' : ' selected'}>— none —</option>`
     + lists.map((l) =>
       `<option value="${escapeHtml(l.id)}"${l.id === listId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
+  // A saved id that matches no list still needs its own option. Without one
+  // the browser shows the none option as already chosen, and picking it
+  // fires no change, so the mapping could never be cleared (and a failed
+  // save's undo would blank the picker). It is selected but disabled: it
+  // shows what is saved and can't be picked again, so choosing none is
+  // always a real change.
+  const savedOption = listId && !lists.some((l) => l.id === listId)
+    ? `<option value="${escapeHtml(listId)}" selected disabled>${gone ? '(list gone)' : '(current list)'}</option>`
+    : '';
   const offNow = !!listId && !opts.twoWay;
+  // Mapped to a list the sync no longer has: say what happened above the
+  // picker. The picker shows "(list gone)" and still offers none to clear
+  // the mapping, even when no lists are left.
+  const goneText = lists.length
+    ? 'This person’s iCloud chore list is gone; pick a new one.'
+    : 'This person’s iCloud chore list is gone, and iCloud has no other lists. Make or share one in iCloud Reminders, then pick it here.';
   return `<div class="field"><label>iCloud chore list</label>`
-    + `<select class="txt-input" data-plist>${options}</select>`
+    + (gone ? `<div class="form-error" data-plist-gone>${goneText}</div>` : '')
+    + `<select class="txt-input" data-plist>${savedOption}${options}</select>`
     + `<div class="hint" data-plist-share>Chores are written to this person’s list in the hub’s iCloud account. To see them on their own iPhone, share that list to their Apple ID once from iCloud Reminders (open the list → Share List).</div>`
     + `<div class="hint${offNow ? '' : ' hidden'}" data-plist-readonly>Two-way sync is off, so chores won’t reach iCloud yet. Turn it on in Settings → iCloud.</div>`
     + `<div class="form-error hidden" data-plist-err></div></div>`;
@@ -1065,13 +1118,16 @@ function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
         if (errEl) { errEl.textContent = 'Couldn’t update the list — check the hub and try again.'; errEl.classList.remove('hidden'); }
       } else {
         committed = value;
+        // a new list (or none) is saved: the old one being gone no longer applies
+        const goneEl = $('[data-plist-gone]');
+        if (goneEl) goneEl.classList.add('hidden');
       }
       paintReadonly();
     };
   }
 
-  $('[data-psubmit]').onclick = () =>
-    onsubmit({ name: $('[data-pname]').value.trim(), color: model.color }, $('[data-perror]'));
+  $('[data-psubmit]').onclick = oneSaveAtATime($('[data-psubmit]'), () =>
+    onsubmit({ name: $('[data-pname]').value.trim(), color: model.color }, $('[data-perror]')));
 }
 
 /* Attempt a chore check-off/uncheck; returns true on success, false if the
@@ -1346,10 +1402,25 @@ function caldavPanelHtml(integ, ui) {
   const pendingNote = pending > 0
     ? `<div class="caldav-pending">${pending} change${pending === 1 ? '' : 's'} not yet synced</div>`
     : '';
+  // Parked: edits iCloud refused for good (a read-only list) or whose list is
+  // gone. Kept but no longer sent, so not "not yet synced". Not "on the
+  // wall": an edit whose list is gone is hidden from the wall.
+  const parked = Number(integ.parked) || 0;
+  const parkedNote = parked > 0
+    ? `<div class="caldav-parked">${parked} change${parked === 1 ? '' : 's'} iCloud would not take (read-only or deleted list); kept but not sent</div>`
+    : '';
+  // People whose chore list is gone from iCloud (deleted, unshared or moved):
+  // the mirror leaves them out until a new list is picked, so say so plainly
+  // rather than let the panel look healthy.
+  const goneNote = (Array.isArray(integ.lists_gone) ? integ.lists_gone : [])
+    .map((name) => `<div class="caldav-gone">${escapeHtml(name)}’s iCloud chore list is gone; pick a new one.</div>`)
+    .join('');
   return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong>`
     + (warn ? `<span class="integ-warn">${warn}</span>` : '')
     + `</div>`
+    + goneNote
     + pendingNote
+    + parkedNote
     + `<div class="settings-row">`
     + `<span class="settings-k">Sync direction</span>`
     + `<div class="segmented" role="group" aria-label="Sync direction">`

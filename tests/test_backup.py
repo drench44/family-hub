@@ -11,6 +11,8 @@ The script is driven entirely by env so it is deterministic under test:
   and the per-tier keep counts (…_KEEP) are overridable.
 """
 import json
+import os
+import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -489,3 +491,176 @@ def test_no_remote_configured_clears_remote_fields(tmp_path):
     rec = _status(db)
     assert not any(k.startswith("remote") for k in rec)
     assert rec["at"] != "2000-01-01T00:00:00+00:00"
+
+
+# --- off-box copy never mirrors a missing local history --------------------------
+# The copy used `rsync --delete`, so a new or empty local tree (a replaced disk,
+# a changed FH_OUT) would have wiped every snapshot on the NAS on its first run.
+# It now only adds files, and the NAS tiers are pruned by the same keep counts
+# as the local ones.
+
+def _seed_remote(remote, tier, stamps):
+    (remote / tier).mkdir(parents=True, exist_ok=True)
+    for s in stamps:
+        (remote / tier / f"hub-{s}.db").write_bytes(b"old snapshot")
+
+
+def test_new_empty_local_tree_never_wipes_remote_history(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    old = [f"20260801-{h:02d}00" for h in range(10)]
+    _seed_remote(remote, "hourly", old)
+    _seed_remote(remote, "monthly", ["202601", "202602", "202603"])
+    (remote / "notes.txt").write_text("operator's own file")
+    _run(db, tmp_path / "fresh-out", remote=remote)       # brand-new local tree
+    names = {p.name for p in _snaps(remote, "hourly")}
+    assert {f"hub-{s}.db" for s in old} <= names, "remote history survives"
+    assert "hub-20260818-0930.db" in names, "and the new snapshot is added"
+    assert len(_snaps(remote, "monthly")) == 4
+    assert (remote / "notes.txt").exists(), "files that are not snapshots stay"
+
+
+def test_remote_tiers_are_pruned_by_the_same_keep_counts(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    _seed_remote(remote, "hourly", [f"20260801-{h:02d}00" for h in range(6)])
+    _seed_remote(remote, "daily", ["20260801", "20260802", "20260803"])
+    _run(db, tmp_path / "out", remote=remote,
+         extra_env={"HOURLY_KEEP": "3", "DAILY_KEEP": "2"})
+    assert [p.name for p in _snaps(remote, "hourly")] == [
+        "hub-20260801-0400.db", "hub-20260801-0500.db", "hub-20260818-0930.db"]
+    assert [p.name for p in _snaps(remote, "daily")] == [
+        "hub-20260803.db", "hub-20260818.db"]
+
+
+def test_offbox_copy_does_not_use_delete():
+    import re
+    s = SCRIPT.read_text()
+    m = re.search(r'rsync\b[^\n]*"\$OUT/"\s+"\$REMOTE/"', s)
+    assert m and "--delete" not in m.group(0), \
+        "the off-box copy must never mirror deletions from the local tree"
+
+
+def test_partials_are_never_copied_off_box(tmp_path):
+    """Only the rsync exclude keeps a partial off the NAS when the sweep
+    doesn't remove it first. The sweep matches .partial-*.db (and its -wal /
+    -shm), so a partial with another suffix, like a promote cut short or a
+    concurrent run's temp, is still there at copy time."""
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    out = tmp_path / "out"
+    remote = tmp_path / "nas"
+    _run(db, out, remote=remote)
+    (out / "daily" / ".partial-x.db.tmp").write_bytes(b"half")
+    (out / "hourly" / ".partial-y").write_bytes(b"half")
+    _run(db, out, remote=remote, now="202608181030")
+    assert (out / "daily" / ".partial-x.db.tmp").exists(), \
+        "the sweep leaves it, so the exclude alone is under test"
+    assert not list((remote / "daily").glob(".partial*"))
+    assert not list((remote / "hourly").glob(".partial*"))
+    assert (remote / "hourly" / "hub-20260818-1030.db").exists(), \
+        "the real snapshot still went across"
+
+
+def test_remote_prune_failure_exits_2_and_records_it(tmp_path):
+    """If the NAS tier can't be listed for the prune, the run is a remote
+    failure: exit 2, the heartbeat says the remote copy failed, and the local
+    snapshot is kept."""
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    out = tmp_path / "out"
+    remote = tmp_path / "nas"
+    _run(db, out, remote=remote)
+    assert _status(db)["remote_ok"] is True
+    # Fail only the prune's listing of the NAS tier, with an rsync shim. A
+    # chmod on the tier can't do it portably: GNU rsync (the house box, the
+    # OMEN) resets the directory's mode while adding files, so the listing
+    # then succeeds, and root ignores directory modes anyway.
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    real = shutil.which("rsync")
+    if not real:   # never skip: the shim would exec nothing and prove nothing
+        pytest.fail("rsync is not on PATH; this test needs the real one")
+    (shim / "rsync").write_text(
+        "#!/bin/bash\n"
+        'case "$*" in *--list-only*hourly/*) '
+        'echo "opendir: Permission denied" >&2; exit 23;; esac\n'
+        f'exec {real} "$@"\n')
+    (shim / "rsync").chmod(0o755)
+    extra = {"PATH": f"{shim}:{os.environ['PATH']}"}
+    r = _run(db, out, remote=remote, now="202608181030", check=False,
+             extra_env=extra)
+    assert r.returncode == 2, f"a failed prune is a remote failure: {r.stderr}"
+    assert "prune hourly" in r.stderr
+    assert _status(db)["remote_ok"] is False
+    assert (out / "hourly" / "hub-20260818-1030.db").exists(), "local snapshot kept"
+
+
+def test_remote_weekly_tier_is_pruned_by_its_keep_count(tmp_path):
+    """Weekly names are YYYY-Www, not digits only; the remote prune must
+    match and order them too, across a year boundary."""
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    _seed_remote(remote, "weekly", ["2025-W52", "2026-W01", "2026-W30", "2026-W33"])
+    _run(db, tmp_path / "out", remote=remote, extra_env={"WEEKLY_KEEP": "3"})
+    assert [p.name for p in _snaps(remote, "weekly")] == [
+        "hub-2026-W30.db", "hub-2026-W33.db", "hub-2026-W34.db"]
+
+
+def test_remote_weekly_prune_orders_weeks_across_the_new_year(tmp_path):
+    """Keep 3 of 2025-W52, 2026-W01, 2026-W02 and the new run's week: the
+    order across the year decides which goes. 2025-W52 is the oldest and
+    goes; 2026-W01 stays (sorting by week number alone would drop it)."""
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    _seed_remote(remote, "weekly", ["2025-W52", "2026-W01", "2026-W02"])
+    _run(db, tmp_path / "out", remote=remote, extra_env={"WEEKLY_KEEP": "3"})
+    assert [p.name for p in _snaps(remote, "weekly")] == [
+        "hub-2026-W01.db", "hub-2026-W02.db", "hub-2026-W34.db"]
+
+
+def test_stale_partial_wal_and_shm_sidecars_are_swept(tmp_path):
+    # The integrity check opens the snapshot, which is in WAL mode, so a hard
+    # kill there leaves .partial-*.db-wal / -shm next to it. They are swept too.
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    out = tmp_path / "backup"
+    for tier in ("hourly", "daily", "weekly", "monthly"):
+        (out / tier).mkdir(parents=True)
+        for suffix in (".db", ".db-wal", ".db-shm"):
+            (out / tier / f".partial-20260101-0000{suffix}").write_bytes(b"stale")
+    _run(db, out)
+    for tier in ("hourly", "daily", "weekly", "monthly"):
+        assert not list((out / tier).glob(".partial*")), tier
+
+
+def test_snapshot_of_a_wal_db_leaves_no_sidecars_and_is_not_wal(tmp_path):
+    """The online backup copies the live db's WAL journal mode into the
+    snapshot, so its integrity check made a .partial-*.db-wal that could be
+    left behind (and on some builds always was, next to every snapshot). The
+    snapshot is switched out of WAL before it is closed: no sidecars, and a
+    restore copies one plain file. The app holds the live db open (as it does
+    on the box), so the live db's own sidecars exist during the run."""
+    db = tmp_path / "hub.db"
+    c = sqlite3.connect(db)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("create table todos (id integer primary key, title text)")
+    c.executemany("insert into todos (title) values (?)", [("a",)] * 50)
+    c.commit()
+    try:
+        out = tmp_path / "backup"
+        _run(db, out)
+    finally:
+        c.close()
+    for tier in ("hourly", "daily", "weekly", "monthly"):
+        assert not list((out / tier).glob("*-wal")) and \
+            not list((out / tier).glob("*-shm")), f"{tier}: sidecars left behind"
+    snap = _snaps(out, "hourly")[0]
+    assert snap.read_bytes()[18:20] == b"\x01\x01", "rollback journal, not WAL"
+    s = sqlite3.connect(snap)
+    assert s.execute("select count(*) from todos").fetchone()[0] == 50
+    s.close()
