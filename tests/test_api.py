@@ -3092,6 +3092,28 @@ def test_caldav_settings_entry_carries_pending_and_parked_counts(tmp_path, monke
         assert (e["pending"], e["parked"]) == (1, 2)
 
 
+def test_caldav_settings_entry_names_people_whose_list_is_gone(tmp_path, monkeypatch):
+    """A person mapped to a Reminders list the sync dropped is named on the
+    iCloud settings entry, read live, so picking a new list clears it."""
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "abcd-efgh")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        entry = lambda: {i["id"]: i for i in
+                         tc.get("/api/integrations").json()["integrations"]}["icloud_caldav"]
+        c = appmod._db()
+        assert entry()["lists_gone"] == []
+        pid = appmod.fdb.add_person(c, "Sam", "#5BC9F0")
+        appmod.fdb.upsert_caldav_collection(c, "caldav:sam", "VTODO", "Sam", None, "t")
+        appmod.fdb.upsert_caldav_collection(c, "caldav:new", "VTODO", "New", None, "t")
+        appmod.fdb.update_person(c, pid, reminder_list_id="caldav:sam")
+        assert entry()["lists_gone"] == []
+        appmod.fdb.drop_caldav_collection(c, "caldav:sam")
+        assert entry()["lists_gone"] == ["Sam"]
+        appmod.fdb.update_person(c, pid, reminder_list_id="caldav:new")
+        assert entry()["lists_gone"] == []
+
+
 def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
     appmod = _reload_with(tmp_path, monkeypatch, {})
     with TestClient(appmod.app) as tc:

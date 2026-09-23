@@ -1046,7 +1046,11 @@ function mirrorFieldHtml(opts) {
     + lists.map((l) =>
       `<option value="${escapeHtml(l.id)}"${l.id === listId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
   const offNow = !!listId && !opts.twoWay;
+  // Mapped to a list the sync no longer has: the picker would just look
+  // empty (the none option), so say what happened.
+  const gone = !!listId && !lists.some((l) => l.id === listId);
   return `<div class="field"><label>iCloud chore list</label>`
+    + (gone ? `<div class="form-error" data-plist-gone>This person’s iCloud chore list is gone; pick a new one.</div>` : '')
     + `<select class="txt-input" data-plist>${options}</select>`
     + `<div class="hint" data-plist-share>Chores are written to this person’s list in the hub’s iCloud account. To see them on their own iPhone, share that list to their Apple ID once from iCloud Reminders (open the list → Share List).</div>`
     + `<div class="hint${offNow ? '' : ' hidden'}" data-plist-readonly>Two-way sync is off, so chores won’t reach iCloud yet. Turn it on in Settings → iCloud.</div>`
@@ -1385,9 +1389,16 @@ function caldavPanelHtml(integ, ui) {
   const parkedNote = parked > 0
     ? `<div class="caldav-parked">${parked} change${parked === 1 ? '' : 's'} iCloud would not take (read-only or deleted list); kept but not sent</div>`
     : '';
+  // People whose chore list is gone from iCloud (deleted, unshared or moved):
+  // the mirror leaves them out until a new list is picked, so say so plainly
+  // rather than let the panel look healthy.
+  const goneNote = (Array.isArray(integ.lists_gone) ? integ.lists_gone : [])
+    .map((name) => `<div class="caldav-gone">${escapeHtml(name)}’s iCloud chore list is gone; pick a new one.</div>`)
+    .join('');
   return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong>`
     + (warn ? `<span class="integ-warn">${warn}</span>` : '')
     + `</div>`
+    + goneNote
     + pendingNote
     + parkedNote
     + `<div class="settings-row">`

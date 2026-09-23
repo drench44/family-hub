@@ -721,3 +721,22 @@ def test_reconcile_skips_a_mapped_list_that_is_gone(conn, caplog):
     assert res["created"] == 0
     assert fdb.list_chore_mirror(conn) == []
     assert any("Emma" in r.getMessage() for r in caplog.records)
+    # and the result names who is left out, so settings can say so
+    assert res["lists_gone"] == ["Emma"]
+
+
+def test_people_with_gone_lists_names_only_mapped_people_whose_list_is_gone(conn):
+    emma = _person(conn, "Emma", "caldav:emma")
+    _person(conn, "Sam", "caldav:sam")
+    _person(conn, "Noah")                              # not mapped at all
+    assert chore_mirror.people_with_gone_lists(conn) == []
+    assert chore_mirror.reconcile(conn, _CFG, _NOW)["lists_gone"] == []
+    fdb.drop_caldav_collection(conn, "caldav:sam")
+    gone = chore_mirror.people_with_gone_lists(conn)
+    assert [(p["name"], p["list_id"]) for p in gone] == [("Sam", "caldav:sam")]
+    # picking a new list clears it
+    fdb.update_person(conn, gone[0]["id"], reminder_list_id="caldav:emma")
+    assert chore_mirror.people_with_gone_lists(conn) == []
+    # an inactive person is not mirrored, so not named
+    fdb.update_person(conn, emma, reminder_list_id="caldav:nowhere", active=0)
+    assert chore_mirror.people_with_gone_lists(conn) == []
