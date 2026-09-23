@@ -541,7 +541,7 @@ def _parked_status(conn) -> dict:
     return {"parked": n,
             "parked_note": (f"{n} wall change{'s' if n != 1 else ''} iCloud "
                             "refused or can no longer take (its list is read-only "
-                            "or gone); kept on the wall, not retried")}
+                            "or gone); kept but not sent")}
 
 
 def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
