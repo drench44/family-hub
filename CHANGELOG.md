@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-09-22
+
 ### Fixed
 - Calendar times are shown in the house time zone. A calendar set to a
   fixed zone would have shown its events an hour late from November 1.
