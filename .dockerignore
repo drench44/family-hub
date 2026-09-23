@@ -1,0 +1,13 @@
+# The build context is an ALLOWLIST: ignore everything, then allow back only
+# what web.Dockerfile COPYs. Without this the whole checkout went to the
+# builder, including data/ (the family's database and tokens), .env and the
+# real config.json. tests/test_build_files.py keeps this list in step with
+# the Dockerfile's COPY lines.
+*
+!requirements.txt
+!requirements.lock
+!src
+!VERSION
+!config.example.json
+**/__pycache__
+**/*.pyc

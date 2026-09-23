@@ -12,7 +12,8 @@ Conventions:
   restore window ("recently done" in the full view). It used to linger until
   local midnight, which on a wall read as "checking it off did nothing"
   (operator report, 2026-09-22: an item checked at 10am was still up at
-  noon).
+  noon). Past that window db.set_todo_done drops finished items once they
+  are TODO_DONE_KEEP_DAYS old, so the table stays small.
 """
 from __future__ import annotations
 

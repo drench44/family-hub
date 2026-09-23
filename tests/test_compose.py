@@ -133,3 +133,18 @@ def test_go2rtc_config_is_read_only_and_config_dirs_are_named_volumes():
 def test_hub_reaches_go2rtc_over_the_compose_network():
     env = _services()["web"]["environment"]
     assert "GO2RTC_FETCH_BASE=http://go2rtc:1984" in env
+
+
+def test_web_service_is_hardened():
+    """The hub needs no Linux capabilities and never escalates: it runs as
+    a fixed non-root uid, serves an unprivileged port and writes only /data.
+    Dropping every capability and forbidding new privileges costs nothing
+    and turns a code-execution bug into much less. go2rtc and wyze-bridge
+    are third-party images whose needs are not pinned down, so only the
+    web service carries these."""
+    web = _services()["web"]
+    assert web["user"] == "${HUB_UID:-1000}:${HUB_GID:-1000}"
+    assert "no-new-privileges:true" in web.get("security_opt", [])
+    assert web.get("cap_drop") == ["ALL"]
+    assert "cap_add" not in web
+    assert not web.get("privileged")

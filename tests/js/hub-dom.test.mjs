@@ -89,13 +89,24 @@ const VOID_TAGS = new Set(['input', 'br', 'img', 'hr', 'meta', 'link']);
 let focusDoc = null;
 function fakeFocus(node) { if (focusDoc) focusDoc.activeElement = node; }
 
+// A browser decodes character references in attribute values, so a value
+// escapeHtml wrote as front&quot;yard reads back as front"yard. Decode the
+// ones escapeHtml emits (plus numeric ones); &amp; last, so &amp;quot; stays
+// a literal &quot;.
+function decodeAttr(v) {
+  return v.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&amp;/g, '&');
+}
+
 function parseTagAttrs(attrStr) {
   const attrs = {};
   const re = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*(?:=\s*("([^"]*)"|'([^']*)'|[^\s"'=<>`]+))?/g;
   let m;
   while ((m = re.exec(attrStr))) {
     const val = m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : (m[2] || ''));
-    attrs[m[1].toLowerCase()] = val;
+    attrs[m[1].toLowerCase()] = decodeAttr(val);
   }
   return attrs;
 }
@@ -427,6 +438,10 @@ function newHub(opts = {}) {
     document,
     window: {
       addEventListener: (type, fn) => { (winListeners[type] || (winListeners[type] = [])).push(fn); },
+      removeEventListener: (type, fn) => {
+        const l = winListeners[type];
+        if (l && l.indexOf(fn) >= 0) l.splice(l.indexOf(fn), 1);
+      },
       innerWidth,
       innerHeight,
       screen: { width: innerWidth, height: opts.screenHeight ?? 800 },
@@ -1687,6 +1702,102 @@ test('buildPersonForm: the two-way-off note shows only when mapped AND sync is o
   assert.ok(mk('', false).classList.contains('hidden'), 'unmapped -> hidden even when sync is off');
 });
 
+test('buildPersonForm: a mapped list that is gone says so instead of an empty-looking picker', () => {
+  const { document, sandbox } = newHub();
+  const mk = (reminderListId, listGone = false) => {
+    const host = document.createElement('div');
+    sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+      { edit: true, reminderLists: LISTS2, reminderListId, listGone, twoWay: true, onListChange: () => true });
+    return host;
+  };
+  const gone = mk('caldav:deleted', true);
+  assert.ok(gone.querySelector('[data-plist-gone]'), 'a gone-list note is shown');
+  assert.match(gone.innerHTML, /data-plist-gone>This person’s iCloud chore list is gone; pick a new one\.</);
+  assert.ok(gone.querySelector('[data-plist]'), 'the picker is still there to pick a new one');
+  assert.equal(mk('caldav:a').querySelector('[data-plist-gone]'), null, 'a live list: no note');
+  assert.equal(mk('').querySelector('[data-plist-gone]'), null, 'unmapped: no note');
+  // the server decides: an id missing from the array is not "gone" on its own
+  assert.equal(mk('caldav:deleted', false).querySelector('[data-plist-gone]'), null,
+    'the server says the list is fine: no note');
+  assert.match(mk('caldav:deleted', false).innerHTML,
+    /<option value="caldav:deleted" selected disabled>\(current list\)<\/option>/,
+    'but the saved id still holds the selection, so choosing none stays a real change');
+});
+
+test('buildPersonForm: every list gone still says gone, not "connect iCloud"', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:deleted', listGone: true, twoWay: true, onListChange: () => true });
+  assert.ok(host.querySelector('[data-plist-gone]'), 'the gone note is shown');
+  assert.equal(host.querySelector('[data-plist-empty]'), null, 'no connect-iCloud line: iCloud is connected');
+  assert.doesNotMatch(host.innerHTML, /Connect iCloud in Settings/);
+  assert.ok(host.querySelector('[data-plist]'), 'the picker stays so the mapping can be cleared');
+});
+
+// A real browser shows the SELECTED option and fires change only when the
+// choice differs. If nothing matched the gone id, the none option would show as
+// already chosen and picking it would never save. The fake <select> can't
+// reflect options, so the markup is asserted: the gone list holds the
+// selection, the none option does not.
+test('buildPersonForm: a gone list holds the selection so choosing none is a real change', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:<gone>', listGone: true, twoWay: true, onListChange: () => true });
+  const html = host.innerHTML;
+  assert.match(html, /<option value="caldav:&lt;gone&gt;" selected disabled>\(list gone\)<\/option>/,
+    'the gone list is the selected, unpickable option (value escaped)');
+  assert.match(html, /<option value="">\u2014 none \u2014<\/option>/, 'the none option is not preselected');
+  assert.ok(html.indexOf('(list gone)') < html.indexOf('\u2014 none \u2014'), 'the gone option comes first');
+});
+
+test('buildPersonForm: with every list gone, choosing none saves and clears', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const calls = [];
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:deleted', listGone: true, twoWay: true,
+      onListChange: (v) => { calls.push(v); return true; } });
+  const sel = host.querySelector('[data-plist]');
+  sel.value = ''; await sel.onchange();
+  assert.deepEqual(calls, [''], 'the clear was sent');
+  assert.equal(sandbox.reminderListBody(calls[0]).reminder_list_id, null, 'and it clears to null');
+  assert.ok(host.querySelector('[data-plist-gone]').classList.contains('hidden'), 'the gone note goes');
+});
+
+test('buildPersonForm: a failed clear of a gone list puts the gone option back, not a blank', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:deleted', listGone: true, twoWay: true, onListChange: () => false });
+  const sel = host.querySelector('[data-plist]');
+  sel.value = ''; await sel.onchange();
+  assert.equal(sel.value, 'caldav:deleted', 'reverted to the saved (gone) id');
+  assert.match(host.innerHTML, /<option value="caldav:deleted" selected disabled>\(list gone\)<\/option>/,
+    'an option for that id exists, so the picker reads "(list gone)", not blank');
+  assert.ok(!host.querySelector('[data-plist-gone]').classList.contains('hidden'), 'the gone note stays');
+  assert.ok(!host.querySelector('[data-plist-err]').classList.contains('hidden'), 'the error shows');
+});
+
+test('buildPersonForm: the gone note goes away once a new list is saved, and stays on a failed save', async () => {
+  const { document, sandbox } = newHub();
+  const mk = (ok) => {
+    const host = document.createElement('div');
+    sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+      { edit: true, reminderLists: LISTS2, reminderListId: 'caldav:deleted', listGone: true, twoWay: true, onListChange: () => ok });
+    return host;
+  };
+  const good = mk(true);
+  const sel = good.querySelector('[data-plist]');
+  sel.value = 'caldav:a'; await sel.onchange();
+  assert.ok(good.querySelector('[data-plist-gone]').classList.contains('hidden'), 'hidden after a good save');
+  const bad = mk(false);
+  const sel2 = bad.querySelector('[data-plist]');
+  sel2.value = 'caldav:a'; await sel2.onchange();
+  assert.ok(!bad.querySelector('[data-plist-gone]').classList.contains('hidden'), 'still shown: nothing was saved');
+});
+
 test('buildPersonForm: no lists -> the connect-iCloud empty state, no dropdown', () => {
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
@@ -2334,6 +2445,69 @@ test('people admin: a mapped person shows the "iCloud ✓" badge in the list', a
   const row2 = ctx.choresFull.querySelector('[data-padmin="2"]');   // Alex (unmapped)
   assert.ok(row1.querySelector('.padmin-badge'), 'the mapped person is badged');
   assert.equal(row2.querySelector('.padmin-badge'), null, 'the unmapped person is not');
+});
+
+test('people admin: a person whose iCloud list is gone is badged "list gone", not "iCloud ✓"', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [{ id: 'caldav:home', name: 'Home' }];   // Sam's list is gone
+  admin.people[0].list_gone = true;                               // and the server says so
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  const row = ctx.choresFull.querySelector('[data-padmin="1"]');
+  assert.ok(row.querySelector('.padmin-badge-warn'), 'badged as a warning');
+  // parsed children keep no markup of their own; read Sam's row off the host
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, />iCloud list gone</);
+  assert.doesNotMatch(samRow, /iCloud ✓/);
+});
+
+test('people admin: every iCloud list gone still badges "list gone" and the editor says so', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [];                   // iCloud connected, but every list is gone
+  admin.people[0].list_gone = true;
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, />iCloud list gone</);
+  assert.doesNotMatch(samRow, /iCloud ✓/);
+  ctx.tap('[data-pedit="1"]');
+  const editor = ctx.registry['chore-editor'];
+  assert.ok(editor.querySelector('[data-plist-gone]'), 'the editor says the list is gone');
+  assert.equal(editor.querySelector('[data-plist-empty]'), null, 'not "connect iCloud"');
+});
+
+test('people admin: picking a new list for a person whose list is gone clears "list gone" everywhere', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [{ id: 'caldav:home', name: 'Home' }];   // Sam's list is gone
+  admin.people[0].list_gone = true;
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-pedit="1"]');
+  const sel = ctx.registry['chore-editor'].querySelector('[data-plist]');
+  sel.value = 'caldav:home';
+  await sel.onchange();
+  const patch = ctx.adminPeopleCalls.find((c) => c.url === '/api/admin/people/1' && c.method === 'PATCH');
+  assert.equal(patch.body.reminder_list_id, 'caldav:home', 'the new list was saved');
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, /iCloud ✓/, 'the badge is back to a tick');
+  assert.doesNotMatch(samRow, /iCloud list gone/);
+  ctx.tap('[data-pedit="1"]');                 // reopen the editor
+  assert.equal(ctx.registry['chore-editor'].querySelector('[data-plist-gone]'), null,
+    'the reopened editor no longer says the list is gone');
+});
+
+test('people admin: a mapped person the server calls fine keeps "iCloud ✓" even if the list is not in the array', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [{ id: 'caldav:home', name: 'Home' }];
+  admin.people[0].list_gone = false;
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, /iCloud ✓/);
 });
 
 test('people admin: with no iCloud lists, the editor shows a connect hint, not a dead dropdown', async () => {
@@ -3443,17 +3617,17 @@ test('scheduledProbeCamera: skips a second tick while a probe run is still in fl
   assert.equal(probeCalls, afterFirst, 'no second round of probes while one is still in flight');
 });
 
-test('camera SD probe arms fetchTimeout (J_TIMEOUT_MS), not a bare unbounded fetch', () => {
-  // probeOneCamera was changed from a bare fetch to fetchTimeout so a wedged
+test('camera SD probe arms the probeOk timeout (J_TIMEOUT_MS), not a bare unbounded fetch', () => {
+  // probeOneCamera was changed from a bare fetch to probeOk so a wedged
   // producer can't stack never-resolving sockets (issue #33). Prove the SD probe
   // arms an abort timer at the default J_TIMEOUT_MS (12s); a bare fetch arms none.
   const { sandbox } = hubWithTiles([CAM1]);
   const timers = captureTimers(sandbox);   // capture only the timers THIS probe arms
   sandbox.AbortController = AbortController;
   sandbox.fetch = () => new Promise(() => {});   // hang forever; only the armed timer matters
-  sandbox.probeCamera();   // issues probeOneCamera synchronously up to its fetchTimeout await
+  sandbox.probeCamera();   // issues probeOneCamera synchronously up to its probeOk await
   assert.ok(timers.some((t) => t.ms === 12000 && !t.done),
-    'the SD probe arms a J_TIMEOUT_MS (12000ms) abort timer via fetchTimeout, not a bare fetch');
+    'the SD probe arms a J_TIMEOUT_MS (12000ms) abort timer via probeOk, not a bare fetch');
 });
 
 test('probeCamera probes every camera concurrently — one slow camera never delays the rest', async () => {
@@ -4910,12 +5084,12 @@ test('camera HD upgrade gives up and keeps the warm stream when the HD never ans
 
 test('camera HD reveal probe arms a short bounded timeout (CAM_HD_PROBE_TIMEOUT_MS), not the long default', () => {
   // revealHdWhenLive's own give-up budget is ~8s (CAM_HD_TRIES x CAM_HD_POLL_MS).
-  // fetchTimeout defaults to the much longer J_TIMEOUT_MS (12s); a wedged HD
+  // probeOk defaults to the much longer J_TIMEOUT_MS (12s); a wedged HD
   // producer hanging on the default for all 12 tries would balloon the "~8s,
   // then give up" promise into minutes. Prove the HD probe passes its own
   // shorter, explicit timeout instead of falling back to that default.
   const { sandbox } = newHub();
-  const timers = captureTimers(sandbox);   // captures every setTimeout, incl. fetchTimeout's abort timer
+  const timers = captureTimers(sandbox);   // captures every setTimeout, incl. probeOk's abort timer
   sandbox.AbortController = AbortController;
   sandbox.fetch = () => new Promise(() => {});   // hang forever; only the armed timer matters here
   vm.runInContext(`links = { cameras: [${JSON.stringify(HD_CAM)}] };`, sandbox);
@@ -4924,7 +5098,7 @@ test('camera HD reveal probe arms a short bounded timeout (CAM_HD_PROBE_TIMEOUT_
   const first = nextTimer(timers, 0);   // the first HD reveal check fires immediately
   assert.ok(first, 'first HD reveal check scheduled');
   first.done = true;
-  first.fn();   // runs synchronously up to the await, which is where fetchTimeout arms its abort timer
+  first.fn();   // runs synchronously up to the await, which is where probeOk arms its abort timer
 
   assert.ok(timers.some((t) => t.ms === 3000 && !t.done),
     'the HD probe arms a 3000ms (CAM_HD_PROBE_TIMEOUT_MS) abort timeout');
@@ -8561,5 +8735,502 @@ test('choreRowHtml: a locked (finished, then taken off the plan) row is shown do
   // edit mode still opens the editor for it
   assert.match(sandbox.choreRowHtml({ id: 7, title: 'Dishes', done: true, locked: true }, 'Ana', { editing: true }),
     /data-edit-chore="7"/);
+});
+
+// ---- one save at a time (audit): a double tap on Save used to POST twice
+// and create two chores / two people. The OSK Done key clicks the same
+// button, so the guard lives on the button itself.
+
+test('chore editor: a double tap on Save sends ONE create and disables the button until it settles', async () => {
+  const { document, adminChoreCalls, tap } = mountChoresFull(SAMPLE_PEOPLE);
+  tap('[data-chedit="1"]');
+  tap('[data-add-chore="1"]');
+  await flush();
+  const host = document.getElementById('chore-editor');
+  host.querySelector('.f-title').value = 'Water plants';
+  host.querySelector('.f-person').value = '1';
+  const save = host.querySelector('[data-submit]');
+  save.onclick();
+  assert.equal(save.disabled, true, 'Save is disabled while the write is in flight');
+  save.onclick();                      // the second tap of a double tap
+  await flush();
+  assert.equal(adminChoreCalls.filter((c) => c.method === 'POST').length, 1, 'exactly one create');
+});
+
+test('chore editor: a FAILED save re-enables Save so the user can try again', async () => {
+  const { document, sandbox, tap } = mountChoresFull(SAMPLE_PEOPLE);
+  let posts = 0;
+  sandbox.fetch = async (url) => {
+    if (url === '/api/admin/state') return okResp({ people: SAMPLE_ADMIN.people, chores: SAMPLE_ADMIN.chores });
+    if (url === '/api/admin/chores') { posts += 1; return failResp(500, 'Disk full (test)'); }
+    throw new Error('offline in test');
+  };
+  tap('[data-chedit="1"]');
+  tap('[data-add-chore="1"]');
+  await flush();
+  const host = document.getElementById('chore-editor');
+  host.querySelector('.f-title').value = 'Water plants';
+  host.querySelector('.f-person').value = '1';
+  const save = host.querySelector('[data-submit]');
+  save.onclick();
+  await flush();
+  assert.equal(save.disabled, false, 'Save is usable again after a failure');
+  save.onclick();
+  await flush();
+  assert.equal(posts, 2, 'the retry went out');
+});
+
+test('person editor: a double tap on Save sends ONE create; a failure re-enables it', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-padd="1"]');
+  const editor = ctx.registry['chore-editor'];
+  editor.querySelector('[data-pname]').value = 'Jordan';
+  const save = editor.querySelector('[data-psubmit]');
+  let posts = 0;
+  ctx.sandbox.fetch = async (url) => {
+    if (url === '/api/admin/people') { posts += 1; return failResp(500, 'Disk full (test)'); }
+    throw new Error('offline in test');
+  };
+  save.onclick();
+  assert.equal(save.disabled, true, 'Save is disabled while the write is in flight');
+  save.onclick();
+  await flush();
+  assert.equal(posts, 1, 'the second tap did not send a second create');
+  assert.equal(save.disabled, false, 'the failure re-enabled Save');
+  save.onclick();
+  await flush();
+  assert.equal(posts, 2, 'the retry went out');
+});
+
+// ---- a chore tap writes to the day that is SHOWN (audit). The All chores
+// overlay paints choreState.day, but toggleChore sent data_date, which a
+// poll moves at midnight while the overlay still shows yesterday's rows.
+
+test('choreRowHtml: a tappable row carries the day it was drawn for', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.choreRowHtml({ id: 7, title: 'Dishes', done: false }, 'Ana', { day: '2026-09-21' });
+  assert.match(html, /data-chore="7" data-date="2026-09-21"/);
+});
+
+// Same-day control, not coverage of the midnight fix: the row's day and
+// data_date agree here, so this only pins that a normal tap still writes, with
+// a date. The stale-day case is the repaint test below.
+test('chores overlay: a normal same-day tap still writes, with the date', async () => {
+  const { completeCalls, tap } = mountChoresFull(SAMPLE_PEOPLE);
+  tap('[data-chore="10"]');
+  await flush();
+  assert.equal(completeCalls.length, 1);
+  assert.equal(JSON.parse(completeCalls[0].opts.body).date, '2026-08-14');
+});
+
+test('chores overlay: a tap on a day that is no longer today repaints instead of writing', async () => {
+  const { completeCalls, tap, read, choresFull, document } = mountChoresFull(SAMPLE_PEOPLE);
+  // a poll crossed midnight while the overlay still shows the old day's rows
+  read("data_date = '2026-08-15';");
+  tap('[data-chore="10"]');
+  await flush();
+  assert.equal(completeCalls.length, 0, 'nothing was written to either day');
+  assert.match(document.getElementById('toast').textContent, /day has ended/);
+  await flush();
+  assert.doesNotMatch(choresFull.innerHTML, /data-chore="10"/,
+    'the old day repainted as look-only rows');
+});
+
+// Same-day control too: the drawn day equals data_date, so this only pins that
+// toggleChore passes its date through to the write.
+test('home wall: toggleChore passes its date through to the write (same day)', async () => {
+  const { sandbox } = newHub();
+  const seen = [];
+  sandbox.attemptToggle = async (id, done, date) => { seen.push(date); return true; };
+  vm.runInContext("data_date = '2026-09-21';", sandbox);
+  await sandbox.toggleChore(42, false, '2026-09-21');
+  assert.deepEqual(seen, ['2026-09-21']);
+});
+
+// ---- open overlays refresh on the poll beat while nobody is using them
+// (audit): the full calendar and All chores views fetched only on open.
+
+function idleOverlayHub() {
+  const ctx = newHub();
+  const calls = { cal: 0, calPaint: 0, chores: [] };
+  ctx.sandbox.fetchCalWindow = async () => { calls.cal += 1; };
+  ctx.sandbox.renderCalFull = () => { calls.calPaint += 1; };
+  ctx.sandbox.renderChoresFull = (people) => { calls.chores.push(people); };
+  ctx.document.body.dataset.conn = 'up';
+  vm.runInContext("data_date = '2026-09-22'; lastInteraction = 0;", ctx.sandbox);
+  return { ...ctx, calls };
+}
+
+test('refreshIdleOverlay: an open calendar refetches and repaints', async () => {
+  const { sandbox, calls } = idleOverlayHub();
+  vm.runInContext("openView = 'calendar';", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(calls.cal, 1, 'fetched the calendar window');
+  assert.equal(calls.calPaint, 1, 'and repainted it');
+});
+
+test('refreshIdleOverlay: an open All chores view repaints, and follows midnight when it showed today', async () => {
+  const { sandbox, calls } = idleOverlayHub();
+  vm.runInContext("openView = 'chores'; choreState.day = '2026-09-21'; choreState.editing = false;"
+    + " hubData = { people: [] };", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-21');   // the poll moved 09-21 -> 09-22
+  assert.equal(vm.runInContext('choreState.day', sandbox), '2026-09-22', 'moved on to the new today');
+  assert.equal(calls.chores.length, 1, 'repainted');
+  assert.equal(calls.chores[0], vm.runInContext('hubData.people', sandbox), 'from the fresh hub payload');
+});
+
+test('refreshIdleOverlay: a chores view paged to another day stays on that day', async () => {
+  const { sandbox, calls } = idleOverlayHub();
+  vm.runInContext("openView = 'chores'; choreState.day = '2026-09-19'; choreState.editing = false;", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(vm.runInContext('choreState.day', sandbox), '2026-09-19');
+  assert.equal(calls.chores.length, 1);
+  assert.equal(calls.chores[0], null, 'a past day is fetched, not painted from today');
+});
+
+test('refreshIdleOverlay: a calendar repaint keeps the month paged to, the day drilled into, and the scroll', async () => {
+  // Real fetchCalWindow + renderCalFull (not the stubs above): the beat must
+  // not snap a family member's paged view back to today or to the top.
+  const { document, sandbox } = newHub();
+  await flush();   // let the load-time poll settle first
+  const panel = document.createElement('div');
+  panel.className = 'overlay-panel';          // the overlay's scroll container
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  panel.appendChild(host);
+  document.body.appendChild(panel);
+  document.body.dataset.conn = 'up';
+  let fetches = 0;
+  sandbox.fetch = async () => {
+    fetches += 1;
+    return { ok: true, status: 200, json: async () => ({
+      status: { ok: true },
+      window: { from: '2026-08-08', to: '2027-10-27' },
+      events: [{ id: 'e1', title: 'Dentist', calendar_id: 'c', all_day: 1,
+        start_ts: '2026-11-05', end_ts: '2026-11-06' }] }) };
+  };
+  vm.runInContext("data_date = '2026-09-22'; lastInteraction = 0; openView = 'calendar';"
+    + " calState.mode = 'month'; calState.y = 2026; calState.m = 11;"
+    + " calState.weekStart = '2026-09-22'; calState.day = '2026-09-22';", sandbox);
+  panel.scrollTop = 640;
+  // the beat after midnight (the poll moved 09-21 -> 09-22): still stays put
+  await sandbox.refreshIdleOverlay('2026-09-21');
+  assert.equal(fetches, 1, 'the window was refetched');
+  assert.deepEqual([vm.runInContext('calState.mode', sandbox), vm.runInContext('calState.y', sandbox),
+    vm.runInContext('calState.m', sandbox)], ['month', 2026, 11], 'still on the month paged to');
+  assert.match(host.innerHTML, /November 2026/, 'repainted on that month');
+  assert.match(host.innerHTML, /Dentist/, 'with the fresh events');
+  assert.equal(panel.scrollTop, 640, 'scroll kept');
+  assert.equal(document.getElementById('cal-full'), host, 'the scroll container was not rebuilt');
+
+  vm.runInContext("calState.mode = 'day'; calState.day = '2026-11-05';", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(vm.runInContext('calState.mode', sandbox), 'day', 'still drilled into the day');
+  assert.equal(vm.runInContext('calState.day', sandbox), '2026-11-05', 'the same day');
+  assert.match(host.innerHTML, /back to month/);
+  assert.match(host.innerHTML, /Dentist/);
+  assert.equal(panel.scrollTop, 640);
+});
+
+test('refreshIdleOverlay: leaves the view alone mid-use (edit mode, a recent tap, or offline)', async () => {
+  const { sandbox, calls, document } = idleOverlayHub();
+  vm.runInContext("openView = 'chores'; choreState.day = '2026-09-22'; choreState.editing = true;", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  vm.runInContext("choreState.editing = false; lastInteraction = Date.now();", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  vm.runInContext("lastInteraction = 0; openView = 'calendar';", sandbox);
+  document.body.dataset.conn = 'down';
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(calls.chores.length, 0, 'no chores repaint while editing or just tapped');
+  assert.equal(calls.cal, 0, 'no calendar refetch while offline');
+});
+
+test('applyHouseTheme hands the house default to theme.js to cache for the next first paint', () => {
+  const { sandbox } = newHub();
+  const seen = [];
+  sandbox.rememberHouseTheme = (t) => { seen.push(t); };
+  const theme = { season: 'on' };   // season only: stampSeason is typeof-guarded here
+  sandbox.applyHouseTheme(theme);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0], theme);
+});
+
+test('applyHouseTheme still works where theme.js never loaded (no rememberHouseTheme)', () => {
+  const { sandbox } = newHub();
+  assert.doesNotThrow(() => sandbox.applyHouseTheme({ season: 'on' }));
+});
+
+// ---- camera probes (audit): the 30s probe downloaded a whole snapshot and
+// never read or cancelled the body, and its abort timer was cleared once the
+// headers arrived. probeOk reads .ok, cancels the body, and keeps the timer
+// armed until that is done.
+
+function probeResponse(ok, cancel) {
+  return { ok, body: { cancel } };
+}
+
+test('camera probe: cancels the snapshot body after reading .ok', async () => {
+  const { sandbox } = hubWithTiles([CAM1]);
+  let cancelled = 0;
+  let fetched = 0;
+  // (the load-time poll().then(probeCamera) may also land here: count both)
+  sandbox.fetch = async () => { fetched += 1; return probeResponse(true, async () => { cancelled += 1; }); };
+  await sandbox.probeCamera();
+  await flush();
+  assert.ok(fetched >= 1);
+  assert.equal(cancelled, fetched, 'every probe body was cancelled, not left downloading');
+});
+
+test('camera HD probe: cancels the snapshot body too', async () => {
+  const { sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+  let cancelled = 0;
+  sandbox.fetch = async () => probeResponse(true, async () => { cancelled += 1; });
+  vm.runInContext(`links = { cameras: [${JSON.stringify(HD_CAM)}] };`, sandbox);
+  sandbox.openOverlay('camera:drive');
+  const first = nextTimer(timers, 0);
+  first.done = true;
+  await first.fn();
+  assert.equal(cancelled, 1);
+});
+
+test('camera probe: the abort timer stays armed until the body is dealt with', async () => {
+  const { sandbox } = hubWithTiles([CAM1]);
+  const timers = captureTimers(sandbox);
+  sandbox.AbortController = AbortController;
+  const pending = [];
+  sandbox.fetch = async () => probeResponse(true, () => new Promise((r) => { pending.push(r); }));
+  const done = sandbox.probeCamera();
+  await flush();
+  const aborts = timers.filter((t) => t.ms === 12000);
+  assert.ok(aborts.length >= 1, 'an abort timer was armed');
+  assert.ok(pending.length >= 1, 'the probe reached the body cancel');
+  assert.ok(aborts.every((t) => !t.done), 'still armed while the body is being cancelled');
+  pending.forEach((r) => r());
+  await done;
+  await flush();
+  assert.ok(aborts.every((t) => t.done), 'cleared once the probe is fully over');
+});
+
+test('camera probe: a probe answer with no body (older engine) still reads .ok', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  sandbox.fetch = async () => ({ ok: true });
+  await sandbox.probeCamera();
+  const tile = document.querySelector('.tile-camera[data-cam="cam1"]');
+  assert.ok(!tile.classList.contains('is-offline'), 'the camera reads live');
+});
+
+test('camera probe: a src with a quote in it never builds a broken selector', async () => {
+  // cam.src comes from config; it went raw into a querySelector string
+  const odd = { ...CAM1, src: 'front"yard' };
+  const { document, sandbox } = hubWithTiles([odd]);
+  sandbox.fetch = async () => ({ ok: true });
+  await assert.doesNotReject(sandbox.probeCamera());
+  // and the probe found its tile: it goes live, not left on "offline"
+  const tiles = document.querySelectorAll('.tile-camera');
+  assert.equal(tiles.length, 1);
+  assert.equal(tiles[0].dataset.cam, 'front"yard', 'the attribute decodes back to the src');
+  assert.ok(!tiles[0].classList.contains('is-offline'), 'the camera reads live');
+  assert.ok(!tiles[0].querySelector('.tile-live').classList.contains('hidden'), 'LIVE shows');
+});
+
+// ---- one broken render step must not take the wall "offline" (audit): all
+// the render steps shared the fetch's try/catch, so one throw marked the hub
+// offline and skipped every step after it.
+
+test('poll: a render step that throws is logged, the rest still render, and the wall stays live', async () => {
+  const { document, sandbox } = newHub();
+  await flush();   // let the load-time poll settle first
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  const errors = [];
+  sandbox.console = { ...console, error: (...a) => { errors.push(a); } };
+  const ran = [];
+  sandbox.renderCalendar = () => { ran.push('cal'); throw new Error('bad event'); };
+  sandbox.renderPeople = () => { ran.push('people'); };
+  sandbox.renderTodoSlot = () => { ran.push('todos'); };
+  sandbox.renderBackup = () => { ran.push('backup'); };
+  await sandbox.poll();
+  assert.deepEqual([...ran], ['cal', 'people', 'todos', 'backup'], 'every later step still ran');
+  assert.equal(document.body.dataset.conn, 'up', 'a render bug is not an outage');
+  assert.equal(document.getElementById('conn-word').textContent, 'live · 1 panel failed',
+    'live, but the failed panel is visible, not only in the console');
+  assert.equal(errors.length, 1, 'the broken step was logged');
+  assert.match(String(errors[0][0]), /renderCalendar|calendar/);
+});
+
+test('poll: the failed-panel note counts the latest render and clears when it draws again', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  sandbox.console = { ...console, error: () => {} };
+  const word = () => document.getElementById('conn-word').textContent;
+  let calBroken = true;
+  let peopleBroken = true;
+  sandbox.renderCalendar = () => { if (calBroken) throw new Error('bad event'); };
+  sandbox.renderPeople = () => { if (peopleBroken) throw new Error('bad person'); };
+  sandbox.renderTodoSlot = () => {};
+  sandbox.renderBackup = () => {};
+  await sandbox.poll();
+  assert.equal(word(), 'live · 2 panels failed');
+  assert.equal(document.body.dataset.render, 'partial', 'drives the warn colour');
+  assert.equal(document.getElementById('conn-word').title,
+    'Could not draw: Calendar, Chores. The rest of the wall is up to date.',
+    'the tooltip names what failed in plain words, not code names');
+  peopleBroken = false;
+  await sandbox.poll();
+  assert.equal(word(), 'live · 1 panel failed', 'a step that draws again stops counting');
+  calBroken = false;
+  await sandbox.poll();
+  assert.equal(word(), 'live', 'all clear once every step draws');
+  assert.equal(document.body.dataset.render, 'ok');
+  assert.equal(document.getElementById('conn-word').title || '', '');
+});
+
+test('poll: a step that is not a panel is counted as a part, and named plainly', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  sandbox.console = { ...console, error: () => {} };
+  const el = () => document.getElementById('conn-word');
+  let calBroken = false;
+  sandbox.renderCalendar = () => { if (calBroken) throw new Error('bad event'); };
+  sandbox.renderPeople = () => {};
+  sandbox.renderTodoSlot = () => {};
+  sandbox.renderBackup = () => {};
+  sandbox.pruneEvIndex = () => { throw new Error('bad index'); };
+  await sandbox.poll();
+  assert.equal(el().textContent, 'live · 1 part failed', 'not called a panel');
+  assert.equal(el().title, 'Could not draw: Event cleanup. The rest of the wall is up to date.');
+  assert.doesNotMatch(el().title, /pruneEvIndex/);
+  calBroken = true;
+  await sandbox.poll();
+  assert.equal(el().textContent, 'live · 1 panel, 1 part failed', 'panels and parts counted apart');
+  assert.equal(el().title, 'Could not draw: Calendar, Event cleanup. The rest of the wall is up to date.');
+});
+
+test('poll: a failed step with no plain name is still counted, under its own name', () => {
+  const { document, sandbox } = newHub();
+  sandbox.console = { ...console, error: () => {} };
+  const el = () => document.getElementById('conn-word');
+  sandbox.renderStep('renderCalendar', () => { throw new Error('bad event'); });
+  sandbox.renderStep('renderMystery', () => { throw new Error('new step, not named yet'); });
+  sandbox.paintConnWord();
+  assert.equal(el().textContent, 'live · 1 panel, 1 part failed',
+    'the unnamed step counts (as a part), not dropped from the count');
+  assert.equal(el().title, 'Could not draw: Calendar, renderMystery. The rest of the wall is up to date.',
+    'named steps first in step order, then the unnamed one by its raw name');
+  assert.equal(document.body.dataset.render, 'partial');
+  sandbox.renderStep('renderMystery', () => {});
+  sandbox.renderStep('renderCalendar', () => {});
+  sandbox.paintConnWord();
+  assert.equal(el().textContent, 'live', 'clears once it draws again');
+});
+
+test('poll: every render step has a plain name, and every name is a step', () => {
+  const { sandbox } = newHub();
+  const steps = [...hubSrc.matchAll(/renderStep\('(\w+)'/g)].map((m) => m[1]);
+  assert.ok(steps.length >= 10, 'found the render steps');
+  const named = vm.runInContext('Object.keys(RENDER_STEPS)', sandbox);
+  assert.deepEqual([...steps].sort(), [...named].sort(),
+    'a step missing here would never show in the header count');
+});
+
+test('poll: a failed fetch still marks the wall offline and clears the failed-part tooltip', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  sandbox.console = { ...console, error: () => {} };
+  sandbox.renderCalendar = () => { throw new Error('bad event'); };
+  await sandbox.poll();
+  assert.notEqual(document.getElementById('conn-word').title, '', 'a tooltip to clear');
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.poll();
+  assert.equal(document.body.dataset.conn, 'down');
+  assert.equal(document.getElementById('conn-word').textContent, 'offline');
+  assert.equal(document.getElementById('conn-word').title, '',
+    'offline says nothing about parts it could not draw');
+});
+
+// ---- a "fit" full-screen panel re-scales on resize (audit): it was scaled
+// once on open, so rotating a phone or resizing a window left it wrong.
+
+function openFitPanel() {
+  const ctx = newHub();
+  vm.runInContext("links = { panels: [{ id: 'wx', full: 'fit', url: '/wx', vw: 1024, vh: 600 }] };", ctx.sandbox);
+  ctx.sandbox.openOverlay('panel:wx');
+  const frame = ctx.document.getElementById('overlay-content').children[0];
+  return { ...ctx, frame };
+}
+
+test('fit panel: resize and orientation change re-scale it while open', () => {
+  const { sandbox, fire, frame } = openFitPanel();
+  assert.equal(frame.style.transform, 'scale(1.25)');   // min(1280/1024, 800/600)
+  sandbox.innerWidth = 2048; sandbox.innerHeight = 1200;
+  fire('resize');
+  assert.equal(frame.style.transform, 'scale(2)', 'resize re-scaled it');
+  assert.equal(frame.style.left, '0px');
+  sandbox.innerWidth = 512; sandbox.innerHeight = 900;
+  fire('orientationchange');
+  assert.equal(frame.style.transform, 'scale(0.5)', 'orientation change re-scaled it');
+  assert.equal(frame.style.top, '300px', 'and re-centred it');
+});
+
+test('fit panel: closing the overlay drops its resize listeners', () => {
+  const { sandbox, fire, frame, winListeners } = openFitPanel();
+  const before = (winListeners.resize || []).length;
+  sandbox.closeOverlay();
+  assert.equal((winListeners.resize || []).length, before - 1, 'the resize listener is gone');
+  sandbox.innerWidth = 2048; sandbox.innerHeight = 1200;
+  fire('resize');
+  fire('orientationchange');
+  assert.equal(frame.style.transform, 'scale(1.25)', 'a closed panel is left alone');
+});
+
+test('fit panel: opening another view drops the old panel listener too', () => {
+  const { sandbox, winListeners } = openFitPanel();
+  const before = (winListeners.resize || []).length;
+  sandbox.openOverlay('settings');
+  assert.equal((winListeners.resize || []).length, before - 1);
+});
+
+// ---- a fast double tap on an iCloud reminder (audit) sent two opposite
+// writes (complete, then reopen). Taps on a reminder are ignored while its
+// write is out.
+
+test('reminder: a second tap while the first write is out sends nothing', async () => {
+  const posts = [];
+  let answer;
+  const { tap } = mountReminders({ surface: 'home', fetch: (url, opts) => {
+    if (url === '/api/reminders/toggle') {
+      posts.push(JSON.parse(opts.body));
+      return new Promise((r) => { answer = r; });
+    }
+    return Promise.reject(new Error('offline in test'));
+  } });
+  const row = tap('[data-reminder]');
+  tap('[data-reminder]');                      // the double tap
+  assert.equal(posts.length, 1, 'one write, not two opposite ones');
+  assert.ok(row.classList.contains('done'), 'the row keeps the first tap');
+  answer(okResp({ id: 'caldav:g/1', completed: true }));
+  await flush();
+  tap('[data-reminder]');                      // once settled, taps work again
+  assert.equal(posts.length, 2);
+});
+
+test('scheduledPoll hands refreshIdleOverlay the day from BEFORE the poll', async () => {
+  const { sandbox } = newHub();
+  vm.runInContext("data_date = '2026-09-21';", sandbox);
+  sandbox.poll = async () => { vm.runInContext("data_date = '2026-09-22';", sandbox); };
+  sandbox.refreshIdleTodosView = () => undefined;
+  const seen = [];
+  sandbox.refreshIdleOverlay = (before) => { seen.push(before); };
+  sandbox.scheduledPoll();
+  await flush();
+  assert.deepEqual(seen, ['2026-09-21']);
 });
 

@@ -22,10 +22,10 @@ const oskSrc = readFileSync(join(staticDir, 'osk.js'), 'utf8');
 // '#todo-add-input', '.txt-input'); anything else throws so a silent miss
 // can't send a test down the wrong branch.
 function matchOne(el, sel) {
-  const m = /^([a-z]+)?((?:[#.][\w-]+|\[[\w-]+\])*)$/.exec(sel);
+  const m = /^([a-z]+)?((?:[#.][\w-]+|\[[\w-]+(?:="[^"]*")?\])*)$/.exec(sel);
   if (!m) throw new Error(`unsupported selector in fake DOM: ${sel}`);
   if (m[1] && el.tagName !== m[1].toUpperCase()) return false;
-  const re = /([#.])([\w-]+)|\[([\w-]+)\]/g;
+  const re = /([#.])([\w-]+)|\[([\w-]+)(?:="([^"]*)")?\]/g;
   let p;
   while ((p = re.exec(m[2]))) {
     if (p[1] === '#' && el.id !== p[2]) return false;
@@ -34,6 +34,7 @@ function matchOne(el, sel) {
       const key = p[3].startsWith('data-')
         ? p[3].slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase()) : null;
       if (key ? !(key in el.dataset) : !(p[3] in el.attrs)) return false;
+      if (p[4] !== undefined && (key ? el.dataset[key] : el.attrs[p[3]]) !== p[4]) return false;
     }
   }
   return true;
@@ -102,6 +103,14 @@ class El {
 
   matches(sel) { return sel.split(',').some((s) => matchOne(this, s.trim())); }
 
+  closest(sel) {
+    for (let n = this; n && n.matches; n = n.parentNode) if (n.matches(sel)) return n;
+    return null;
+  }
+
+  // Like a browser: click() on a disabled button does nothing.
+  click() { if (!this.disabled && this.onclick) this.onclick(); }
+
   querySelectorAll(sel) {
     const out = [];
     const walk = (n) => n.children.forEach((c) => { if (c.matches(sel)) out.push(c); walk(c); });
@@ -166,7 +175,7 @@ function loadOsk() {
     parent.appendChild(inp);
     return inp;
   };
-  return { document, osk, fire, mutated, field };
+  return { document, osk, fire, mutated, field, sandbox };
 }
 
 test('osk: focusing a wall text field shows the keyboard', () => {
@@ -213,4 +222,65 @@ test('osk: a repaint that swaps in a new focused field keeps the keyboard up', (
   fire('focusin', { target: fresh });
   mutated([{ addedNodes: [fresh], removedNodes: [old] }]);
   assert.ok(!osk.classList.contains('hidden'), 'still shown for the new field');
+});
+
+// The chore and person editors are plain divs in the .chore-card modal, not
+// <form>s, so Done commits through their Save button. The chore form's is
+// [data-submit]; the person form's is [data-psubmit].
+function editorWithSave(document, saveAttr) {
+  const card = new El('div', document);
+  card.className = 'chore-card';
+  document.body.appendChild(card);
+  const inp = new El('input', document);
+  inp.className = 'txt-input';
+  inp.type = 'text';
+  card.appendChild(inp);
+  const save = new El('button', document);
+  save.dataset[saveAttr] = '';
+  card.appendChild(save);
+  return { inp, save };
+}
+
+function pressDone(osk) {
+  const done = osk.querySelectorAll('.osk-key').find((b) => b.dataset.key === 'Done');
+  assert.ok(done, 'the keyboard has a Done key');
+  (osk.listeners.click || []).forEach((fn) => fn({ target: done }));
+}
+
+test('osk: Done saves the person form too (its Save is [data-psubmit])', () => {
+  const { document, osk, fire } = loadOsk();
+  const { inp, save } = editorWithSave(document, 'psubmit');
+  let saves = 0;
+  save.onclick = () => { saves += 1; };
+  inp.focus();
+  fire('focusin', { target: inp });
+  pressDone(osk);
+  assert.equal(saves, 1, 'Done clicked the person Save');
+});
+
+test('osk: Done still saves the chore form ([data-submit])', () => {
+  const { document, osk, fire } = loadOsk();
+  const { inp, save } = editorWithSave(document, 'submit');
+  let saves = 0;
+  save.onclick = () => { saves += 1; };
+  inp.focus();
+  fire('focusin', { target: inp });
+  pressDone(osk);
+  assert.equal(saves, 1);
+});
+
+test('osk: Done pressed again while a save is still out sends nothing new', () => {
+  // The one-save-at-a-time guard (common.js oneSaveAtATime) sits on the Save
+  // button, so it holds for the Done key's click as well as a finger's tap.
+  const { document, osk, fire, sandbox } = loadOsk();
+  const { inp, save } = editorWithSave(document, 'submit');
+  let saves = 0;
+  save.onclick = sandbox.oneSaveAtATime(save, () => { saves += 1; return new Promise(() => {}); });
+  inp.focus();
+  fire('focusin', { target: inp });
+  pressDone(osk);
+  inp.focus();
+  fire('focusin', { target: inp });
+  pressDone(osk);
+  assert.equal(saves, 1, 'one write, not two');
 });

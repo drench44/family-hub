@@ -1,5 +1,13 @@
 # FamView — Technical Architecture & Design Spec
 
+> **Read this first.** This is the original design spec for *FamView*, a
+> native Android kiosk, written before family-hub was built as the FastAPI +
+> SQLite + vanilla JS app in this repo. The app, UI and data-model sections do
+> not describe this codebase. The CalDAV protocol research (iCloud discovery,
+> `sync-collection`, ETags, polling, color) still applies and is what the
+> comments in `caldav_service.py`, `caldav_sync.py` and `db.py` cite. For how
+> family-hub actually works, read `README.md` and the code.
+
 **Status:** Draft v0.1 · **Owner:** Gary · **Date:** 2026-08-12
 **Companion to:** `PRD: Family Dashboard` (native Android + iCloud CalDAV)
 
