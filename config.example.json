@@ -26,7 +26,7 @@
     { "id": "climate", "label": "House Climate", "url": "http://192.168.1.50:8090/",
       "vw": 1024, "vh": 600, "full": "fit" }
   ],
-  "go2rtc_base": "http://192.168.1.50:1984",
+  "go2rtc_base": "http://go2rtc:1984",
   "climate_base": "",
   "weather_base": "",
   "laundry": {

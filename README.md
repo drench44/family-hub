@@ -132,7 +132,8 @@ Wall / phones ─► http://<your-server>:8138/       family-hub (FastAPI + SQLi
                           ├─► iCloud CalDAV         (reminders + chore mirror, two-way, optional)
                           ├─► Home Assistant        (laundry, optional)
                           ├─► weather / climate / fleet feeds (tiles, optional)
-                          ├─► :1984 go2rtc          (camera tiles, optional)
+                          ├─► go2rtc                (camera tiles, optional; proxied
+                          │                          at /go2rtc/, never on the LAN)
                           └─► your own dashboards   (embedded panels, optional)
 ```
 
@@ -260,7 +261,7 @@ once with **`?kiosk=1`** to turn it on (the setting is then remembered;
 | `cameras` | go2rtc streams shown as tiles: `{"src","label"}` + optional `"hd"` (higher-res twin used full-screen) |
 | `camera_page` | The phone/tablet **Cameras** tab as a 2×2 (row-major) live grid — same entry shape as `cameras`, but its own set and order, so the tab can show cameras the wall column doesn't. Omit to reuse `cameras`. |
 | `panels` | Always-on dashboard embeds (see below) |
-| `go2rtc_base` | Your go2rtc URL (browser-reachable), omit if no cameras |
+| `go2rtc_base` | Where the hub reaches go2rtc (`http://go2rtc:1984` in the compose stack; the `GO2RTC_FETCH_BASE` env var overrides it). Browsers never use it: they get the player through the hub. Omit if no cameras |
 | `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
 | `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
 | `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). Optional per machine: `total_entity` (cycle length in minutes; LG *Total time*), `start_entity` (LG *Delayed start* timestamp) and `error_entity` (LG *Error* event). Each only adds detail; leave any out. The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
@@ -329,6 +330,17 @@ Camera tiles are live sub-second WebRTC streams via
 2. `docker compose up -d go2rtc`
 3. Add each stream to `cameras` in config.json.
 
+**go2rtc's API stays off your LAN.** It has no login, and it hands anyone who
+asks every camera URL it knows (often a password or a per-camera token) and
+lets them rewrite its config. So the compose file publishes only go2rtc's
+WebRTC port (8555, video only) on the LAN. The hub serves the player itself at
+`/go2rtc/` and passes the player's WebSocket through to go2rtc, for the
+streams in your `cameras` / `camera_page` and nothing else. `data/go2rtc.yaml`
+is mounted read-only: edit it on the server and `docker compose restart
+go2rtc`. To use go2rtc's own web page for debugging, it is on the server's
+loopback: `ssh -L 1984:127.0.0.1:1984 <server>`, then open
+`http://127.0.0.1:1984/` on your computer.
+
 On phones and tablets the **Cameras** tab shows a 2×2 live grid instead of the
 wall's stacked column. It defaults to your `cameras`; set `camera_page` to give
 that grid its own set and order (top-left, top-right, bottom-left, bottom-right)
@@ -364,8 +376,10 @@ that grid its own set and order (top-left, top-right, bottom-left, bottom-right)
 them: put your Wyze email/password/API-key in `data/wyze.env`
 (`WYZE_EMAIL=…`, `WYZE_PASSWORD=…`, `API_ID=…`, `API_KEY=…`; get an API key at
 developer-api-console.wyze.com), `docker compose up -d wyze-bridge`, find each
-camera's slug in the bridge WebUI on `:5050`, and reference it from
-`go2rtc.yaml`. Remove the service from the compose file if you don't need it.
+camera's slug in the bridge WebUI, and reference it from `go2rtc.yaml`. The
+WebUI has no login, so it is published on the server's loopback only: from
+your computer, `ssh -L 5050:127.0.0.1:5050 <server>` and open
+`http://127.0.0.1:5050/`. Remove the service from the compose file if you don't need it.
 
 > **Wyze Cam v3/v4 on recent firmware (the IOTC_ER_TIMEOUT problem):** Wyze's
 > 2025 firmware (v4 4.52.9+) disabled the local TUTK P2P protocol, so the
@@ -375,7 +389,7 @@ camera's slug in the bridge WebUI on `:5050`, and reference it from
 > which auto-falls-back to Wyze's WebRTC backend (the path that still works),
 > so these cameras stream again with no downgrade. Two gotchas: this fork
 > slugs stream names with **underscores** (not the original's dashes) — copy
-> the exact slug from the `:5050` WebUI — and WebRTC streams are **on-demand**
+> the exact slug from the bridge WebUI; and WebRTC streams are **on-demand**
 > (they connect when a viewer opens the tile). If one specific camera fails
 > its WebRTC handshake while its neighbors work, it's usually that camera's
 > cloud session — a full power-cycle (unplug 30s) or remove/re-add in the
