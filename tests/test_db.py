@@ -1067,3 +1067,118 @@ def test_open_filter_hides_a_row_queued_for_delete(conn):
     assert fdb.queue_cal_object_delete(conn, "caldav:rem/gone", "t1")
     assert _open_uids(conn) == {"keep"}
     assert fdb.count_open_vtodo_objects(conn) == 1
+
+
+# --- parked chore creates when a list comes back ------------------------------
+
+from family_hub import caldav_sync as _csync        # noqa: E402
+from family_hub import chore_mirror as _cmirror     # noqa: E402
+
+_GONE = _csync._GONE_REASON
+_UIDP = _cmirror.UID_PREFIX
+
+
+@pytest.fixture
+def cdb(tmp_path):
+    c = fdb.connect(str(tmp_path / "hub.db"))
+    fdb.ensure_schema(c)
+    yield c
+    c.close()
+
+
+def _create(c, col, uid):
+    oid = f"{col}/{uid}"
+    fdb.queue_cal_object_create(c, {
+        "id": oid, "collection_id": col, "comp_type": "VTODO", "uid": uid,
+        "summary": "x", "raw_ics": "ICS"}, "t0")
+    return oid
+
+
+def _pushed(c, col, uid):
+    """A create that reached iCloud: it has an href and is SYNCED."""
+    oid = _create(c, col, uid)
+    rev = fdb.get_cal_object(c, oid)["local_rev"]
+    assert fdb.mark_cal_object_pushed(c, oid, f"h/{uid}", "e1", rev) == "synced"
+    return oid
+
+
+def test_drop_untracked_parked_creates_only_drops_forgotten_unsent_chore_creates(cdb):
+    col, other = "caldav:kids", "caldav:home"
+    # 1. an unsent chore create the mirror forgot, parked for the gone list
+    untracked = _create(cdb, col, f"{_UIDP}7-2026-09-01")
+    fdb.park_cal_object(cdb, untracked, _GONE, "t1")
+    # 2. the same, but the mirror still tracks it
+    tracked = _create(cdb, col, f"{_UIDP}7-2026-09-02")
+    fdb.park_cal_object(cdb, tracked, _GONE, "t1")
+    fdb.upsert_chore_mirror(cdb, 7, "2026-09-02", 1, tracked, f"{_UIDP}7-2026-09-02")
+    # 3. a chore delete of a sent reminder (has an href)
+    deleting = _pushed(cdb, col, f"{_UIDP}7-2026-09-03")
+    assert fdb.queue_cal_object_delete(cdb, deleting, "t1")
+    fdb.park_cal_object(cdb, deleting, _GONE, "t1")
+    # 4. a chore update of a sent reminder (has an href)
+    updating = _pushed(cdb, col, f"{_UIDP}7-2026-09-04")
+    assert fdb.queue_cal_object_update(cdb, updating, "ICS2", "x", "t1")
+    fdb.park_cal_object(cdb, updating, _GONE, "t1")
+    # 5. an unsent chore create parked because iCloud refused it, not gone
+    refused = _create(cdb, col, f"{_UIDP}7-2026-09-05")
+    for _ in range(fdb.CAL_PARK_ATTEMPTS):
+        parked = fdb.record_cal_object_error(cdb, refused, "PUT -> 403 Forbidden",
+                                             "t1", permanent=True)
+    assert parked
+    # 6. an untracked unsent chore create parked for a gone list, other list
+    elsewhere = _create(cdb, other, f"{_UIDP}8-2026-09-01")
+    fdb.park_cal_object(cdb, elsewhere, _GONE, "t1")
+    assert len(fdb.caldav_parked(cdb)) == 6
+
+    assert fdb.drop_untracked_parked_creates(cdb, col, _GONE, _UIDP) == 1
+    assert fdb.get_cal_object(cdb, untracked) is None
+    for kept in (tracked, deleting, updating, refused, elsewhere):
+        assert fdb.get_cal_object(cdb, kept) is not None, kept
+    assert fdb.get_cal_object(cdb, deleting)["sync_state"] == "PENDING_DELETE"
+    assert fdb.get_cal_object(cdb, updating)["sync_state"] == "PENDING_UPDATE"
+
+
+# --- every path that resets a row also resets its refusal count ---------------
+
+def _reset_unpark(c, oid):
+    # its list went away (parked for that), then came back
+    fdb.park_cal_object(c, oid, _GONE, "t2")
+    assert fdb.unpark_cal_objects(c, "caldav:rem", _GONE) == 1
+    return oid
+
+
+def _reset_pushed(c, oid):
+    # an upload of an older version landed while the newer edit stays queued
+    # (superseded); no queue_* call here, so only the push itself resets
+    older = fdb.get_cal_object(c, oid)["local_rev"] - 1
+    assert fdb.mark_cal_object_pushed(c, oid, "h/u", "e2", older) == "superseded"
+    return oid
+
+
+def _reset_delete(c, oid):
+    assert fdb.queue_cal_object_delete(c, oid, "t2")
+    assert fdb.get_cal_object(c, oid)["sync_state"] == "PENDING_DELETE"
+    return oid
+
+
+def _reset_update(c, oid):
+    assert fdb.queue_cal_object_update(c, oid, "ICS3", "x", "t2")
+    return oid
+
+
+@pytest.mark.parametrize("reset", [_reset_unpark, _reset_pushed, _reset_delete,
+                                   _reset_update],
+                         ids=["unpark", "pushed", "delete", "update"])
+def test_each_reset_path_clears_the_refusal_count(cdb, reset):
+    """Four refusals, then a reset, then one more refusal: not parked. A path
+    that reset sync_attempts but kept sync_refusals would park it here."""
+    oid = _pushed(cdb, "caldav:rem", "u1")
+    assert fdb.queue_cal_object_update(cdb, oid, "ICS2", "x", "t1")
+    for _ in range(fdb.CAL_PARK_ATTEMPTS - 1):
+        assert fdb.record_cal_object_error(cdb, oid, "no", "t1",
+                                           permanent=True) is False
+    reset(cdb, oid)
+    assert fdb.get_cal_object(cdb, oid)["sync_refusals"] == 0
+    assert fdb.record_cal_object_error(cdb, oid, "no", "t3",
+                                       permanent=True) is False
+    assert fdb.caldav_parked(cdb) == []
