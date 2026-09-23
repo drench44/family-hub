@@ -1156,6 +1156,20 @@ def test_sync_once_records_chore_mirror_status(conn):
     st = fdb.kv_get(conn, "chore_mirror_status")
     assert st["ok"] is True and st["at"] == _NOW.isoformat()
     assert st["created"] >= 1 and st["deleted"] == 0
+    assert st["lists_gone"] == []
+
+
+def test_sync_status_names_people_whose_chore_list_is_gone(conn):
+    """A person whose list was dropped is left out of the mirror. The mirror
+    status and the sync status name them, instead of only a log line."""
+    client = _two_way_mirror_fixture(conn)
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    fdb.drop_caldav_collection(conn, "caldav:rem")
+    gone = WriteFake([{"id": "other", "name": "Other", "comp": "VTODO",
+                       "todos": []}])
+    st = caldav_sync.sync_once(gone, conn, _CFG, _NOW + dt.timedelta(minutes=5))
+    assert fdb.kv_get(conn, "chore_mirror_status")["lists_gone"] == ["Emma"]
+    assert st["lists_gone"] == ["Emma"]
 
 
 def test_sync_once_records_chore_mirror_failure(conn, monkeypatch):

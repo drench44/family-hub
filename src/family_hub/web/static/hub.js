@@ -687,6 +687,13 @@ let awayOpenFor = null;
    editable from the wall, with no separate admin surface. */
 function peopleAdminHtml(people, awayPeriods) {
   const away = awayPeriods || [];
+  // A mapped list the sync no longer has (deleted or unshared in iCloud) is
+  // not "iCloud ✓": that person's chores stopped mirroring. With no lists at
+  // all iCloud isn't connected, and the editor already says so.
+  const lists = choreAdminReminderLists || [];
+  const listBadge = (lid) => (lists.length && !lists.some((l) => l.id === lid)
+    ? `<span class="padmin-badge padmin-badge-warn" title="This person’s iCloud list is gone; pick a new one">iCloud list gone</span>`
+    : `<span class="padmin-badge" title="Mirrored to an iCloud list">iCloud ✓</span>`);
   // At most one OPEN (end_date === null) period per person; that invariant is
   // enforced by the away endpoints, so the last match wins if it's ever wrong.
   const openByPerson = new Map();
@@ -724,7 +731,7 @@ function peopleAdminHtml(people, awayPeriods) {
       : '';
     return `<div class="padmin-row${p.active ? '' : ' inactive'}" data-padmin="${p.id}">`
       + `<span class="padmin-name" style="color:${safeColor(p.color)}">${escapeHtml(p.name)}</span>`
-      + (p.reminder_list_id ? `<span class="padmin-badge" title="Mirrored to an iCloud list">iCloud ✓</span>` : '')
+      + (p.reminder_list_id ? listBadge(p.reminder_list_id) : '')
       + `<button class="padmin-btn" type="button" data-pedit="${p.id}">Edit</button>`
       + `<button class="padmin-btn" type="button" data-ptoggle="${p.id}">${p.active ? 'Deactivate' : 'Activate'}</button>`
       + `<button class="padmin-btn padmin-del" type="button" data-pdel="${p.id}">Delete</button>`

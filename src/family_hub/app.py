@@ -837,8 +837,13 @@ def _integrations_state(c) -> dict:
             # "N changes not yet synced" instead of the backlog being invisible.
             entry["pending"] = caldav_status.get("pending", 0)
             # wall edits iCloud refused for good, or whose list is gone: kept
-            # on the wall but no longer retried, so they get their own note.
+            # but no longer sent, so they get their own note.
             entry["parked"] = caldav_status.get("parked", 0)
+            # people whose chore list is gone from iCloud: left out of the
+            # mirror until a new list is picked. Read live, so picking one
+            # clears the settings line at once.
+            entry["lists_gone"] = [
+                p["name"] for p in chore_mirror.people_with_gone_lists(c)]
         lst.append(entry)
     return {"list": lst, "enabled_ids": enabled_ids}
 

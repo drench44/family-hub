@@ -771,6 +771,17 @@ test('caldavPanelHtml: parked wall changes get their own note; 0/absent shows no
   assert.doesNotMatch(note, /on the wall/, 'never claims it shows on the wall');
 });
 
+test('caldavPanelHtml: a person whose chore list is gone gets a plain line; none shows nothing', () => {
+  const none = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true }, {});
+  assert.doesNotMatch(none, /caldav-gone/, 'no line when lists_gone is absent');
+  const empty = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, lists_gone: [] }, {});
+  assert.doesNotMatch(empty, /caldav-gone/, 'no line when nobody is affected');
+  const two = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true,
+    lists_gone: ['Sam', '<b>Bo</b>'] }, {});
+  assert.match(two, /caldav-gone">Sam’s iCloud chore list is gone; pick a new one\.</, 'one line per person');
+  assert.match(two, /caldav-gone">&lt;b&gt;Bo&lt;\/b&gt;’s iCloud chore list/, 'names are escaped');
+});
+
 test('caldavPanelHtml: connected + testing shows progress text and disables the Test button', () => {
   const html = caldavPanelHtml(
     { id: 'icloud_caldav', account: 'a@b.com', enabled: true }, { testing: true });

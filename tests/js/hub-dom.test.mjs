@@ -1691,6 +1691,22 @@ test('buildPersonForm: the two-way-off note shows only when mapped AND sync is o
   assert.ok(mk('', false).classList.contains('hidden'), 'unmapped -> hidden even when sync is off');
 });
 
+test('buildPersonForm: a mapped list that is gone says so instead of an empty-looking picker', () => {
+  const { document, sandbox } = newHub();
+  const mk = (reminderListId) => {
+    const host = document.createElement('div');
+    sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+      { edit: true, reminderLists: LISTS2, reminderListId, twoWay: true, onListChange: () => true });
+    return host;
+  };
+  const gone = mk('caldav:deleted');
+  assert.ok(gone.querySelector('[data-plist-gone]'), 'a gone-list note is shown');
+  assert.match(gone.innerHTML, /data-plist-gone>This person’s iCloud chore list is gone; pick a new one\.</);
+  assert.ok(gone.querySelector('[data-plist]'), 'the picker is still there to pick a new one');
+  assert.equal(mk('caldav:a').querySelector('[data-plist-gone]'), null, 'a live list: no note');
+  assert.equal(mk('').querySelector('[data-plist-gone]'), null, 'unmapped: no note');
+});
+
 test('buildPersonForm: no lists -> the connect-iCloud empty state, no dropdown', () => {
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
@@ -2338,6 +2354,20 @@ test('people admin: a mapped person shows the "iCloud ✓" badge in the list', a
   const row2 = ctx.choresFull.querySelector('[data-padmin="2"]');   // Alex (unmapped)
   assert.ok(row1.querySelector('.padmin-badge'), 'the mapped person is badged');
   assert.equal(row2.querySelector('.padmin-badge'), null, 'the unmapped person is not');
+});
+
+test('people admin: a person whose iCloud list is gone is badged "list gone", not "iCloud ✓"', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [{ id: 'caldav:home', name: 'Home' }];   // Sam's list is gone
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  const row = ctx.choresFull.querySelector('[data-padmin="1"]');
+  assert.ok(row.querySelector('.padmin-badge-warn'), 'badged as a warning');
+  // parsed children keep no markup of their own; read Sam's row off the host
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, />iCloud list gone</);
+  assert.doesNotMatch(samRow, /iCloud ✓/);
 });
 
 test('people admin: with no iCloud lists, the editor shows a connect hint, not a dead dropdown', async () => {
