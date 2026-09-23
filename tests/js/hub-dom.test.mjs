@@ -9112,6 +9112,24 @@ test('poll: a step that is not a panel is counted as a part, and named plainly',
   assert.equal(el().title, 'Could not draw: Calendar, Event cleanup. The rest of the wall is up to date.');
 });
 
+test('poll: a failed step with no plain name is still counted, under its own name', () => {
+  const { document, sandbox } = newHub();
+  sandbox.console = { ...console, error: () => {} };
+  const el = () => document.getElementById('conn-word');
+  sandbox.renderStep('renderCalendar', () => { throw new Error('bad event'); });
+  sandbox.renderStep('renderMystery', () => { throw new Error('new step, not named yet'); });
+  sandbox.paintConnWord();
+  assert.equal(el().textContent, 'live · 1 panel, 1 part failed',
+    'the unnamed step counts (as a part), not dropped from the count');
+  assert.equal(el().title, 'Could not draw: Calendar, renderMystery. The rest of the wall is up to date.',
+    'named steps first in step order, then the unnamed one by its raw name');
+  assert.equal(document.body.dataset.render, 'partial');
+  sandbox.renderStep('renderMystery', () => {});
+  sandbox.renderStep('renderCalendar', () => {});
+  sandbox.paintConnWord();
+  assert.equal(el().textContent, 'live', 'clears once it draws again');
+});
+
 test('poll: every render step has a plain name, and every name is a step', () => {
   const { sandbox } = newHub();
   const steps = [...hubSrc.matchAll(/renderStep\('(\w+)'/g)].map((m) => m[1]);
