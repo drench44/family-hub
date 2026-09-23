@@ -129,6 +129,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   answer's status code, not the words in the error.
 - A wall change is set aside only after iCloud refuses it 5 times. Before,
   a few failed tries during an outage plus one refusal were enough.
+- The note for wall changes iCloud would not take now says they are kept
+  but not sent. It said "kept on the wall", but a change whose list is gone
+  is not shown on the wall.
 
 ## [1.8.1] — 2026-09-22
 

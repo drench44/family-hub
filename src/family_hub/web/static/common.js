@@ -1379,10 +1379,11 @@ function caldavPanelHtml(integ, ui) {
     ? `<div class="caldav-pending">${pending} change${pending === 1 ? '' : 's'} not yet synced</div>`
     : '';
   // Parked: edits iCloud refused for good (a read-only list) or whose list is
-  // gone. Kept on the wall, no longer retried, so not "not yet synced".
+  // gone. Kept but no longer sent, so not "not yet synced". Not "on the
+  // wall": an edit whose list is gone is hidden from the wall.
   const parked = Number(integ.parked) || 0;
   const parkedNote = parked > 0
-    ? `<div class="caldav-parked">${parked} change${parked === 1 ? '' : 's'} iCloud would not take (read-only or deleted list); kept on the wall</div>`
+    ? `<div class="caldav-parked">${parked} change${parked === 1 ? '' : 's'} iCloud would not take (read-only or deleted list); kept but not sent</div>`
     : '';
   return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong>`
     + (warn ? `<span class="integ-warn">${warn}</span>` : '')
