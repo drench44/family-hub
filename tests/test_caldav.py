@@ -2210,6 +2210,41 @@ def test_a_garbled_missing_clock_store_warns_and_starts_empty(conn, caplog, stor
                for r in caplog.records if r.levelno >= logging.WARNING)
 
 
+def test_the_missing_clock_runs_on_a_zoned_clock_like_the_wall(conn):
+    """The wall syncs with a zoned now, not the naive test clock: the stored
+    stamps carry the zone and the day still counts right."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Los_Angeles")
+    base = _NOW.replace(tzinfo=tz)
+    later = _gone_list_setup(conn)
+    for h in range(1, 25):
+        caldav_sync.sync_once(later, conn, _CFG, base + dt.timedelta(hours=h))
+    assert "caldav:old" in _collection_ids(conn)
+    clock = fdb.kv_get(conn, "caldav_missing_since")["caldav:old"]
+    assert clock["since"] == (base + dt.timedelta(hours=1)).isoformat()
+    caldav_sync.sync_once(later, conn, _CFG, base + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+def test_a_naive_missing_clock_against_a_zoned_now_warns_and_restarts(conn, caplog):
+    """The other half of the zone mismatch: stamps saved without a zone read
+    by a wall whose clock has one. Warn, start over, keep syncing."""
+    from zoneinfo import ZoneInfo
+    now = (_NOW + dt.timedelta(hours=1)).replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since", {"caldav:old": {
+        "since": (_NOW - dt.timedelta(hours=30)).isoformat(),
+        "last": _NOW.isoformat()}})
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        st = caldav_sync.sync_once(later, conn, _CFG, now)
+    assert st["ok"] is True, st
+    assert "caldav:old" in _collection_ids(conn)      # never dropped on a bad clock
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"] == \
+        {"since": now.isoformat(), "last": now.isoformat()}
+    assert any("caldav_missing_since" in r.getMessage() and "caldav:old" in
+               r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+
+
 class _PutsFail(WriteFake):
     def put_object(self, collection, href, ics, base_etag=None, uid=None):
         raise RuntimeError("connection reset")
