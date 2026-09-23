@@ -12,6 +12,7 @@ The script is driven entirely by env so it is deterministic under test:
 """
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -579,8 +580,9 @@ def test_remote_prune_failure_exits_2_and_records_it(tmp_path):
     # then succeeds, and root ignores directory modes anyway.
     shim = tmp_path / "bin"
     shim.mkdir()
-    real = subprocess.run(["which", "rsync"], capture_output=True,
-                          text=True).stdout.strip()
+    real = shutil.which("rsync")
+    if not real:   # never skip: the shim would exec nothing and prove nothing
+        pytest.fail("rsync is not on PATH; this test needs the real one")
     (shim / "rsync").write_text(
         "#!/bin/bash\n"
         'case "$*" in *--list-only*hourly/*) '
@@ -606,6 +608,19 @@ def test_remote_weekly_tier_is_pruned_by_its_keep_count(tmp_path):
     _run(db, tmp_path / "out", remote=remote, extra_env={"WEEKLY_KEEP": "3"})
     assert [p.name for p in _snaps(remote, "weekly")] == [
         "hub-2026-W30.db", "hub-2026-W33.db", "hub-2026-W34.db"]
+
+
+def test_remote_weekly_prune_orders_weeks_across_the_new_year(tmp_path):
+    """Keep 3 of 2025-W52, 2026-W01, 2026-W02 and the new run's week: the
+    order across the year decides which goes. 2025-W52 is the oldest and
+    goes; 2026-W01 stays (sorting by week number alone would drop it)."""
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    _seed_remote(remote, "weekly", ["2025-W52", "2026-W01", "2026-W02"])
+    _run(db, tmp_path / "out", remote=remote, extra_env={"WEEKLY_KEEP": "3"})
+    assert [p.name for p in _snaps(remote, "weekly")] == [
+        "hub-2026-W01.db", "hub-2026-W02.db", "hub-2026-W34.db"]
 
 
 def test_stale_partial_wal_and_shm_sidecars_are_swept(tmp_path):
