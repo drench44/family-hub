@@ -74,7 +74,11 @@ def test_camera_services_have_healthchecks_using_binaries_their_images_ship():
     g = svcs["go2rtc"]["healthcheck"]["test"]
     assert g[:2] == ["CMD", "curl"] and "http://127.0.0.1:1984/api" in g
     w = svcs["wyze-bridge"]["healthcheck"]["test"]
-    assert w[:2] == ["CMD", "wget"] and "http://127.0.0.1:5080/api/health" in w
+    assert w[0] == "CMD-SHELL" and w[1].startswith("wget ")
+    # Both the WebUI and the bridge's internal go2rtc: the internal one can
+    # die alone (2026-09-23) and the WebUI keeps answering.
+    assert "http://127.0.0.1:5080/api/health" in w[1]
+    assert "&& wget -q -T 4 -O /dev/null http://127.0.0.1:1984/api" in w[1]
     for name in ("go2rtc", "wyze-bridge"):
         hc = svcs[name]["healthcheck"]
         assert hc.get("interval") and hc.get("timeout") and hc.get("retries"), name
