@@ -573,28 +573,23 @@ def test_remote_prune_failure_exits_2_and_records_it(tmp_path):
     remote = tmp_path / "nas"
     _run(db, out, remote=remote)
     assert _status(db)["remote_ok"] is True
-    # writable (the add step still works) but not listable (the prune fails)
-    (remote / "hourly").chmod(0o300)
-    extra = None
-    if os.access(remote / "hourly", os.R_OK):
-        # root ignores directory modes (a CI runner may be root): fail the
-        # listing with an rsync shim instead, so the test never skips
-        shim = tmp_path / "bin"
-        shim.mkdir()
-        real = subprocess.run(["which", "rsync"], capture_output=True,
-                              text=True).stdout.strip()
-        (shim / "rsync").write_text(
-            "#!/bin/bash\n"
-            'case "$*" in *--list-only*hourly/*) '
-            'echo "opendir: Permission denied" >&2; exit 23;; esac\n'
-            f'exec {real} "$@"\n')
-        (shim / "rsync").chmod(0o755)
-        extra = {"PATH": f"{shim}:/usr/bin:/bin:/usr/local/bin"}
-    try:
-        r = _run(db, out, remote=remote, now="202608181030", check=False,
-                 extra_env=extra)
-    finally:
-        (remote / "hourly").chmod(0o755)
+    # Fail only the prune's listing of the NAS tier, with an rsync shim. A
+    # chmod on the tier can't do it portably: GNU rsync (the house box, the
+    # OMEN) resets the directory's mode while adding files, so the listing
+    # then succeeds, and root ignores directory modes anyway.
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    real = subprocess.run(["which", "rsync"], capture_output=True,
+                          text=True).stdout.strip()
+    (shim / "rsync").write_text(
+        "#!/bin/bash\n"
+        'case "$*" in *--list-only*hourly/*) '
+        'echo "opendir: Permission denied" >&2; exit 23;; esac\n'
+        f'exec {real} "$@"\n')
+    (shim / "rsync").chmod(0o755)
+    extra = {"PATH": f"{shim}:{os.environ['PATH']}"}
+    r = _run(db, out, remote=remote, now="202608181030", check=False,
+             extra_env=extra)
     assert r.returncode == 2, f"a failed prune is a remote failure: {r.stderr}"
     assert "prune hourly" in r.stderr
     assert _status(db)["remote_ok"] is False
