@@ -10,6 +10,17 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- `GET /health/full`: a report of whether the hub actually works, for deploy
+  gates and people. Every source the wall shows (calendar, laundry, weather,
+  climate, fleet, cameras) says whether it is fresh and was read by the
+  running process; the settings they need (HA_TOKEN, the Google token) and
+  whether `config.json` is the one the deploy shipped are checked too.
+  `/health` is unchanged (liveness only).
+- `/health/full` names a room sensor house-climate calls stale, treats a
+  data stamp from the future as an error, and turns a check that crashes
+  into a named problem instead of a 500.
+
 ## [1.8.1] — 2026-09-22
 
 ### Fixed

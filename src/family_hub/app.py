@@ -44,6 +44,7 @@ from . import version as fversion
 from . import caldav_service
 from . import caldav_sync
 from . import chore_mirror
+from . import deep_health
 from .calendar_sync import GoogleCalendarClient, sync_once
 from .config import load_config
 
@@ -61,7 +62,15 @@ for _noisy in ("httpx", "httpcore"):
 # and health checks, keep their errors and every other request (access_log.py).
 access_log.install()
 
-cfg = load_config(os.environ.get("CONFIG_PATH", "config.json"))
+# When this process started: /health/full only counts a calendar sync or a
+# laundry read made after it (the previous container's work proves nothing).
+PROCESS_STARTED_AT = time.time()
+CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.json")
+cfg = load_config(CONFIG_PATH)
+# The bytes this process loaded, fingerprinted right after loading them, and
+# what the deploy recorded when it built the image (deep_health.py).
+CONFIG_LOADED_SHA256 = deep_health.file_sha256(CONFIG_PATH)
+BUILD_INFO = deep_health.read_build_info()
 # Server-side camera fetches reach go2rtc over the shared compose network
 # (http://go2rtc:1984): a container cannot hairpin its OWN stack's published
 # LAN port (same-bridge NAT reply mismatch — found live 2026-08-12). Browser
@@ -329,6 +338,7 @@ _http = httpx.AsyncClient()
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app):
+    global _laundry_watch_task
     # Configured but unusable is a misconfiguration, not a runtime failure:
     # say it once, here, before anything tries to use it.
     if _laundry_env_broken():
@@ -351,6 +361,7 @@ async def _lifespan(_app):
     watch = None
     if _laundry_watch_enabled():
         watch = asyncio.create_task(laundry_watch_loop())
+        _laundry_watch_task = watch
         watch.add_done_callback(
             lambda t: t.cancelled()
             or log.error("laundry watch: task exited (real-time lane dead; "
@@ -838,15 +849,11 @@ def _config_panel_links() -> list[dict]:
     return panels
 
 
-@app.get("/health")
-def health():
-    """Liveness for the container healthcheck, and it means the hub can use its
-    database. It used to return ok without touching the db, so a missing or
-    corrupt hub.db read healthy while every real request failed. One read of a
+def _db_usable() -> Exception | None:
+    """None when the hub can use its database, else the error. One read of a
     table the app always has, on the same per-thread connection the routes
     use. SELECT 1 alone never reads the file, and a schema count passes on the
-    empty file sqlite quietly creates when hub.db has gone missing. Stays
-    sub-millisecond."""
+    empty file sqlite quietly creates when hub.db has gone missing."""
     try:
         _db().execute("SELECT 1 FROM kv LIMIT 1").fetchone()
         # A connection opened before hub.db was deleted keeps reading the
@@ -856,9 +863,175 @@ def health():
             raise FileNotFoundError("hub.db is missing")
     except Exception as e:
         log.error("health: database unusable: %s", e)
+        return e
+    return None
+
+
+@app.get("/health")
+def health():
+    """Liveness for the container healthcheck, and it means the hub can use its
+    database. It used to return ok without touching the db, so a missing or
+    corrupt hub.db read healthy while every real request failed. Stays
+    sub-millisecond. Whether the hub WORKS (fresh data, settings, the shipped
+    config) is /health/full; this stays liveness so an upstream outage never
+    marks the container unhealthy."""
+    e = _db_usable()
+    if e is not None:
         return JSONResponse({"status": "error", "db": type(e).__name__},
                             status_code=503)
     return {"status": "ok"}
+
+
+def _health_full_local() -> dict:
+    """The parts of /health/full that read the database and the filesystem,
+    run off the event loop."""
+    e = _db_usable()
+    out = {"db_ok": e is None,
+           "db_error": None if e is None else f"{type(e).__name__}: {e}",
+           "config_now": deep_health.file_sha256(CONFIG_PATH),
+           "google_token": deep_health.token_file_present(TOKEN_PATH)}
+    if e is not None:
+        # Without the database the toggles and sync statuses are unknown: judge
+        # every configured source as on, so nothing passes by default.
+        avail = {i["id"] for i in _available_only()}
+        out.update(on=avail, cal_status={}, caldav_status={}, backup=None)
+        return out
+    c = _db()
+    out["on"] = {i["id"] for i in _available_only()
+                 if fdb.integration_enabled(c, i["id"], default=True)}
+    out["cal_status"] = fdb.kv_get(c, "calendar_status") or {}
+    out["caldav_status"] = fdb.kv_get(c, "caldav_status") or {}
+    try:
+        out["backup"] = _build_backup(c)
+    except Exception:
+        log.error("health: backup status read failed", exc_info=True)
+        out["backup"] = None
+    return out
+
+
+async def _go2rtc_streams() -> tuple[dict | None, str | None]:
+    """go2rtc's stream list (name -> details), or None and why."""
+    base = _fetch_cfg.go2rtc_base
+    try:
+        r = await _http.get(f"{base}/api/streams", timeout=tiles.TIMEOUT)
+        r.raise_for_status()
+        body = r.json()
+        if not isinstance(body, dict):
+            raise ValueError(f"non-dict body {type(body).__name__}")
+        return body, None
+    except Exception as e:
+        return None, f"{base}/api/streams: {type(e).__name__}: {e}"[:200]
+
+
+def _camera_srcs() -> list[str]:
+    """Every go2rtc stream name config.json points the wall or phone at."""
+    out = []
+    for cam in list(cfg.cameras or []) + list(getattr(cfg, "camera_page", []) or []):
+        if isinstance(cam, dict):
+            out += [v for v in (cam.get("src"), cam.get("hd"))
+                    if isinstance(v, str) and v]
+    return out
+
+
+@app.get("/health/full")
+async def health_full():
+    """Does the hub WORK? Fresh data from every source the wall shows, read by
+    THIS process; the settings those sources need; config.json being the one
+    the deploy shipped; the commit the image was built from. See deep_health.py.
+    The deploy gate (homelab-deploy, in the garage overlay) reads it. Always
+    200: a report, not a liveness probe."""
+    now = time.time()
+    try:
+        local = await asyncio.to_thread(_health_full_local)
+    except Exception as e:     # a bug here must be a named problem, not a 500
+        log.exception("health/full: reading the database and files crashed")
+        local = {"db_ok": False, "db_error": f"health check crashed: {type(e).__name__}: {e}",
+                 "config_now": deep_health.file_sha256(CONFIG_PATH),
+                 "google_token": deep_health.token_file_present(TOKEN_PATH),
+                 "on": {i["id"] for i in _available_only()},
+                 "cal_status": {}, "caldav_status": {}, "backup": None}
+    on = local["on"]
+    avail = {i["id"] for i in _available_only()}
+
+    async def _skip():
+        return {"available": False}
+
+    weather_on = "weather" in on and not DEMO
+    climate_on = "climate" in on and not DEMO
+    fleet_on = "fleet" in on and not DEMO
+    cams_on = "cameras" in on and not DEMO and bool(_fetch_cfg.go2rtc_base)
+    results = await asyncio.gather(
+        tiles.weather_tile(_http, cfg) if weather_on else _skip(),
+        tiles.climate_tile(_http, cfg) if climate_on else _skip(),
+        tiles.fleet_tile(_http, cfg) if fleet_on else _skip(),
+        _go2rtc_streams() if cams_on else asyncio.sleep(0, (None, None)),
+        return_exceptions=True)
+    # A tile that RAISES (fleet_tile does on purpose for a build bug) becomes
+    # that source's named error in the report instead of a 500 with no reason.
+    for name, r in zip(("weather", "climate", "fleet", "cameras"), results):
+        if isinstance(r, BaseException):
+            log.error("health/full: %s check crashed", name, exc_info=r)
+            tiles._note_error(name, f"health check crashed: {type(r).__name__}: {r}")
+    weather, climate, fleet = [r if isinstance(r, dict) else {"available": False}
+                               for r in results[:3]]
+    if isinstance(results[3], BaseException):
+        streams, streams_err = None, f"health check crashed: {type(results[3]).__name__}: {results[3]}"
+    else:
+        streams, streams_err = results[3]
+
+    has_google = any(c.get("kind", "google") == "google" for c in cfg.calendars or [])
+    google_on = bool(cfg.calendars) and ("google_calendar" in on or "ics_calendar" in on)
+    laundry_configured = fintegrations.laundry_configured(cfg)
+    sources = {
+        "calendar": deep_health.calendar_source(
+            configured=bool(cfg.calendars) or "icloud_caldav" in avail,
+            enabled={"google": google_on, "icloud": "icloud_caldav" in on},
+            statuses={"google": local["cal_status"], "icloud": local["caldav_status"]},
+            now=now, started_at=PROCESS_STARTED_AT),
+        "laundry": deep_health.laundry_source(
+            configured=laundry_configured, enabled="laundry" in on and not DEMO,
+            config_error=getattr(cfg, "laundry_config_error", None),
+            token_present=bool(fintegrations.ha_token(os.environ)),
+            auth_rejected=tiles.laundry_auth_rejected(),
+            watching=_laundry_watch_task is not None and not _laundry_watch_task.done(),
+            last_ok=_laundry_last_ok_wall, snapshot=_laundry_snapshot,
+            now=now, started_at=PROCESS_STARTED_AT),
+        "weather": deep_health.tile_source(
+            "weather", configured="weather" in avail, enabled=weather_on,
+            state=tiles.SOURCE_STATE.get("weather"), available=weather.get("available"),
+            now=now, max_age_s=deep_health.WEATHER_MAX_AGE_S),
+        "climate": deep_health.tile_source(
+            "climate", configured="climate" in avail, enabled=climate_on,
+            state=tiles.SOURCE_STATE.get("climate"), available=climate.get("available"),
+            now=now, max_age_s=deep_health.CLIMATE_MAX_AGE_S),
+        "fleet": deep_health.tile_source(
+            "fleet", configured="fleet" in avail, enabled=fleet_on,
+            state=tiles.SOURCE_STATE.get("fleet"), available=fleet.get("available"),
+            now=now, max_age_s=deep_health.FLEET_MAX_AGE_S),
+        "cameras": deep_health.cameras_source(
+            configured="cameras" in avail, enabled=cams_on,
+            wanted=_camera_srcs(), streams=streams, error=streams_err),
+    }
+    settings = {
+        "ha_token": deep_health.setting(
+            laundry_configured and not DEMO,
+            bool(fintegrations.ha_token(os.environ)),
+            "laundry is configured, so HA_TOKEN must reach the container"),
+        "google_token": deep_health.setting(
+            has_google and google_on and not DEMO, local["google_token"],
+            f"Google calendars are configured, so {TOKEN_PATH} must exist"),
+        "config": deep_health.setting(
+            True, not getattr(cfg, "laundry_config_error", None),
+            f"config.json: {getattr(cfg, 'laundry_config_error', None)}"),
+    }
+    return deep_health.assemble(
+        now=now, started_at=PROCESS_STARTED_AT, version=APP_VERSION, build=BUILD,
+        build_info=BUILD_INFO,
+        config=deep_health.config_block(CONFIG_PATH, CONFIG_LOADED_SHA256,
+                                        local["config_now"], BUILD_INFO),
+        db_ok=local["db_ok"], db_error=local["db_error"],
+        settings=settings, sources=sources,
+        notes={"backup": local["backup"]})
 
 
 @app.get("/api/version")
@@ -2269,6 +2442,14 @@ LAUNDRY_UNAVAIL_ALERT_S = 300.0
 
 _laundry_snapshot: dict | None = None
 _laundry_snapshot_ts: float = 0.0
+# Wall-clock time of the watcher's last Home Assistant read that came back
+# available, for /health/full. Unlike _laundry_snapshot_ts it is NOT
+# re-stamped while the hold keeps a last-good card standing through a blip:
+# it says when HA last really answered.
+_laundry_last_ok_wall: float | None = None
+# The running watcher task (set by the lifespan), so /health/full can tell a
+# watcher that is running from one that was never started or has died.
+_laundry_watch_task: "asyncio.Task | None" = None
 _laundry_unavail_since: float | None = None
 # One-shot latch for the prolonged-outage ERROR below: a watcher ticking every
 # 5s must not reprint it 12 times a minute, and it re-arms on recovery.
@@ -2338,7 +2519,7 @@ async def _laundry_watch_tick() -> None:
     a finished load to a bare "Idle")."""
     global _laundry_snapshot, _laundry_snapshot_ts, _laundry_unavail_since, \
         _laundry_change, _laundry_unavail_alerted, _laundry_ok_streak, \
-        _laundry_annotate_failures, _laundry_alert_since
+        _laundry_annotate_failures, _laundry_alert_since, _laundry_last_ok_wall
     try:
         t = await tiles.laundry_tile(_http, cfg, os.environ.get("HA_TOKEN", ""))
     except Exception:
@@ -2346,6 +2527,7 @@ async def _laundry_watch_tick() -> None:
                     exc_info=True)
         return
     if t.get("available"):
+        _laundry_last_ok_wall = time.time()
         try:
             snap = await _laundry_annotate_off_loop(t)
             if _laundry_annotate_failures >= LAUNDRY_ANNOTATE_STRIKES:
