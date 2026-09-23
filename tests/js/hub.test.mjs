@@ -764,6 +764,11 @@ test('caldavPanelHtml: parked wall changes get their own note; 0/absent shows no
   assert.match(one, /caldav-parked">1 change iCloud would not take/, 'singular copy');
   const many = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, parked: 2 }, {});
   assert.match(many, /caldav-parked">2 changes iCloud would not take/, 'plural copy');
+  // A change parked because its list is gone is hidden from the wall, so the
+  // note must not promise it is "on the wall".
+  const note = one.match(/caldav-parked">([^<]*)</)[1];
+  assert.match(note, /kept but not sent/, 'says it is kept and not sent');
+  assert.doesNotMatch(note, /on the wall/, 'never claims it shows on the wall');
 });
 
 test('caldavPanelHtml: connected + testing shows progress text and disables the Test button', () => {

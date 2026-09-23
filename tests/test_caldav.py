@@ -2022,6 +2022,10 @@ def test_sync_status_reports_parked_changes_and_goes_ok(conn):
     st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
     assert st["ok"] is True and st["parked"] == 1 and st["pending"] == 0
     assert "refused" in st["parked_note"]
+    # a change parked because its list is gone is hidden from the wall, so
+    # the note must not say it is kept "on the wall"
+    assert "kept but not sent" in st["parked_note"]
+    assert "on the wall" not in st["parked_note"]
 
 
 def test_transient_push_failures_never_park(conn):
