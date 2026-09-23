@@ -34,6 +34,13 @@ streams:
   # the bridge's WebRTC fallback (see README), whose cloud path is capped at
   # SD — for those cams the main stream is the sharpest source available.
 
+# No `api:` section is needed: go2rtc's API (port 1984) is only reachable by
+# the hub over the compose network (see docker-compose.yml). This file is
+# mounted read-only, so edit it here and `docker compose restart go2rtc`;
+# adding streams through go2rtc's API or web page cannot be saved. Don't set
+# `api: username/password`: the hub's own requests to go2rtc carry none and
+# would get a 401 (and with `local_auth: true`, so would the healthcheck).
+
 webrtc:
   # Your box's LAN IP — browsers connect here for the live WebRTC streams.
   candidates: [ "192.168.1.50:8555" ]

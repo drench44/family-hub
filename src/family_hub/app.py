@@ -26,10 +26,11 @@ import threading
 import time
 import uuid
 from typing import Literal
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -38,6 +39,7 @@ from . import access_log
 from . import chores as chlogic
 from . import db as fdb
 from . import demo as fdemo
+from . import go2rtc_proxy
 from . import integrations as fintegrations
 from . import reminders as remlogic
 from . import tiles
@@ -73,10 +75,13 @@ cfg = load_config(CONFIG_PATH)
 # what the deploy recorded when it built the image (deep_health.py).
 CONFIG_LOADED_SHA256 = deep_health.file_sha256(CONFIG_PATH)
 BUILD_INFO = deep_health.read_build_info()
-# Server-side camera fetches reach go2rtc over the shared compose network
-# (http://go2rtc:1984): a container cannot hairpin its OWN stack's published
-# LAN port (same-bridge NAT reply mismatch — found live 2026-08-12). Browser
-# links keep the LAN URL from config.
+# Where the hub reaches go2rtc. Browsers never do: they get the player and its
+# WebSocket through the hub's /go2rtc/ proxy (go2rtc_proxy.py), because
+# go2rtc's own API has no access control and must not be on the LAN. In the
+# compose stack that is http://go2rtc:1984 over the compose network
+# (GO2RTC_FETCH_BASE; a container also cannot hairpin its OWN stack's
+# published LAN port, found live 2026-08-12); config's go2rtc_base is the
+# fallback for a hub run outside docker.
 _fetch_cfg = dataclasses.replace(
     cfg, go2rtc_base=os.environ.get("GO2RTC_FETCH_BASE", cfg.go2rtc_base))
 DB_PATH = os.environ.get("DB_PATH", "data/hub.db")
@@ -857,8 +862,9 @@ def _camera_links(entries: list[dict]) -> list[dict]:
             cameras.append({
                 "src": src,
                 "label": cam.get("label", src),
-                "tile": f"{cfg.go2rtc_base}/stream.html?src={src}&mode=webrtc",
-                "full": f"{cfg.go2rtc_base}/stream.html?src={hd_src}",
+                # The hub's own go2rtc proxy, same origin as the wall.
+                "tile": f"/go2rtc/stream.html?src={quote(src, safe='')}&mode=webrtc",
+                "full": f"/go2rtc/stream.html?src={quote(hd_src, safe='')}",
                 # Full-screen shows the warm tile stream first, then upgrades to a
                 # distinct HD twin only when one is configured. has_hd is the
                 # explicit signal (the tile/full URLs always differ by query
@@ -3287,23 +3293,86 @@ def laundry_log_route(machine: str | None = None, limit: int = 200):
         return {"entries": []}
 
 
+def _camera_stream_names() -> set[str]:
+    """The go2rtc streams the wall and phone may show: every camera's src and
+    its "hd" twin, from both the wall column (`cameras`) and the Cameras-tab /
+    camera-page grid (`camera_page`), so a grid-only camera works too. The
+    snapshot probe and the /go2rtc/ proxy serve these and nothing else: no
+    free-form proxying. A malformed entry (no "src") is skipped the same way
+    _links() skips it, rather than 500-ing over one config typo."""
+    names = set()
+    for entry in (*cfg.cameras, *cfg.camera_page):
+        if not isinstance(entry, dict):
+            continue
+        for key in ("src", "hd"):
+            if isinstance(entry.get(key), str) and entry[key]:
+                names.add(entry[key])
+    return names
+
+
 @app.get("/api/tiles/camera.jpg")
 async def tile_camera(src: str = "cam"):
-    # only configured streams may be probed — no free-form proxying. Both the
-    # primary src (tile liveness) and any "hd" twin (full-screen readiness probe)
-    # are allowed; nothing else. _camera_srcs skips a malformed entry (not an
-    # object, or no "src") the way _camera_links does, rather than 500-ing
-    # every probe over one config typo. Both the wall column (`cameras`) and
-    # the Cameras-tab / camera-page grid (`camera_page`) are probe-able, so a
-    # grid-only camera (e.g. one shown only on the camera page) can report
-    # live. No cameras configured means nothing is probe-able.
-    if src not in set(_camera_srcs()):
+    # Only configured streams may be probed (the src and any "hd" twin, from
+    # both the wall column and the camera page), nothing else, and no cameras
+    # configured means nothing is probe-able.
+    if src not in _camera_stream_names():
         raise HTTPException(404, "unknown camera")
     result = await tiles.camera_snapshot(_http, _fetch_cfg, src)
     if result is None:
         raise HTTPException(502, "camera unavailable")
     content, media = result
     return Response(content=content, media_type=media)
+
+
+# --- go2rtc, through the hub (go2rtc_proxy.py says why) ---------------------
+
+@app.get("/go2rtc/{name}")
+async def go2rtc_player(name: str):
+    """go2rtc's player page and its two scripts, and nothing else of it."""
+    media = go2rtc_proxy.PLAYER_FILES.get(name)
+    if media is None or DEMO or not _fetch_cfg.go2rtc_base:
+        raise HTTPException(404, "not found")
+    return await _go2rtc_get(name, {}, media, pass_4xx=False)
+
+
+@app.get("/go2rtc/api/hls/{name}")
+async def go2rtc_hls(name: str, request: Request):
+    """The player's HLS fallback (old iPhones): the files of a session the
+    WebSocket below already opened, by its id."""
+    if name not in go2rtc_proxy.HLS_FILES or DEMO or not _fetch_cfg.go2rtc_base:
+        raise HTTPException(404, "not found")
+    params = {k: request.query_params[k] for k in go2rtc_proxy.HLS_PARAMS
+              if k in request.query_params}
+    return await _go2rtc_get(f"api/hls/{name}", params, None, pass_4xx=True)
+
+
+async def _go2rtc_get(path: str, params: dict, media: str | None,
+                      pass_4xx: bool) -> Response:
+    """GET one go2rtc file for the browser. No answer, a 5xx, or (for the
+    player files, which must always exist) any status but 200 is a 502, and
+    logged: the tiles go black over it. With pass_4xx, go2rtc's own 4xx goes
+    to the browser as-is: an HLS session that ended is a 404 the player
+    handles by reconnecting."""
+    url = f"{_fetch_cfg.go2rtc_base}/{path}"
+    try:
+        r = await _http.get(url, params=params, timeout=tiles.CAMERA_TIMEOUT)
+    except httpx.HTTPError as e:
+        log.warning("go2rtc proxy: GET %s failed: %s: %s", url, type(e).__name__, e)
+        raise HTTPException(502, "go2rtc did not answer") from None
+    if r.status_code != 200 and not (pass_4xx and 400 <= r.status_code < 500):
+        log.warning("go2rtc proxy: GET %s answered %s", url, r.status_code)
+        raise HTTPException(502, f"go2rtc answered {r.status_code}")
+    return Response(content=r.content, status_code=r.status_code,
+                    media_type=media or r.headers.get("content-type"))
+
+
+@app.websocket("/go2rtc/api/ws")
+async def go2rtc_ws(websocket: WebSocket):
+    """The player's WebSocket (WebRTC signaling, or the MSE/MJPEG stream
+    itself), piped to go2rtc for a configured stream only."""
+    src = websocket.query_params.get("src", "")
+    base = "" if DEMO else _fetch_cfg.go2rtc_base
+    await go2rtc_proxy.bridge(websocket, base, src, _camera_stream_names())
 
 
 # --- background sync ------------------------------------------------------
