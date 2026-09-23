@@ -3129,6 +3129,31 @@ def test_caldav_settings_entry_names_people_whose_list_is_gone(tmp_path, monkeyp
         assert entry()["lists_gone"] == []
 
 
+def test_admin_state_flags_each_person_whose_list_is_gone(tmp_path, monkeypatch):
+    """/api/admin/state says per person whether their mapped list is gone, so
+    the wall does not have to guess from the list array. With every list gone
+    (an empty array) the person still reads as gone, not as unconnected. An
+    inactive person is flagged too; an unmapped one never is."""
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        flags = lambda: {p["name"]: p["list_gone"] for p in
+                         tc.get("/api/admin/state").json()["people"]}
+        sam = appmod.fdb.add_person(c, "Sam", "#5BC9F0")
+        ada = appmod.fdb.add_person(c, "Ada", "#8AE0AD")
+        appmod.fdb.add_person(c, "Bee", "#F0A05B")                 # unmapped
+        appmod.fdb.upsert_caldav_collection(c, "caldav:sam", "VTODO", "Sam", None, "t")
+        appmod.fdb.upsert_caldav_collection(c, "caldav:ada", "VTODO", "Ada", None, "t")
+        appmod.fdb.update_person(c, sam, reminder_list_id="caldav:sam")
+        appmod.fdb.update_person(c, ada, reminder_list_id="caldav:ada", active=0)
+        assert flags() == {"Sam": False, "Ada": False, "Bee": False}
+        appmod.fdb.drop_caldav_collection(c, "caldav:sam")
+        assert flags() == {"Sam": True, "Ada": False, "Bee": False}
+        appmod.fdb.drop_caldav_collection(c, "caldav:ada")        # every list gone
+        assert tc.get("/api/admin/state").json()["reminder_lists"] == []
+        assert flags() == {"Sam": True, "Ada": True, "Bee": False}
+
+
 def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
     appmod = _reload_with(tmp_path, monkeypatch, {})
     with TestClient(appmod.app) as tc:

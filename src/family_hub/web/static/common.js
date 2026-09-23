@@ -1030,15 +1030,20 @@ function reminderListBody(value) {
 
 /* The iCloud-list mapping block for the person editor (edit mode only — a new
    person has no id to PATCH yet). `opts` carries {reminderLists, reminderListId,
-   twoWay}. With lists it renders a picker + the one-time sharing note; with no
-   lists it renders a single "connect iCloud" line instead of a dead dropdown.
-   Kept as an HTML string so buildPersonForm can drop it into the same template
-   pass (the live wiring + PATCH is added after). */
+   listGone, twoWay}. With lists it renders a picker + the one-time sharing note;
+   with no lists it renders a single "connect iCloud" line instead of a dead
+   dropdown, unless the person's list is gone (then iCloud IS connected and
+   every list went away, so say that). `listGone` comes from the server
+   (/api/admin/state people[].list_gone); an empty list array alone can't tell
+   "not connected" from "all gone". Kept as an HTML string so buildPersonForm
+   can drop it into the same template pass (the live wiring + PATCH is added
+   after). */
 function mirrorFieldHtml(opts) {
   if (!opts || !opts.edit) return '';
   const lists = opts.reminderLists || [];
   const listId = opts.reminderListId || '';
-  if (!lists.length) {
+  const gone = !!listId && !!opts.listGone;
+  if (!lists.length && !gone) {
     return `<div class="field"><label>iCloud chore list</label>`
       + `<div class="hint" data-plist-empty>Connect iCloud in Settings to mirror this person’s chores to a list.</div></div>`;
   }
@@ -1047,10 +1052,13 @@ function mirrorFieldHtml(opts) {
       `<option value="${escapeHtml(l.id)}"${l.id === listId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
   const offNow = !!listId && !opts.twoWay;
   // Mapped to a list the sync no longer has: the picker would just look
-  // empty (the none option), so say what happened.
-  const gone = !!listId && !lists.some((l) => l.id === listId);
+  // empty (the none option), so say what happened. With no lists left the
+  // picker still offers "none" to clear the mapping.
+  const goneText = lists.length
+    ? 'This person’s iCloud chore list is gone; pick a new one.'
+    : 'This person’s iCloud chore list is gone, and iCloud has no other lists. Make or share one in iCloud Reminders, then pick it here.';
   return `<div class="field"><label>iCloud chore list</label>`
-    + (gone ? `<div class="form-error" data-plist-gone>This person’s iCloud chore list is gone; pick a new one.</div>` : '')
+    + (gone ? `<div class="form-error" data-plist-gone>${goneText}</div>` : '')
     + `<select class="txt-input" data-plist>${options}</select>`
     + `<div class="hint" data-plist-share>Chores are written to this person’s list in the hub’s iCloud account. To see them on their own iPhone, share that list to their Apple ID once from iCloud Reminders (open the list → Share List).</div>`
     + `<div class="hint${offNow ? '' : ' hidden'}" data-plist-readonly>Two-way sync is off, so chores won’t reach iCloud yet. Turn it on in Settings → iCloud.</div>`
@@ -1101,6 +1109,9 @@ function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
         if (errEl) { errEl.textContent = 'Couldn’t update the list — check the hub and try again.'; errEl.classList.remove('hidden'); }
       } else {
         committed = value;
+        // a new list (or none) is saved: the old one being gone no longer applies
+        const goneEl = $('[data-plist-gone]');
+        if (goneEl) goneEl.classList.add('hidden');
       }
       paintReadonly();
     };

@@ -1704,18 +1704,50 @@ test('buildPersonForm: the two-way-off note shows only when mapped AND sync is o
 
 test('buildPersonForm: a mapped list that is gone says so instead of an empty-looking picker', () => {
   const { document, sandbox } = newHub();
-  const mk = (reminderListId) => {
+  const mk = (reminderListId, listGone = false) => {
     const host = document.createElement('div');
     sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
-      { edit: true, reminderLists: LISTS2, reminderListId, twoWay: true, onListChange: () => true });
+      { edit: true, reminderLists: LISTS2, reminderListId, listGone, twoWay: true, onListChange: () => true });
     return host;
   };
-  const gone = mk('caldav:deleted');
+  const gone = mk('caldav:deleted', true);
   assert.ok(gone.querySelector('[data-plist-gone]'), 'a gone-list note is shown');
   assert.match(gone.innerHTML, /data-plist-gone>This person’s iCloud chore list is gone; pick a new one\.</);
   assert.ok(gone.querySelector('[data-plist]'), 'the picker is still there to pick a new one');
   assert.equal(mk('caldav:a').querySelector('[data-plist-gone]'), null, 'a live list: no note');
   assert.equal(mk('').querySelector('[data-plist-gone]'), null, 'unmapped: no note');
+  // the server decides: an id missing from the array is not "gone" on its own
+  assert.equal(mk('caldav:deleted', false).querySelector('[data-plist-gone]'), null,
+    'the server says the list is fine: no note');
+});
+
+test('buildPersonForm: every list gone still says gone, not "connect iCloud"', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:deleted', listGone: true, twoWay: true, onListChange: () => true });
+  assert.ok(host.querySelector('[data-plist-gone]'), 'the gone note is shown');
+  assert.equal(host.querySelector('[data-plist-empty]'), null, 'no connect-iCloud line: iCloud is connected');
+  assert.doesNotMatch(host.innerHTML, /Connect iCloud in Settings/);
+  assert.ok(host.querySelector('[data-plist]'), 'the picker stays so the mapping can be cleared');
+});
+
+test('buildPersonForm: the gone note goes away once a new list is saved, and stays on a failed save', async () => {
+  const { document, sandbox } = newHub();
+  const mk = (ok) => {
+    const host = document.createElement('div');
+    sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+      { edit: true, reminderLists: LISTS2, reminderListId: 'caldav:deleted', listGone: true, twoWay: true, onListChange: () => ok });
+    return host;
+  };
+  const good = mk(true);
+  const sel = good.querySelector('[data-plist]');
+  sel.value = 'caldav:a'; await sel.onchange();
+  assert.ok(good.querySelector('[data-plist-gone]').classList.contains('hidden'), 'hidden after a good save');
+  const bad = mk(false);
+  const sel2 = bad.querySelector('[data-plist]');
+  sel2.value = 'caldav:a'; await sel2.onchange();
+  assert.ok(!bad.querySelector('[data-plist-gone]').classList.contains('hidden'), 'still shown: nothing was saved');
 });
 
 test('buildPersonForm: no lists -> the connect-iCloud empty state, no dropdown', () => {
@@ -2370,6 +2402,7 @@ test('people admin: a mapped person shows the "iCloud ✓" badge in the list', a
 test('people admin: a person whose iCloud list is gone is badged "list gone", not "iCloud ✓"', async () => {
   const admin = adminWithLists();
   admin.reminder_lists = [{ id: 'caldav:home', name: 'Home' }];   // Sam's list is gone
+  admin.people[0].list_gone = true;                               // and the server says so
   const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
   await enterEditWithPeople(ctx);
   const row = ctx.choresFull.querySelector('[data-padmin="1"]');
@@ -2379,6 +2412,33 @@ test('people admin: a person whose iCloud list is gone is badged "list gone", no
   const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
   assert.match(samRow, />iCloud list gone</);
   assert.doesNotMatch(samRow, /iCloud ✓/);
+});
+
+test('people admin: every iCloud list gone still badges "list gone" and the editor says so', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [];                   // iCloud connected, but every list is gone
+  admin.people[0].list_gone = true;
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, />iCloud list gone</);
+  assert.doesNotMatch(samRow, /iCloud ✓/);
+  ctx.tap('[data-pedit="1"]');
+  const editor = ctx.registry['chore-editor'];
+  assert.ok(editor.querySelector('[data-plist-gone]'), 'the editor says the list is gone');
+  assert.equal(editor.querySelector('[data-plist-empty]'), null, 'not "connect iCloud"');
+});
+
+test('people admin: a mapped person the server calls fine keeps "iCloud ✓" even if the list is not in the array', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [{ id: 'caldav:home', name: 'Home' }];
+  admin.people[0].list_gone = false;
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, /iCloud ✓/);
 });
 
 test('people admin: with no iCloud lists, the editor shows a connect hint, not a dead dropdown', async () => {
