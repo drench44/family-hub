@@ -1901,6 +1901,19 @@ def _gone_list_setup(conn):
                        "todos": [_VTODO]}])
 
 
+def _sync_hourly(client, conn, start_h, end_h):
+    """sync_once every hour from start_h to end_h (inclusive), the way the
+    background sync keeps discovering. Returns the last status."""
+    st = None
+    for h in range(start_h, end_h + 1):
+        st = caldav_sync.sync_once(client, conn, _CFG, _NOW + dt.timedelta(hours=h))
+    return st
+
+
+def _collection_ids(conn):
+    return {c["id"] for c in fdb.list_caldav_collections(conn)}
+
+
 def test_a_list_missing_briefly_is_kept(conn):
     later = _gone_list_setup(conn)
     st = caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
@@ -1911,7 +1924,7 @@ def test_a_list_missing_briefly_is_kept(conn):
 
 def test_a_list_gone_a_day_is_dropped_and_its_unsent_edit_parked(conn, caplog):
     later = _gone_list_setup(conn)
-    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    _sync_hourly(later, conn, 1, 25)
     with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
         st = caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=26))
     assert "caldav:old" not in {c["id"] for c in fdb.list_caldav_collections(conn)}
@@ -1939,8 +1952,8 @@ def test_an_empty_discover_never_counts_toward_dropping_a_list(conn):
 
 def test_a_list_that_comes_back_retries_its_parked_edits(conn):
     later = _gone_list_setup(conn)
-    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
-    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=26))
+    _sync_hourly(later, conn, 1, 26)
+    assert "caldav:old" not in _collection_ids(conn)
     back = WriteFake([
         {"id": "keep", "name": "Keep", "comp": "VTODO", "todos": [_VTODO]},
         {"id": "old", "name": "Old", "comp": "VTODO", "todos": []}])
@@ -1948,6 +1961,59 @@ def test_a_list_that_comes_back_retries_its_parked_edits(conn):
     assert [p[0] for p in back.puts] == ["old"]
     assert fdb.get_cal_object(conn, "caldav:old/NEW")["sync_state"] == "SYNCED"
     assert st["parked"] == 0
+
+
+class _DiscoverFails(WriteFake):
+    def discover(self):
+        raise RuntimeError("iCloud unreachable")
+
+
+def test_failed_syncs_do_not_age_a_missing_list(conn):
+    """Seen missing once, then a day of failed syncs: the next good sync is only
+    the second sighting, so the list is kept. The missing sightings must span
+    24h of good discovers."""
+    later = _gone_list_setup(conn)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    _sync_hourly(_DiscoverFails([]), conn, 2, 30)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=31))
+    assert "caldav:old" in _collection_ids(conn)
+    # a full day of good sightings after that does drop it
+    _sync_hourly(later, conn, 32, 54)
+    assert "caldav:old" in _collection_ids(conn)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=55))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+def test_a_list_back_for_one_sync_restarts_its_clock(conn):
+    """Missing 20h, back for one sync, missing 5h more: kept."""
+    later = _gone_list_setup(conn)
+    back = WriteFake([
+        {"id": "keep", "name": "Keep", "comp": "VTODO", "todos": [_VTODO]},
+        {"id": "old", "name": "Old", "comp": "VTODO", "todos": []}])
+    _sync_hourly(later, conn, 1, 20)
+    caldav_sync.sync_once(back, conn, _CFG, _NOW + dt.timedelta(hours=21))
+    _sync_hourly(later, conn, 22, 27)
+    assert "caldav:old" in _collection_ids(conn)
+
+
+def test_a_list_is_dropped_at_exactly_24h_of_sightings(conn):
+    later = _gone_list_setup(conn)
+    _sync_hourly(later, conn, 1, 24)
+    edge = _NOW + dt.timedelta(hours=25) - dt.timedelta(seconds=1)
+    caldav_sync.sync_once(later, conn, _CFG, edge)
+    assert "caldav:old" in _collection_ids(conn)      # 23h59m59s: kept
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)  # 24h exactly: dropped
+
+
+def test_an_old_style_missing_clock_restarts(conn):
+    """A clock saved by the older version (a bare time, no last sighting) can't
+    show the sightings were continuous, so it starts over rather than drop."""
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since",
+               {"caldav:old": (_NOW - dt.timedelta(hours=40)).isoformat()})
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    assert "caldav:old" in _collection_ids(conn)
 
 
 # --- pushes iCloud refuses for good ---------------------------------------------

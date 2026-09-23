@@ -42,6 +42,14 @@ _ERROR_SURFACE_HOURS = 6
 # an iCloud blip never drops a list the family still has.
 _LIST_GONE_HOURS = 24
 
+# The sync discovers every few minutes. A list's missing clock only runs while
+# good discovers keep seeing it missing: if the last sighting is older than
+# this, the syncs in between failed (or the hub was off), so nothing says the
+# list stayed gone, and the clock starts over. Without this a list seen
+# missing once, then a day of iCloud failures, was dropped on the next good
+# sync after only a second sighting.
+_MISSING_GAP_HOURS = 2
+
 # Why a row is parked when its list is gone. unpark_cal_objects matches on it
 # when the list comes back.
 _GONE_REASON = "its list is no longer in iCloud"
@@ -489,11 +497,14 @@ def _drop_gone_lists(conn, discovered: list[dict], now: dt.datetime) -> None:
     """Drop saved collections iCloud no longer returns (deleted or unshared).
 
     A saved collection missing from a NON-empty discover starts a clock in kv
-    `caldav_missing_since`; once it has been missing _LIST_GONE_HOURS it is
-    dropped with its pulled objects. An empty discover is a blip and never
-    counts. Unsent wall edits for a dropped list are kept and parked with
-    _GONE_REASON (logged), so they stop counting as "not yet synced" but are
-    not silently lost; they go out again if the list comes back."""
+    `caldav_missing_since` ({id: {"since", "last"}}: the first and the latest
+    sighting); once its sightings span _LIST_GONE_HOURS it is dropped with its
+    pulled objects. An empty discover is a blip and never counts, and a gap of
+    more than _MISSING_GAP_HOURS since the last sighting (failed syncs between)
+    starts the clock over. Unsent wall edits for a dropped list are kept and
+    parked with _GONE_REASON (logged), so they stop counting as "not yet
+    synced" but are not silently lost; they go out again if the list comes
+    back."""
     if not discovered:
         return
     seen = {"caldav:" + c["id"] for c in discovered}
@@ -504,16 +515,28 @@ def _drop_gone_lists(conn, discovered: list[dict], now: dt.datetime) -> None:
         cid = col["id"]
         if cid in seen:
             continue
-        since = missing.get(cid)
+        clock = missing.get(cid)
+        since = last = None
+        if isinstance(clock, dict):
+            since, last = clock.get("since"), clock.get("last")
         try:
-            age_h = (now - dt.datetime.fromisoformat(since)).total_seconds() / 3600.0 \
-                if since else 0.0
+            since_dt = dt.datetime.fromisoformat(since) if since else None
+            last_dt = dt.datetime.fromisoformat(last) if last else None
         except Exception:
             log.warning("caldav_missing_since for %s unparseable (%r); resetting",
-                        cid, since)
-            since, age_h = None, 0.0
+                        cid, clock)
+            since_dt = last_dt = None
+        # No last sighting (a first sighting, or a clock the older version
+        # saved as a bare time) or too long since it: start over.
+        if since_dt is None or last_dt is None or \
+                (now - last_dt).total_seconds() / 3600.0 > _MISSING_GAP_HOURS:
+            if clock is not None and since_dt is not None:
+                log.info("caldav %s: no sighting for a while (failed syncs); its "
+                         "missing clock starts over", cid)
+            since_dt = now
+        age_h = (now - since_dt).total_seconds() / 3600.0
         if age_h < _LIST_GONE_HOURS:
-            kept[cid] = since or now_iso
+            kept[cid] = {"since": since_dt.isoformat(), "last": now_iso}
             continue
         name = col.get("display_name") or cid
         unsent = fdb.drop_caldav_collection(conn, cid)
