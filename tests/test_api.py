@@ -5620,3 +5620,60 @@ def test_undo_on_a_chore_done_today_reopens_the_mirror_under_the_logged_owner(cl
     client.delete(f"/api/chores/{cid}/complete")
     assert seen == [a]
 
+
+import pytest as _pytest_sync  # noqa: E402
+
+
+@_pytest_sync.mark.parametrize("prior_since, expect_since", [
+    ("2026-08-11T09:00:00-07:00", "2026-08-11T09:00:00-07:00"),   # a running clock is kept
+    (None, "2026-08-10T09:00:00-07:00"),                          # else dated from the last good sync
+])
+def test_open_sync_conn_keeps_the_error_clock_and_an_expired_sign_in(app_mod, monkeypatch, prior_since, expect_since):
+    seed = app_mod.fdb.connect(app_mod.DB_PATH)
+    app_mod.fdb.ensure_schema(seed)
+    prior = {"ok": False, "needs_auth": True, "last_sync": "2026-08-10T09:00:00-07:00"}
+    if prior_since:
+        prior["error_since"] = prior_since
+    app_mod.fdb.kv_set(seed, "calendar_status", prior)
+    seed.close()
+    real_ensure = app_mod.fdb.ensure_schema
+    calls = {"n": 0}
+
+    def flaky(conn):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        return real_ensure(conn)
+
+    monkeypatch.setattr(app_mod.fdb, "ensure_schema", flaky)
+    monkeypatch.setattr(app_mod.time, "sleep", lambda *_: None)
+    conn = app_mod._open_sync_conn()
+    st = app_mod.fdb.kv_get(conn, "calendar_status")
+    assert st["needs_auth"] is True
+    assert st["last_sync"] == "2026-08-10T09:00:00-07:00"
+    assert st["error_since"] == expect_since
+
+
+def test_turning_off_a_chore_done_today_takes_it_off_today(client, app_mod):
+    pid = _mk_person(client, "Ana")
+    cid = client.post("/api/admin/chores", json={"title": "Dishes", "schedule_kind": "daily",
+        "assign_kind": "fixed", "fixed_person_id": pid}).json()["id"]
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    assert client.patch(f"/api/admin/chores/{cid}", json={"active": False}).status_code == 200
+    assert cid not in {c["id"] for c in _today_chores(client, pid)}
+
+
+def test_untick_is_refused_while_the_away_list_cannot_be_read(client, app_mod, monkeypatch):
+    # without the away list the server can't tell a locked row from a normal
+    # one; refuse and let the tap be retried (complete() does the same)
+    pid = _mk_person(client, "Ana")
+    cid = client.post("/api/admin/chores", json={"title": "Dishes", "schedule_kind": "daily",
+        "assign_kind": "fixed", "fixed_person_id": pid}).json()["id"]
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    monkeypatch.setattr(app_mod, "_away_view", lambda c, d: ({}, {"ids": set(), "backup": {}}, False))
+    assert client.delete(f"/api/chores/{cid}/complete").status_code == 503
+    today = app_mod._today().isoformat()
+    assert app_mod.fdb.completion_exists(app_mod._db(), cid, today)
+
