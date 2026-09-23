@@ -101,6 +101,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   panel failed" (or "1 part" for something that is not a panel, like the
   backup badge) in amber until it draws again; hovering names it
   ("Calendar").
+- A failed part of the wall that has no plain name yet is still counted in
+  the header ("1 part failed") and named by its code name, instead of being
+  left out.
 - A full-screen dashboard that scales to fit now re-fits when the phone is
   turned or the window changes size, not just when it opens.
 - A fast double tap on an iCloud reminder no longer ticks and unticks it

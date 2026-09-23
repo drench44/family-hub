@@ -3527,11 +3527,14 @@ function renderStep(name, fn) {
 
 /* The header's connection word for a hub that answered: "live", or
    "live · 1 panel, 2 parts failed" while any render step's latest run threw
-   (the tooltip names them, in step order). */
+   (the tooltip names them, in step order). A failed step missing from
+   RENDER_STEPS still counts, as a part, under its raw name, after the named
+   ones: a forgotten entry must not hide a failure. */
 function paintConnWord() {
   const el = document.getElementById('conn-word');
-  const failed = Object.keys(RENDER_STEPS).filter((k) => renderFailed.has(k));
-  const panels = failed.filter((k) => RENDER_STEPS[k].panel).length;
+  const failed = Object.keys(RENDER_STEPS).filter((k) => renderFailed.has(k))
+    .concat([...renderFailed].filter((k) => !RENDER_STEPS[k]));
+  const panels = failed.filter((k) => RENDER_STEPS[k] && RENDER_STEPS[k].panel).length;
   const parts = failed.length - panels;
   const counts = [];
   if (panels) counts.push(`${panels} panel${panels === 1 ? '' : 's'}`);
@@ -3539,7 +3542,7 @@ function paintConnWord() {
   el.textContent = failed.length ? `live · ${counts.join(', ')} failed` : 'live';
   document.body.dataset.render = failed.length ? 'partial' : 'ok';
   el.title = failed.length
-    ? `Could not draw: ${failed.map((k) => RENDER_STEPS[k].label).join(', ')}. The rest of the wall is up to date.`
+    ? `Could not draw: ${failed.map((k) => (RENDER_STEPS[k] ? RENDER_STEPS[k].label : k)).join(', ')}. The rest of the wall is up to date.`
     : '';
 }
 
