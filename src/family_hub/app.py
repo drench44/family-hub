@@ -941,7 +941,15 @@ async def health_full():
     The deploy gate (homelab-deploy, in the garage overlay) reads it. Always
     200: a report, not a liveness probe."""
     now = time.time()
-    local = await asyncio.to_thread(_health_full_local)
+    try:
+        local = await asyncio.to_thread(_health_full_local)
+    except Exception as e:     # a bug here must be a named problem, not a 500
+        log.exception("health/full: reading the database and files crashed")
+        local = {"db_ok": False, "db_error": f"health check crashed: {type(e).__name__}: {e}",
+                 "config_now": deep_health.file_sha256(CONFIG_PATH),
+                 "google_token": deep_health.token_file_present(TOKEN_PATH),
+                 "on": {i["id"] for i in _available_only()},
+                 "cal_status": {}, "caldav_status": {}, "backup": None}
     on = local["on"]
     avail = {i["id"] for i in _available_only()}
 
@@ -952,11 +960,24 @@ async def health_full():
     climate_on = "climate" in on and not DEMO
     fleet_on = "fleet" in on and not DEMO
     cams_on = "cameras" in on and not DEMO and bool(_fetch_cfg.go2rtc_base)
-    weather, climate, fleet, (streams, streams_err) = await asyncio.gather(
+    results = await asyncio.gather(
         tiles.weather_tile(_http, cfg) if weather_on else _skip(),
         tiles.climate_tile(_http, cfg) if climate_on else _skip(),
         tiles.fleet_tile(_http, cfg) if fleet_on else _skip(),
-        _go2rtc_streams() if cams_on else asyncio.sleep(0, (None, None)))
+        _go2rtc_streams() if cams_on else asyncio.sleep(0, (None, None)),
+        return_exceptions=True)
+    # A tile that RAISES (fleet_tile does on purpose for a build bug) becomes
+    # that source's named error in the report instead of a 500 with no reason.
+    for name, r in zip(("weather", "climate", "fleet", "cameras"), results):
+        if isinstance(r, BaseException):
+            log.error("health/full: %s check crashed", name, exc_info=r)
+            tiles._note_error(name, f"health check crashed: {type(r).__name__}: {r}")
+    weather, climate, fleet = [r if isinstance(r, dict) else {"available": False}
+                               for r in results[:3]]
+    if isinstance(results[3], BaseException):
+        streams, streams_err = None, f"health check crashed: {type(results[3]).__name__}: {results[3]}"
+    else:
+        streams, streams_err = results[3]
 
     has_google = any(c.get("kind", "google") == "google" for c in cfg.calendars or [])
     google_on = bool(cfg.calendars) and ("google_calendar" in on or "ics_calendar" in on)
