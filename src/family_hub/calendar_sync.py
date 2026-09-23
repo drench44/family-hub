@@ -23,6 +23,22 @@ log = logging.getLogger("family_hub.calendar")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
+def _mark_error_since(status: dict, prior: dict, now: dt.datetime) -> None:
+    """Carry the start of a run of NON-auth errors across ticks, so the wall can
+    wait out a brief Google/network hiccup instead of flashing "sync hit a snag"
+    on the first failed fetch (app._calendar_status_agg reads it). An auth
+    failure is surfaced at once and a clean sync clears the clock."""
+    if status.get("ok") or status.get("needs_auth"):
+        return
+    since = prior.get("error_since")
+    if not since and prior.get("ok") is False and not prior.get("needs_auth"):
+        # an error that was already running before this clock existed (the
+        # first sync after deploy, or a status written by another path) is
+        # dated from the last good sync, not restarted at now
+        since = prior.get("last_sync")
+    status["error_since"] = since or now.isoformat()
+
+
 # How long to keep a source's last-good events after it starts returning a
 # valid-but-empty result, before accepting the emptiness and letting the cache
 # clear. Long enough to ride out a maintenance window; short enough that a
@@ -34,19 +50,75 @@ def _is_auth_error(exc) -> bool:
     """True if the exception (or its cause chain) is a Google auth/refresh
     failure — i.e. the saved token was revoked/expired and re-authorization is
     required, as distinct from a transient network/quota error. Matched by
-    class name so this module still imports without the google libraries."""
+    class name so this module still imports without the google libraries.
+
+    google-auth raises RefreshError for BOTH a revoked token and an outage at
+    Google's token server (5xx, "internal_failure"); it marks the second kind
+    `retryable`. An outage must not ask the family to reconnect a sign-in that
+    is fine, so a retryable RefreshError is not an auth error."""
     e, seen = exc, 0
     while e is not None and seen < 10:
-        if type(e).__name__ in ("RefreshError", "DefaultCredentialsError"):
+        name = type(e).__name__
+        if name == "RefreshError" and getattr(e, "retryable", False):
+            return False
+        if name in ("RefreshError", "DefaultCredentialsError"):
             return True
         e = e.__cause__ or e.__context__
         seen += 1
     return False
 
 
-def normalize_event(item: dict, calendar_id: str) -> dict | None:
-    """Google API event resource -> flat row, or None if it should be dropped."""
+# Google event types that are not events the family should see on the wall:
+# a work-location marker and a focus-time block. Out-of-office is kept (it
+# says someone is away).
+_HIDDEN_EVENT_TYPES = {"workingLocation", "focusTime"}
+
+
+_BAD_TIMES_WARNED: set = set()
+
+
+def _local_iso(value: str, tz) -> str:
+    """An ISO timestamp in the house time zone. Google and ICS feeds carry the
+    SOURCE calendar's offset (a calendar set to a fixed -07:00 keeps -07:00
+    through November, so its 2:45 class read 3:45 on the wall after the clocks
+    changed; review, 2026-09-22). The wall reads the date and clock time
+    straight off this text, so it must already be local. A floating (naive)
+    time has no zone to convert and is left as written."""
+    if tz is None:
+        return value
+    try:
+        t = dt.datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        if value not in _BAD_TIMES_WARNED:      # once per value, not every sync
+            _BAD_TIMES_WARNED.add(value)
+            log.warning("event time %r did not parse; left as sent", value)
+        return value
+    if t.tzinfo is None:
+        return value
+    return t.astimezone(tz).isoformat()
+
+
+def intended_drop(item: dict) -> bool:
+    """A Google item we drop on purpose (cancelled, declined, a non-event
+    type), as opposed to one we could not read. Only these count toward "the
+    calendar answered" in sync_once's empty guard, so a feed that suddenly
+    sends only malformed items still reads as suspicious."""
+    return (item.get("status") == "cancelled"
+            or item.get("eventType") in _HIDDEN_EVENT_TYPES
+            or _declined_by_me(item))
+
+
+def _declined_by_me(item: dict) -> bool:
+    return any(a.get("self") and a.get("responseStatus") == "declined"
+               for a in item.get("attendees") or [])
+
+
+def normalize_event(item: dict, calendar_id: str, tz=None) -> dict | None:
+    """Google API event resource -> flat row, or None if it should be dropped.
+    `tz` (the house zone) converts timed events; None leaves them as sent."""
     if item.get("status") == "cancelled":
+        return None
+    if item.get("eventType") in _HIDDEN_EVENT_TYPES or _declined_by_me(item):
         return None
     start = item.get("start") or {}
     end = item.get("end") or {}
@@ -65,8 +137,8 @@ def normalize_event(item: dict, calendar_id: str) -> dict | None:
     if "dateTime" in start:  # timed
         return {
             "id": item["id"], "calendar_id": calendar_id, "title": title,
-            "start_ts": start["dateTime"],
-            "end_ts": end.get("dateTime", start["dateTime"]),
+            "start_ts": _local_iso(start["dateTime"], tz),
+            "end_ts": _local_iso(end.get("dateTime", start["dateTime"]), tz),
             "all_day": 0, "updated": item.get("updated"), **details,
         }
     return None  # missing start
@@ -91,8 +163,13 @@ def _ics_text(comp, key: str) -> str:
     return str(v) if v is not None else ""
 
 
-def normalize_ics_event(comp, calendar_id: str) -> dict | None:
-    """One (already recurrence-expanded) VEVENT -> flat row, or None."""
+def normalize_ics_event(comp, calendar_id: str, tz=None) -> dict | None:
+    """One (already recurrence-expanded) VEVENT -> flat row, or None.
+    `tz` (the house zone) converts timed events; None leaves them as sent."""
+    # A cancelled event, or one cancelled occurrence of a recurring one (an
+    # override carrying STATUS:CANCELLED), is not on the calendar.
+    if _ics_text(comp, "STATUS").upper() == "CANCELLED":
+        return None
     start = comp.decoded("DTSTART", None)
     if start is None:
         return None
@@ -101,7 +178,8 @@ def normalize_ics_event(comp, calendar_id: str) -> dict | None:
     if isinstance(start, dt.datetime):
         all_day = 0
         end_v = end if isinstance(end, dt.datetime) else start
-        start_ts, end_ts = start.isoformat(), end_v.isoformat()
+        start_ts = _local_iso(start.isoformat(), tz)
+        end_ts = _local_iso(end_v.isoformat(), tz)
     else:  # date-only = all-day; ICS DTEND is exclusive, like Google's
         all_day = 1
         end_v = end if isinstance(end, dt.date) else start + dt.timedelta(days=1)
@@ -117,17 +195,27 @@ def normalize_ics_event(comp, calendar_id: str) -> dict | None:
 
 
 def ics_events(data: bytes, calendar_id: str,
-               lo: dt.date, hi: dt.date) -> list[dict]:
+               lo: dt.date, hi: dt.date, tz=None,
+               stats: dict | None = None) -> list[dict]:
     """Parse an ICS document and expand recurrences over [lo, hi] inclusive
-    (the library's `between` end bound is exclusive for dates)."""
+    (the library's `between` end bound is exclusive for dates). `stats`, when
+    given, receives {"raw": n}: how many occurrences the feed returned that were
+    either kept or dropped on purpose (cancelled); an unreadable one does not
+    count (see sync_once's empty guard)."""
     import icalendar
     import recurring_ical_events
     cal = icalendar.Calendar.from_ical(data)
     out = []
+    answered = 0
     for comp in recurring_ical_events.of(cal).between(lo, hi + dt.timedelta(days=1)):
-        ev = normalize_ics_event(comp, calendar_id)
+        ev = normalize_ics_event(comp, calendar_id, tz)
         if ev:
             out.append(ev)
+            answered += 1
+        elif _ics_text(comp, "STATUS").upper() == "CANCELLED":
+            answered += 1                      # dropped on purpose
+    if stats is not None:
+        stats["raw"] = answered
     return out
 
 
@@ -263,6 +351,12 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
         events: list[dict] = []
         errors: list[str] = []
         failed_ids: list[str] = []
+        # Calendars that answered with at least one item, even if every item
+        # was then filtered out (declined, cancelled, working-location). The
+        # empty guard below must not read those as a suspicious empty feed:
+        # it kept the just-declined event for a day and raised a false "snag"
+        # (review, 2026-09-22).
+        answered_ids: set = set()
         needs_auth = False
 
         if google_cals:
@@ -283,10 +377,23 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                 lo, hi = _rfc3339(lo_dt), _rfc3339(hi_dt)
                 for cal in google_cals:
                     try:
-                        for item in client.fetch_events(cal["id"], lo, hi):
-                            ev = normalize_event(item, cal["id"])
+                        items = client.fetch_events(cal["id"], lo, hi)
+                        kept = intended = 0
+                        for item in items:
+                            ev = normalize_event(item, cal["id"], now.tzinfo)
                             if ev:
                                 events.append(ev)
+                                kept += 1
+                            elif intended_drop(item):
+                                intended += 1
+                            else:
+                                log.warning("%s: an event could not be read (no start): %s",
+                                            cal.get("label", cal["id"]), item.get("id"))
+                        if kept or intended:
+                            answered_ids.add(cal["id"])
+                        if intended:
+                            log.debug("%s: %d events not shown (cancelled, declined, "
+                                      "or not an event)", cal.get("label", cal["id"]), intended)
                     except Exception as e:
                         errors.append(f"{cal.get('label', cal['id'])}: {e}")
                         failed_ids.append(cal["id"])
@@ -296,8 +403,12 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
         fetcher = ics_fetch or fetch_ics
         for cal in ics_cals:
             try:
+                stats: dict = {}
                 events.extend(ics_events(
-                    fetcher(cal["url"]), cal["id"], lo_dt.date(), hi_dt.date()))
+                    fetcher(cal["url"]), cal["id"], lo_dt.date(), hi_dt.date(),
+                    now.tzinfo, stats))
+                if stats.get("raw"):
+                    answered_ids.add(cal["id"])
             except Exception as e:
                 errors.append(f"{cal.get('label', cal['id'])}: {e}")
                 failed_ids.append(cal["id"])
@@ -314,7 +425,7 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
         # CONTINUOUS emptiness (rides out maintenance windows), after which a
         # genuinely-emptied calendar is finally allowed to clear instead of
         # showing stale events forever. Per-source "empty since" is tracked in kv.
-        synced_ids = {e["calendar_id"] for e in events}
+        synced_ids = {e["calendar_id"] for e in events} | answered_ids
         cached_ids = fdb.event_calendar_ids(conn)
         empty_since = fdb.kv_get(conn, "calendar_empty_since") or {}
         suspicious_empty = []
@@ -371,6 +482,7 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                       "last_sync": prior.get("last_sync")}
             if needs_auth:
                 status["needs_auth"] = True
+            _mark_error_since(status, prior, now)
             fdb.kv_set(conn, "calendar_status", status)
             return status
         fdb.replace_events(conn, events, keep_ids=keep_ids)
@@ -397,11 +509,13 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                         "to": hi_dt.date().isoformat()})
         if needs_auth:
             status["needs_auth"] = True
+        _mark_error_since(status, prior, now)
         fdb.kv_set(conn, "calendar_status", status)
         return status
     except Exception as e:  # never kill the caller / sync thread
         log.exception("sync_once failed")
         status = {"ok": False, "error": str(e),
                   "last_sync": prior.get("last_sync")}
+        _mark_error_since(status, prior, now)
         fdb.kv_set(conn, "calendar_status", status)
         return status

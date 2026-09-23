@@ -702,6 +702,30 @@ function buildChorePayload(f) {
   };
 }
 
+/* Active chores that nobody can do: a fixed chore whose owner was deleted or
+   turned off, or a rotation with no active member left. They appear on no
+   person card, so from the wall they simply vanished (review, 2026-09-22).
+   The chores edit mode lists them with an Edit button to reassign. Pure. */
+function unassignedChores(chores, people) {
+  const active = new Set((people || []).filter((p) => p.active).map((p) => p.id));
+  return (chores || []).filter((ch) => {
+    if (!ch.active) return false;
+    if (ch.assign_kind === 'fixed') return !active.has(ch.fixed_person_id);
+    return !(ch.rotation_order || []).some((pid) => active.has(pid));
+  });
+}
+
+function unassignedChoresHtml(list) {
+  if (!list || !list.length) return '';
+  return `<div class="padmin padmin-unassigned">`
+    + `<div class="padmin-head"><span class="padmin-head-label">No one to do these</span></div>`
+    + list.map((ch) => `<div class="padmin-row">`
+      + `<span class="padmin-name">${escapeHtml(ch.icon ? `${ch.icon} ${ch.title}` : ch.title)}</span>`
+      + `<button class="padmin-btn" type="button" data-edit-chore="${ch.id}">Reassign</button>`
+      + `</div>`).join('')
+    + `</div>`;
+}
+
 function choreToModel(ch) {
   const days = new Set();
   for (let i = 0; i < 7; i++) if ((ch.days_mask >> i) & 1) days.add(i);
@@ -1069,12 +1093,28 @@ async function attemptToggle(id, done, date) {
         body: JSON.stringify(date ? { date } : {}),
       });
     }
+    attemptToggle.lastError = '';
     return true;
   } catch (e) {
-    // the caller only shows a generic toast; keep the server's reason findable
+    // keep the server's reason findable, and readable by the caller
+    // (choreToggleMessage) so a refusal that can never succeed isn't told
+    // "tap again"
     console.warn('chore toggle failed:', e && e.message);
+    attemptToggle.lastError = (e && e.message) || '';
     return false;
   }
+}
+attemptToggle.lastError = '';
+
+/* The toast for a refused chore tap. 'stays done' matches the detail
+   app.uncomplete sends (409) for a chore finished before it came off today's
+   plan: it is locked, so "tap again" would be a lie. Pure for tests. */
+function choreToggleMessage(error, dayEnded) {
+  if (dayEnded) return 'That day has ended, so it can’t be changed now.';
+  if (String(error || '').includes('stays done')) {
+    return 'That one was already finished, so it stays done.';
+  }
+  return todoFailMessage('');   // the shared generic "couldn't save" copy
 }
 
 /* Attempt a to-do write (add / move / complete / delete); resolves to

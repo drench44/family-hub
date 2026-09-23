@@ -476,6 +476,8 @@ function choreRowHtml(ch, firstName, opts = {}) {
   const body = `<span class="chore-check">✓</span>`
     + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}${covering}</span>`;
   if (readonly) return `<div class="${cls}">${body}</div>`;   // past/future: look, don't touch
+  // finished earlier, then paused or edited off today: stays done, not tappable
+  if (ch.locked && !editing) return `<div class="${cls} locked" title="Finished before it came off today's plan">${body}</div>`;
   // edit mode: the tap opens the editor (Task 5), it does NOT complete the
   // chore — so the row carries data-edit-chore, never data-chore. The trash
   // control is a plain <span> (not a nested <button>, which is invalid inside a
@@ -605,11 +607,15 @@ async function renderChoresFull(prefetched) {
   // person cards still paint instantly on the first pass.
   let peopleAdmin = '';
   if (editing) {
-    if (choreAdminPeople) peopleAdmin = peopleAdminHtml(choreAdminPeople, choreAdminAway);
+    if (choreAdminPeople) {
+      peopleAdmin = unassignedChoresHtml(unassignedChores(choreAdminChores, choreAdminPeople))
+        + peopleAdminHtml(choreAdminPeople, choreAdminAway);
+    }
     else if (choreAdminError) peopleAdmin = `<div class="cal-empty">couldn’t load people — is the hub reachable? Tap Done, then Edit to retry.</div>`;
     else ensurePeopleThenRerender();
   } else {
     choreAdminPeople = null;   // drop stale cache when leaving edit
+    choreAdminChores = null;
     choreAdminAway = null;
     choreAdminReminderLists = [];
     choreAdminError = false;
@@ -636,6 +642,7 @@ async function ensurePeopleThenRerender() {
   try {
     const st = await j('/api/admin/state');
     choreAdminPeople = st.people;
+    choreAdminChores = st.chores || [];
     choreAdminAway = st.away_periods || [];
     // The iCloud VTODO lists a person can mirror to (empty until iCloud is
     // connected + its reminder lists have synced). Cached alongside people so
@@ -659,6 +666,7 @@ async function ensurePeopleThenRerender() {
    failed load so the section shows a visible note instead of vanishing
    silently. */
 let choreAdminPeople = null;
+let choreAdminChores = null;     // full chore records from /api/admin/state, same cache lifecycle
 let choreAdminAway = null;       // away_periods from /api/admin/state, same cache lifecycle
 let choreAdminReminderLists = [];   // iCloud lists to map people to (from /api/admin/state)
 let choreAdminError = false;
@@ -3554,9 +3562,8 @@ async function toggleChore(id, done) {
   // A refused tap on a day that has since rolled over will never succeed on
   // retry, so don't tell anyone to tap again: say the day has ended.
   if (!ok) {
-    showToast(shown && data_date && data_date !== shown
-      ? 'That day has ended, so it can’t be changed now.'
-      : 'Couldn’t save — check the hub and tap again.');
+    showToast(choreToggleMessage(attemptToggle.lastError,
+      Boolean(shown && data_date && data_date !== shown)));
   }
   // keep the full-screen chores view in step when it's open on today
   if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
@@ -3582,6 +3589,10 @@ function closeChoreEditor() {
    keep going. */
 async function refreshChoresAfterEdit() {
   closeChoreEditor();
+  // the "No one to do these" list reads the cached chore records: refetch so
+  // a just-reassigned chore leaves it
+  choreAdminPeople = null;
+  choreAdminChores = null;
   await poll();
   if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
 }
@@ -3648,6 +3659,7 @@ async function openChoreEditor(seed) {
    activate shows there too), and repaint the chores view staying in edit. */
 async function refreshPeopleAdmin() {
   choreAdminPeople = null;
+  choreAdminChores = null;
   choreAdminAway = null;
   awayOpenFor = null;
   await poll();

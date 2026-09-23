@@ -168,10 +168,26 @@ def reconcile_completions(conn, now: dt.datetime) -> int:
     if not rows:
         return 0
     owners = _OwnerResolver(conn, {m["date"] for m in rows})
+    today = now.date().isoformat()
     for m in rows:
         try:      # isolate per row so one poison object can't stall all streaks
             obj = fdb.get_cal_object(conn, m["cal_object_id"])
             if not obj or "STATUS:COMPLETED" not in (obj.get("raw_ics") or ""):
+                continue
+            if m["date"] > today:
+                # The phone mirrors a few days ahead. A future day ticked there
+                # is REFUSED, like the wall refuses it: recording it (even
+                # later) would make that day start already done. Reopen the
+                # reminder so the phone shows the same thing (review,
+                # 2026-09-22).
+                reopened = remlogic.set_completed(
+                    obj["raw_ics"], False, now.astimezone(dt.timezone.utc)
+                    if now.tzinfo else now.replace(tzinfo=dt.timezone.utc))
+                fdb.queue_cal_object_update(
+                    conn, m["cal_object_id"], reopened, obj.get("summary", ""),
+                    dt.datetime.now(dt.timezone.utc).isoformat())
+                log.info("chore %s: a future day (%s) was ticked on the phone; "
+                         "reopened it", m["chore_id"], m["date"])
                 continue
             if not fdb.completion_exists(conn, m["chore_id"], m["date"]):
                 pid = owners.owner_of(m["chore_id"], m["date"], m["person_id"])

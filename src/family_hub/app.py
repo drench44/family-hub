@@ -384,6 +384,28 @@ GOOGLE_EVENT_COLORS = {
 }
 
 
+# A Google/ICS sync error is held back from the wall this long, while a
+# previous good sync's events are still showing: a one-tick network or Google
+# 5xx blip used to flash "Calendar sync hit a snag" on the first failure
+# (review, 2026-09-22). iCloud has its own, longer hold (caldav_sync).
+CALENDAR_ERROR_GRACE_MIN = 60
+
+
+def _google_status_for_wall(s: dict, now: dt.datetime) -> dict:
+    """The Google/ICS status as the wall should read it: ok during the grace
+    window of a fresh non-auth error, when there is a last good sync to show."""
+    if s.get("ok") or s.get("needs_auth") or not s.get("last_sync"):
+        return s
+    since = s.get("error_since")
+    if not since:
+        return s
+    try:
+        age_min = (now - dt.datetime.fromisoformat(since)).total_seconds() / 60.0
+    except (TypeError, ValueError):
+        return s
+    return {**s, "ok": True} if age_min < CALENDAR_ERROR_GRACE_MIN else s
+
+
 def _calendar_status_agg(c) -> dict:
     """Aggregate calendar health across every ENABLED source (Google/ICS + iCloud
     CalDAV), so the wall's banner reflects whether ANY calendar is connected, not
@@ -393,8 +415,9 @@ def _calendar_status_agg(c) -> dict:
     statuses = []
     if cfg.calendars and (_integration_on(c, "google_calendar")
                           or _integration_on(c, "ics_calendar")):
-        statuses.append(fdb.kv_get(c, "calendar_status")
-                        or {"ok": False, "error": "not configured"})
+        statuses.append(_google_status_for_wall(
+            fdb.kv_get(c, "calendar_status") or {"ok": False, "error": "not configured"},
+            _now_local()))
     if _integration_on(c, "icloud_caldav"):
         statuses.append(fdb.kv_get(c, "caldav_status") or {"ok": False})
     if not statuses:
@@ -916,6 +939,42 @@ def diag_viewport_recent():
     return {"recent": list(_VIEWPORT_DIAG), "reloads": list(_VIEWPORT_RELOADS)}
 
 
+def _keep_done_rows(c, d_str: str, rows: list[dict]) -> list[dict]:
+    """Today's plan, with every chore ALREADY checked off today kept exactly as
+    it was served when it was done. Re-resolving today after the fact (someone
+    paused, a chore's days edited) must not erase finished work: on 2026-08-26
+    thirteen morning check-offs vanished from that day when "Pause everyone"
+    started, and on 09-12 a Saturday check-off was dropped when the chore was
+    edited to Fridays (review, 2026-09-22).
+
+    Only a done chore the new plan DROPS is kept. A done chore that is still
+    in the plan follows it, even to a new owner: a returning owner (or a backup
+    taking over mid-day) must own that finished row so their streak counts it
+    (test_return_mid_day_keeps_the_owners_streak)."""
+    locked = _locked_done_ids(c, d_str, {r["chore_id"] for r in rows})
+    if not locked:
+        return rows
+    served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)}
+    # Kept rows are LOCKED: shown done, not tappable, and uncomplete() refuses
+    # them (same helper). Unticking one would drop it from today with no way
+    # to tick it back (it is no longer due, or its owner is paused).
+    return rows + [{**served[cid], "locked": True} for cid in sorted(locked)]
+
+
+def _locked_done_ids(c, d_str: str, planned: set) -> set:
+    """Chores done on ``d_str`` that the plan no longer has, but that were
+    served (frozen) that day and still exist: the rows _keep_done_rows keeps
+    and uncomplete() refuses. One rule for both, so the wall never shows a
+    row as tappable that the server then refuses, or the reverse. A chore
+    that was DELETED or turned off is not kept (db.delete_chore)."""
+    done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
+    if not done - planned:
+        return set()
+    live = {ch["id"] for ch in fdb.list_chores(c)}
+    served = {r["chore_id"] for r in fdb.day_log(c, d_str)}
+    return (done - planned) & live & served
+
+
 def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
     """Write the day's live-resolved plan into the occurrence log — the moment
     history becomes frozen. Skips the write when the frozen rows already match,
@@ -978,6 +1037,8 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         rows = fdb.day_log(c, d_str)
     else:
         rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
+        if d == today:
+            rows = _keep_done_rows(c, d_str, rows)
         # Only freeze a plan built WITH the away overlay. A degraded build
         # treats everyone as present, and the log is permanent history: it
         # would record the wrong owner for good. The next healthy serve
@@ -1202,6 +1263,10 @@ def complete(chore_id: int, body: CompleteBody | None = None):
     today = _today()
     if abs((d - today).days) > 366:
         raise HTTPException(422, "date out of range")
+    if d > today:
+        # The wall shows future days read-only; a future check-off would make
+        # that day start already done (review, 2026-09-22).
+        raise HTTPException(422, "can't check off a day that hasn't come yet")
     person_id = body.person_id
     if d < today:
         # Frozen day: the occurrence log is the truth about what occurred and
@@ -1263,6 +1328,11 @@ def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
         if d < _today():
             row = fdb.log_row(c, chore_id, date_str)
             return row["person_id"] if row else None
+        if d == _today() and fdb.completion_exists(c, chore_id, date_str):
+            # a chore done today is kept as it was served (_keep_done_rows)
+            row = fdb.log_row(c, chore_id, date_str)
+            if row is not None:
+                return row["person_id"]
         _, away_view, _ = _away_view(c, d)
         rows = chlogic.plan_rows(fdb.list_chores(c), fdb.list_people(c), d,
                                  away_view)
@@ -1285,6 +1355,18 @@ def uncomplete(chore_id: int, date: str | None = None):
         raise HTTPException(422, "bad date")
     if abs((d - _today()).days) > 366:
         raise HTTPException(422, "date out of range")
+    if d == _today() and fdb.completion_exists(c, chore_id, date_str):
+        _, away_view, away_ok = _away_view(c, d)
+        if not away_ok:
+            # can't tell whether this row is a locked one; same refusal
+            # complete() gives when the away list can't be read
+            raise HTTPException(503, "away status unavailable; retry")
+        planned = {r["chore_id"] for r in chlogic.plan_rows(
+            fdb.list_chores(c), fdb.list_people(c), d, away_view)}
+        if chore_id in _locked_done_ids(c, date_str, planned):
+            # a finished chore kept on the wall after a pause or an edit
+            # (_keep_done_rows): unticking it would lose it for the day
+            raise HTTPException(409, "this chore was finished before it came off today's plan; it stays done")
     # Resolve the current owner BEFORE clearing, so the reopen can't be pushed
     # onto a mirror ledger row that still names the other person (M3).
     owner = _resolved_owner(c, chore_id, date_str)
@@ -1777,6 +1859,17 @@ def _validate_chore(merged: dict) -> None:
         raise HTTPException(422, "pick a person for a fixed chore")
     if merged["assign_kind"] == "rotation" and not merged.get("rotation_order"):
         raise HTTPException(422, "add people to the rotation")
+    # Every assignee must be a real person: an unknown id was accepted and made
+    # the chore invisible on every card (review, 2026-09-22). A turned-off
+    # person is still a person (editing a chore that names one must keep
+    # working); a chore left with no ACTIVE owner shows in the chores edit
+    # mode under "No one to do these". A person listed twice in a rotation is
+    # allowed on purpose (two turns in the cycle).
+    known = {p["id"] for p in fdb.list_people(_db(), include_inactive=True)}
+    ids = ([merged.get("fixed_person_id")] if merged["assign_kind"] == "fixed"
+           else list(merged.get("rotation_order") or []))
+    if any(not isinstance(i, int) or i not in known for i in ids):
+        raise HTTPException(422, "that person doesn't exist")
 
 
 def _person_row(c, pid: int) -> dict:
@@ -3024,9 +3117,15 @@ def _open_sync_conn():
                 # backoff loop would leak one connection per iteration.
                 with contextlib.closing(fdb.connect(DB_PATH)) as sc:
                     prior = fdb.kv_get(sc, "calendar_status") or {}
-                    fdb.kv_set(sc, "calendar_status",
-                               {"ok": False, "error": f"sync startup: {e}",
-                                "last_sync": prior.get("last_sync")})
+                    st = {"ok": False, "error": f"sync startup: {e}",
+                          "last_sync": prior.get("last_sync"),
+                          # keep the running error's clock and a known
+                          # expired sign-in, so neither is reset here
+                          "error_since": prior.get("error_since")
+                          or prior.get("last_sync")}
+                    if prior.get("needs_auth"):
+                        st["needs_auth"] = True
+                    fdb.kv_set(sc, "calendar_status", st)
             except Exception:
                 pass
             time.sleep(backoff)

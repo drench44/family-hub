@@ -1108,7 +1108,10 @@ body {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--dim);
 }
-.cal-title { flex: 1; font-size: 15px; color: var(--ink); }
+/* min-width: 0 lets a flex child shrink below its longest word, and
+   overflow-wrap: anywhere breaks a single very long word (a pasted URL) so it
+   can never push past the row (review, 2026-09-22). */
+.cal-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 15px; color: var(--ink); }
 .cal-day.is-today .cal-title { font-size: 17px; }
 /* a timed event whose end has passed quiets down and strikes through */
 .cal-ev.ended .cal-title {
@@ -1183,7 +1186,10 @@ body {
 }
 .chore-body { flex: 1; display: flex; align-items: center; gap: 8px; }
 .chore-icon { font-size: 17px; }
-.chore-title { font-size: 17px; color: var(--ink); position: relative; }
+/* a chore finished before it came off today's plan (paused, or edited off
+   today): shown done, not tappable (app._keep_done_rows) */
+.chore-row.locked { cursor: default; }
+.chore-title { font-size: 17px; color: var(--ink); position: relative; min-width: 0; overflow-wrap: anywhere; }
 .chore-row.done .chore-title { color: var(--dim); }
 /* the strike sweeps through in their color — one-shot, like the check pop */
 .chore-row.done .chore-title::after {
@@ -1666,7 +1672,10 @@ body.overlay-open { overflow: hidden; }
   border-bottom: 1px solid var(--edge);
 }
 .padmin-row.inactive { opacity: 0.5; }
-.padmin-name { flex: 1; font-weight: 600; font-size: 17px; }
+/* "No one to do these": chores with no active owner, listed above People so
+   they can be reassigned (review, 2026-09-22) */
+.padmin-unassigned .padmin-head-label { color: var(--warn); }
+.padmin-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; font-size: 17px; }
 /* At-a-glance "this person mirrors to an iCloud list" tag — informational, not
    a control (no tap target). Accent pill from tokens so it reads in every
    theme. */
@@ -1944,7 +1953,7 @@ body.overlay-open { overflow: hidden; }
   border-radius: 50%; cursor: pointer;
 }
 .ev-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ev-title { font-size: 26px; font-weight: 600; line-height: 1.25; padding-right: 48px; }
+.ev-title { font-size: 26px; font-weight: 600; line-height: 1.25; padding-right: 48px; overflow-wrap: anywhere; }
 .ev-when { font-family: var(--mono); font-size: 14px; color: var(--dim); margin-top: 8px; }
 .ev-chip {
   display: inline-block; margin-top: 12px;
