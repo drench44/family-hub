@@ -378,11 +378,11 @@ def test_hub_shape_end_to_end(client, app_mod):
     assert panels[1]["full_url"] == "http://climate/"
     cams = hub["links"]["cameras"]
     assert cams[0] == {"src": "cam", "label": "Driveway",
-                       "tile": "http://cam/stream.html?src=cam&mode=webrtc",
-                       "full": "http://cam/stream.html?src=cam_hd",
+                       "tile": "/go2rtc/stream.html?src=cam&mode=webrtc",
+                       "full": "/go2rtc/stream.html?src=cam_hd",
                        "has_hd": True, "hd_src": "cam_hd"}   # distinct 4K twin
     assert cams[1]["src"] == "wyze" and cams[1]["label"] == "Back Yard"
-    assert cams[1]["full"] == "http://cam/stream.html?src=wyze"  # no hd stream
+    assert cams[1]["full"] == "/go2rtc/stream.html?src=wyze"  # no hd stream
     # no distinct HD twin -> the wall won't run the full-screen upgrade
     assert cams[1]["has_hd"] is False and cams[1]["hd_src"] == "wyze"
     # camera_page (the Cameras-tab 2x2 grid) is unset in this config, so it
@@ -1385,8 +1385,8 @@ def test_camera_page_grid_is_independent_of_wall_cameras(tmp_path, monkeypatch):
     # a grid-only camera (Mailbox) carries a distinct HD twin for full-screen
     assert links["camera_page"][1] == {
         "src": "cam2", "label": "Mailbox",
-        "tile": "http://cam/stream.html?src=cam2&mode=webrtc",
-        "full": "http://cam/stream.html?src=cam2_hd",
+        "tile": "/go2rtc/stream.html?src=cam2&mode=webrtc",
+        "full": "/go2rtc/stream.html?src=cam2_hd",
         "has_hd": True, "hd_src": "cam2_hd"}
     # a grid cam with no hd twin falls back to its own src for full-screen
     assert links["camera_page"][2]["has_hd"] is False

@@ -68,6 +68,30 @@ _laundry_cache: dict[str, tuple[float, dict]] = {}
 FLEET_TTL = 30.0
 _fleet_cache: dict[str, tuple[float, dict]] = {}
 
+# Camera snapshots (the liveness and HD-readiness probes behind
+# /api/tiles/camera.jpg). Every go2rtc /api/frame.jpeg of an H.264/H.265
+# camera spawns an ffmpeg to turn one keyframe into a JPEG. Every open screen
+# probes every camera at once every 30 s (hub.js CAM_PROBE_MS), again on each
+# Cameras tab or camera page open, and polls an HD twin every 0.7 s while a
+# full-screen view warms up (CAM_HD_POLL_MS), so N screens meant N ffmpegs
+# per camera. go2rtc was OOM-killed six times in ten days (2026-09-13..22),
+# once with ~20 ffmpegs running. So:
+#   - single-flight: concurrent probes of one stream share ONE go2rtc fetch
+#     (keyed by go2rtc base + stream name), however many screens ask;
+#   - a short cache of a GOOD frame: CAMERA_TTL is well under the 30 s probe
+#     cadence, so each screen's own next probe is always a fresh read and a
+#     camera that drops shows offline within one probe cycle, while the burst
+#     of every screen, surface and tab probing together costs one ffmpeg.
+# A failure is shared with the requests that were waiting on it, never
+# cached: the next probe tries again, the same rule as the other tiles.
+CAMERA_TTL = 5.0
+# go2rtc bases that did not answer at all on their last fetch (connection
+# refused: go2rtc itself is down, not a camera). Logged once when that
+# starts and once when it ends, not on every probe.
+_camera_unreachable: set[str] = set()
+_camera_cache: dict[tuple[str, str], tuple[float, tuple[bytes, str]]] = {}
+_camera_inflight: dict[tuple[str, str], asyncio.Task] = {}
+
 
 # The last REAL fetch of each proxied upstream in this process (a cache hit
 # records nothing), for /health/full: {name: {"last_ok", "data_ts",
@@ -133,6 +157,9 @@ def reset_caches() -> None:
     _climate_cache.clear()
     _laundry_cache.clear()
     _fleet_cache.clear()
+    _camera_cache.clear()
+    _camera_inflight.clear()
+    _camera_unreachable.clear()
     _ha_warned.clear()
     _ha_auth_failed.clear()
     _ha_auth_strikes.clear()
@@ -833,13 +860,57 @@ async def laundry_tile(client, cfg, token: str) -> dict:
 
 
 async def camera_snapshot(client, cfg, src: str = "cam") -> tuple[bytes, str] | None:
+    """One JPEG from go2rtc for stream `src`, or None when the camera is not
+    live. Single-flight plus a CAMERA_TTL cache of good frames (see above)."""
+    key = (cfg.go2rtc_base, src)
+    hit = _camera_cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    loop = asyncio.get_running_loop()
+    task = _camera_inflight.get(key)
+    # A task from another event loop (a test's finished asyncio.run) can never
+    # complete here; start a fresh fetch instead of awaiting it forever.
+    if task is None or task.get_loop() is not loop:
+        task = loop.create_task(_camera_fetch(client, cfg, src))
+        _camera_inflight[key] = task
+
+        def _done(t, key=key):
+            if _camera_inflight.get(key) is t:
+                del _camera_inflight[key]
+        task.add_done_callback(_done)
+    # shield: one caller giving up (its browser went away) must not cancel the
+    # fetch the other callers are still waiting on.
+    return await asyncio.shield(task)
+
+
+async def _camera_fetch(client, cfg, src: str) -> tuple[bytes, str] | None:
+    base = cfg.go2rtc_base
     try:
-        r = await client.get(f"{cfg.go2rtc_base}/api/frame.jpeg?src={src}",
-                             timeout=CAMERA_TIMEOUT)
-        r.raise_for_status()
-        if not r.content:
-            return None   # go2rtc 200s with an empty body when the camera
-        return (r.content, "image/jpeg")   # behind it is down — that's offline
-    except Exception as e:
+        r = await client.get(f"{base}/api/frame.jpeg",
+                             params={"src": src}, timeout=CAMERA_TIMEOUT)
+    except httpx.ConnectError as e:
+        # go2rtc itself is not answering: every tile goes offline. Warn once
+        # when that starts (and once when it ends, below).
+        if base not in _camera_unreachable:
+            _camera_unreachable.add(base)
+            log.warning("camera snapshots: go2rtc at %s is not answering: %s", base, e)
+        return None
+    except httpx.HTTPError as e:
         log.debug("camera %s snapshot unavailable: %s", src, e)
         return None
+    if base in _camera_unreachable:
+        _camera_unreachable.discard(base)
+        log.info("camera snapshots: go2rtc at %s is answering again", base)
+    # debug, not warning, for a camera that is off or asleep: it answers this
+    # way (an error status, an empty body) on every probe, and the tile
+    # already shows it as offline. Anything that is not an HTTP error is a
+    # bug and propagates (a 500 from the route, logged by the server).
+    if r.status_code != 200:
+        log.debug("camera %s snapshot unavailable: go2rtc answered %s", src, r.status_code)
+        return None
+    if not r.content:
+        return None   # go2rtc 200s with an empty body when the camera
+                      # behind it is down: that's offline
+    result = (r.content, "image/jpeg")
+    _camera_cache[(cfg.go2rtc_base, src)] = (time.monotonic() + CAMERA_TTL, result)
+    return result

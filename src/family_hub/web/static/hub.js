@@ -1384,7 +1384,7 @@ function initCamGrid() {
   camGridBuilt = true;
 }
 
-/* Live iframes can't report stream health cross-origin, so a snapshot probe
+/* The live player iframe doesn't report stream health, so a snapshot probe
    per camera toggles each tile's live/offline state (shares the same go2rtc
    producer as the stream — cheap). All cameras probe in PARALLEL: the probes
    are independent, and a serial loop made every tile queue behind the slowest

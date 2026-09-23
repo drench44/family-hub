@@ -507,14 +507,26 @@ def test_climate_success_is_cached_within_ttl_no_refetch():
     assert second == first and calls["n"] == seen
 
 
-def test_camera_happy_and_error():
-    jpeg = b"\xff\xd8\xff\xe0jpegbytes"
+JPEG = b"\xff\xd8\xff\xe0jpegbytes"
 
+
+@pytest.fixture
+def fresh_cameras():
+    """The snapshot cache and in-flight table are module state: start and end
+    every camera test empty, so no test sees another's cached frame."""
+    tiles.reset_caches()
+    yield
+    tiles.reset_caches()
+
+
+def test_camera_happy_and_error(fresh_cameras):
     def ok(req):
         assert req.url.path == "/api/frame.jpeg"
-        return httpx.Response(200, content=jpeg)
-    assert run_tile(tiles.camera_snapshot, ok) == (jpeg, "image/jpeg")
+        assert req.url.params["src"] == "cam"
+        return httpx.Response(200, content=JPEG)
+    assert run_tile(tiles.camera_snapshot, ok) == (JPEG, "image/jpeg")
 
+    tiles.reset_caches()
     def boom(req):
         return httpx.Response(502)
     assert run_tile(tiles.camera_snapshot, boom) is None
@@ -524,6 +536,149 @@ def test_camera_happy_and_error():
     def empty(req):
         return httpx.Response(200, content=b"")
     assert run_tile(tiles.camera_snapshot, empty) is None
+
+
+def _gated_go2rtc(responses):
+    """A go2rtc stand-in that holds every request until `gate` is set, so a
+    test can pile up concurrent callers first. `responses` is a list of
+    callables (req -> Response); the Nth request gets the Nth."""
+    state = {"n": 0, "gate": None}
+
+    async def handler(req):
+        i = state["n"]
+        state["n"] += 1
+        await state["gate"].wait()
+        return responses[min(i, len(responses) - 1)](req)
+    return state, handler
+
+
+def _run_concurrent(handler, state, callers=6, src="cam", cancel_first=False):
+    async def run():
+        state["gate"] = asyncio.Event()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            tasks = [asyncio.create_task(tiles.camera_snapshot(c, cfg(), src))
+                     for _ in range(callers)]
+            for _ in range(5):
+                await asyncio.sleep(0)   # let every caller reach the fetch
+            if cancel_first:
+                tasks[0].cancel()
+            state["gate"].set()
+            return await asyncio.gather(*tasks, return_exceptions=True)
+    return asyncio.run(run())
+
+
+def test_camera_concurrent_probes_share_one_go2rtc_fetch(fresh_cameras):
+    """Every screen probes every camera at once; each go2rtc snapshot is an
+    ffmpeg. N screens must cost ONE fetch per camera, not N (go2rtc was
+    OOM-killed with ~20 ffmpegs running, 2026-09-17)."""
+    state, handler = _gated_go2rtc([lambda req: httpx.Response(200, content=JPEG)])
+    results = _run_concurrent(handler, state, callers=6)
+    assert state["n"] == 1
+    assert results == [(JPEG, "image/jpeg")] * 6
+
+
+def test_camera_concurrent_failure_is_shared_and_not_cached(fresh_cameras):
+    state, handler = _gated_go2rtc([lambda req: httpx.Response(502),
+                                    lambda req: httpx.Response(200, content=JPEG)])
+    assert _run_concurrent(handler, state, callers=4) == [None] * 4
+    assert state["n"] == 1
+    # the failure was not cached: the very next probe asks go2rtc again
+    assert _run_concurrent(handler, state, callers=1) == [(JPEG, "image/jpeg")]
+    assert state["n"] == 2
+
+
+def test_camera_one_caller_giving_up_does_not_cancel_the_shared_fetch(fresh_cameras):
+    state, handler = _gated_go2rtc([lambda req: httpx.Response(200, content=JPEG)])
+    results = _run_concurrent(handler, state, callers=3, cancel_first=True)
+    assert isinstance(results[0], asyncio.CancelledError)
+    assert results[1:] == [(JPEG, "image/jpeg")] * 2
+    assert state["n"] == 1
+
+
+def test_camera_streams_are_fetched_separately(fresh_cameras):
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.params["src"])
+        return httpx.Response(200, content=req.url.params["src"].encode())
+
+    async def run():
+        async with make_client(handler) as c:
+            return await asyncio.gather(
+                tiles.camera_snapshot(c, cfg(), "cam"),
+                tiles.camera_snapshot(c, cfg(), "cam_hd"))
+    assert asyncio.run(run()) == [(b"cam", "image/jpeg"), (b"cam_hd", "image/jpeg")]
+    assert sorted(seen) == ["cam", "cam_hd"]
+
+
+def test_camera_good_frame_cached_for_ttl_then_refetched(fresh_cameras, monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tiles.time, "monotonic", lambda: clock["t"])
+    calls = {"n": 0}
+
+    def ok(req):
+        calls["n"] += 1
+        return httpx.Response(200, content=JPEG)
+    assert run_tile(tiles.camera_snapshot, ok) == (JPEG, "image/jpeg")
+    # the next screen's probe inside the TTL is served from the cache
+    clock["t"] += tiles.CAMERA_TTL - 0.1
+    assert run_tile(tiles.camera_snapshot, ok) == (JPEG, "image/jpeg")
+    assert calls["n"] == 1
+    # past the TTL go2rtc is asked again, so a camera that died shows offline
+    clock["t"] += 0.2
+    def down(req):
+        calls["n"] += 1
+        return httpx.Response(200, content=b"")
+    assert run_tile(tiles.camera_snapshot, down) is None
+    assert calls["n"] == 2
+
+
+def test_camera_go2rtc_down_warns_once_and_recovery_is_noted(fresh_cameras, caplog):
+    """go2rtc not answering at all blacks out every tile: one warning when it
+    starts, one line when it ends, not one per probe."""
+    caplog.set_level(logging.DEBUG, logger="family_hub.tiles")
+
+    def refused(req):
+        raise httpx.ConnectError("refused")
+    for _ in range(3):
+        assert run_tile(tiles.camera_snapshot, refused) is None
+    warns = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warns) == 1 and "not answering" in warns[0].getMessage()
+
+    def ok(req):
+        return httpx.Response(200, content=JPEG)
+    assert run_tile(tiles.camera_snapshot, ok) == (JPEG, "image/jpeg")
+    assert any("answering again" in r.getMessage() for r in caplog.records)
+
+
+def test_camera_sleeping_camera_stays_at_debug(fresh_cameras, caplog):
+    caplog.set_level(logging.DEBUG, logger="family_hub.tiles")
+
+    def timeout(req):
+        raise httpx.ReadTimeout("slow")
+    assert run_tile(tiles.camera_snapshot, timeout) is None
+    assert run_tile(tiles.camera_snapshot, lambda req: httpx.Response(500)) is None
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_camera_a_bug_is_not_swallowed_as_offline(fresh_cameras):
+    """Only HTTP failures mean "offline". A bug must surface (a 500 the server
+    logs), not mark every tile offline forever at debug level."""
+    def bug(req):
+        raise KeyError("oops")
+    with pytest.raises(KeyError):
+        run_tile(tiles.camera_snapshot, bug)
+
+
+def test_camera_ttl_is_well_under_the_wall_probe_cadence():
+    """Each screen probes every 30 s (hub.js CAM_PROBE_MS). A cache as long as
+    that would let one screen see its own previous answer again and hide a
+    camera that went offline for a whole extra cycle."""
+    import pathlib
+    import re
+    hub = (pathlib.Path(tiles.__file__).parent / "web" / "static" / "hub.js").read_text()
+    probe_ms = int(re.search(r"const CAM_PROBE_MS = (\d+);", hub).group(1))
+    assert 0 < tiles.CAMERA_TTL <= probe_ms / 1000 / 4
 
 
 # ---------------- laundry (washer/dryer via Home Assistant) ----------------
