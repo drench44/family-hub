@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Enforce that code changes are logged in CHANGELOG.md.
 
-A change under ``src/`` must add a bullet to the ``## [Unreleased]`` section.
+A change under ``src/`` must add a bullet to the ``## [Unreleased]`` section,
+or to a release section it cuts itself (release.py run on the PR branch).
 Docs-only (``*.md``) and test-only (``tests/``) diffs are exempt — the same
 carve-out CLAUDE.md gives the review gate.
 
@@ -26,8 +27,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-_UNRELEASED = re.compile(r"^##\s*\[Unreleased\]\s*$", re.MULTILINE | re.IGNORECASE)
-_NEXT_RELEASE = re.compile(r"^##\s*\[", re.MULTILINE)
 _BULLET = re.compile(r"^[-*]\s+(.+?)\s*$")
 
 _FIX = ("changelog-guard: code changed under src/ but CHANGELOG.md's "
@@ -64,20 +63,36 @@ def is_release(changed_paths: list[str]) -> bool:
     return "VERSION" in paths and paths <= RELEASE_FILES
 
 
-def _unreleased_bullets(changelog: str) -> set[str]:
-    m = _UNRELEASED.search(changelog)
-    if not m:
-        return set()
-    rest = changelog[m.end():]
-    nxt = _NEXT_RELEASE.search(rest)
-    section = rest[:nxt.start()] if nxt else rest
-    return {b.group(1) for line in section.splitlines()
+_SECTION_HEAD = re.compile(r"^##\s*\[([^\]]+)\].*$", re.MULTILINE)
+
+
+def _sections(changelog: str) -> dict[str, set[str]]:
+    """Every `## [name]` section's bullets, keyed by the name in brackets."""
+    heads = list(_SECTION_HEAD.finditer(changelog))
+    out = {}
+    for i, h in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(changelog)
+        out[h.group(1).strip().lower()] = {
+            b.group(1) for line in changelog[h.end():end].splitlines()
             if (b := _BULLET.match(line))}
+    return out
 
 
 def gained_entry(base_changelog: str, head_changelog: str) -> bool:
-    """True iff the [Unreleased] section gained at least one new bullet."""
-    return bool(_unreleased_bullets(head_changelog) - _unreleased_bullets(base_changelog))
+    """True iff the change wrote at least one bullet that was nowhere in the
+    base changelog, under [Unreleased] or under a release section this change
+    added. The second case is the house habit of running release.py on the PR
+    branch before merge: the PR's own bullets then sit in the new dated section
+    and [Unreleased] is empty. Bullets merely rolled from the base's
+    [Unreleased], or copied from an older release, don't count."""
+    base = _sections(base_changelog)
+    seen = set().union(*base.values()) if base else set()
+    head = _sections(head_changelog)
+    fresh = set(head.get("unreleased", set()))
+    for name, bullets in head.items():
+        if name != "unreleased" and name not in base:
+            fresh |= bullets
+    return bool(fresh - seen)
 
 
 # --- git-facing wiring ------------------------------------------------------
