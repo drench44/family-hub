@@ -2217,3 +2217,16 @@ def test_overlays_and_modals_are_announced_as_modal_dialogs():
         assert 'aria-modal="true"' in tag, f"#{el_id} must be aria-modal"
         assert "aria-label=" in tag or "aria-labelledby=" in tag, f"#{el_id} needs a name"
         assert 'tabindex="-1"' in tag, f"#{el_id} needs tabindex=-1 as a focus fallback"
+
+
+def test_long_titles_wrap_instead_of_overflowing():
+    """review 2026-09-22: a very long single word (a pasted URL) ran past the
+    edge of agenda and chore rows. Flex children need min-width: 0 to shrink
+    below their longest word, and overflow-wrap: anywhere to break it."""
+    for sel in (".cal-title", ".chore-title", ".padmin-name"):
+        rule = re.search(r"(?m)^" + re.escape(sel) + r"\s*\{([^}]*)\}", CSS)
+        assert rule, sel
+        assert "min-width: 0" in rule.group(1) and "overflow-wrap: anywhere" in rule.group(1), sel
+    ev = re.search(r"(?m)^\.ev-title\s*\{([^}]*)\}", CSS)
+    assert ev and "overflow-wrap: anywhere" in ev.group(1)
+

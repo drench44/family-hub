@@ -476,6 +476,8 @@ function choreRowHtml(ch, firstName, opts = {}) {
   const body = `<span class="chore-check">✓</span>`
     + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}${covering}</span>`;
   if (readonly) return `<div class="${cls}">${body}</div>`;   // past/future: look, don't touch
+  // finished earlier, then paused or edited off today: stays done, not tappable
+  if (ch.locked && !editing) return `<div class="${cls} locked" title="Finished before it came off today's plan">${body}</div>`;
   // edit mode: the tap opens the editor (Task 5), it does NOT complete the
   // chore — so the row carries data-edit-chore, never data-chore. The trash
   // control is a plain <span> (not a nested <button>, which is invalid inside a

@@ -588,3 +588,79 @@ def test_error_since_is_carried_until_a_clean_sync(conn):
     assert first["error_since"] == later["error_since"] == t0.isoformat()
     ok = cs.sync_once(FakeClient({"cal": [TIMED_FIXTURE]}), conn, cfg, t0 + dt.timedelta(minutes=20))
     assert "error_since" not in ok
+
+
+def test_a_calendar_whose_every_event_was_filtered_is_not_a_suspicious_empty(conn):
+    # review 2026-09-22: declining the only event made the empty guard keep it
+    # for a day and raise a false "snag"
+    item = {"id": "s", "summary": "Soccer",
+            "start": {"dateTime": "2026-09-23T17:00:00-07:00"},
+            "end": {"dateTime": "2026-09-23T18:00:00-07:00"}}
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 9, 22, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [item]}), conn, cfg, t0)
+    assert [e["title"] for e in fdb.list_events(conn)] == ["Soccer"]
+    declined = {**item, "attendees": [{"self": True, "responseStatus": "declined"}]}
+    st = cs.sync_once(FakeClient({"cal": [declined]}), conn, cfg, t0 + dt.timedelta(hours=1))
+    assert st["ok"] is True
+    assert fdb.list_events(conn) == []
+
+
+def test_an_ics_feed_whose_only_event_was_cancelled_is_not_a_suspicious_empty(conn):
+    only = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//t//t//EN
+BEGIN:VEVENT
+UID:gone
+DTSTART:20260910T170000Z
+DTEND:20260910T180000Z
+SUMMARY:Called off
+END:VEVENT
+END:VCALENDAR
+"""
+    cfg = make_cfg(calendars=[{"id": "ic", "label": "Feed", "kind": "ics", "url": "https://x/c.ics"}])
+    t0 = dt.datetime(2026, 9, 1, 9, 0, tzinfo=LA)
+    cs.sync_once(None, conn, cfg, t0, ics_fetch=lambda url: only)
+    assert len(fdb.list_events(conn)) == 1
+    cancelled = only.replace(b"SUMMARY:Called off\n", b"SUMMARY:Called off\nSTATUS:CANCELLED\n")
+    st = cs.sync_once(None, conn, cfg, t0 + dt.timedelta(hours=1), ics_fetch=lambda url: cancelled)
+    assert st["ok"] is True and fdb.list_events(conn) == []
+
+
+def test_error_since_on_a_partial_failure_and_on_the_exception_path(conn, monkeypatch):
+    class Half(FakeClient):
+        def fetch_events(self, cal_id, lo, hi):
+            if cal_id == "bad":
+                raise RuntimeError("503")
+            return super().fetch_events(cal_id, lo, hi)
+
+    cfg = make_cfg(calendars=[{"id": "good", "label": "G", "kind": "google"},
+                              {"id": "bad", "label": "B", "kind": "google"}])
+    t0 = dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA)
+    st = cs.sync_once(Half({"good": [TIMED_FIXTURE]}), conn, cfg, t0)
+    assert st["ok"] is False and st["error_since"] == t0.isoformat()
+
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(cs.fdb, "replace_events", boom)
+    st2 = cs.sync_once(FakeClient({"good": [TIMED_FIXTURE], "bad": [TIMED_FIXTURE]}),
+                       conn, cfg, t0 + dt.timedelta(minutes=5))
+    assert st2["ok"] is False and st2["error_since"] == t0.isoformat()
+
+
+def test_an_error_already_running_is_dated_from_the_last_good_sync(conn):
+    # the first sync after deploy (no error_since yet) must not restart the
+    # clock on an error that has been going on for days
+    fdb.kv_set(conn, "calendar_status", {"ok": False, "error": "503",
+                                         "last_sync": "2026-08-10T09:00:00-07:00"})
+
+    class Boom:
+        def configured(self):
+            return True
+
+        def fetch_events(self, *a):
+            raise RuntimeError("503")
+
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    st = cs.sync_once(Boom(), conn, cfg, dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA))
+    assert st["error_since"] == "2026-08-10T09:00:00-07:00"

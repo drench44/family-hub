@@ -214,7 +214,9 @@ def day_plan(rows: list[dict], people: list[dict], completions) -> list[dict]:
         pid = person["id"]
         prows = [{"id": r["chore_id"], "title": r["title"], "icon": r["icon"],
                   "rot": bool(r["rot"]), "done": r["chore_id"] in completed,
-                  "covering_for": r.get("covering_for")}
+                  "covering_for": r.get("covering_for"),
+                  # finished, then taken off today's plan: shown done, read-only
+                  "locked": bool(r.get("locked"))}
                  for r in rows if r["person_id"] == pid]
         plan.append({
             "person": {"id": pid, "name": person["name"], "color": person["color"]},

@@ -8545,4 +8545,21 @@ test('chores edit mode lists chores nobody can do, and Reassign opens that chore
     'the chore editor opened');
   assert.match(ctx.document.getElementById('chore-editor').querySelector('.f-title').value || '',
     /Walk dog/, 'for the chore that was tapped');
+  // after a save the list is re-read, so a reassigned chore leaves it
+  admin.chores[1].fixed_person_id = 1;
+  await ctx.read('refreshChoresAfterEdit()');
+  await flush();
+  await flush();
+  assert.doesNotMatch(ctx.choresFull.innerHTML, /No one to do these/, 'the reassigned chore left the list');
 });
+
+test('choreRowHtml: a locked (finished, then taken off the plan) row is shown done and not tappable', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.choreRowHtml({ id: 7, title: 'Dishes', done: true, locked: true }, 'Ana');
+  assert.match(html, /class="chore-row done locked"/);
+  assert.doesNotMatch(html, /data-chore=/, 'no toggle on a locked row');
+  // edit mode still opens the editor for it
+  assert.match(sandbox.choreRowHtml({ id: 7, title: 'Dishes', done: true, locked: true }, 'Ana', { editing: true }),
+    /data-edit-chore="7"/);
+});
+
