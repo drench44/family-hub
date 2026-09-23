@@ -67,6 +67,12 @@ def test_go2rtc_image_is_pinned_to_an_exact_release():
     assert re.fullmatch(r"alexxit/go2rtc:\d+\.\d+\.\d+(@sha256:[0-9a-f]{64})?", image), image
 
 
+def _secs(v):
+    m = re.fullmatch(r"(\d+)s", str(v))
+    assert m, v
+    return int(m.group(1))
+
+
 def test_camera_services_have_healthchecks_using_binaries_their_images_ship():
     """go2rtc's image has curl; the wyze-bridge fork's is busybox (wget, no
     curl). Checked in the real images, 2026-09-23."""
@@ -74,11 +80,15 @@ def test_camera_services_have_healthchecks_using_binaries_their_images_ship():
     g = svcs["go2rtc"]["healthcheck"]["test"]
     assert g[:2] == ["CMD", "curl"] and "http://127.0.0.1:1984/api" in g
     w = svcs["wyze-bridge"]["healthcheck"]["test"]
-    assert w[0] == "CMD-SHELL" and w[1].startswith("wget ")
+    assert w[0] == "CMD-SHELL"
     # Both the WebUI and the bridge's internal go2rtc: the internal one can
     # die alone (2026-09-23) and the WebUI keeps answering.
-    assert "http://127.0.0.1:5080/api/health" in w[1]
-    assert "&& wget -q -T 4 -O /dev/null http://127.0.0.1:1984/api" in w[1]
+    assert "wget -q -T 4 -O /dev/null http://127.0.0.1:5080/api/health" in w[1]
+    assert "&& wget -q -T 4 -O /dev/null http://127.0.0.1:1984/api && exit 0" in w[1]
+    # Self-heal only after retries, and the check's own timeout covers them.
+    assert w[1].startswith("for i in 1 2 3; do ") and "sleep 5" in w[1]
+    assert w[1].endswith("kill -TERM 1; exit 1")
+    assert _secs(svcs["wyze-bridge"]["healthcheck"]["timeout"]) >= 3 * (4 + 4 + 5)
     for name in ("go2rtc", "wyze-bridge"):
         hc = svcs[name]["healthcheck"]
         assert hc.get("interval") and hc.get("timeout") and hc.get("retries"), name
