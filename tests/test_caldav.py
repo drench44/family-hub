@@ -2143,6 +2143,29 @@ def test_a_gap_just_over_two_hours_restarts_the_missing_clock(conn):
     assert "caldav:old" not in _collection_ids(conn)
 
 
+@pytest.mark.parametrize("clock", [
+    {"since": "garbage", "last": "garbage"},
+    {"since": 12345, "last": None},
+    # a stamp with a zone against a clock without one can't be compared
+    {"since": "2026-08-16T12:00:00+00:00", "last": "2026-08-17T11:00:00+00:00"},
+    ["not", "a", "clock"],
+], ids=["text", "number", "other-zone", "list"])
+def test_a_garbled_missing_clock_warns_and_restarts(conn, caplog, clock):
+    """A stored clock that can't be read is logged and started over. It
+    never drops the list, and never stops the sync."""
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since", {"caldav:old": clock})
+    now = _NOW + dt.timedelta(hours=1)
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        st = caldav_sync.sync_once(later, conn, _CFG, now)
+    assert st["ok"] is True, st
+    assert "caldav:old" in _collection_ids(conn)
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"] == \
+        {"since": now.isoformat(), "last": now.isoformat()}
+    assert any("caldav_missing_since" in r.getMessage() and "caldav:old" in
+               r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+
+
 class _PutsFail(WriteFake):
     def put_object(self, collection, href, ics, base_etag=None, uid=None):
         raise RuntimeError("connection reset")
