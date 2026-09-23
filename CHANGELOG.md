@@ -170,7 +170,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   are swept.
 - The changelog check no longer lets a code change skip its entry just by
   also bumping `VERSION`; only a diff limited to the files a release writes
-  counts as a release.
+  counts as a release. A pull request that cuts its own release still
+  passes, as long as it wrote new entries into that release.
 - If iCloud does not say whether a collection is a calendar or a reminder
   list, the sync uses what it knew before instead of treating it as a
   calendar for a round.
