@@ -30,7 +30,13 @@ def _mark_error_since(status: dict, prior: dict, now: dt.datetime) -> None:
     failure is surfaced at once and a clean sync clears the clock."""
     if status.get("ok") or status.get("needs_auth"):
         return
-    status["error_since"] = prior.get("error_since") or now.isoformat()
+    since = prior.get("error_since")
+    if not since and prior.get("ok") is False and not prior.get("needs_auth"):
+        # an error that was already running before this clock existed (the
+        # first sync after deploy, or a status written by another path) is
+        # dated from the last good sync, not restarted at now
+        since = prior.get("last_sync")
+    status["error_since"] = since or now.isoformat()
 
 
 # How long to keep a source's last-good events after it starts returning a
@@ -80,6 +86,7 @@ def _local_iso(value: str, tz) -> str:
     try:
         t = dt.datetime.fromisoformat(value)
     except (TypeError, ValueError):
+        log.warning("event time %r did not parse; shown in its source zone", value)
         return value
     if t.tzinfo is None:
         return value
@@ -173,17 +180,24 @@ def normalize_ics_event(comp, calendar_id: str, tz=None) -> dict | None:
 
 
 def ics_events(data: bytes, calendar_id: str,
-               lo: dt.date, hi: dt.date, tz=None) -> list[dict]:
+               lo: dt.date, hi: dt.date, tz=None,
+               stats: dict | None = None) -> list[dict]:
     """Parse an ICS document and expand recurrences over [lo, hi] inclusive
-    (the library's `between` end bound is exclusive for dates)."""
+    (the library's `between` end bound is exclusive for dates). `stats`, when
+    given, receives {"raw": n}: how many occurrences the feed returned before
+    cancelled ones were dropped (see sync_once's empty guard)."""
     import icalendar
     import recurring_ical_events
     cal = icalendar.Calendar.from_ical(data)
     out = []
+    raw = 0
     for comp in recurring_ical_events.of(cal).between(lo, hi + dt.timedelta(days=1)):
+        raw += 1
         ev = normalize_ics_event(comp, calendar_id, tz)
         if ev:
             out.append(ev)
+    if stats is not None:
+        stats["raw"] = raw
     return out
 
 
@@ -319,6 +333,12 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
         events: list[dict] = []
         errors: list[str] = []
         failed_ids: list[str] = []
+        # Calendars that answered with at least one item, even if every item
+        # was then filtered out (declined, cancelled, working-location). The
+        # empty guard below must not read those as a suspicious empty feed:
+        # it kept the just-declined event for a day and raised a false "snag"
+        # (review, 2026-09-22).
+        answered_ids: set = set()
         needs_auth = False
 
         if google_cals:
@@ -339,10 +359,19 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                 lo, hi = _rfc3339(lo_dt), _rfc3339(hi_dt)
                 for cal in google_cals:
                     try:
-                        for item in client.fetch_events(cal["id"], lo, hi):
+                        items = client.fetch_events(cal["id"], lo, hi)
+                        kept = 0
+                        for item in items:
                             ev = normalize_event(item, cal["id"], now.tzinfo)
                             if ev:
                                 events.append(ev)
+                                kept += 1
+                        if items:
+                            answered_ids.add(cal["id"])
+                        if len(items) > kept:
+                            log.info("%s: %d of %d events not shown (cancelled, "
+                                     "declined, or not an event)",
+                                     cal.get("label", cal["id"]), len(items) - kept, len(items))
                     except Exception as e:
                         errors.append(f"{cal.get('label', cal['id'])}: {e}")
                         failed_ids.append(cal["id"])
@@ -352,9 +381,12 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
         fetcher = ics_fetch or fetch_ics
         for cal in ics_cals:
             try:
+                stats: dict = {}
                 events.extend(ics_events(
                     fetcher(cal["url"]), cal["id"], lo_dt.date(), hi_dt.date(),
-                    now.tzinfo))
+                    now.tzinfo, stats))
+                if stats.get("raw"):
+                    answered_ids.add(cal["id"])
             except Exception as e:
                 errors.append(f"{cal.get('label', cal['id'])}: {e}")
                 failed_ids.append(cal["id"])
@@ -371,7 +403,7 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
         # CONTINUOUS emptiness (rides out maintenance windows), after which a
         # genuinely-emptied calendar is finally allowed to clear instead of
         # showing stale events forever. Per-source "empty since" is tracked in kv.
-        synced_ids = {e["calendar_id"] for e in events}
+        synced_ids = {e["calendar_id"] for e in events} | answered_ids
         cached_ids = fdb.event_calendar_ids(conn)
         empty_since = fdb.kv_get(conn, "calendar_empty_since") or {}
         suspicious_empty = []

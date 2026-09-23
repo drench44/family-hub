@@ -32,6 +32,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Very long titles wrap instead of running past the edge of a row.
 - A finished chore that is still due today still moves to whoever now owns
   it, so an owner back from being away keeps their streak.
+- A finished chore kept on the wall after a pause is locked: it stays done
+  and can't be unticked by accident. Deleting a chore still takes it off
+  today, and ticking tomorrow's reminder on the phone no longer marks
+  tomorrow done.
+- Declining the only event in a calendar (or it being cancelled) removes it
+  at once, instead of keeping it for a day with a "sync hit a snag" note.
 
 ## [1.8.0] — 2026-09-22
 
