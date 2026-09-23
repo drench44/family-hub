@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-09-23
+
 ### Security
 - go2rtc's API is no longer published on the LAN. It has no login, and
   `/api/streams` and `/api/config` handed any device on the network every
