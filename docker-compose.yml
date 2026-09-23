@@ -73,10 +73,17 @@ services:
     # go2rtc (127.0.0.1:1984 inside this container) is probed too: on
     # 2026-09-23 it exited 1 s after a recreate, 4.5.0 never relaunched it,
     # and both Wyze tiles were dead while /api/health still said ok.
+    # Self-healing: after 3 failed tries ~5 s apart, the check sends SIGTERM
+    # to PID 1 (the bridge, which shuts down cleanly on it), so the restart
+    # policy brings the whole container back instead of it sitting unhealthy.
+    # An exit from inside counts as a crash, unlike `docker stop`, so
+    # unless-stopped restarts it (checked on the box 2026-09-23). Repeated
+    # restarts show in RestartCount, which the watchdog reads.
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 4 -O /dev/null http://127.0.0.1:5080/api/health && wget -q -T 4 -O /dev/null http://127.0.0.1:1984/api"]
+      test: ["CMD-SHELL", "for i in 1 2 3; do wget -q -T 4 -O /dev/null http://127.0.0.1:5080/api/health && wget -q -T 4 -O /dev/null http://127.0.0.1:1984/api && exit 0; sleep 5; done; kill -TERM 1; exit 1"]
       interval: 30s
-      timeout: 5s
+      # 3 tries x (two 4 s wgets + 5 s sleep) is under 40 s.
+      timeout: 45s
       retries: 3
       start_period: 60s
     environment:
