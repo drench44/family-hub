@@ -45,21 +45,18 @@ webrtc:
   # Your box's LAN IP — browsers connect here for the live WebRTC streams.
   candidates: [ "192.168.1.50:8555" ]
 
-# LOCK DOWN THE API. Out of the box, anyone on your LAN can call go2rtc's API on
-# :1984: read this whole file back from /api/config, rewrite it, and restart
-# go2rtc. go2rtc's own README warns that API access means full access to the
-# box. Only these paths are needed: "/" serves the player page and its scripts
-# that the camera tiles load, /api/ws carries the live stream, the /api/hls/*
-# paths are the player's fallback for phones that can't use the other modes,
-# /api/streams lets the hub's health check see which streams exist, and
-# /api/frame.jpeg is the hub's snapshot probe. The go2rtc web UI still loads,
-# but its config editor and restart stop working.
-#
-# What stays open: GET /api/streams lists each stream's source URL (nothing
-# beyond watching the cameras, which the LAN can already do through the
-# player), and PUT/DELETE on it still add or remove streams and save that to
-# this file (the README uses PUT to add a camera). go2rtc refuses exec:, echo:
-# and expr: sources there, so that can't be used to run commands.
+# LOCK DOWN THE API. The compose file already keeps go2rtc's API (:1984) off
+# the LAN (loopback only; browsers get the player through the hub's /go2rtc/
+# proxy) and mounts this file read-only. This block is the second lock, for
+# anything that can still reach :1984 (the box itself, the compose network):
+# go2rtc's own README warns that API access means full access to the box.
+# Only these paths are needed: "/" serves the player page and its scripts,
+# /api/ws carries the live stream, the /api/hls/* paths are the player's
+# fallback for phones that can't use the other modes, /api/streams lets the
+# hub's health check see which streams exist, and /api/frame.jpeg is the hub's
+# snapshot probe. /api/config, restart, the log and the rest stop answering.
+# GET /api/streams still lists each stream's source URL; go2rtc refuses
+# exec:, echo: and expr: sources on PUT there, so it can't run commands.
 api:
   allow_paths: [ "/", "/api", "/api/ws", "/api/streams", "/api/frame.jpeg",
                  "/api/hls/playlist.m3u8", "/api/hls/segment.ts",
