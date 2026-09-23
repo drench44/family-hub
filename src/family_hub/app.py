@@ -945,15 +945,19 @@ def _keep_done_rows(c, d_str: str, rows: list[dict]) -> list[dict]:
     paused, a chore's days edited) must not erase finished work: on 2026-08-26
     thirteen morning check-offs vanished from that day when "Pause everyone"
     started, and on 09-12 a Saturday check-off was dropped when the chore was
-    edited to Fridays (review, 2026-09-22). Chores not yet done follow the new
-    plan as before."""
+    edited to Fridays (review, 2026-09-22).
+
+    Only a done chore the new plan DROPS is kept. A done chore that is still
+    in the plan follows it, even to a new owner: a returning owner (or a backup
+    taking over mid-day) must own that finished row so their streak counts it
+    (test_return_mid_day_keeps_the_owners_streak)."""
     done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
     if not done:
         return rows
+    planned = {r["chore_id"] for r in rows}
     served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)}
-    kept = [served[cid] for cid in done if cid in served]
-    kept_ids = {r["chore_id"] for r in kept}
-    return [r for r in rows if r["chore_id"] not in kept_ids] + kept
+    kept = [served[cid] for cid in sorted(done - planned) if cid in served]
+    return rows + kept
 
 
 def _freeze_day(c, d_str: str, rows: list[dict]) -> None:

@@ -30,6 +30,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A chore can't be assigned to a person who doesn't exist, and a future
   day can't be checked off.
 - Very long titles wrap instead of running past the edge of a row.
+- A finished chore that is still due today still moves to whoever now owns
+  it, so an owner back from being away keeps their streak.
 
 ## [1.8.0] — 2026-09-22
 
