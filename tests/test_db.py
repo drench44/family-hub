@@ -1019,3 +1019,51 @@ def test_events_overlapping_keeps_spans_that_touch_the_window(conn):
     # the same row shape list_events returns, so the caller is unchanged
     assert got[0] == next(e for e in fdb.list_events(conn)
                           if e["id"] == "running")
+
+
+# --- the SQL completed-reminder filter (_OPEN_VTODO_WHERE) ---------------------
+# It drops completed reminders without parsing them. These pin its edges: it
+# must match only a STATUS:COMPLETED property LINE, in any case, and never a
+# row queued for delete.
+
+def _vtodo_row(conn, uid, body_lines):
+    ics = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\n"
+           f"UID:{uid}\r\nSUMMARY:{uid}\r\n" + "".join(l + "\r\n" for l in body_lines)
+           + "END:VTODO\r\nEND:VCALENDAR\r\n")
+    fdb.upsert_cal_object_synced(conn, {
+        "id": f"caldav:rem/{uid}", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": uid, "href": f"h/{uid}", "etag": "e",
+        "summary": uid, "raw_ics": ics, "sequence": 0, "last_modified": None})
+
+
+def _open_uids(conn):
+    return {o["uid"] for o in fdb.list_open_vtodo_objects(conn)}
+
+
+def test_open_filter_keeps_status_completed_inside_a_description(conn):
+    _vtodo_row(conn, "desc", ["DESCRIPTION:set STATUS:COMPLETED when done",
+                              "STATUS:NEEDS-ACTION"])
+    # a folded long line: the continuation starts with a space, not a property
+    _vtodo_row(conn, "folded", ["DESCRIPTION:a long note that wraps and then",
+                                " STATUS:COMPLETED is part of the note",
+                                "STATUS:NEEDS-ACTION"])
+    assert _open_uids(conn) == {"desc", "folded"}
+    assert fdb.count_open_vtodo_objects(conn) == 2
+
+
+def test_open_filter_hides_a_lowercase_status_completed_line(conn):
+    """RFC 5545 property names and this enumerated value are case-insensitive.
+    iCloud writes them upper case, but the reminder parser reads either case as
+    done, so the filter must too (LIKE ignores ASCII case)."""
+    _vtodo_row(conn, "lower", ["status:completed"])
+    _vtodo_row(conn, "mixed", ["Status:Completed"])
+    _vtodo_row(conn, "open", ["STATUS:NEEDS-ACTION"])
+    assert _open_uids(conn) == {"open"}
+
+
+def test_open_filter_hides_a_row_queued_for_delete(conn):
+    _vtodo_row(conn, "keep", ["STATUS:NEEDS-ACTION"])
+    _vtodo_row(conn, "gone", ["STATUS:NEEDS-ACTION"])
+    assert fdb.queue_cal_object_delete(conn, "caldav:rem/gone", "t1")
+    assert _open_uids(conn) == {"keep"}
+    assert fdb.count_open_vtodo_objects(conn) == 1
