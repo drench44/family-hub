@@ -8517,3 +8517,32 @@ test('Enter on a real calendar row opens its event card (end to end, no stubbed 
   assert.ok(!document.getElementById('ev-modal').classList.contains('hidden'), 'the card opened');
   assert.match(document.getElementById('ev-card').innerHTML, /Dentist/);
 });
+
+/* review 2026-09-22: a chore whose owner was deleted or turned off appeared on
+   no card, so it could not be found or fixed from the wall */
+test('chores edit mode lists chores nobody can do, and Reassign opens that chore', async () => {
+  const admin = {
+    people: [
+      { id: 1, name: 'Sam Rivera', color: '#5BC9F0', active: 1 },
+      { id: 2, name: 'Alex Kim', color: '#8AE0AD', active: 0 },
+    ],
+    chores: [
+      { id: 10, title: 'Feed cat', icon: '🐈', schedule_kind: 'daily', days_mask: 0, active: 1,
+        assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [] },
+      { id: 11, title: 'Walk dog', icon: '', schedule_kind: 'daily', days_mask: 0, active: 1,
+        assign_kind: 'fixed', fixed_person_id: 2, rotation_order: [] },
+    ],
+  };
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  const html = ctx.choresFull.innerHTML;
+  assert.match(html, /No one to do these/);
+  assert.match(html, /Walk dog/);
+  assert.ok(!/padmin-unassigned[\s\S]*Feed cat/.test(html), 'an assigned chore is not listed');
+  ctx.tap('[data-edit-chore="11"]');
+  await flush();                       // openChoreEditor awaits /api/admin/state
+  assert.ok(!ctx.document.getElementById('chore-modal').classList.contains('hidden'),
+    'the chore editor opened');
+  assert.match(ctx.document.getElementById('chore-editor').querySelector('.f-title').value || '',
+    /Walk dog/, 'for the chore that was tapped');
+});

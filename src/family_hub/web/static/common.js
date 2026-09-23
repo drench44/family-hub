@@ -702,6 +702,30 @@ function buildChorePayload(f) {
   };
 }
 
+/* Active chores that nobody can do: a fixed chore whose owner was deleted or
+   turned off, or a rotation with no active member left. They appear on no
+   person card, so from the wall they simply vanished (review, 2026-09-22).
+   The chores edit mode lists them with an Edit button to reassign. Pure. */
+function unassignedChores(chores, people) {
+  const active = new Set((people || []).filter((p) => p.active).map((p) => p.id));
+  return (chores || []).filter((ch) => {
+    if (!ch.active) return false;
+    if (ch.assign_kind === 'fixed') return !active.has(ch.fixed_person_id);
+    return !(ch.rotation_order || []).some((pid) => active.has(pid));
+  });
+}
+
+function unassignedChoresHtml(list) {
+  if (!list || !list.length) return '';
+  return `<div class="padmin padmin-unassigned">`
+    + `<div class="padmin-head"><span class="padmin-head-label">No one to do these</span></div>`
+    + list.map((ch) => `<div class="padmin-row">`
+      + `<span class="padmin-name">${escapeHtml(ch.icon ? `${ch.icon} ${ch.title}` : ch.title)}</span>`
+      + `<button class="padmin-btn" type="button" data-edit-chore="${ch.id}">Reassign</button>`
+      + `</div>`).join('')
+    + `</div>`;
+}
+
 function choreToModel(ch) {
   const days = new Set();
   for (let i = 0; i < 7; i++) if ((ch.days_mask >> i) & 1) days.add(i);
