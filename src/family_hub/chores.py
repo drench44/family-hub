@@ -143,8 +143,10 @@ def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
     way. Chores with no resolvable assignee among ``people`` are omitted.
 
     ``away`` (optional) is ``{"ids": set[int], "backup": {pid: backup_pid |
-    None}}``. Away people fall out of rotations (their turns go to whoever's
-    home). A fixed chore assigned to an away person reassigns to their backup
+    None}}``. In a rotation, only an away person's OWN turn moves: it goes to
+    the next person in the order who is home, tagged ``covering_for=<away
+    pid>``, and everyone else keeps their usual days. (It used to drop the away
+    person and recount, which moved every later turn; review, 2026-09-22.) A fixed chore assigned to an away person reassigns to their backup
     if the backup is present (active and not away), tagging the row
     ``covering_for=<away pid>``; with no available backup the chore pauses
     for the day (row omitted) rather than crashing -- except a one-time
@@ -160,18 +162,29 @@ def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
     for chore in chores:
         if not occurs(chore, d):
             continue
-        # rotations skip away people (fall to whoever's home); fixed returns
+        # Whose turn it naturally is among the people still in the household
+        # (deactivated people do leave the rotation for good). Fixed returns
         # its fixed_person_id regardless.
-        aid = assignee_id(chore, d, present_ids)
+        aid = assignee_id(chore, d, active_ids)
         if aid is None:
             continue
+        rotation_cover = None
+        if chore["assign_kind"] == "rotation" and aid in away_ids:
+            order = [pid for pid in chore["rotation_order"] if pid in active_ids]
+            # the turn's own slot (a person can hold two slots, e.g. laundry)
+            start = occurrences_before(chore, d) % len(order)
+            nxt = next((order[(start + k) % len(order)] for k in range(1, len(order))
+                        if order[(start + k) % len(order)] in present_ids), None)
+            if nxt is None:
+                continue                         # everyone in it is away: pause
+            rotation_cover, aid = aid, nxt
         # An owner who is no longer in the household (deactivated or deleted)
         # drops out BEFORE the away branch: inactive beats away-cover. With the
         # order reversed, deactivating someone who still had an open away period
         # parked their chores on the backup forever.
         if aid not in active_ids:
             continue
-        covering_for = None
+        covering_for = rotation_cover
         if aid in away_ids:                      # only fixed chores reach here
             b = backup.get(aid)
             if b is not None and b in present_ids:
@@ -201,7 +214,9 @@ def day_plan(rows: list[dict], people: list[dict], completions) -> list[dict]:
         pid = person["id"]
         prows = [{"id": r["chore_id"], "title": r["title"], "icon": r["icon"],
                   "rot": bool(r["rot"]), "done": r["chore_id"] in completed,
-                  "covering_for": r.get("covering_for")}
+                  "covering_for": r.get("covering_for"),
+                  # finished, then taken off today's plan: shown done, read-only
+                  "locked": bool(r.get("locked"))}
                  for r in rows if r["person_id"] == pid]
         plan.append({
             "person": {"id": pid, "name": person["name"], "color": person["color"]},
