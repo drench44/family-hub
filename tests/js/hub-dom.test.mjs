@@ -9007,8 +9007,9 @@ test('poll: the failed-panel note counts the latest render and clears when it dr
   await sandbox.poll();
   assert.equal(word(), 'live · 2 panels failed');
   assert.equal(document.body.dataset.render, 'partial', 'drives the warn colour');
-  assert.match(document.getElementById('conn-word').title || '', /renderCalendar/,
-    'the tooltip names what failed');
+  assert.equal(document.getElementById('conn-word').title,
+    'Could not draw: Calendar, Chores. The rest of the wall is up to date.',
+    'the tooltip names what failed in plain words, not code names');
   peopleBroken = false;
   await sandbox.poll();
   assert.equal(word(), 'live · 1 panel failed', 'a step that draws again stops counting');
@@ -9019,13 +9020,53 @@ test('poll: the failed-panel note counts the latest render and clears when it dr
   assert.equal(document.getElementById('conn-word').title || '', '');
 });
 
-test('poll: a failed fetch still marks the wall offline', async () => {
+test('poll: a step that is not a panel is counted as a part, and named plainly', async () => {
   const { document, sandbox } = newHub();
   await flush();
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  sandbox.console = { ...console, error: () => {} };
+  const el = () => document.getElementById('conn-word');
+  let calBroken = false;
+  sandbox.renderCalendar = () => { if (calBroken) throw new Error('bad event'); };
+  sandbox.renderPeople = () => {};
+  sandbox.renderTodoSlot = () => {};
+  sandbox.renderBackup = () => {};
+  sandbox.pruneEvIndex = () => { throw new Error('bad index'); };
+  await sandbox.poll();
+  assert.equal(el().textContent, 'live · 1 part failed', 'not called a panel');
+  assert.equal(el().title, 'Could not draw: Event cleanup. The rest of the wall is up to date.');
+  assert.doesNotMatch(el().title, /pruneEvIndex/);
+  calBroken = true;
+  await sandbox.poll();
+  assert.equal(el().textContent, 'live · 1 panel, 1 part failed', 'panels and parts counted apart');
+  assert.equal(el().title, 'Could not draw: Calendar, Event cleanup. The rest of the wall is up to date.');
+});
+
+test('poll: every render step has a plain name, and every name is a step', () => {
+  const { sandbox } = newHub();
+  const steps = [...hubSrc.matchAll(/renderStep\('(\w+)'/g)].map((m) => m[1]);
+  assert.ok(steps.length >= 10, 'found the render steps');
+  const named = vm.runInContext('Object.keys(RENDER_STEPS)', sandbox);
+  assert.deepEqual([...steps].sort(), [...named].sort(),
+    'a step missing here would never show in the header count');
+});
+
+test('poll: a failed fetch still marks the wall offline and clears the failed-part tooltip', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  sandbox.console = { ...console, error: () => {} };
+  sandbox.renderCalendar = () => { throw new Error('bad event'); };
+  await sandbox.poll();
+  assert.notEqual(document.getElementById('conn-word').title, '', 'a tooltip to clear');
   sandbox.fetch = async () => { throw new Error('down'); };
   await sandbox.poll();
   assert.equal(document.body.dataset.conn, 'down');
   assert.equal(document.getElementById('conn-word').textContent, 'offline');
+  assert.equal(document.getElementById('conn-word').title, '',
+    'offline says nothing about parts it could not draw');
 });
 
 // ---- a "fit" full-screen panel re-scales on resize (audit): it was scaled
