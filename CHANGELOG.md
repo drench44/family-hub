@@ -146,6 +146,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   instead of plain "live" while the part kept showing old data.
 - A reminder marked done with a lower-case status ("completed") now reads
   as done, as the iCloud standard says it should.
+- A chore reminder list that comes back after being gone for a while no
+  longer sends chore reminders for days that have passed. Only the days
+  still ahead are sent, once each.
 
 ## [1.8.1] — 2026-09-22
 

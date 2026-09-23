@@ -597,10 +597,22 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             fdb.upsert_caldav_collection(
                 conn, cid, col.get("comp", "VEVENT"),
                 col.get("name", ""), col.get("color"), now_iso)
-            if col.get("comp") == "VTODO" and \
-                    fdb.unpark_cal_objects(conn, cid, _GONE_REASON):
-                log.info("caldav %s is back in iCloud; its parked wall "
-                         "changes will be sent again", col.get("name") or cid)
+            if col.get("comp") == "VTODO":
+                # Chore reminders never sent before the list went away were
+                # forgotten by the mirror meanwhile. It queues the days still
+                # wanted again this tick (same ids, so never twice); sending
+                # the old ones would bring past days back on the phone.
+                from . import chore_mirror
+                dropped = fdb.drop_untracked_parked_creates(
+                    conn, cid, _GONE_REASON, chore_mirror.UID_PREFIX)
+                if dropped:
+                    log.info("caldav %s is back in iCloud; %d unsent chore "
+                             "reminder(s) the mirror no longer tracks were "
+                             "dropped (it re-queues the days still wanted)",
+                             col.get("name") or cid, dropped)
+                if fdb.unpark_cal_objects(conn, cid, _GONE_REASON):
+                    log.info("caldav %s is back in iCloud; its parked wall "
+                             "changes will be sent again", col.get("name") or cid)
         _drop_gone_lists(conn, discovered, now)
         # Nothing reads VEVENT objects from the store (events render from the
         # events table, and only reminders are written back), so the pull no
