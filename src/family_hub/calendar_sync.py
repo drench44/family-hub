@@ -74,6 +74,9 @@ def _is_auth_error(exc) -> bool:
 _HIDDEN_EVENT_TYPES = {"workingLocation", "focusTime"}
 
 
+_BAD_TIMES_WARNED: set = set()
+
+
 def _local_iso(value: str, tz) -> str:
     """An ISO timestamp in the house time zone. Google and ICS feeds carry the
     SOURCE calendar's offset (a calendar set to a fixed -07:00 keeps -07:00
@@ -86,11 +89,23 @@ def _local_iso(value: str, tz) -> str:
     try:
         t = dt.datetime.fromisoformat(value)
     except (TypeError, ValueError):
-        log.warning("event time %r did not parse; shown in its source zone", value)
+        if value not in _BAD_TIMES_WARNED:      # once per value, not every sync
+            _BAD_TIMES_WARNED.add(value)
+            log.warning("event time %r did not parse; left as sent", value)
         return value
     if t.tzinfo is None:
         return value
     return t.astimezone(tz).isoformat()
+
+
+def intended_drop(item: dict) -> bool:
+    """A Google item we drop on purpose (cancelled, declined, a non-event
+    type), as opposed to one we could not read. Only these count toward "the
+    calendar answered" in sync_once's empty guard, so a feed that suddenly
+    sends only malformed items still reads as suspicious."""
+    return (item.get("status") == "cancelled"
+            or item.get("eventType") in _HIDDEN_EVENT_TYPES
+            or _declined_by_me(item))
 
 
 def _declined_by_me(item: dict) -> bool:
@@ -184,20 +199,23 @@ def ics_events(data: bytes, calendar_id: str,
                stats: dict | None = None) -> list[dict]:
     """Parse an ICS document and expand recurrences over [lo, hi] inclusive
     (the library's `between` end bound is exclusive for dates). `stats`, when
-    given, receives {"raw": n}: how many occurrences the feed returned before
-    cancelled ones were dropped (see sync_once's empty guard)."""
+    given, receives {"raw": n}: how many occurrences the feed returned that were
+    either kept or dropped on purpose (cancelled); an unreadable one does not
+    count (see sync_once's empty guard)."""
     import icalendar
     import recurring_ical_events
     cal = icalendar.Calendar.from_ical(data)
     out = []
-    raw = 0
+    answered = 0
     for comp in recurring_ical_events.of(cal).between(lo, hi + dt.timedelta(days=1)):
-        raw += 1
         ev = normalize_ics_event(comp, calendar_id, tz)
         if ev:
             out.append(ev)
+            answered += 1
+        elif _ics_text(comp, "STATUS").upper() == "CANCELLED":
+            answered += 1                      # dropped on purpose
     if stats is not None:
-        stats["raw"] = raw
+        stats["raw"] = answered
     return out
 
 
@@ -360,18 +378,22 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                 for cal in google_cals:
                     try:
                         items = client.fetch_events(cal["id"], lo, hi)
-                        kept = 0
+                        kept = intended = 0
                         for item in items:
                             ev = normalize_event(item, cal["id"], now.tzinfo)
                             if ev:
                                 events.append(ev)
                                 kept += 1
-                        if items:
+                            elif intended_drop(item):
+                                intended += 1
+                            else:
+                                log.warning("%s: an event could not be read (no start): %s",
+                                            cal.get("label", cal["id"]), item.get("id"))
+                        if kept or intended:
                             answered_ids.add(cal["id"])
-                        if len(items) > kept:
-                            log.info("%s: %d of %d events not shown (cancelled, "
-                                     "declined, or not an event)",
-                                     cal.get("label", cal["id"]), len(items) - kept, len(items))
+                        if intended:
+                            log.debug("%s: %d events not shown (cancelled, declined, "
+                                      "or not an event)", cal.get("label", cal["id"]), intended)
                     except Exception as e:
                         errors.append(f"{cal.get('label', cal['id'])}: {e}")
                         failed_ids.append(cal["id"])

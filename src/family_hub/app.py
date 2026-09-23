@@ -951,20 +951,28 @@ def _keep_done_rows(c, d_str: str, rows: list[dict]) -> list[dict]:
     in the plan follows it, even to a new owner: a returning owner (or a backup
     taking over mid-day) must own that finished row so their streak counts it
     (test_return_mid_day_keeps_the_owners_streak)."""
-    done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
-    if not done:
+    locked = _locked_done_ids(c, d_str, {r["chore_id"] for r in rows})
+    if not locked:
         return rows
-    planned = {r["chore_id"] for r in rows}
-    # a chore that was DELETED or turned off leaves today's wall as before
-    # (db.delete_chore); only pause/edit-off keeps its finished row
-    live = {ch["id"] for ch in fdb.list_chores(c)}
     served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)}
     # Kept rows are LOCKED: shown done, not tappable, and uncomplete() refuses
-    # them. Unticking one would drop it from today with no way to tick it
-    # back (it is no longer due, or its owner is paused).
-    kept = [{**served[cid], "locked": True}
-            for cid in sorted((done - planned) & live) if cid in served]
-    return rows + kept
+    # them (same helper). Unticking one would drop it from today with no way
+    # to tick it back (it is no longer due, or its owner is paused).
+    return rows + [{**served[cid], "locked": True} for cid in sorted(locked)]
+
+
+def _locked_done_ids(c, d_str: str, planned: set) -> set:
+    """Chores done on ``d_str`` that the plan no longer has, but that were
+    served (frozen) that day and still exist: the rows _keep_done_rows keeps
+    and uncomplete() refuses. One rule for both, so the wall never shows a
+    row as tappable that the server then refuses, or the reverse. A chore
+    that was DELETED or turned off is not kept (db.delete_chore)."""
+    done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
+    if not done - planned:
+        return set()
+    live = {ch["id"] for ch in fdb.list_chores(c)}
+    served = {r["chore_id"] for r in fdb.day_log(c, d_str)}
+    return (done - planned) & live & served
 
 
 def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
@@ -1349,9 +1357,13 @@ def uncomplete(chore_id: int, date: str | None = None):
         raise HTTPException(422, "date out of range")
     if d == _today() and fdb.completion_exists(c, chore_id, date_str):
         _, away_view, away_ok = _away_view(c, d)
-        if away_ok and not any(
-                r["chore_id"] == chore_id for r in chlogic.plan_rows(
-                    fdb.list_chores(c), fdb.list_people(c), d, away_view)):
+        if not away_ok:
+            # can't tell whether this row is a locked one; same refusal
+            # complete() gives when the away list can't be read
+            raise HTTPException(503, "away status unavailable; retry")
+        planned = {r["chore_id"] for r in chlogic.plan_rows(
+            fdb.list_chores(c), fdb.list_people(c), d, away_view)}
+        if chore_id in _locked_done_ids(c, date_str, planned):
             # a finished chore kept on the wall after a pause or an edit
             # (_keep_done_rows): unticking it would lose it for the day
             raise HTTPException(409, "this chore was finished before it came off today's plan; it stays done")
