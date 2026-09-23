@@ -38,6 +38,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   tomorrow done.
 - Declining the only event in a calendar (or it being cancelled) removes it
   at once, instead of keeping it for a day with a "sync hit a snag" note.
+- A reminder ticked on the phone for a future day is reopened there, so the
+  phone and the wall agree. A refused untick on the wall says why ("it stays
+  done") instead of asking you to tap again.
 
 ## [1.8.0] — 2026-09-22
 

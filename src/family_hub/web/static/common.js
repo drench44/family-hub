@@ -1093,12 +1093,28 @@ async function attemptToggle(id, done, date) {
         body: JSON.stringify(date ? { date } : {}),
       });
     }
+    attemptToggle.lastError = '';
     return true;
   } catch (e) {
-    // the caller only shows a generic toast; keep the server's reason findable
+    // keep the server's reason findable, and readable by the caller
+    // (choreToggleMessage) so a refusal that can never succeed isn't told
+    // "tap again"
     console.warn('chore toggle failed:', e && e.message);
+    attemptToggle.lastError = (e && e.message) || '';
     return false;
   }
+}
+attemptToggle.lastError = '';
+
+/* The toast for a refused chore tap. 'stays done' matches the detail
+   app.uncomplete sends (409) for a chore finished before it came off today's
+   plan: it is locked, so "tap again" would be a lie. Pure for tests. */
+function choreToggleMessage(error, dayEnded) {
+  if (dayEnded) return 'That day has ended, so it can’t be changed now.';
+  if (String(error || '').includes('stays done')) {
+    return 'That one was already finished, so it stays done.';
+  }
+  return todoFailMessage('');   // the shared generic "couldn't save" copy
 }
 
 /* Attempt a to-do write (add / move / complete / delete); resolves to

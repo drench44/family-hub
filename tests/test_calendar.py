@@ -664,3 +664,19 @@ def test_an_error_already_running_is_dated_from_the_last_good_sync(conn):
     cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
     st = cs.sync_once(Boom(), conn, cfg, dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA))
     assert st["error_since"] == "2026-08-10T09:00:00-07:00"
+
+
+def test_a_feed_of_only_unreadable_items_is_still_a_suspicious_empty(conn):
+    # only intended drops (declined, cancelled, hidden types) count as "the
+    # calendar answered"; a feed that suddenly sends broken items keeps its
+    # last-good events and says so
+    item = {"id": "s", "summary": "Soccer",
+            "start": {"dateTime": "2026-09-23T17:00:00-07:00"},
+            "end": {"dateTime": "2026-09-23T18:00:00-07:00"}}
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 9, 22, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [item]}), conn, cfg, t0)
+    broken = {"id": "x", "summary": "no start"}
+    st = cs.sync_once(FakeClient({"cal": [broken]}), conn, cfg, t0 + dt.timedelta(hours=1))
+    assert st["ok"] is False
+    assert [e["title"] for e in fdb.list_events(conn)] == ["Soccer"]

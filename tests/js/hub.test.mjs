@@ -1238,3 +1238,10 @@ test('unassignedChoresHtml: a Reassign button per chore that opens the editor; n
   assert.match(html, /data-edit-chore="12"/);
   assert.match(html, /Feed &lt;dog&gt;/);
 });
+
+test('choreToggleMessage: a locked chore says it stays done, never "tap again"', () => {
+  assert.equal(sandbox.choreToggleMessage('this chore was finished before it came off today’s plan; it stays done', false),
+    'That one was already finished, so it stays done.');
+  assert.equal(sandbox.choreToggleMessage('', true), 'That day has ended, so it can’t be changed now.');
+  assert.match(sandbox.choreToggleMessage('boom', false), /tap again/);
+});
