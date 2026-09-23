@@ -5677,3 +5677,15 @@ def test_untick_is_refused_while_the_away_list_cannot_be_read(client, app_mod, m
     today = app_mod._today().isoformat()
     assert app_mod.fdb.completion_exists(app_mod._db(), cid, today)
 
+
+
+def test_a_deleted_persons_fixed_chore_stays_active_to_be_reassigned(client, app_mod):
+    # it shows under "No one to do these" in edit mode (JS tests cover the list);
+    # here: the chore itself is kept, active and unassigned, not lost
+    a = _mk_person(client, "Gone")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Feed dog", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": a}).json()["id"]
+    client.delete(f"/api/admin/people/{a}")
+    ch = next(c for c in client.get("/api/admin/state").json()["chores"] if c["id"] == cid)
+    assert ch["active"] in (1, True) and ch["fixed_person_id"] is None
