@@ -568,3 +568,62 @@ def test_laundry_watcher_stamps_only_real_reads(laundry_hub):
         await appmod._laundry_watch_tick()          # unavailable: held, not stamped
         assert appmod._laundry_last_ok_wall == first
     asyncio.run(_t())
+
+
+def test_a_future_stamp_is_an_error_not_fresh():
+    st = {"last_ok": NOW, "data_ts": NOW + 900}
+    s = dh.tile_source("weather", configured=True, enabled=True, state=st,
+                       available=True, now=NOW, max_age_s=600)
+    assert s["ok"] is False and s["status"] == "error"
+    assert "in the future" in s["last_error"]
+
+
+def test_one_live_sensor_does_not_hide_dead_rooms():
+    st = {"last_ok": NOW, "data_ts": NOW - 60, "stale_items": ["Garage"]}
+    s = dh.tile_source("climate", configured=True, enabled=True, state=st,
+                       available=True, now=NOW, max_age_s=900)
+    assert s["ok"] is False and s["status"] == "degraded"
+    assert s["stale_items"] == ["Garage"]
+
+
+def test_a_success_clears_the_last_error():
+    async def _t():
+        def refused(url):
+            raise httpx.ConnectError("refused")
+        await ftiles.weather_tile(_Client(refused), _cfg(weather_base="http://w"))
+        assert "last_error" in ftiles.SOURCE_STATE["weather"]
+        wx = {"ts": time.time(), "temp": 60.0}
+        await ftiles.weather_tile(_Client(lambda u: _Resp(wx)), _cfg(weather_base="http://w"))
+        assert "last_error" not in ftiles.SOURCE_STATE["weather"]
+    asyncio.run(_t())
+
+
+def test_climate_records_rooms_house_climate_calls_stale():
+    async def _t():
+        rooms = {"rooms": [{"name": "Up", "age_s": 60, "stale": False},
+                           {"name": "Garage", "age_s": 5000, "stale": True}]}
+        await ftiles.climate_tile(_Client(lambda u: _Resp(rooms)), _cfg(climate_base="http://c"))
+        assert ftiles.SOURCE_STATE["climate"]["stale_items"] == ["Garage"]
+    asyncio.run(_t())
+
+
+def test_a_crashing_source_is_a_named_problem_not_a_500(hub, monkeypatch):
+    appmod, client, _, _ = hub
+
+    async def boom(*a, **k):
+        raise TypeError("rollup shape changed")
+    monkeypatch.setattr(appmod.tiles, "fleet_tile", boom)
+    r = _full(client)
+    assert r["sources"]["fleet"]["ok"] is False
+    assert "health check crashed: TypeError: rollup shape changed" in r["sources"]["fleet"]["last_error"]
+
+
+def test_a_crashing_local_read_is_a_named_problem_not_a_500(hub, monkeypatch):
+    appmod, client, _, _ = hub
+
+    def boom():
+        raise RuntimeError("kv exploded")
+    monkeypatch.setattr(appmod, "_health_full_local", boom)
+    r = _full(client)
+    assert r["db"]["ok"] is False and "kv exploded" in r["db"]["error"]
+    assert r["status"] == "degraded"

@@ -91,10 +91,15 @@ def error_kind(e: BaseException) -> str:
     return "invalid"
 
 
-def _note_ok(name: str, data_ts: float | None) -> None:
+def _note_ok(name: str, data_ts: float | None, **extra) -> None:
+    """A good fetch. Clears the previous error, so a later verdict never
+    quotes an old, unrelated one as its reason."""
     st = SOURCE_STATE.setdefault(name, {})
     st["last_ok"] = time.time()
     st["data_ts"] = data_ts
+    for k in ("last_error", "last_error_kind", "last_error_at"):
+        st.pop(k, None)
+    st.update(extra)
 
 
 def _note_error(name: str, e: BaseException | str) -> None:
@@ -203,7 +208,10 @@ async def climate_tile(client, cfg) -> dict:
         "indoor_rh": indoor_rh,
         "indoor_dp": indoor_dp,
     }
-    _note_ok("climate", time.time() - min(ages) if ages else None)
+    # One live sensor must not hide dead rooms: name the ones house-climate
+    # itself calls stale.
+    _note_ok("climate", time.time() - min(ages) if ages else None,
+             stale_items=sorted(str(r.get("name")) for r in mapped if r.get("stale") is True))
     _climate_cache[base] = (time.monotonic() + CLIMATE_TTL, result)
     return result
 
