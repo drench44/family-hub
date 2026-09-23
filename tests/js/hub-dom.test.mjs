@@ -427,6 +427,10 @@ function newHub(opts = {}) {
     document,
     window: {
       addEventListener: (type, fn) => { (winListeners[type] || (winListeners[type] = [])).push(fn); },
+      removeEventListener: (type, fn) => {
+        const l = winListeners[type];
+        if (l && l.indexOf(fn) >= 0) l.splice(l.indexOf(fn), 1);
+      },
       innerWidth,
       innerHeight,
       screen: { width: innerWidth, height: opts.screenHeight ?? 800 },
@@ -3443,17 +3447,17 @@ test('scheduledProbeCamera: skips a second tick while a probe run is still in fl
   assert.equal(probeCalls, afterFirst, 'no second round of probes while one is still in flight');
 });
 
-test('camera SD probe arms fetchTimeout (J_TIMEOUT_MS), not a bare unbounded fetch', () => {
-  // probeOneCamera was changed from a bare fetch to fetchTimeout so a wedged
+test('camera SD probe arms the probeOk timeout (J_TIMEOUT_MS), not a bare unbounded fetch', () => {
+  // probeOneCamera was changed from a bare fetch to probeOk so a wedged
   // producer can't stack never-resolving sockets (issue #33). Prove the SD probe
   // arms an abort timer at the default J_TIMEOUT_MS (12s); a bare fetch arms none.
   const { sandbox } = hubWithTiles([CAM1]);
   const timers = captureTimers(sandbox);   // capture only the timers THIS probe arms
   sandbox.AbortController = AbortController;
   sandbox.fetch = () => new Promise(() => {});   // hang forever; only the armed timer matters
-  sandbox.probeCamera();   // issues probeOneCamera synchronously up to its fetchTimeout await
+  sandbox.probeCamera();   // issues probeOneCamera synchronously up to its probeOk await
   assert.ok(timers.some((t) => t.ms === 12000 && !t.done),
-    'the SD probe arms a J_TIMEOUT_MS (12000ms) abort timer via fetchTimeout, not a bare fetch');
+    'the SD probe arms a J_TIMEOUT_MS (12000ms) abort timer via probeOk, not a bare fetch');
 });
 
 test('probeCamera probes every camera concurrently — one slow camera never delays the rest', async () => {
@@ -4910,12 +4914,12 @@ test('camera HD upgrade gives up and keeps the warm stream when the HD never ans
 
 test('camera HD reveal probe arms a short bounded timeout (CAM_HD_PROBE_TIMEOUT_MS), not the long default', () => {
   // revealHdWhenLive's own give-up budget is ~8s (CAM_HD_TRIES x CAM_HD_POLL_MS).
-  // fetchTimeout defaults to the much longer J_TIMEOUT_MS (12s); a wedged HD
+  // probeOk defaults to the much longer J_TIMEOUT_MS (12s); a wedged HD
   // producer hanging on the default for all 12 tries would balloon the "~8s,
   // then give up" promise into minutes. Prove the HD probe passes its own
   // shorter, explicit timeout instead of falling back to that default.
   const { sandbox } = newHub();
-  const timers = captureTimers(sandbox);   // captures every setTimeout, incl. fetchTimeout's abort timer
+  const timers = captureTimers(sandbox);   // captures every setTimeout, incl. probeOk's abort timer
   sandbox.AbortController = AbortController;
   sandbox.fetch = () => new Promise(() => {});   // hang forever; only the armed timer matters here
   vm.runInContext(`links = { cameras: [${JSON.stringify(HD_CAM)}] };`, sandbox);
@@ -4924,7 +4928,7 @@ test('camera HD reveal probe arms a short bounded timeout (CAM_HD_PROBE_TIMEOUT_
   const first = nextTimer(timers, 0);   // the first HD reveal check fires immediately
   assert.ok(first, 'first HD reveal check scheduled');
   first.done = true;
-  first.fn();   // runs synchronously up to the await, which is where fetchTimeout arms its abort timer
+  first.fn();   // runs synchronously up to the await, which is where probeOk arms its abort timer
 
   assert.ok(timers.some((t) => t.ms === 3000 && !t.done),
     'the HD probe arms a 3000ms (CAM_HD_PROBE_TIMEOUT_MS) abort timeout');
@@ -8561,5 +8565,359 @@ test('choreRowHtml: a locked (finished, then taken off the plan) row is shown do
   // edit mode still opens the editor for it
   assert.match(sandbox.choreRowHtml({ id: 7, title: 'Dishes', done: true, locked: true }, 'Ana', { editing: true }),
     /data-edit-chore="7"/);
+});
+
+// ---- one save at a time (audit): a double tap on Save used to POST twice
+// and create two chores / two people. The OSK Done key clicks the same
+// button, so the guard lives on the button itself.
+
+test('chore editor: a double tap on Save sends ONE create and disables the button until it settles', async () => {
+  const { document, adminChoreCalls, tap } = mountChoresFull(SAMPLE_PEOPLE);
+  tap('[data-chedit="1"]');
+  tap('[data-add-chore="1"]');
+  await flush();
+  const host = document.getElementById('chore-editor');
+  host.querySelector('.f-title').value = 'Water plants';
+  host.querySelector('.f-person').value = '1';
+  const save = host.querySelector('[data-submit]');
+  save.onclick();
+  assert.equal(save.disabled, true, 'Save is disabled while the write is in flight');
+  save.onclick();                      // the second tap of a double tap
+  await flush();
+  assert.equal(adminChoreCalls.filter((c) => c.method === 'POST').length, 1, 'exactly one create');
+});
+
+test('chore editor: a FAILED save re-enables Save so the user can try again', async () => {
+  const { document, sandbox, tap } = mountChoresFull(SAMPLE_PEOPLE);
+  let posts = 0;
+  sandbox.fetch = async (url) => {
+    if (url === '/api/admin/state') return okResp({ people: SAMPLE_ADMIN.people, chores: SAMPLE_ADMIN.chores });
+    if (url === '/api/admin/chores') { posts += 1; return failResp(500, 'Disk full (test)'); }
+    throw new Error('offline in test');
+  };
+  tap('[data-chedit="1"]');
+  tap('[data-add-chore="1"]');
+  await flush();
+  const host = document.getElementById('chore-editor');
+  host.querySelector('.f-title').value = 'Water plants';
+  host.querySelector('.f-person').value = '1';
+  const save = host.querySelector('[data-submit]');
+  save.onclick();
+  await flush();
+  assert.equal(save.disabled, false, 'Save is usable again after a failure');
+  save.onclick();
+  await flush();
+  assert.equal(posts, 2, 'the retry went out');
+});
+
+test('person editor: a double tap on Save sends ONE create; a failure re-enables it', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-padd="1"]');
+  const editor = ctx.registry['chore-editor'];
+  editor.querySelector('[data-pname]').value = 'Jordan';
+  const save = editor.querySelector('[data-psubmit]');
+  let posts = 0;
+  ctx.sandbox.fetch = async (url) => {
+    if (url === '/api/admin/people') { posts += 1; return failResp(500, 'Disk full (test)'); }
+    throw new Error('offline in test');
+  };
+  save.onclick();
+  assert.equal(save.disabled, true, 'Save is disabled while the write is in flight');
+  save.onclick();
+  await flush();
+  assert.equal(posts, 1, 'the second tap did not send a second create');
+  assert.equal(save.disabled, false, 'the failure re-enabled Save');
+  save.onclick();
+  await flush();
+  assert.equal(posts, 2, 'the retry went out');
+});
+
+// ---- a chore tap writes to the day that is SHOWN (audit). The All chores
+// overlay paints choreState.day, but toggleChore sent data_date, which a
+// poll moves at midnight while the overlay still shows yesterday's rows.
+
+test('choreRowHtml: a tappable row carries the day it was drawn for', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.choreRowHtml({ id: 7, title: 'Dishes', done: false }, 'Ana', { day: '2026-09-21' });
+  assert.match(html, /data-chore="7" data-date="2026-09-21"/);
+});
+
+test('chores overlay: a tap sends the day on the row', async () => {
+  const { completeCalls, tap } = mountChoresFull(SAMPLE_PEOPLE);
+  tap('[data-chore="10"]');
+  await flush();
+  assert.equal(completeCalls.length, 1);
+  assert.equal(JSON.parse(completeCalls[0].opts.body).date, '2026-08-14');
+});
+
+test('chores overlay: a tap on a day that is no longer today repaints instead of writing', async () => {
+  const { completeCalls, tap, read, choresFull, document } = mountChoresFull(SAMPLE_PEOPLE);
+  // a poll crossed midnight while the overlay still shows the old day's rows
+  read("data_date = '2026-08-15';");
+  tap('[data-chore="10"]');
+  await flush();
+  assert.equal(completeCalls.length, 0, 'nothing was written to either day');
+  assert.match(document.getElementById('toast').textContent, /day has ended/);
+  await flush();
+  assert.doesNotMatch(choresFull.innerHTML, /data-chore="10"/,
+    'the old day repainted as look-only rows');
+});
+
+test('home wall: a tap still sends the day it was drawn for (just after midnight, before the poll)', async () => {
+  const { sandbox } = newHub();
+  const seen = [];
+  sandbox.attemptToggle = async (id, done, date) => { seen.push(date); return true; };
+  vm.runInContext("data_date = '2026-09-21';", sandbox);
+  await sandbox.toggleChore(42, false, '2026-09-21');
+  assert.deepEqual(seen, ['2026-09-21']);
+});
+
+// ---- open overlays refresh on the poll beat while nobody is using them
+// (audit): the full calendar and All chores views fetched only on open.
+
+function idleOverlayHub() {
+  const ctx = newHub();
+  const calls = { cal: 0, calPaint: 0, chores: [] };
+  ctx.sandbox.fetchCalWindow = async () => { calls.cal += 1; };
+  ctx.sandbox.renderCalFull = () => { calls.calPaint += 1; };
+  ctx.sandbox.renderChoresFull = (people) => { calls.chores.push(people); };
+  ctx.document.body.dataset.conn = 'up';
+  vm.runInContext("data_date = '2026-09-22'; lastInteraction = 0;", ctx.sandbox);
+  return { ...ctx, calls };
+}
+
+test('refreshIdleOverlay: an open calendar refetches and repaints', async () => {
+  const { sandbox, calls } = idleOverlayHub();
+  vm.runInContext("openView = 'calendar';", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(calls.cal, 1, 'fetched the calendar window');
+  assert.equal(calls.calPaint, 1, 'and repainted it');
+});
+
+test('refreshIdleOverlay: an open All chores view repaints, and follows midnight when it showed today', async () => {
+  const { sandbox, calls } = idleOverlayHub();
+  vm.runInContext("openView = 'chores'; choreState.day = '2026-09-21'; choreState.editing = false;"
+    + " hubData = { people: [] };", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-21');   // the poll moved 09-21 -> 09-22
+  assert.equal(vm.runInContext('choreState.day', sandbox), '2026-09-22', 'moved on to the new today');
+  assert.equal(calls.chores.length, 1, 'repainted');
+  assert.equal(calls.chores[0], vm.runInContext('hubData.people', sandbox), 'from the fresh hub payload');
+});
+
+test('refreshIdleOverlay: a chores view paged to another day stays on that day', async () => {
+  const { sandbox, calls } = idleOverlayHub();
+  vm.runInContext("openView = 'chores'; choreState.day = '2026-09-19'; choreState.editing = false;", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(vm.runInContext('choreState.day', sandbox), '2026-09-19');
+  assert.equal(calls.chores.length, 1);
+  assert.equal(calls.chores[0], null, 'a past day is fetched, not painted from today');
+});
+
+test('refreshIdleOverlay: leaves the view alone mid-use (edit mode, a recent tap, or offline)', async () => {
+  const { sandbox, calls, document } = idleOverlayHub();
+  vm.runInContext("openView = 'chores'; choreState.day = '2026-09-22'; choreState.editing = true;", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  vm.runInContext("choreState.editing = false; lastInteraction = Date.now();", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  vm.runInContext("lastInteraction = 0; openView = 'calendar';", sandbox);
+  document.body.dataset.conn = 'down';
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(calls.chores.length, 0, 'no chores repaint while editing or just tapped');
+  assert.equal(calls.cal, 0, 'no calendar refetch while offline');
+});
+
+test('applyHouseTheme hands the house default to theme.js to cache for the next first paint', () => {
+  const { sandbox } = newHub();
+  const seen = [];
+  sandbox.rememberHouseTheme = (t) => { seen.push(t); };
+  const theme = { season: 'on' };   // season only: stampSeason is typeof-guarded here
+  sandbox.applyHouseTheme(theme);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0], theme);
+});
+
+test('applyHouseTheme still works where theme.js never loaded (no rememberHouseTheme)', () => {
+  const { sandbox } = newHub();
+  assert.doesNotThrow(() => sandbox.applyHouseTheme({ season: 'on' }));
+});
+
+// ---- camera probes (audit): the 30s probe downloaded a whole snapshot and
+// never read or cancelled the body, and its abort timer was cleared once the
+// headers arrived. probeOk reads .ok, cancels the body, and keeps the timer
+// armed until that is done.
+
+function probeResponse(ok, cancel) {
+  return { ok, body: { cancel } };
+}
+
+test('camera probe: cancels the snapshot body after reading .ok', async () => {
+  const { sandbox } = hubWithTiles([CAM1]);
+  let cancelled = 0;
+  let fetched = 0;
+  // (the load-time poll().then(probeCamera) may also land here: count both)
+  sandbox.fetch = async () => { fetched += 1; return probeResponse(true, async () => { cancelled += 1; }); };
+  await sandbox.probeCamera();
+  await flush();
+  assert.ok(fetched >= 1);
+  assert.equal(cancelled, fetched, 'every probe body was cancelled, not left downloading');
+});
+
+test('camera HD probe: cancels the snapshot body too', async () => {
+  const { sandbox } = newHub();
+  const timers = captureTimers(sandbox);
+  let cancelled = 0;
+  sandbox.fetch = async () => probeResponse(true, async () => { cancelled += 1; });
+  vm.runInContext(`links = { cameras: [${JSON.stringify(HD_CAM)}] };`, sandbox);
+  sandbox.openOverlay('camera:drive');
+  const first = nextTimer(timers, 0);
+  first.done = true;
+  await first.fn();
+  assert.equal(cancelled, 1);
+});
+
+test('camera probe: the abort timer stays armed until the body is dealt with', async () => {
+  const { sandbox } = hubWithTiles([CAM1]);
+  const timers = captureTimers(sandbox);
+  sandbox.AbortController = AbortController;
+  const pending = [];
+  sandbox.fetch = async () => probeResponse(true, () => new Promise((r) => { pending.push(r); }));
+  const done = sandbox.probeCamera();
+  await flush();
+  const aborts = timers.filter((t) => t.ms === 12000);
+  assert.ok(aborts.length >= 1, 'an abort timer was armed');
+  assert.ok(pending.length >= 1, 'the probe reached the body cancel');
+  assert.ok(aborts.every((t) => !t.done), 'still armed while the body is being cancelled');
+  pending.forEach((r) => r());
+  await done;
+  await flush();
+  assert.ok(aborts.every((t) => t.done), 'cleared once the probe is fully over');
+});
+
+test('camera probe: a probe answer with no body (older engine) still reads .ok', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  sandbox.fetch = async () => ({ ok: true });
+  await sandbox.probeCamera();
+  const tile = document.querySelector('.tile-camera[data-cam="cam1"]');
+  assert.ok(!tile.classList.contains('is-offline'), 'the camera reads live');
+});
+
+test('camera probe: a src with a quote in it never builds a broken selector', async () => {
+  // cam.src comes from config; it went raw into a querySelector string
+  const odd = { ...CAM1, src: 'front"yard' };
+  const { sandbox } = hubWithTiles([odd]);
+  sandbox.fetch = async () => ({ ok: true });
+  await assert.doesNotReject(sandbox.probeCamera());
+});
+
+// ---- one broken render step must not take the wall "offline" (audit): all
+// the render steps shared the fetch's try/catch, so one throw marked the hub
+// offline and skipped every step after it.
+
+test('poll: a render step that throws is logged, the rest still render, and the wall stays live', async () => {
+  const { document, sandbox } = newHub();
+  await flush();   // let the load-time poll settle first
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  const errors = [];
+  sandbox.console = { ...console, error: (...a) => { errors.push(a); } };
+  const ran = [];
+  sandbox.renderCalendar = () => { ran.push('cal'); throw new Error('bad event'); };
+  sandbox.renderPeople = () => { ran.push('people'); };
+  sandbox.renderTodoSlot = () => { ran.push('todos'); };
+  sandbox.renderBackup = () => { ran.push('backup'); };
+  await sandbox.poll();
+  assert.deepEqual([...ran], ['cal', 'people', 'todos', 'backup'], 'every later step still ran');
+  assert.equal(document.body.dataset.conn, 'up', 'a render bug is not an outage');
+  assert.equal(document.getElementById('conn-word').textContent, 'live');
+  assert.equal(errors.length, 1, 'the broken step was logged');
+  assert.match(String(errors[0][0]), /renderCalendar|calendar/);
+});
+
+test('poll: a failed fetch still marks the wall offline', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.poll();
+  assert.equal(document.body.dataset.conn, 'down');
+  assert.equal(document.getElementById('conn-word').textContent, 'offline');
+});
+
+// ---- a "fit" full-screen panel re-scales on resize (audit): it was scaled
+// once on open, so rotating a phone or resizing a window left it wrong.
+
+function openFitPanel() {
+  const ctx = newHub();
+  vm.runInContext("links = { panels: [{ id: 'wx', full: 'fit', url: '/wx', vw: 1024, vh: 600 }] };", ctx.sandbox);
+  ctx.sandbox.openOverlay('panel:wx');
+  const frame = ctx.document.getElementById('overlay-content').children[0];
+  return { ...ctx, frame };
+}
+
+test('fit panel: resize and orientation change re-scale it while open', () => {
+  const { sandbox, fire, frame } = openFitPanel();
+  assert.equal(frame.style.transform, 'scale(1.25)');   // min(1280/1024, 800/600)
+  sandbox.innerWidth = 2048; sandbox.innerHeight = 1200;
+  fire('resize');
+  assert.equal(frame.style.transform, 'scale(2)', 'resize re-scaled it');
+  assert.equal(frame.style.left, '0px');
+  sandbox.innerWidth = 512; sandbox.innerHeight = 900;
+  fire('orientationchange');
+  assert.equal(frame.style.transform, 'scale(0.5)', 'orientation change re-scaled it');
+  assert.equal(frame.style.top, '300px', 'and re-centred it');
+});
+
+test('fit panel: closing the overlay drops its resize listeners', () => {
+  const { sandbox, fire, frame, winListeners } = openFitPanel();
+  const before = (winListeners.resize || []).length;
+  sandbox.closeOverlay();
+  assert.equal((winListeners.resize || []).length, before - 1, 'the resize listener is gone');
+  sandbox.innerWidth = 2048; sandbox.innerHeight = 1200;
+  fire('resize');
+  fire('orientationchange');
+  assert.equal(frame.style.transform, 'scale(1.25)', 'a closed panel is left alone');
+});
+
+test('fit panel: opening another view drops the old panel listener too', () => {
+  const { sandbox, winListeners } = openFitPanel();
+  const before = (winListeners.resize || []).length;
+  sandbox.openOverlay('settings');
+  assert.equal((winListeners.resize || []).length, before - 1);
+});
+
+// ---- a fast double tap on an iCloud reminder (audit) sent two opposite
+// writes (complete, then reopen). Taps on a reminder are ignored while its
+// write is out.
+
+test('reminder: a second tap while the first write is out sends nothing', async () => {
+  const posts = [];
+  let answer;
+  const { tap } = mountReminders({ surface: 'home', fetch: (url, opts) => {
+    if (url === '/api/reminders/toggle') {
+      posts.push(JSON.parse(opts.body));
+      return new Promise((r) => { answer = r; });
+    }
+    return Promise.reject(new Error('offline in test'));
+  } });
+  const row = tap('[data-reminder]');
+  tap('[data-reminder]');                      // the double tap
+  assert.equal(posts.length, 1, 'one write, not two opposite ones');
+  assert.ok(row.classList.contains('done'), 'the row keeps the first tap');
+  answer(okResp({ id: 'caldav:g/1', completed: true }));
+  await flush();
+  tap('[data-reminder]');                      // once settled, taps work again
+  assert.equal(posts.length, 2);
+});
+
+test('scheduledPoll hands refreshIdleOverlay the day from BEFORE the poll', async () => {
+  const { sandbox } = newHub();
+  vm.runInContext("data_date = '2026-09-21';", sandbox);
+  sandbox.poll = async () => { vm.runInContext("data_date = '2026-09-22';", sandbox); };
+  sandbox.refreshIdleTodosView = () => undefined;
+  const seen = [];
+  sandbox.refreshIdleOverlay = (before) => { seen.push(before); };
+  sandbox.scheduledPoll();
+  await flush();
+  assert.deepEqual(seen, ['2026-09-21']);
 });
 

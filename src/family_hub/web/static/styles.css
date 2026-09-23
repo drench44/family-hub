@@ -39,8 +39,8 @@
   --warn:      #D98A15;
   --crit:      #E05656;
   --shadow:    0 1px 2px rgba(20,28,45,.06), 0 8px 24px rgba(20,28,45,.06);
-  /* person hues (work on both grounds) */
-  --p1: #E86A9E; --p2: #3E9BE8; --p3: #E39A2A;
+  /* laundry hues: washer blue, dryer amber (work on both grounds) */
+  --p2: #3E9BE8; --p3: #E39A2A;
   --accent: #0E9BCF; --accent-ink: #FFFFFF; --accent-soft: rgba(14,155,207,.12);
   /* seasonal scene tokens (only painted while a look is active; each look's
      blocks near the end of the file set them — these are neutral defaults) */
@@ -70,7 +70,7 @@
     --faint:     #616D82;
     --good:      #5FD3A0; --warn:#F0B45C; --crit:#EB7373;
     --shadow:    0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
-    --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+    --p2:#5FB0EE; --p3:#F0B24E;
     --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
   }
   :root:not([data-theme])[data-accent="violet"]{--accent:#A78BFA;--accent-ink:#150E2E;--accent-soft:rgba(167,139,250,.16);}
@@ -82,7 +82,7 @@
   --ink:#E9EDF5; --dim:#98A3B6; --faint:#616D82;
   --good:#5FD3A0; --warn:#F0B45C; --crit:#EB7373;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
-  --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+  --p2:#5FB0EE; --p3:#F0B24E;
   --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
 }
 /* Soft: a warm "paper" light, softer than Light. Uses the light-family accents,
@@ -92,7 +92,7 @@
   --ink:#2B271F; --dim:#6D6557; --faint:#9B9485;
   --good:#178A63; --warn:#C07C15; --crit:#CE5050;
   --shadow:0 1px 2px rgba(60,50,30,.05), 0 8px 24px rgba(60,50,30,.06);
-  --p1:#E86A9E; --p2:#3E9BE8; --p3:#E39A2A;
+  --p2:#3E9BE8; --p3:#E39A2A;
   --accent:#0E9BCF; --accent-ink:#FFFFFF; --accent-soft:rgba(14,155,207,.12);
 }
 /* Soft is light-family, but its own [data-theme="soft"] block (specificity
@@ -110,7 +110,7 @@
   --ink:#ECECEE; --dim:#A1A1A7; --faint:#6B6B71;
   --good:#5FD3A0; --warn:#F0B45C; --crit:#EB7373;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
-  --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+  --p2:#5FB0EE; --p3:#F0B24E;
   --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
 }
 /* Black: true OLED black; cards lifted just enough to separate. Dark-family
@@ -120,7 +120,7 @@
   --ink:#ECECEE; --dim:#9A9AA0; --faint:#5E5E64;
   --good:#5FD3A0; --warn:#F0B45C; --crit:#EB7373;
   --shadow:0 1px 2px rgba(0,0,0,.6), 0 12px 34px rgba(0,0,0,.55);
-  --p1:#F07FA9; --p2:#5FB0EE; --p3:#F0B24E;
+  --p2:#5FB0EE; --p3:#F0B24E;
   --accent:#56C6F0; --accent-ink:#06121A; --accent-soft:rgba(86,198,240,.14);
 }
 /* Dark-family accent overrides: dark, grey, and black share the violet/amber/
@@ -155,12 +155,6 @@ body {
 }
 
 .num { font-variant-numeric: tabular-nums; }
-.micro {
-  font-family: var(--mono);
-  font-size: 10.5px; font-weight: 600;
-  letter-spacing: 0.16em; text-transform: uppercase;
-  color: var(--faint);
-}
 
 /* Night: the whole page dims after 22:00. The dim is applied to each DIRECT
    CHILD of <body>, never to <body>/.is-night itself: a `filter` on an element
@@ -1509,7 +1503,7 @@ body.hub-empty .tabbar { display: none; }
   margin-bottom: 8px;
 }
 /* Section headers are the shared .shead system now (see top of file); the
-   camera tile's own label keeps the .tile-label micro treatment above. */
+   camera tile's own label keeps its small-caps .tile-label style above. */
 .tile-offline { font-family: var(--mono); font-size: 13px; color: var(--faint); }
 .cam-frame {
   display: block; width: 100%; aspect-ratio: 16 / 9;
@@ -2243,7 +2237,7 @@ body.overlay-open { overflow: hidden; }
 .caldav-test-result.err { color: var(--crit); }
 /* Outbox backlog note: wall edits still queued for the next push. Quiet (--dim,
    not an alarm colour) — a transient, self-clearing state, not an error. */
-.caldav-pending { font-size: 13px; color: var(--dim); }
+.caldav-pending, .caldav-parked { font-size: 13px; color: var(--dim); }
 /* The Calendars picker: same heading/caption pair as the Display rows above
    (.settings-k / .hint), then a plain list of .integ-row toggles - gap:0 so
    only the shared .integ-row + .integ-row border-top separates them, same as

@@ -9,7 +9,7 @@ installed, and the sync logic (caldav_sync.py) takes an injected client with
 this shape, so it's fully testable against a fake — no live server needed:
 
     client.configured() -> bool
-    client.discover()   -> [{"id","name","comp"('VEVENT'|'VTODO'),"color"}, ...]
+    client.discover()   -> [{"id","name","comp"('VEVENT'|'VTODO'|None),"color"}, ...]
     client.fetch_ics(collection, lo: date, hi: date) -> [ics_str, ...]
 
 The collection dict a real client returns also carries a private "_cal" handle
@@ -23,6 +23,8 @@ import json
 import logging
 import os
 
+from .calendar_sync import _write_secret_atomic
+
 log = logging.getLogger("family_hub.caldav")
 
 ICLOUD_CALDAV_URL = "https://caldav.icloud.com"
@@ -35,14 +37,22 @@ def _creds_path(env):
     return env.get("CALDAV_CREDS_PATH")
 
 
+def env_credentials_set(env=None) -> bool:
+    """True when ICLOUD_CALDAV_USER + ICLOUD_CALDAV_APP_PASSWORD are both set.
+    Those win over the settings file, so while they are set the settings
+    screen can neither change the account nor disconnect it (the routes say so
+    with a 409 rather than answering ok and changing nothing)."""
+    env = env if env is not None else os.environ
+    return bool(env.get("ICLOUD_CALDAV_USER")
+                and env.get("ICLOUD_CALDAV_APP_PASSWORD"))
+
+
 def caldav_credentials(env=None):
     """(user, app_password), from env first (advanced/backward-compat) then the
     server-side creds file (the settings UI writes it). Neither -> (None, None)."""
     env = env if env is not None else os.environ
-    user, pw = (env.get("ICLOUD_CALDAV_USER"),
-                env.get("ICLOUD_CALDAV_APP_PASSWORD"))
-    if user and pw:
-        return user, pw
+    if env_credentials_set(env):
+        return env["ICLOUD_CALDAV_USER"], env["ICLOUD_CALDAV_APP_PASSWORD"]
     path = _creds_path(env)
     if path and os.path.exists(path):
         try:
@@ -56,7 +66,12 @@ def caldav_credentials(env=None):
 
 def store_credentials(user: str, app_password: str, env=None) -> None:
     """Persist UI-entered credentials to the server-side file, mode 0600. The
-    plaintext never leaves the box; no API ever returns it."""
+    plaintext never leaves the box; no API ever returns it.
+
+    Written with calendar_sync._write_secret_atomic (temp file, 0600, fsync,
+    rename): opening the file in place kept an older file's looser mode (the
+    0600 in os.open only applies on create) and a crash mid-write left a
+    half file that read as "not connected"."""
     env = env if env is not None else os.environ
     path = _creds_path(env)
     if not path:
@@ -64,9 +79,8 @@ def store_credentials(user: str, app_password: str, env=None) -> None:
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"user": user, "app_password": app_password}, f)
+    _write_secret_atomic(path, json.dumps({"user": user,
+                                           "app_password": app_password}))
 
 
 def clear_credentials(env=None) -> None:
@@ -94,6 +108,32 @@ class CalDavConflict(Exception):
     (If-Match no longer matches, or If-None-Match:* found the resource present).
     flush_pending resolves this server-wins rather than silently overwriting the
     other writer's change — the TECHNICAL_DESIGN §5.6 optimistic-concurrency path."""
+
+
+class CalDavRejected(RuntimeError):
+    """The server refused a write for a reason retrying will not fix (a 4xx such
+    as 403 on a read-only or shared list, 400, 405, 409, 415). flush_pending
+    counts these toward parking the row instead of retrying it forever, and never
+    reads one as a dead password. `status` is the HTTP status."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+# 4xx answers that can clear up on their own, so they stay plain retryable
+# errors: 401 (auth, surfaced as reconnect), 407/408 (proxy auth, timeout),
+# 412 (a conflict, resolved server-wins), 423/425/429 (locked, too early, rate
+# limited). Every other 4xx is a lasting refusal.
+_RETRYABLE_4XX = {401, 407, 408, 412, 423, 425, 429}
+
+
+def _raise_for_write(method: str, url: str, resp, status: int) -> None:
+    reason = getattr(resp, "reason", "")
+    msg = f"{method} {url} -> {status} {reason}"
+    if 400 <= status < 500 and status not in _RETRYABLE_4XX:
+        raise CalDavRejected(status, msg)
+    raise RuntimeError(msg)
 
 
 _ICAL_CT = "text/calendar; charset=utf-8"
@@ -189,19 +229,28 @@ class CalDavClient:
 
     def discover(self) -> list[dict]:
         """List the account's calendars/reminder lists. VEVENT vs VTODO comes
-        from the supported-component-set; color from apple:calendar-color."""
+        from the supported-component-set; color from apple:calendar-color.
+
+        If the component set can't be read this time, "comp" is None: guessing
+        VEVENT turned a reminder list into a calendar for a tick. The sync then
+        uses the kind it stored for that collection, or skips it this tick."""
         out = []
         for cal in self._principal_obj().calendars():
             url = str(getattr(cal, "url", "") or "")
             try:
                 comps = list(cal.get_supported_components())
             except Exception:
-                comps = ["VEVENT"]
+                log.warning("caldav supported-components read failed for %s; "
+                            "kind unknown this sync", url, exc_info=True)
+                comps = None
             # iCloud's real layout: calendars advertise VEVENT-only and reminder
-            # lists VTODO-only, so treating a both/unknown collection as VEVENT is
-            # correct in practice (and the except above falls back to VEVENT).
-            comp = "VTODO" if ("VTODO" in comps and "VEVENT" not in comps) \
-                else "VEVENT"
+            # lists VTODO-only, so treating a both-kinds collection as VEVENT
+            # is correct in practice.
+            if comps is None:
+                comp = None
+            else:
+                comp = "VTODO" if ("VTODO" in comps and "VEVENT" not in comps) \
+                    else "VEVENT"
             try:
                 name = str(cal.get_display_name() or "")
             except Exception:
@@ -231,7 +280,12 @@ class CalDavClient:
 
     def fetch_todos(self, collection: dict) -> list[dict]:
         """CalDAV objects ({href, etag, ics}) for a reminders (VTODO) collection,
-        including completed ones so grouping can decide what to show."""
+        including completed ones: the chore mirror learns about a check-off on
+        a phone from the pulled STATUS:COMPLETED, and a reminder missing from
+        the pull reads as deleted in iCloud (and is re-created). The sync skips
+        any object whose ETag is unchanged, so the completed ones cost the
+        transfer only. (A server-side time-range cut was not used: iCloud's
+        handling of time-range on VTODOs without dates is not verified.)"""
         cal = collection["_cal"]
         return [self._obj(t) for t in cal.todos(include_completed=True)
                 if getattr(t, "data", None)]
@@ -270,7 +324,7 @@ class CalDavClient:
         if status == 412:
             raise CalDavConflict(url)
         if status and not (200 <= status < 300):
-            raise RuntimeError(f"PUT {url} -> {status} {getattr(resp, 'reason', '')}")
+            _raise_for_write("PUT", url, resp, status)
         return {"href": url, "etag": _resp_etag(resp)}
 
     def delete_object(self, collection: dict, href: str, base_etag=None) -> None:
@@ -282,7 +336,7 @@ class CalDavClient:
         if status == 412:
             raise CalDavConflict(href)
         if status and status not in (200, 202, 204, 404):
-            raise RuntimeError(f"DELETE {href} -> {status} {getattr(resp, 'reason', '')}")
+            _raise_for_write("DELETE", href, resp, status)
 
     def get_object(self, collection: dict, href: str):
         """Fetch one object's current server state as {href, etag, ics}, or None

@@ -65,8 +65,13 @@ curl -s http://127.0.0.1:8138/health      # {"status":"ok"}
 Clearing `hub.db-wal`/`hub.db-shm` before the copy is essential: the live db
 runs in WAL mode, and leaving an old write-ahead log next to the restored file
 lets SQLite replay stale frames onto it on the next open — silently reverting or
-corrupting the restore. The snapshot itself has no sidecars (it's a fresh
-default-journal db), so only the destination's need clearing.
+corrupting the restore. The snapshot itself is one self-contained file with no
+sidecars: the online backup copies the live db's WAL mode into it, so the
+script switches it to a plain rollback journal (folding everything into the
+file) before closing it, and sweeps any `.partial-*.db-wal`/`-shm` a killed run
+left behind. Snapshots taken before that change are still marked WAL in their
+header; that is harmless (they were fully checkpointed, and SQLite simply starts
+a fresh log on open). Only the destination's sidecars need clearing.
 
 ## Enable off-box mirroring to a NAS
 
@@ -88,3 +93,11 @@ configure on the box — they never belong in this repo.
    written, so it never costs you the local backup. Each run also records the
    NAS result in the hub's backup heartbeat, and the wall header shows an
    "Off-box backup failing" (or "stale") badge until a copy succeeds again.
+
+The off-box copy only ever **adds** files; it never mirrors deletions from the
+local tree. Each NAS tier is then pruned to the same keep count as the local
+one (newest by the stamp in the name), touching only `hub-<stamp>.db` files. So
+if the local tree is ever new or empty (a replaced disk, a changed `FH_OUT`),
+the first run adds to the NAS history instead of wiping it, and the old
+snapshots age out at the normal pace. A failed prune counts as a failed remote
+copy (exit 2).

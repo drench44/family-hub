@@ -44,13 +44,24 @@ def requires_entry(changed_paths: list[str]) -> bool:
                for p in changed_paths)
 
 
+# Exactly the files scripts/release.py writes and commits (its `rel_paths`):
+# VERSION, the rolled CHANGELOG.md, and index.html with its ?v= stamps. A test
+# pins this list to release.py.
+RELEASE_FILES = frozenset({
+    "VERSION", "CHANGELOG.md", "src/family_hub/web/static/index.html"})
+
+
 def is_release(changed_paths: list[str]) -> bool:
-    """True iff this diff is a release cut by scripts/release.py — it bumps
+    """True iff this diff is a release cut by scripts/release.py: it bumps
     VERSION and ROLLS [Unreleased] into a dated section rather than adding a
     bullet, so it's exempt: it can't satisfy the [Unreleased]-entry rule by
-    design (that's the whole point of a release). VERSION is only ever touched by
-    release.py, so its presence is the tight, unambiguous signal."""
-    return "VERSION" in changed_paths
+    design (that's the whole point of a release).
+
+    It must touch VERSION and NOTHING outside RELEASE_FILES. Any VERSION change
+    used to exempt the whole diff, so a feature PR that also bumped VERSION
+    skipped the changelog rule."""
+    paths = set(changed_paths)
+    return "VERSION" in paths and paths <= RELEASE_FILES
 
 
 def _unreleased_bullets(changelog: str) -> set[str]:

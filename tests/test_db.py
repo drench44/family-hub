@@ -41,7 +41,7 @@ def _legacy_fk_db(path):
           person_id INTEGER NOT NULL REFERENCES people(id),
           done_at TEXT NOT NULL, PRIMARY KEY(chore_id, date));
     """)
-    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Rem', '#5BC9F0')")
+    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Ava', '#5BC9F0')")
     c.execute("""INSERT INTO chores(id, title, schedule_kind, assign_kind,
                  fixed_person_id, rotation_epoch)
                  VALUES(1, 'Trash', 'daily', 'fixed', 7, '2026-08-01')""")
@@ -52,16 +52,36 @@ def _legacy_fk_db(path):
 
 
 def test_schema_idempotent(conn):
-    fdb.ensure_schema(conn)  # second call must not raise
+    """Every app start runs ensure_schema on the live DB, so a second run
+    must not raise AND must not lose or rewrite a single existing row."""
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    cid = fdb.add_chore(conn, title="Trash", icon="", schedule_kind="daily",
+                        days_mask=0, assign_kind="fixed", fixed_person_id=pid,
+                        rotation_order=[], rotation_epoch="2026-08-01")
+    fdb.set_completion(conn, cid, "2026-08-12", pid)
+    fdb.add_todo(conn, "Fix gate latch", "now")
+    fdb.kv_set(conn, "k", {"v": 1})
+    fdb.replace_events(conn, [{"id": "e1", "calendar_id": "cal", "title": "Dentist",
+                               "start_ts": "2026-08-12", "end_ts": "2026-08-13",
+                               "all_day": 1}])
+
+    def snapshot():
+        return {t: [tuple(r) for r in conn.execute(f"SELECT * FROM {t} ORDER BY 1")]
+                for t in ("people", "chores", "completions", "todos", "kv",
+                          "events")}
+    before = snapshot()
+    fdb.ensure_schema(conn)
+    assert snapshot() == before
+    assert all(before.values()), "every table was seeded"
 
 
 def test_person_crud(conn):
-    pid = fdb.add_person(conn, "Rem", "#5BC9F0")
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
     people = fdb.list_people(conn)
-    assert [p["name"] for p in people] == ["Rem"]
-    fdb.update_person(conn, pid, name="Remy", color="#8AE0AD", sort=2)
+    assert [p["name"] for p in people] == ["Ava"]
+    fdb.update_person(conn, pid, name="Ben", color="#8AE0AD", sort=2)
     p = fdb.list_people(conn)[0]
-    assert (p["name"], p["color"], p["sort"]) == ("Remy", "#8AE0AD", 2)
+    assert (p["name"], p["color"], p["sort"]) == ("Ben", "#8AE0AD", 2)
     fdb.update_person(conn, pid, active=0)
     assert fdb.list_people(conn) == []            # default: active only
     assert len(fdb.list_people(conn, include_inactive=True)) == 1
@@ -100,7 +120,7 @@ def test_delete_person_is_history_safe_and_cleans_assignments(conn):
 
 
 def test_chore_crud_and_shapes(conn):
-    pid = fdb.add_person(conn, "Rem", "#5BC9F0")
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
     cid = fdb.add_chore(conn, title="Dishes", icon="🍽️", schedule_kind="daily",
                         days_mask=0, assign_kind="fixed", fixed_person_id=pid,
                         rotation_order=[], rotation_epoch="2026-08-12")
@@ -111,7 +131,7 @@ def test_chore_crud_and_shapes(conn):
 
 
 def test_completion_toggle(conn):
-    pid = fdb.add_person(conn, "Rem", "#5BC9F0")
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
     cid = fdb.add_chore(conn, title="Trash", icon="", schedule_kind="daily",
                         days_mask=0, assign_kind="fixed", fixed_person_id=pid,
                         rotation_order=[], rotation_epoch="2026-08-12")
@@ -319,6 +339,40 @@ def test_todos_crud_roundtrip(conn):
     assert fdb.list_todos(conn) == []
 
 
+def test_get_todo_reads_one_row(conn):
+    tid = fdb.add_todo(conn, "Fix gate latch", "now")
+    fdb.add_todo(conn, "Other", "soon")
+    assert fdb.get_todo(conn, tid) == fdb.list_todos(conn)[0]
+    assert fdb.get_todo(conn, 9999) is None
+
+
+def test_checking_off_a_todo_prunes_long_finished_ones(conn):
+    """The todos table used to grow forever: every finished item stayed.
+    Only the last 30 days are restorable, so each check-off drops items
+    finished more than TODO_DONE_KEEP_DAYS before it. Open items and items
+    inside the window are never touched."""
+    from family_hub import todos as tdlogic
+    import inspect
+    restore_days = inspect.signature(tdlogic.recent_done) \
+        .parameters["days"].default
+    assert fdb.TODO_DONE_KEEP_DAYS > restore_days   # never prune restorable
+
+    old = fdb.add_todo(conn, "Old", "now")
+    edge = fdb.add_todo(conn, "Edge", "now")
+    open_old = fdb.add_todo(conn, "Still open", "later")
+    fresh = fdb.add_todo(conn, "Fresh", "soon")
+    # checked off in date order, so no earlier check-off prunes these yet
+    fdb.set_todo_done(conn, old, "2026-06-01")
+    fdb.set_todo_done(conn, edge, "2026-07-10")        # 60 days before 09-08
+    fdb.set_todo_done(conn, fresh, "2026-07-30")
+    assert {t["id"] for t in fdb.list_todos(conn)} == {old, edge, open_old,
+                                                       fresh}
+    now_done = fdb.add_todo(conn, "Now", "now")
+    fdb.set_todo_done(conn, now_done, "2026-09-08")
+    assert {t["id"] for t in fdb.list_todos(conn)} == {edge, open_old, fresh,
+                                                       now_done}
+
+
 def test_todos_list_order_is_created_then_id(conn):
     a = fdb.add_todo(conn, "first", "now")
     b = fdb.add_todo(conn, "second", "later")
@@ -501,7 +555,7 @@ def test_log_row_lookup(conn):
 def test_delete_chore_keeps_history(conn):
     """Frozen history: deleting a chore removes the definition but leaves its
     completion rows and occurrence-log rows for past days intact."""
-    pid = fdb.add_person(conn, "Rem", "#5BC9F0")
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
     cid = fdb.add_chore(conn, title="Trash", icon="", schedule_kind="daily",
                         days_mask=0, assign_kind="fixed", fixed_person_id=pid,
                         rotation_order=[], rotation_epoch="2026-08-12")
@@ -573,7 +627,7 @@ def test_schema_widens_chore_schedule_check_for_once(tmp_path):
           rotation_epoch TEXT NOT NULL,
           sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
     """)
-    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Rem', '#5BC9F0')")
+    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Ava', '#5BC9F0')")
     c.execute("""INSERT INTO chores(id, title, schedule_kind, assign_kind,
                  fixed_person_id, rotation_epoch)
                  VALUES(1, 'Trash', 'daily', 'fixed', 7, '2026-08-01')""")
@@ -672,7 +726,7 @@ def test_schema_migrates_completions_chore_fk_away(tmp_path):
           person_id INTEGER NOT NULL REFERENCES people(id),
           done_at TEXT NOT NULL, PRIMARY KEY(chore_id, date));
     """)
-    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Rem', '#5BC9F0')")
+    c.execute("INSERT INTO people(id, name, color) VALUES(7, 'Ava', '#5BC9F0')")
     c.execute("""INSERT INTO chores(id, title, schedule_kind, assign_kind,
                  fixed_person_id, rotation_epoch)
                  VALUES(1, 'Trash', 'daily', 'fixed', 7, '2026-08-01')""")
@@ -894,3 +948,45 @@ def test_laundry_log_add_recent_filter_and_prune(conn):
     rows = fdb.laundry_log_recent(conn)
     assert len(rows) == 5   # the ancient row is gone, the new one is in
     assert all(r["ts"] > old for r in rows)
+
+
+def test_failed_single_write_rolls_back_instead_of_leaving_a_transaction(conn):
+    """A write helper that fails (a CHECK here; "database is locked" in real
+    life) must not leave its implicit transaction open. An open transaction
+    on a per-thread connection freezes that thread's reads on an old
+    snapshot and stops the WAL checkpointing until something commits."""
+    with pytest.raises(sqlite3.IntegrityError):
+        fdb.add_todo(conn, "Bad bucket", "never")
+    assert not conn.in_transaction
+    with pytest.raises(sqlite3.IntegrityError):
+        fdb.set_completion(conn, 1, "2026-08-12", None)   # person_id NOT NULL
+    assert not conn.in_transaction
+    with pytest.raises(sqlite3.IntegrityError):
+        fdb.add_person(conn, None, "#5BC9F0")               # name NOT NULL
+    assert not conn.in_transaction
+
+
+def test_events_overlapping_keeps_spans_that_touch_the_window(conn):
+    """The calendar block asks SQL for just the window instead of loading the
+    whole events table on every wall poll. The SQL filter is a coarse
+    superset (the exact all-day / midnight trimming stays in app.py), so it
+    must keep anything whose raw span touches [lo, hi] and drop the rest."""
+    fdb.replace_events(conn, [
+        {"id": "before", "calendar_id": "c", "title": "Before", "all_day": 1,
+         "start_ts": "2026-08-01", "end_ts": "2026-08-03"},
+        {"id": "running", "calendar_id": "c", "title": "Running", "all_day": 1,
+         "start_ts": "2026-08-05", "end_ts": "2026-08-11"},
+        {"id": "edge", "calendar_id": "c", "title": "Edge", "all_day": 1,
+         "start_ts": "2026-08-09", "end_ts": "2026-08-10"},
+        {"id": "timed", "calendar_id": "c", "title": "Timed", "all_day": 0,
+         "start_ts": "2026-08-24T20:00:00-07:00",
+         "end_ts": "2026-08-24T21:00:00-07:00"},
+        {"id": "after", "calendar_id": "c", "title": "After", "all_day": 0,
+         "start_ts": "2026-08-25T09:00:00-07:00",
+         "end_ts": "2026-08-25T10:00:00-07:00"},
+    ])
+    got = fdb.events_overlapping(conn, "2026-08-10", "2026-08-24")
+    assert [e["id"] for e in got] == ["running", "edge", "timed"]
+    # the same row shape list_events returns, so the caller is unchanged
+    assert got[0] == next(e for e in fdb.list_events(conn)
+                          if e["id"] == "running")

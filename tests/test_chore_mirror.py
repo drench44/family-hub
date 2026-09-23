@@ -662,3 +662,62 @@ def test_reconcile_completions_ignores_a_future_day_ticked_on_the_phone(conn):
     assert "STATUS:COMPLETED" not in obj["raw_ics"]
     assert chore_mirror.reconcile_completions(conn, _NOW + dt.timedelta(days=1)) == 0
     assert not fdb.completion_exists(conn, cid, tomorrow)
+
+
+def test_reconcile_moves_reminders_when_the_persons_list_changes(conn):
+    """The list is part of the reminder's identity. Pointing a person at another
+    Reminders list used to leave every occurrence on the old list (same person,
+    same sig, so nothing looked changed). It moves like a hand-off now."""
+    pid = _person(conn, "Emma", "caldav:old")
+    cid = _daily(conn, "Dishes", pid)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    today = _NOW.date().isoformat()
+    before = fdb.get_chore_mirror(conn, cid, today)
+    assert before["cal_object_id"].startswith("caldav:old/")
+    fdb.upsert_caldav_collection(conn, "caldav:new", "VTODO", "Emma 2", None, "t")
+    fdb.update_person(conn, pid, reminder_list_id="caldav:new")
+    res = chore_mirror.reconcile(conn, _CFG, _NOW,
+                                 synced_collections={"caldav:old", "caldav:new"})
+    assert res["moved"] == 8
+    after = fdb.get_chore_mirror(conn, cid, today)
+    assert after["person_id"] == pid
+    assert after["cal_object_id"].startswith("caldav:new/")
+    assert fdb.get_cal_object(conn, before["cal_object_id"]) is None
+    assert fdb.get_cal_object(conn, after["cal_object_id"])["collection_id"] \
+        == "caldav:new"
+
+
+def test_reconcile_list_change_keeps_a_completed_reminder_on_the_old_list(conn):
+    pid = _person(conn, "Emma", "caldav:old")
+    cid = _daily(conn, "Dishes", pid)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    today = _NOW.date().isoformat()
+    m = fdb.get_chore_mirror(conn, cid, today)
+    _complete_in_ios(conn, m)
+    fdb.upsert_caldav_collection(conn, "caldav:new", "VTODO", "Emma 2", None, "t")
+    fdb.update_person(conn, pid, reminder_list_id="caldav:new")
+    chore_mirror.reconcile(conn, _CFG, _NOW,
+                           synced_collections={"caldav:old", "caldav:new"})
+    old = fdb.get_cal_object(conn, m["cal_object_id"])
+    assert old is not None and old["sync_state"] == "SYNCED"   # history kept
+    assert fdb.get_chore_mirror(conn, cid, today)["cal_object_id"] \
+        .startswith("caldav:new/")
+
+
+def test_reconcile_skips_a_mapped_list_that_is_gone(conn, caplog):
+    """A person mapped to a list iCloud dropped (deleted or unshared) must not
+    get new reminders queued into it every day; they could never be sent. Its
+    ledger rows are forgotten (the list and its items are gone)."""
+    import logging
+    pid = _person(conn, "Emma", "caldav:emma")
+    _daily(conn, "Dishes", pid)
+    chore_mirror.reconcile(conn, _CFG, _NOW)
+    assert len(fdb.list_chore_mirror(conn)) == 8
+    fdb.drop_caldav_collection(conn, "caldav:emma")
+    chore_mirror._GONE_WARNED.clear()       # warned once per process
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        res = chore_mirror.reconcile(conn, _CFG, _NOW + dt.timedelta(days=1),
+                                     synced_collections=set())
+    assert res["created"] == 0
+    assert fdb.list_chore_mirror(conn) == []
+    assert any("Emma" in r.getMessage() for r in caplog.records)

@@ -489,3 +489,108 @@ def test_no_remote_configured_clears_remote_fields(tmp_path):
     rec = _status(db)
     assert not any(k.startswith("remote") for k in rec)
     assert rec["at"] != "2000-01-01T00:00:00+00:00"
+
+
+# --- off-box copy never mirrors a missing local history --------------------------
+# The copy used `rsync --delete`, so a new or empty local tree (a replaced disk,
+# a changed FH_OUT) would have wiped every snapshot on the NAS on its first run.
+# It now only adds files, and the NAS tiers are pruned by the same keep counts
+# as the local ones.
+
+def _seed_remote(remote, tier, stamps):
+    (remote / tier).mkdir(parents=True, exist_ok=True)
+    for s in stamps:
+        (remote / tier / f"hub-{s}.db").write_bytes(b"old snapshot")
+
+
+def test_new_empty_local_tree_never_wipes_remote_history(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    old = [f"20260801-{h:02d}00" for h in range(10)]
+    _seed_remote(remote, "hourly", old)
+    _seed_remote(remote, "monthly", ["202601", "202602", "202603"])
+    (remote / "notes.txt").write_text("operator's own file")
+    _run(db, tmp_path / "fresh-out", remote=remote)       # brand-new local tree
+    names = {p.name for p in _snaps(remote, "hourly")}
+    assert {f"hub-{s}.db" for s in old} <= names, "remote history survives"
+    assert "hub-20260818-0930.db" in names, "and the new snapshot is added"
+    assert len(_snaps(remote, "monthly")) == 4
+    assert (remote / "notes.txt").exists(), "files that are not snapshots stay"
+
+
+def test_remote_tiers_are_pruned_by_the_same_keep_counts(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    _seed_remote(remote, "hourly", [f"20260801-{h:02d}00" for h in range(6)])
+    _seed_remote(remote, "daily", ["20260801", "20260802", "20260803"])
+    _run(db, tmp_path / "out", remote=remote,
+         extra_env={"HOURLY_KEEP": "3", "DAILY_KEEP": "2"})
+    assert [p.name for p in _snaps(remote, "hourly")] == [
+        "hub-20260801-0400.db", "hub-20260801-0500.db", "hub-20260818-0930.db"]
+    assert [p.name for p in _snaps(remote, "daily")] == [
+        "hub-20260803.db", "hub-20260818.db"]
+
+
+def test_offbox_copy_does_not_use_delete():
+    import re
+    s = SCRIPT.read_text()
+    m = re.search(r'rsync\b[^\n]*"\$OUT/"\s+"\$REMOTE/"', s)
+    assert m and "--delete" not in m.group(0), \
+        "the off-box copy must never mirror deletions from the local tree"
+
+
+def test_partials_are_never_copied_off_box(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    out = tmp_path / "out"
+    remote = tmp_path / "nas"
+    _run(db, out, remote=remote)
+    # a partial that appears between the sweep and the copy (a concurrent run)
+    (out / "daily" / ".partial-x.db").write_bytes(b"half")
+    _run(db, out, remote=remote, now="202608181030")
+    assert not list((remote / "daily").glob(".partial*"))
+
+
+def test_stale_partial_wal_and_shm_sidecars_are_swept(tmp_path):
+    # The integrity check opens the snapshot, which is in WAL mode, so a hard
+    # kill there leaves .partial-*.db-wal / -shm next to it. They are swept too.
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    out = tmp_path / "backup"
+    for tier in ("hourly", "daily", "weekly", "monthly"):
+        (out / tier).mkdir(parents=True)
+        for suffix in (".db", ".db-wal", ".db-shm"):
+            (out / tier / f".partial-20260101-0000{suffix}").write_bytes(b"stale")
+    _run(db, out)
+    for tier in ("hourly", "daily", "weekly", "monthly"):
+        assert not list((out / tier).glob(".partial*")), tier
+
+
+def test_snapshot_of_a_wal_db_leaves_no_sidecars_and_is_not_wal(tmp_path):
+    """The online backup copies the live db's WAL journal mode into the
+    snapshot, so its integrity check made a .partial-*.db-wal that could be
+    left behind (and on some builds always was, next to every snapshot). The
+    snapshot is switched out of WAL before it is closed: no sidecars, and a
+    restore copies one plain file. The app holds the live db open (as it does
+    on the box), so the live db's own sidecars exist during the run."""
+    db = tmp_path / "hub.db"
+    c = sqlite3.connect(db)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("create table todos (id integer primary key, title text)")
+    c.executemany("insert into todos (title) values (?)", [("a",)] * 50)
+    c.commit()
+    try:
+        out = tmp_path / "backup"
+        _run(db, out)
+    finally:
+        c.close()
+    for tier in ("hourly", "daily", "weekly", "monthly"):
+        assert not list((out / tier).glob("*-wal")) and \
+            not list((out / tier).glob("*-shm")), f"{tier}: sidecars left behind"
+    snap = _snaps(out, "hourly")[0]
+    assert snap.read_bytes()[18:20] == b"\x01\x01", "rollback journal, not WAL"
+    s = sqlite3.connect(snap)
+    assert s.execute("select count(*) from todos").fetchone()[0] == 50
+    s.close()

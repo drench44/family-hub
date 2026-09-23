@@ -374,12 +374,14 @@
       if (form && typeof form.requestSubmit === 'function') {
         form.requestSubmit();   // e.g. #todo-add-form: adds the to-do
       } else if (el) {
-        // The chore editor is a non-<form> div with a [data-submit] Save button,
-        // so el.form is null there. Commit through that button (its own
-        // validation surfaces an error if the chore is incomplete) instead of
+        // The chore and person editors are non-<form> divs, so el.form is
+        // null there. Their Save buttons are [data-submit] (chore) and
+        // [data-psubmit] (person). Commit through that button (its own
+        // validation surfaces an error if the form is incomplete, and it
+        // ignores a second press while a save is still out) instead of
         // dismissing the keyboard with nothing saved.
         const scope = el.closest('.chore-modal, .chore-card, dialog, [role="dialog"]');
-        const submit = scope && scope.querySelector('[data-submit]');
+        const submit = scope && scope.querySelector('[data-submit], [data-psubmit]');
         if (submit) submit.click(); else el.blur();
       }
       hide();
