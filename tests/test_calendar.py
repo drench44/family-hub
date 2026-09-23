@@ -680,3 +680,33 @@ def test_a_feed_of_only_unreadable_items_is_still_a_suspicious_empty(conn):
     st = cs.sync_once(FakeClient({"cal": [broken]}), conn, cfg, t0 + dt.timedelta(hours=1))
     assert st["ok"] is False
     assert [e["title"] for e in fdb.list_events(conn)] == ["Soccer"]
+
+
+def test_a_google_calendar_that_suddenly_returns_nothing_keeps_its_events(conn):
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [TIMED_FIXTURE]}), conn, cfg, t0)
+    st = cs.sync_once(FakeClient({"cal": []}), conn, cfg, t0 + dt.timedelta(hours=1))
+    assert [e["title"] for e in fdb.list_events(conn)] == ["Dentist"]
+    assert st["ok"] is False and "no events" in st["error"]
+
+
+def test_the_error_clock_starts_fresh_after_a_clean_sync_and_ignores_an_auth_status(conn):
+    class Boom:
+        def configured(self):
+            return True
+
+        def fetch_events(self, *a):
+            raise RuntimeError("503")
+
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [TIMED_FIXTURE]}), conn, cfg, t0)
+    later = t0 + dt.timedelta(hours=3)
+    assert cs.sync_once(Boom(), conn, cfg, later)["error_since"] == later.isoformat()
+    # a prior expired-sign-in status is not "an error already running"
+    fdb.kv_set(conn, "calendar_status", {"ok": False, "needs_auth": True,
+                                         "last_sync": "2026-08-01T09:00:00-07:00"})
+    after = t0 + dt.timedelta(hours=5)
+    assert cs.sync_once(Boom(), conn, cfg, after)["error_since"] == after.isoformat()
+
