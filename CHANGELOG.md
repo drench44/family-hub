@@ -144,6 +144,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - When one part of the wall fails to draw, the header now reads "live · 1
   panel failed" in amber (hover names it) until that part draws again,
   instead of plain "live" while the part kept showing old data.
+- A reminder marked done with a lower-case status ("completed") now reads
+  as done, as the iCloud standard says it should.
 
 ## [1.8.1] — 2026-09-22
 

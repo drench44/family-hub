@@ -278,6 +278,87 @@ def test_caldav_sync_pulls_reminders(conn):
     assert cols["caldav:rem"]["display_name"] == "Groceries"
 
 
+def test_batched_reminder_pull_commits_every_batch_and_the_tail(conn, tmp_path,
+                                                                 monkeypatch):
+    """A list's pulled changes are saved in batches of _PULL_BATCH. With a batch
+    of 2 and 5 new reminders: a second connection sees the first batch while
+    the pull is still going, and once the list is done (checked before the
+    next list is fetched, since later status writes commit anyway) no
+    transaction is left open and all five are visible."""
+    monkeypatch.setattr(caldav_sync, "_PULL_BATCH", 2)
+    todos = [_VTODO.replace("UID:t1", f"UID:b{i}").replace("Buy milk", f"R{i}")
+             for i in range(5)]
+    other = fdb.connect(str(tmp_path / "hub.db"))
+
+    def visible():
+        return {r["summary"] for r in other.execute(
+            "SELECT summary FROM cal_objects WHERE collection_id = 'caldav:a'")}
+
+    seen = {}
+
+    class Batched(FakeCalDav):
+        def fetch_todos(self, collection):
+            if collection["id"] == "b":         # list a is fully pulled by now
+                seen["in_tx"] = conn.in_transaction
+                seen["after"] = visible()
+                return []
+            return self._list_a()
+
+        def _list_a(self):
+            for i, ics in enumerate(todos):
+                if i == 3:                       # two batches written so far
+                    seen["mid"] = visible()
+                yield {"href": f"h/a/{i}", "etag": _etag(ics), "ics": ics}
+
+    try:
+        caldav_sync.sync_once(Batched([
+            {"id": "a", "name": "A", "comp": "VTODO"},
+            {"id": "b", "name": "B", "comp": "VTODO"}]), conn, _CFG, _NOW)
+    finally:
+        other.close()
+    assert seen["mid"] == {"R0", "R1"}, "a full batch is saved mid-pull"
+    assert seen["in_tx"] is False, "the last partial batch is saved too"
+    assert seen["after"] == {f"R{i}" for i in range(5)}
+    assert not conn.in_transaction
+
+
+def test_a_list_that_fails_mid_pull_still_saves_its_partial_batch(conn, tmp_path,
+                                                                    monkeypatch):
+    """The prune commits a clean list's tail, but a list that raises part way
+    skips the prune. What parsed before the failure is still saved (the
+    `finally` commit), and no transaction is left open for the next list."""
+    monkeypatch.setattr(caldav_sync, "_PULL_BATCH", 2)
+    todos = [_VTODO.replace("UID:t1", f"UID:b{i}").replace("Buy milk", f"R{i}")
+             for i in range(3)]
+    other = fdb.connect(str(tmp_path / "hub.db"))
+    seen = {}
+
+    class FailsPartWay(FakeCalDav):
+        def fetch_todos(self, collection):
+            if collection["id"] == "b":
+                seen["in_tx"] = conn.in_transaction
+                seen["after"] = {r["summary"] for r in other.execute(
+                    "SELECT summary FROM cal_objects "
+                    "WHERE collection_id = 'caldav:a'")}
+                return []
+            return self._list_a()
+
+        def _list_a(self):
+            for i, ics in enumerate(todos):
+                yield {"href": f"h/a/{i}", "etag": _etag(ics), "ics": ics}
+            raise RuntimeError("connection reset mid-list")
+
+    try:
+        st = caldav_sync.sync_once(FailsPartWay([
+            {"id": "a", "name": "A", "comp": "VTODO"},
+            {"id": "b", "name": "B", "comp": "VTODO"}]), conn, _CFG, _NOW)
+    finally:
+        other.close()
+    assert st["ok"] is False and "connection reset" in st["error"]
+    assert seen["in_tx"] is False
+    assert seen["after"] == {"R0", "R1", "R2"}
+
+
 def _stored_reminder_titles(conn):
     """Open reminders as the wall reads them (cal_objects, not a kv copy)."""
     return sorted(r["title"] for o in fdb.list_open_vtodo_objects(conn)

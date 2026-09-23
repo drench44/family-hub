@@ -108,6 +108,16 @@ _OPEN = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:u1\r\n"
          "END:VTODO\r\nEND:VCALENDAR\r\n")
 
 
+def test_parse_vtodo_reads_status_completed_in_any_case():
+    """RFC 5545: enumerated values are case-insensitive. The SQL prefilter
+    (db._OPEN_VTODO_WHERE) already hides a lower-case status:completed row, so
+    the parser must call it done too, or the two disagree."""
+    for line in ("STATUS:COMPLETED", "STATUS:completed", "status:Completed"):
+        ics = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:x\r\n"
+               f"SUMMARY:x\r\n{line}\r\nEND:VTODO\r\nEND:VCALENDAR\r\n")
+        assert rem.parse_vtodo(ics, "c")[0]["completed"] is True, line
+
+
 def test_set_completed_marks_done_and_bumps_sequence():
     ics = rem.set_completed(_OPEN, True, _NOW)
     r = rem.parse_vtodo(ics, "caldav:x")[0]
