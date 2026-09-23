@@ -180,8 +180,15 @@ def tile_source(name: str, *, configured: bool, enabled: bool, state: dict | Non
     elif stamps_data and data_ts is None:
         out["status"] = "error"
         out["last_error"] = out["last_error"] or f"{name} data carries no timestamp"
+    elif stamps_data and data_ts - now > 300:
+        out["status"] = "error"
+        out["last_error"] = f"{name} data is stamped {int(data_ts - now)} s in the future (a clock or the value is wrong)"
     elif stamps_data and now - data_ts > max_age_s:
         out["status"] = "stale"
+    elif st.get("stale_items"):
+        out["status"] = "degraded"
+        out["stale_items"] = list(st["stale_items"])
+        out["last_error"] = "stale: " + ", ".join(st["stale_items"])
     else:
         out["status"] = "ok"
     out["ok"] = out["status"] == "ok"
