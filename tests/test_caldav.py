@@ -2,6 +2,8 @@ import datetime as dt
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from family_hub import caldav_service, caldav_sync
 from family_hub import db as fdb
 from family_hub import reminders as remlogic
@@ -2111,6 +2113,36 @@ def test_an_old_style_missing_clock_restarts(conn):
     assert "caldav:old" in _collection_ids(conn)
 
 
+def test_sightings_two_hours_apart_keep_the_missing_clock_running(conn):
+    """A gap of exactly _MISSING_GAP_HOURS between good discovers still counts
+    as continuous: sightings every 2h from hour 1 drop the list at hour 25."""
+    later = _gone_list_setup(conn)
+    for h in range(1, 24, 2):                               # 1, 3, ... 23
+        caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=h))
+    assert "caldav:old" in _collection_ids(conn)
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"]["since"] == \
+        (_NOW + dt.timedelta(hours=1)).isoformat()          # never restarted
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+def test_a_gap_just_over_two_hours_restarts_the_missing_clock(conn):
+    """2h and one minute with no good discover: nothing says the list stayed
+    gone, so the clock starts over at that sighting."""
+    later = _gone_list_setup(conn)
+    _sync_hourly(later, conn, 1, 13)
+    restart = _NOW + dt.timedelta(hours=15, minutes=1)      # 2h01m after hour 13
+    caldav_sync.sync_once(later, conn, _CFG, restart)
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"]["since"] == \
+        restart.isoformat()
+    for h in range(16, 39):                                 # hourly again
+        caldav_sync.sync_once(later, conn, _CFG,
+                              _NOW + dt.timedelta(hours=h, minutes=1))
+    assert "caldav:old" in _collection_ids(conn)            # 23h since the restart
+    caldav_sync.sync_once(later, conn, _CFG, restart + dt.timedelta(hours=24))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
 class _PutsFail(WriteFake):
     def put_object(self, collection, href, ics, base_etag=None, uid=None):
         raise RuntimeError("connection reset")
@@ -2296,6 +2328,38 @@ def test_a_real_401_on_a_chore_403_url_asks_to_reconnect(conn):
                                                    reason="Unauthorized"))
     res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
     assert res["needs_auth"] is True
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_an_authorization_error_with_no_reason_reads_as_401():
+    """The caldav library's AuthorizationError carries no status; with no
+    reason phrase it is the dead-password case, 401."""
+    from caldav.lib import error as dav_error
+    assert caldav_sync._http_status(dav_error.AuthorizationError(url=_CHORE_URL)) == 401
+
+
+def test_a_reasonless_authorization_error_on_a_push_asks_to_reconnect_and_never_parks(conn):
+    from caldav.lib import error as dav_error
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      dav_error.AuthorizationError(url=_CHORE_URL))
+    for n in range(fdb.CAL_PARK_ATTEMPTS * 2):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+        assert res["needs_auth"] is True
+    assert fdb.caldav_parked(conn) == []
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+
+
+def test_an_untyped_push_error_saying_401_does_not_ask_to_reconnect(conn):
+    """Deliberate: a push error is read by its status, never its text. An
+    untyped error that only says 401 (it could be a URL) is a plain failure,
+    retried, not a reconnect prompt. Discovery and the pull, which run first
+    with the same password, still catch a dead one."""
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      RuntimeError("PUT https://x/cal/a.ics -> 401 Unauthorized"))
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["needs_auth"] is False
     assert fdb.caldav_parked(conn) == []
 
 
