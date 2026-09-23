@@ -31,7 +31,7 @@ def parse_vtodo(ics_data, list_id: str, list_name: str = "") -> list[dict]:
     out = []
     for comp in cal.walk("VTODO"):
         uid = str(comp.get("UID") or "")
-        status = str(comp.get("STATUS") or "")
+        status = str(comp.get("STATUS") or "").upper()   # RFC 5545: any case
         completed = status == "COMPLETED" or comp.get("COMPLETED") is not None
         due = comp.decoded("DUE", None)
         if due is None:
