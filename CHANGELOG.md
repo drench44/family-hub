@@ -142,9 +142,11 @@ rolls that section to a dated version via `python scripts/release.py`.
   is saved), and their badge reads "iCloud list gone" instead of a tick.
   The sync and chore-mirror status name them too. Before, their chores just
   stopped reaching iCloud with only a log line.
-- When one part of the wall fails to draw, the header now reads "live · 1
-  panel failed" in amber (hover names it) until that part draws again,
-  instead of plain "live" while the part kept showing old data.
+- When part of the wall fails to draw, the header reads "live · 1 panel
+  failed" (or "1 part" for something that is not a panel, like the backup
+  badge) in amber until it draws again, and hovering names it in plain
+  words ("Calendar"), instead of plain "live" while it kept showing old
+  data.
 - A reminder marked done with a lower-case status ("completed") now reads
   as done, as the iCloud standard says it should.
 - A chore reminder list that comes back after being gone for a while no

@@ -3494,9 +3494,26 @@ let pollApplied = 0;
    fetch's try/catch, so one bad field (a render bug, not an outage) marked
    the wall "offline" and skipped every step after it. Now it is logged and
    the rest still paint. A step whose LATEST run threw is kept in
-   renderFailed, so the header can say a panel is stuck on its last paint
-   (connWord) instead of reading plain "live"; it clears when the step draws
-   again. */
+   renderFailed, so the header can say a part is stuck on its last paint
+   (paintConnWord) instead of reading plain "live"; it clears when the step
+   draws again.
+
+   RENDER_STEPS gives each step the name a person reads in the header
+   tooltip, and says whether it is a panel on the wall or some other part
+   (a badge, the theme, housekeeping), so the header never calls event
+   cleanup a "panel". Steps run in this order. */
+const RENDER_STEPS = {
+  applyHouseTheme: { label: 'House theme', panel: false },
+  wirePanels: { label: 'Side panels', panel: true },
+  initTiles: { label: 'Cameras', panel: true },
+  initCamGrid: { label: 'Cameras tab', panel: false },
+  renderCalendar: { label: 'Calendar', panel: true },
+  renderPeople: { label: 'Chores', panel: true },
+  renderTodoSlot: { label: 'To-dos', panel: true },
+  renderIntegrations: { label: 'Settings list', panel: false },
+  renderBackup: { label: 'Backup badge', panel: false },
+  pruneEvIndex: { label: 'Event cleanup', panel: false },
+};
 const renderFailed = new Set();
 function renderStep(name, fn) {
   try {
@@ -3509,15 +3526,20 @@ function renderStep(name, fn) {
 }
 
 /* The header's connection word for a hub that answered: "live", or
-   "live · N panel(s) failed" while any render step's latest run threw (the
-   tooltip names them). */
+   "live · 1 panel, 2 parts failed" while any render step's latest run threw
+   (the tooltip names them, in step order). */
 function paintConnWord() {
   const el = document.getElementById('conn-word');
-  const n = renderFailed.size;
-  el.textContent = n ? `live · ${n} panel${n === 1 ? '' : 's'} failed` : 'live';
-  document.body.dataset.render = n ? 'partial' : 'ok';
-  el.title = n
-    ? `Could not draw: ${[...renderFailed].join(', ')}. The rest of the wall is up to date.`
+  const failed = Object.keys(RENDER_STEPS).filter((k) => renderFailed.has(k));
+  const panels = failed.filter((k) => RENDER_STEPS[k].panel).length;
+  const parts = failed.length - panels;
+  const counts = [];
+  if (panels) counts.push(`${panels} panel${panels === 1 ? '' : 's'}`);
+  if (parts) counts.push(`${parts} part${parts === 1 ? '' : 's'}`);
+  el.textContent = failed.length ? `live · ${counts.join(', ')} failed` : 'live';
+  document.body.dataset.render = failed.length ? 'partial' : 'ok';
+  el.title = failed.length
+    ? `Could not draw: ${failed.map((k) => RENDER_STEPS[k].label).join(', ')}. The rest of the wall is up to date.`
     : '';
 }
 
