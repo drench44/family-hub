@@ -239,6 +239,8 @@ body {
   color: var(--good);
 }
 [data-conn="down"] .conn { color: var(--crit); }
+/* live, but a panel's latest draw failed (it shows its last paint) */
+[data-conn="up"][data-render="partial"] .conn { color: var(--warn); white-space: nowrap; }
 /* Backup-health badge: absent (hidden attr) when healthy or still unknown;
    amber pill once a known backup goes stale. */
 .backup-badge {
