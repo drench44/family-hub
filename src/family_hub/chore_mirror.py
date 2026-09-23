@@ -212,14 +212,15 @@ def reconcile_completions(conn, now: dt.datetime) -> int:
     return added
 
 
-def people_with_gone_lists(conn) -> list[dict]:
-    """Active people mapped to a Reminders list the sync no longer has (it was
-    deleted, unshared or re-addressed in iCloud and dropped after a day). Their
-    chores are left out of the mirror until a new list is picked, so settings
-    names them instead of looking healthy. [{id, name, list_id}]."""
+def people_with_gone_lists(conn, include_inactive: bool = False) -> list[dict]:
+    """Active people (all people with `include_inactive`) mapped to a Reminders
+    list the sync no longer has (it was deleted, unshared or re-addressed in
+    iCloud and dropped after a day). Their chores are left out of the mirror
+    until a new list is picked, so settings names them instead of looking
+    healthy. [{id, name, list_id}]."""
     known = {c["id"] for c in fdb.list_caldav_collections(conn, "VTODO")}
     return [{"id": p["id"], "name": p["name"], "list_id": p["reminder_list_id"]}
-            for p in fdb.list_people(conn)
+            for p in fdb.list_people(conn, include_inactive=include_inactive)
             if p.get("reminder_list_id") and p["reminder_list_id"] not in known]
 
 

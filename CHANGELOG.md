@@ -135,11 +135,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A reminder list is dropped only after a full day of good syncs have all
   found it missing. Before, a list seen missing once, then a day of iCloud
   errors, was dropped on the next good sync.
-- When a person's iCloud chore list is gone (deleted, unshared or moved),
-  settings now says so: the iCloud panel shows "Sam's iCloud chore list is
-  gone; pick a new one", the person's editor says the same above the list
-  picker, and their badge reads "iCloud list gone" instead of a tick. The
-  sync and chore-mirror status name them too. Before, their chores just
+- Settings says when a person's iCloud chore list is gone (deleted,
+  unshared or moved), even when every list is gone: the iCloud panel shows
+  "Sam's iCloud chore list is gone; pick a new one", the person's editor
+  says the same above the list picker (and drops the note once a new list
+  is saved), and their badge reads "iCloud list gone" instead of a tick.
+  The sync and chore-mirror status name them too. Before, their chores just
   stopped reaching iCloud with only a log line.
 - When one part of the wall fails to draw, the header now reads "live · 1
   panel failed" in amber (hover names it) until that part draws again,

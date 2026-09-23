@@ -2154,7 +2154,14 @@ def _chore_row(c, cid: int) -> dict:
 @app.get("/api/admin/state")
 def admin_state():
     c = _db()
-    return {"people": fdb.list_people(c, include_inactive=True),
+    # list_gone: mapped to a list the sync dropped. Decided here, not on the
+    # wall: an empty list array means "every list gone" as much as "not
+    # connected", and only the server can tell them apart.
+    gone = {p["id"] for p in
+            chore_mirror.people_with_gone_lists(c, include_inactive=True)}
+    people = [{**p, "list_gone": p["id"] in gone}
+              for p in fdb.list_people(c, include_inactive=True)]
+    return {"people": people,
             "chores": fdb.list_chores(c, include_inactive=True),
             "away_periods": fdb.list_away_periods(c),
             # iCloud VTODO lists a person's chores can mirror into (P2 picker);
