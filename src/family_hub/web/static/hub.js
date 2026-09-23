@@ -3493,13 +3493,32 @@ let pollApplied = 0;
 /* Run one render step of a poll on its own. The steps used to share the
    fetch's try/catch, so one bad field (a render bug, not an outage) marked
    the wall "offline" and skipped every step after it. Now it is logged and
-   the rest still paint. */
+   the rest still paint. A step whose LATEST run threw is kept in
+   renderFailed, so the header can say a panel is stuck on its last paint
+   (connWord) instead of reading plain "live"; it clears when the step draws
+   again. */
+const renderFailed = new Set();
 function renderStep(name, fn) {
   try {
     fn();
+    renderFailed.delete(name);
   } catch (e) {
+    renderFailed.add(name);
     console.error(`poll: ${name} failed; the rest of the wall still renders`, e);
   }
+}
+
+/* The header's connection word for a hub that answered: "live", or
+   "live · N panel(s) failed" while any render step's latest run threw (the
+   tooltip names them). */
+function paintConnWord() {
+  const el = document.getElementById('conn-word');
+  const n = renderFailed.size;
+  el.textContent = n ? `live · ${n} panel${n === 1 ? '' : 's'} failed` : 'live';
+  document.body.dataset.render = n ? 'partial' : 'ok';
+  el.title = n
+    ? `Could not draw: ${[...renderFailed].join(', ')}. The rest of the wall is up to date.`
+    : '';
 }
 
 async function poll() {
@@ -3512,6 +3531,7 @@ async function poll() {
     if (seq < pollApplied) return;   // a newer poll already answered: the hub is up
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
+    document.getElementById('conn-word').title = '';
     return;
   }
   if (seq < pollApplied) return;
@@ -3526,7 +3546,8 @@ async function poll() {
   }
   data_date = data.date;
   links = data.links || {};
-  // The hub answered, so the wall is live whatever a render step does below.
+  // The hub answered, so the wall is live whatever a render step does below
+  // (paintConnWord adds a note after them if any failed).
   document.body.dataset.conn = 'up';
   document.getElementById('conn-word').textContent = 'live';
   renderStep('applyHouseTheme', () => applyHouseTheme(data.theme));   // house default on a fresh (un-overridden) device
@@ -3539,6 +3560,7 @@ async function poll() {
   renderStep('renderIntegrations', () => renderIntegrations(data));
   renderStep('renderBackup', () => renderBackup(data));
   renderStep('pruneEvIndex', () => pruneEvIndex());
+  paintConnWord();
 }
 
 // Header backup badge: absent when healthy/unknown, amber when the backup has

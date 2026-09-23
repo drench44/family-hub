@@ -8859,9 +8859,38 @@ test('poll: a render step that throws is logged, the rest still render, and the 
   await sandbox.poll();
   assert.deepEqual([...ran], ['cal', 'people', 'todos', 'backup'], 'every later step still ran');
   assert.equal(document.body.dataset.conn, 'up', 'a render bug is not an outage');
-  assert.equal(document.getElementById('conn-word').textContent, 'live');
+  assert.equal(document.getElementById('conn-word').textContent, 'live · 1 panel failed',
+    'live, but the failed panel is visible, not only in the console');
   assert.equal(errors.length, 1, 'the broken step was logged');
   assert.match(String(errors[0][0]), /renderCalendar|calendar/);
+});
+
+test('poll: the failed-panel note counts the latest render and clears when it draws again', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ date: '2026-09-22', links: {}, people: [] }) });
+  sandbox.console = { ...console, error: () => {} };
+  const word = () => document.getElementById('conn-word').textContent;
+  let calBroken = true;
+  let peopleBroken = true;
+  sandbox.renderCalendar = () => { if (calBroken) throw new Error('bad event'); };
+  sandbox.renderPeople = () => { if (peopleBroken) throw new Error('bad person'); };
+  sandbox.renderTodoSlot = () => {};
+  sandbox.renderBackup = () => {};
+  await sandbox.poll();
+  assert.equal(word(), 'live · 2 panels failed');
+  assert.equal(document.body.dataset.render, 'partial', 'drives the warn colour');
+  assert.match(document.getElementById('conn-word').title || '', /renderCalendar/,
+    'the tooltip names what failed');
+  peopleBroken = false;
+  await sandbox.poll();
+  assert.equal(word(), 'live · 1 panel failed', 'a step that draws again stops counting');
+  calBroken = false;
+  await sandbox.poll();
+  assert.equal(word(), 'live', 'all clear once every step draws');
+  assert.equal(document.body.dataset.render, 'ok');
+  assert.equal(document.getElementById('conn-word').title || '', '');
 });
 
 test('poll: a failed fetch still marks the wall offline', async () => {

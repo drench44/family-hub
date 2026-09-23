@@ -141,6 +141,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   picker, and their badge reads "iCloud list gone" instead of a tick. The
   sync and chore-mirror status name them too. Before, their chores just
   stopped reaching iCloud with only a log line.
+- When one part of the wall fails to draw, the header now reads "live · 1
+  panel failed" in amber (hover names it) until that part draws again,
+  instead of plain "live" while the part kept showing old data.
 
 ## [1.8.1] — 2026-09-22
 
