@@ -126,6 +126,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   (and logged) instead of counting as "not yet synced" forever. If the list
   comes back they go out again, except chore reminders for days that have
   passed, which are not sent.
+- The missing-list clock no longer trusts a saved time later than now (the
+  list would never drop, silently) or a saved value that is not a clock
+  store at all (every iCloud sync failed). Both are logged and start over.
 - A wall change iCloud keeps refusing (for example on a read-only list) is set
   aside after iCloud refuses it 5 times, instead of retrying forever; failed
   tries during an outage do not count toward that. The sync status says how

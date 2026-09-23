@@ -509,6 +509,11 @@ def _drop_gone_lists(conn, discovered: list[dict], now: dt.datetime) -> None:
         return
     seen = {"caldav:" + c["id"] for c in discovered}
     missing = fdb.kv_get(conn, "caldav_missing_since") or {}
+    if not isinstance(missing, dict):
+        # reading a clock off anything else would throw and fail every sync
+        log.warning("caldav_missing_since unreadable (%r); every missing "
+                    "clock starts over", missing)
+        missing = {}
     now_iso = now.isoformat()
     kept = {}
     for col in fdb.list_caldav_collections(conn):
@@ -529,9 +534,14 @@ def _drop_gone_lists(conn, discovered: list[dict], now: dt.datetime) -> None:
                     if stamp is not None and \
                             (stamp.tzinfo is None) != (now.tzinfo is None):
                         raise ValueError("time zone does not match")
+                    # a stamp later than now reads as a negative age: the
+                    # list would never drop until real time caught up
+                    if stamp is not None and stamp > now:
+                        raise ValueError("stamp is in the future")
             except Exception:
-                log.warning("caldav_missing_since for %s unparseable (%r); "
-                            "its missing clock starts over", cid, clock)
+                log.warning("caldav_missing_since for %s unparseable or in the "
+                            "future (%r); its missing clock starts over",
+                            cid, clock)
                 since_dt = last_dt = None
         elif clock is not None and not isinstance(clock, str):
             # a bare time string is the older version's clock (restarts

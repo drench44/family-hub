@@ -2166,6 +2166,50 @@ def test_a_garbled_missing_clock_warns_and_restarts(conn, caplog, clock):
                r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
 
 
+def test_a_missing_clock_stamped_in_the_future_warns_and_restarts(conn, caplog):
+    """A stamp later than now would read as a negative age: the list would
+    never drop until real time caught up, and nothing would say so. It is
+    garbled: warn and start over."""
+    later = _gone_list_setup(conn)
+    now = _NOW + dt.timedelta(hours=1)
+    ahead = (now + dt.timedelta(days=30)).isoformat()
+    for clock in ({"since": ahead, "last": now.isoformat()},
+                  {"since": now.isoformat(), "last": ahead}):
+        fdb.kv_set(conn, "caldav_missing_since", {"caldav:old": clock})
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+            st = caldav_sync.sync_once(later, conn, _CFG, now)
+        assert st["ok"] is True, st
+        assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"] == \
+            {"since": now.isoformat(), "last": now.isoformat()}, clock
+        assert any("caldav_missing_since" in r.getMessage() and "caldav:old" in
+                   r.getMessage() for r in caplog.records
+                   if r.levelno >= logging.WARNING), clock
+    # restarted at hour 1, the clock then runs normally: gone at hour 25
+    _sync_hourly(later, conn, 2, 24)
+    assert "caldav:old" in _collection_ids(conn)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+@pytest.mark.parametrize("stored", [["not", "a", "dict"], "garbage", 42],
+                         ids=["list", "text", "number"])
+def test_a_garbled_missing_clock_store_warns_and_starts_empty(conn, caplog, stored):
+    """If the whole caldav_missing_since value is not a dict, reading a clock
+    off it would throw and fail every sync. Warn and start from nothing."""
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since", stored)
+    now = _NOW + dt.timedelta(hours=1)
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        st = caldav_sync.sync_once(later, conn, _CFG, now)
+    assert st["ok"] is True, st
+    assert "caldav:old" in _collection_ids(conn)
+    assert fdb.kv_get(conn, "caldav_missing_since") == \
+        {"caldav:old": {"since": now.isoformat(), "last": now.isoformat()}}
+    assert any("caldav_missing_since" in r.getMessage()
+               for r in caplog.records if r.levelno >= logging.WARNING)
+
+
 class _PutsFail(WriteFake):
     def put_object(self, collection, href, ics, base_etag=None, uid=None):
         raise RuntimeError("connection reset")
