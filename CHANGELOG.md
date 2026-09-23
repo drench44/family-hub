@@ -10,6 +10,15 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- Calendar times are shown in the house time zone. A calendar set to a
+  fixed zone would have shown its events an hour late from November 1.
+- Cancelled events from calendar links and iCloud, invites you declined,
+  and Google's "working location" and "focus time" entries no longer show.
+- A brief Google hiccup no longer flashes "Calendar sync hit a snag"; it
+  shows only if the problem lasts an hour. An outage at Google's sign-in
+  server no longer asks you to reconnect.
+
 ## [1.8.0] — 2026-09-22
 
 ### Fixed

@@ -384,6 +384,28 @@ GOOGLE_EVENT_COLORS = {
 }
 
 
+# A Google/ICS sync error is held back from the wall this long, while a
+# previous good sync's events are still showing: a one-tick network or Google
+# 5xx blip used to flash "Calendar sync hit a snag" on the first failure
+# (review, 2026-09-22). iCloud has its own, longer hold (caldav_sync).
+CALENDAR_ERROR_GRACE_MIN = 60
+
+
+def _google_status_for_wall(s: dict, now: dt.datetime) -> dict:
+    """The Google/ICS status as the wall should read it: ok during the grace
+    window of a fresh non-auth error, when there is a last good sync to show."""
+    if s.get("ok") or s.get("needs_auth") or not s.get("last_sync"):
+        return s
+    since = s.get("error_since")
+    if not since:
+        return s
+    try:
+        age_min = (now - dt.datetime.fromisoformat(since)).total_seconds() / 60.0
+    except (TypeError, ValueError):
+        return s
+    return {**s, "ok": True} if age_min < CALENDAR_ERROR_GRACE_MIN else s
+
+
 def _calendar_status_agg(c) -> dict:
     """Aggregate calendar health across every ENABLED source (Google/ICS + iCloud
     CalDAV), so the wall's banner reflects whether ANY calendar is connected, not
@@ -393,8 +415,9 @@ def _calendar_status_agg(c) -> dict:
     statuses = []
     if cfg.calendars and (_integration_on(c, "google_calendar")
                           or _integration_on(c, "ics_calendar")):
-        statuses.append(fdb.kv_get(c, "calendar_status")
-                        or {"ok": False, "error": "not configured"})
+        statuses.append(_google_status_for_wall(
+            fdb.kv_get(c, "calendar_status") or {"ok": False, "error": "not configured"},
+            _now_local()))
     if _integration_on(c, "icloud_caldav"):
         statuses.append(fdb.kv_get(c, "caldav_status") or {"ok": False})
     if not statuses:

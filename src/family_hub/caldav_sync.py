@@ -374,7 +374,8 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                     _store_object(conn, cal_id, "VEVENT", obj, seen_objs)
                     try:
                         events.extend(ics_events(
-                            obj["ics"], cal_id, lo_dt.date(), hi_dt.date()))
+                            obj["ics"], cal_id, lo_dt.date(), hi_dt.date(),
+                            now.tzinfo))
                     except Exception:
                         # One unparseable event must not freeze the whole
                         # calendar behind a collection error (which would keep
