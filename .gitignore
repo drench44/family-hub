@@ -1,5 +1,7 @@
 # Box-only state + secrets — never committed.
 data/
+# Written into the staged tree by the deploy (commit + config hash), never here.
+src/family_hub/build_info.json
 config.json
 .env
 scripts/token.json

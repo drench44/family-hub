@@ -69,9 +69,66 @@ FLEET_TTL = 30.0
 _fleet_cache: dict[str, tuple[float, dict]] = {}
 
 
+# The last REAL fetch of each proxied upstream in this process (a cache hit
+# records nothing), for /health/full: {name: {"last_ok", "data_ts",
+# "last_error", "last_error_kind", "last_error_at"}}, times in epoch seconds.
+# data_ts is the upstream's own stamp on its data (wx.json `ts`, the freshest
+# climate room, the fleet rollup's generatedAt), so a feed that answers with
+# old data shows as old, not as fine. In memory on purpose: a new container
+# starts empty, so nothing the previous one read can pass for its own.
+SOURCE_STATE: dict[str, dict] = {}
+
+
+def error_kind(e: BaseException) -> str:
+    """unreachable (no answer: down, wrong host, network), upstream (it
+    answered with a 5xx), or invalid (it answered, and the hub could not use
+    the answer: a 4xx, a body of the wrong shape). Only for the reader of
+    /health/full; every kind fails the gate the same way."""
+    if isinstance(e, (httpx.TransportError, OSError)):
+        return "unreachable"
+    if isinstance(e, httpx.HTTPStatusError) and e.response.status_code >= 500:
+        return "upstream"
+    return "invalid"
+
+
+def _note_ok(name: str, data_ts: float | None, **extra) -> None:
+    """A good fetch. Clears the previous error, so a later verdict never
+    quotes an old, unrelated one as its reason."""
+    st = SOURCE_STATE.setdefault(name, {})
+    st["last_ok"] = time.time()
+    st["data_ts"] = data_ts
+    for k in ("last_error", "last_error_kind", "last_error_at"):
+        st.pop(k, None)
+    st.update(extra)
+
+
+def _note_error(name: str, e: BaseException | str) -> None:
+    st = SOURCE_STATE.setdefault(name, {})
+    st["last_error"] = str(e)[:200] if not isinstance(e, str) else e
+    st["last_error_kind"] = error_kind(e) if not isinstance(e, str) else "invalid"
+    st["last_error_at"] = time.time()
+
+
+def _epoch(value) -> float | None:
+    """An upstream timestamp (epoch seconds or ms, or ISO 8601) as epoch
+    seconds; None for anything else."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value / 1000.0 if value > 100_000_000_000 else float(value)
+    if isinstance(value, str):
+        try:
+            t = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return (t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).timestamp()
+    return None
+
+
 def reset_caches() -> None:
     """Clear the in-process tile caches. Tests call this for deterministic
     behavior when they monkeypatch the HTTP client and poll more than once."""
+    SOURCE_STATE.clear()
     _weather_cache.clear()
     _climate_cache.clear()
     _laundry_cache.clear()
@@ -121,8 +178,14 @@ async def climate_tile(client, cfg) -> dict:
              "stale": rm.get("stale")}
             for rm in raw_rooms if isinstance(rm, dict)
         ]
+        # The freshest room says when the sensors last reported (age_s is
+        # house-climate's own "seconds since this room's reading").
+        ages = [rm["age_s"] for rm in raw_rooms if isinstance(rm, dict)
+                and isinstance(rm.get("age_s"), (int, float))
+                and not isinstance(rm.get("age_s"), bool)]
     except Exception as e:
         log.warning("climate tile /api/rooms unavailable: %s", e)
+        _note_error("climate", e)
         return {"available": False}   # not cached: retry on the next poll
     # Secondary indoor humidity/dew-point: best-effort. A failure — or a
     # valid-but-non-dict body — leaves indoor_rh/indoor_dp None and still returns
@@ -145,6 +208,10 @@ async def climate_tile(client, cfg) -> dict:
         "indoor_rh": indoor_rh,
         "indoor_dp": indoor_dp,
     }
+    # One live sensor must not hide dead rooms: name the ones house-climate
+    # itself calls stale.
+    _note_ok("climate", time.time() - min(ages) if ages else None,
+             stale_items=sorted(str(r.get("name")) for r in mapped if r.get("stale") is True))
     _climate_cache[base] = (time.monotonic() + CLIMATE_TTL, result)
     return result
 
@@ -344,6 +411,7 @@ async def weather_tile(client, cfg) -> dict:
         # cached as good. bool is an int subclass — exclude it explicitly.
         temp = result.get("temp")
         if not isinstance(temp, (int, float)) or isinstance(temp, bool):
+            _note_error("weather", "wx.json has no usable temp")
             return {"available": False}
         if not result["spark"]:
             # A valid temp but no chart series is exactly the silent failure that
@@ -354,7 +422,10 @@ async def weather_tile(client, cfg) -> dict:
                         "(temp chart hidden); wx keys: %s", sorted(wx)[:20])
     except Exception as e:
         log.warning("weather tile wx.json unavailable: %s", e)
+        _note_error("weather", e)
         return {"available": False}   # not cached: retry on the next poll
+    # wx.json's `ts` is when the weather adapter wrote it (epoch seconds).
+    _note_ok("weather", _epoch(wx.get("ts")))
     _weather_cache[base] = (time.monotonic() + WEATHER_TTL, result)
     return result
 
@@ -416,6 +487,7 @@ async def fleet_tile(client, cfg) -> dict:
             raise ValueError("rollup missing fleet/printer block")
     except (httpx.HTTPError, ValueError, json.JSONDecodeError) as e:
         log.warning("fleet tile /api/rollup unavailable: %s", e)
+        _note_error("fleet", e)
         return {"available": False}   # not cached: retry on the next poll
     # internet is a SOFT sub-block: a missing/non-dict one is muted (all-null),
     # never a reason to mark the whole tile unavailable; the card just omits
@@ -455,6 +527,7 @@ async def fleet_tile(client, cfg) -> dict:
     }
     if fleet_cfg.get("label"):
         result["label"] = fleet_cfg["label"]
+    _note_ok("fleet", _epoch(body.get("generatedAt")))
     _fleet_cache[base] = (time.monotonic() + FLEET_TTL, result)
     return result
 

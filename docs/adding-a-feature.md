@@ -67,6 +67,13 @@ can never be turned off and don't degrade gracefully.*
       out of band, in the box's `.env`, so its absence has to be reported.
       If a new integration gains an in-app connect flow, it may follow
       CalDAV; until then it follows laundry.
+- [ ] A new data source reports into `/health/full` (`deep_health.py` plus
+      the route in `app.py`): its freshness (a stamp only THIS process can
+      have made, and the upstream's own data time when it has one) and every
+      setting it needs, each as an `ok` field. The deploy gate reads those
+      fields, so a source missing there can break on a deploy with nothing
+      rolled back. (2026-09-17: `/health` stayed 200 for a day with the
+      laundry card gone.)
 - [ ] `config.example.json` gains a placeholder entry (use the
       `192.168.1.50` example-IP convention — this repo is public; never a
       real LAN IP, never house data).

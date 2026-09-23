@@ -168,6 +168,42 @@ optional and independent — add the pieces you have.
 > `src/family_hub/web/static`, `docker compose build web` — a bare restart
 > keeps the old files.
 
+### Health: `/health` and `/health/full`
+
+`/health` is liveness for the container healthcheck: the process answers and
+can read `hub.db`. It stays `{"status":"ok"}` when an upstream is down, so an
+outage never marks the container unhealthy.
+
+`/health/full` answers "does the hub actually work?" and is what a deploy
+should gate on. It always returns 200 with a report:
+
+- `sources`: one entry per thing the wall shows (`calendar`, `laundry`,
+  `weather`, `climate`, `fleet`, `cameras`), each with `ok`, a `status` word
+  (`ok`, `off`, `waiting`, `stale`, `needs_auth`, `error`, `upstream_down`,
+  `degraded`) and the timestamps that prove freshness. Only reads made by the
+  running process count: the calendar's `last_sync` must be newer than
+  `process_started_at`, and the laundry watcher's last good Home Assistant
+  read must be under a minute old. Where the upstream stamps its own data
+  (`wx.json` `ts`, the climate rooms' ages, the fleet rollup's
+  `generatedAt`), that stamp is `data_ts` and must be recent too.
+- `settings`: `HA_TOKEN` when laundry is configured, the Google token file
+  when Google calendars are, and a laundry block that survived validation.
+- `config`: the sha256 of `config.json` as loaded, as on disk now, and as the
+  deploy recorded it (`matches_deploy`).
+- `deploy`: what the deploy baked into `src/family_hub/build_info.json`
+  (`engine_commit`, `overlay_commit`, `config_sha256`, `built_at`), or null
+  for an image built by hand.
+- `status` is `ok` only when nothing above failed; `problems` names each
+  failure. `notes` (the backup heartbeat) is information only.
+
+```bash
+curl -s http://<your-server>:8138/health/full | jq '{status, problems}'
+```
+
+A deploy script can write `build_info.json` into the tree it builds from
+(never commit it; it is git-ignored) to make `matches_deploy` and
+`deploy.engine_commit` meaningful.
+
 ## Try the demo
 
 Want to see the whole wall before wiring up anything? Run it with `DEMO=1` and
