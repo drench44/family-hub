@@ -8,12 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Every code-changing pull request adds a line under `## [Unreleased]`; a release
 rolls that section to a dated version via `python scripts/release.py`.
 
-### Fixed
-- `scripts/install-hooks.sh` no longer bypasses the ci-policy global git
-  hooks: when they are the machine's global `core.hooksPath`, it chains this
-  repo's `.githooks` behind them (`ci-policy.chainHooksPath`) instead of
-  setting `core.hooksPath=.githooks`, which had silently skipped them.
-
 ## [Unreleased]
 
 ### Added
@@ -26,6 +20,109 @@ rolls that section to a dated version via `python scripts/release.py`.
 - `/health/full` names a room sensor house-climate calls stale, treats a
   data stamp from the future as an error, and turns a check that crashes
   into a named problem instead of a 500.
+
+### Changed
+- Each wall refresh does less work: the calendar reads only the days it
+  shows, chore streaks sort the year of history once instead of once per
+  person, and the list of available integrations is worked out once per
+  refresh instead of about six times.
+- The Docker image installs the exact package versions in the new
+  `requirements.lock`, runs as a non-root user (uid 1000, the same default
+  as `docker-compose.yml`), and the web service drops all Linux
+  capabilities. A new `.dockerignore` keeps `data/`, `.env` and the real
+  `config.json` out of the build.
+
+### Fixed
+- A database write that fails (for example "database is locked") now rolls
+  back instead of leaving a transaction open, which could freeze later reads
+  on an old snapshot and stop the database log from being trimmed.
+- Reading the laundry cycle log no longer blocks the rest of the hub while
+  it waits on the database.
+- Finished to-dos are deleted 60 days after they were checked off (only
+  the last 30 days can be restored), so the list no longer grows forever.
+- Turning a person or chore on or off only accepts on or off (1 or 0); any
+  other number is rejected instead of quietly hiding it.
+- The phone screen-size report now stops reading an oversized report sent
+  without a declared size, instead of reading all of it into memory.
+- One camera entry in `config.json` that is not an object no longer breaks
+  every camera tile, and a hub with no cameras no longer lets anyone probe a
+  camera stream named `cam`.
+- `/health/full` no longer says `config.json: None` for a healthy config.
+- `scripts/install-hooks.sh` no longer bypasses the ci-policy global git
+  hooks: when they are the machine's global `core.hooksPath`, it chains this
+  repo's `.githooks` behind them (`ci-policy.chainHooksPath`) instead of
+  setting `core.hooksPath=.githooks`, which had silently skipped them.
+- A double tap on Save in the chore or person editor no longer adds the
+  chore or person twice. Save waits for the first save to finish, and
+  comes back if it fails.
+- The wall keyboard's Done key now saves the person form too, not just the
+  chore form.
+- A chore tapped in the All chores view counts for the day on screen. If
+  that day ended while the view was open, the tap says so and the view
+  catches up, instead of ticking the chore on the wrong day.
+- The full calendar and All chores views now refresh every minute while
+  open and nobody is using them. Before, a wall left on either one showed
+  stale events and ticks all day.
+- A device that follows the house theme no longer flashes the default grey
+  theme on every load before switching. It remembers the house theme and
+  paints it straight away.
+- The camera health check no longer downloads a full snapshot from every
+  camera every 30 seconds. It checks the answer and drops the picture, and
+  its time limit now covers the whole check.
+- A camera whose name has a quote in it no longer breaks the camera
+  health check.
+- One part of the wall failing to draw no longer shows the hub as
+  "offline" or stops the other parts from updating. The error is logged
+  and the rest of the wall still refreshes.
+- A full-screen dashboard that scales to fit now re-fits when the phone is
+  turned or the window changes size, not just when it opens.
+- A fast double tap on an iCloud reminder no longer ticks and unticks it
+  at the same time. Taps wait until the first one is saved.
+- Removed unused styles (`.micro` and the `--p1` colour) and fixed a stale
+  comment about when the wall keyboard turns on.
+- Deleting an iCloud reminder from the wall now refuses anything that is not
+  a reminder, so a stray id can no longer remove a calendar event from iCloud.
+- When iCloud is set by environment variables, saving other credentials or
+  disconnecting in settings now says so (409) instead of answering ok and
+  changing nothing.
+- The iCloud credentials file and the Google `token.json` written by
+  `scripts/google-auth.py` are now always owner-only and written atomically.
+- The wall skips completed reminders before reading them, and no longer shows
+  reminders from a list that is gone from iCloud.
+- The iCloud sync skips reminders that have not changed since the last sync
+  instead of re-reading and re-saving every one (completed ones included)
+  each time, saves each list in one go, and no longer keeps copies of
+  calendar events or of the whole reminder list that nothing used.
+- A reminder list deleted or unshared in iCloud is dropped after a day. Wall
+  changes still waiting for it are kept and set aside (and logged) instead of
+  counting as "not yet synced" forever; they go out again if the list comes
+  back.
+- A wall change iCloud keeps refusing (for example on a read-only list) is set
+  aside after 5 tries instead of retrying forever, the sync status says how
+  many are set aside, and a refused write no longer asks you to reconnect
+  iCloud. Sending changes now stops after 90 seconds a round, so a slow
+  iCloud cannot hold up the Google calendar sync.
+- Settings shows how many wall changes iCloud would not take, next to the
+  "not yet synced" count.
+- Picking a different Reminders list for a person now moves their chore
+  reminders to it (done ones stay where they are), and a person whose list
+  is gone from iCloud no longer gets reminders queued into it every day.
+- A calendar whose last event has moved out of the synced date range no
+  longer shows "kept last-synced" for a day when it comes back empty; the
+  empty-calendar guard now only holds when events inside the range vanish.
+- The off-box backup copy no longer mirrors deletions: a new or empty local
+  backup folder (a replaced disk, a changed `FH_OUT`) can no longer wipe the
+  history on the NAS. The copy only adds files, and each NAS tier is pruned
+  by the same keep counts as the local one.
+- Backup snapshots are now single files with no `-wal`/`-shm` leftovers (some
+  systems left one next to every snapshot), and leftovers from a killed run
+  are swept.
+- The changelog check no longer lets a code change skip its entry just by
+  also bumping `VERSION`; only a diff limited to the files a release writes
+  counts as a release.
+- If iCloud does not say whether a collection is a calendar or a reminder
+  list, the sync uses what it knew before instead of treating it as a
+  calendar for a round.
 
 ## [1.8.1] — 2026-09-22
 

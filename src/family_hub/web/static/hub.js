@@ -462,7 +462,10 @@ function weekStripHtml(week) {
 }
 
 function choreRowHtml(ch, firstName, opts = {}) {
-  const { readonly = false, editing = false, nameById = null } = opts;
+  // `day` is the date these rows show. A tappable row carries it, so a tap
+  // writes to the day on screen (see toggleChore), not whatever data_date a
+  // later poll moved on to.
+  const { readonly = false, editing = false, nameById = null, day = '' } = opts;
   const icon = ch.icon ? `<span class="chore-icon">${escapeHtml(ch.icon)}</span>` : '';
   const rot = ch.rot ? `<span class="chore-rot">↻ ${escapeHtml(firstName)}</span>` : '';
   // Backup's card: this row is standing in for an away person's fixed chore
@@ -489,11 +492,12 @@ function choreRowHtml(ch, firstName, opts = {}) {
     + `<span class="chore-del" data-del-chore="${ch.id}"`
     + ` aria-label="Delete ${escapeHtml(ch.title)}">🗑</span>`
     + `</button>`;
-  return `<button class="${cls}" type="button" data-chore="${ch.id}">${body}</button>`;
+  const dayAttr = day ? ` data-date="${escapeHtml(day)}"` : '';
+  return `<button class="${cls}" type="button" data-chore="${ch.id}"${dayAttr}>${body}</button>`;
 }
 
 function personCardHtml(p, opts = {}) {
-  const { readonly = false, editing = false, nameById = null } = opts;
+  const { readonly = false, editing = false, nameById = null, day = '' } = opts;
   const first = (p.person.name || '').split(' ')[0];
   // The 🔥 count is chore-days finished in a row (a day with no chores neither
   // counts nor breaks it; see chores.streak), NOT today's completed count. The
@@ -513,10 +517,10 @@ function personCardHtml(p, opts = {}) {
     // its away owner (chores.plan_rows keeps a dated commitment rather than
     // destroying it), and hiding it would lose the task entirely.
     rows = `<div class="away-badge">Away ✈️</div>`
-      + p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing, nameById })).join('');
+      + p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing, nameById, day })).join('');
   } else {
     rows = p.chores.length
-      ? p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing, nameById })).join('')
+      ? p.chores.map((ch) => choreRowHtml(ch, first, { readonly, editing, nameById, day })).join('')
       : (editing ? '' : `<div class="cal-empty">nothing this day</div>`);
   }
   // edit mode grows a per-person "+ Add chore" row (wired in Task 5); it's the
@@ -627,7 +631,7 @@ async function renderChoresFull(prefetched) {
   host.innerHTML = choresNavHtml()
     + awayNote
     + (people.length
-      ? people.map((p) => personCardHtml(p, { readonly, editing, nameById })).join('')
+      ? people.map((p) => personCardHtml(p, { readonly, editing, nameById, day })).join('')
       : `<div class="cal-empty">no people yet</div>`)
     + peopleAdmin;
 }
@@ -775,7 +779,7 @@ function renderPeople(data) {
   host.innerHTML =
     sectionHead('Chores', { overlay: 'chores', expandLabel: 'All chores' })
     + awayNote
-    + data.people.map((p) => personCardHtml(p, { readonly: false, editing: false, nameById })).join('');
+    + data.people.map((p) => personCardHtml(p, { readonly: false, editing: false, nameById, day: data.date })).join('');
   fireCelebrations(data.people);
   lastPeople = data.people;
 }
@@ -1249,8 +1253,19 @@ async function deleteTodo(id) {
 /* Check off / reopen a reminder. The click handler flips the row's .done class
    first (optimistic), then this writes and refreshes; a completed reminder drops
    out of the open buckets on the next read, so a checked row simply disappears. */
+/* Reminder ids whose toggle write is still out. A fast double tap flipped the
+   row twice and sent two opposite writes (complete, then reopen) that could
+   land in either order; the click handler ignores a reminder in this set. */
+const reminderWrites = new Set();
+
 async function toggleReminder(id, completed) {
-  const r = await attemptTodo('/api/reminders/toggle', 'POST', { id, completed });
+  reminderWrites.add(id);
+  let r;
+  try {
+    r = await attemptTodo('/api/reminders/toggle', 'POST', { id, completed });
+  } finally {
+    reminderWrites.delete(id);
+  }
   if (!r.ok) {
     showToast(reminderFailMessage(r.error));
     // The write failed, so UNDO the click handler's optimistic .done flip. Can't
@@ -1405,7 +1420,10 @@ async function probeOneCamera(cam) {
   // A src can render on two surfaces (wall column + Cameras-tab grid); update
   // EVERY tile for it. One snapshot probe drives them all — the producer is
   // shared — but each tile owns its own frame/live/offline state.
-  const tiles = document.querySelectorAll(`.tile-camera[data-cam="${cam.src}"]`);
+  // Match on dataset.cam, not a selector built from cam.src: a config src
+  // with a quote or backslash in it would break (or change) the selector.
+  const tiles = Array.from(document.querySelectorAll('.tile-camera'))
+    .filter((t) => t.dataset.cam === cam.src);
   if (!tiles.length) return;
   // Start each VISIBLE tile's stream WITH the probe, not after it: both share
   // the same go2rtc producer, so the WebRTC connect overlaps the probe's
@@ -1420,9 +1438,10 @@ async function probeOneCamera(cam) {
   });
   let ok = false;
   try {
-    // fetchTimeout (common.js): bounds the probe with J_TIMEOUT_MS so a
-    // connected-but-unresponsive server can't leave it in flight forever.
-    ok = (await fetchTimeout(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`)).ok;
+    // probeOk (common.js): bounds the probe with J_TIMEOUT_MS so a
+    // connected-but-unresponsive server can't leave it in flight forever,
+    // and drops the snapshot body instead of downloading it.
+    ok = await probeOk(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`);
   } catch (e) { /* down (or timed out) */ }
   // Offline -> live transition: reload the frame for a deterministic fresh
   // connect. A player that connected against a DEAD producer may never have
@@ -1622,14 +1641,29 @@ function makeIframe(src) {
 function makeFittedIframe(src, vw, vh) {
   const f = document.createElement('iframe');
   f.className = 'overlay-frame overlay-fitted';
-  const scale = Math.min(innerWidth / vw, innerHeight / vh);
   f.style.width = `${vw}px`;
   f.style.height = `${vh}px`;
+  placeFittedIframe(f, vw, vh);
+  f.src = src;
+  return f;
+}
+
+function placeFittedIframe(f, vw, vh) {
+  const scale = Math.min(innerWidth / vw, innerHeight / vh);
   f.style.transform = `scale(${scale})`;
   f.style.left = `${Math.round((innerWidth - vw * scale) / 2)}px`;
   f.style.top = `${Math.round((innerHeight - vh * scale) / 2)}px`;
-  f.src = src;
-  return f;
+}
+
+/* The open "fit" panel's re-scale handler. It was scaled only on open, so a
+   phone rotated (or a window resized) with the panel up kept the old size.
+   Live only while that panel is open: openOverlay and closeOverlay drop it. */
+let fittedRefit = null;
+function dropFittedRefit() {
+  if (!fittedRefit) return;
+  window.removeEventListener('resize', fittedRefit);
+  window.removeEventListener('orientationchange', fittedRefit);
+  fittedRefit = null;
 }
 
 /* Full-screen a camera without the cold-start black wait. The tile's stream is
@@ -1669,12 +1703,12 @@ function revealHdWhenLive(cam, view, base, hd, tries) {
     if (openView !== view || !hd.parentNode) return;   // overlay closed / switched
     let live = false;
     try {
-      // fetchTimeout (common.js), scoped to CAM_HD_PROBE_TIMEOUT_MS (not the
+      // probeOk (common.js), scoped to CAM_HD_PROBE_TIMEOUT_MS (not the
       // longer default): a wedged HD producer must not hang this retry loop
       // long enough to blow its own ~8s give-up budget (see the constant above).
-      live = (await fetchTimeout(
+      live = await probeOk(
         `/api/tiles/camera.jpg?src=${encodeURIComponent(cam.hd_src)}&probe=${Date.now()}`,
-        CAM_HD_PROBE_TIMEOUT_MS)).ok;
+        CAM_HD_PROBE_TIMEOUT_MS);
     } catch (e) { /* still connecting, down, or timed out: treated as not-yet-live */ }
     if (openView !== view || !hd.parentNode) return;   // re-check after the await
     if (live) {
@@ -1698,14 +1732,22 @@ function openOverlay(view) {
   if (view === 'todos' && !featureEnabled('todos')) return;
   const content = document.getElementById('overlay-content');
   content.innerHTML = '';
+  dropFittedRefit();   // the view it re-scaled is gone
   openView = view;
   if (view.indexOf('panel:') === 0) {
     const p = (links.panels || []).find((x) => x.id === view.slice(6));
-    // 'fit' scales a fixed vw x vh sheet to fill the screen centered;
+    // 'fit' scales a fixed vw x vh sheet to fill the screen centered, and
+    // again on every resize/rotation while it is open;
     // 'native' embeds the (viewport-responsive) page raw.
-    if (p) content.appendChild(p.full === 'fit'
-      ? makeFittedIframe(p.full_url || p.url, p.vw, p.vh)
-      : makeIframe(p.full_url || p.url));
+    if (p && p.full === 'fit') {
+      const f = makeFittedIframe(p.full_url || p.url, p.vw, p.vh);
+      content.appendChild(f);
+      fittedRefit = () => placeFittedIframe(f, p.vw, p.vh);
+      window.addEventListener('resize', fittedRefit);
+      window.addEventListener('orientationchange', fittedRefit);
+    } else if (p) {
+      content.appendChild(makeIframe(p.full_url || p.url));
+    }
   } else if (view.indexOf('camera:') === 0) {
     // Resolve a camera tap from either surface. First match wins, so a src on
     // both lists uses the wall entry — fine because a shared src carries the
@@ -1785,6 +1827,7 @@ function closeOverlay() {
   overlay().classList.remove('open');
   document.body.classList.remove('overlay-open');
   document.getElementById('overlay-content').innerHTML = '';
+  dropFittedRefit();
   openView = null;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   dialogClosed('overlay');
@@ -3440,39 +3483,55 @@ function wallBusy() {
 let pollSeq = 0;
 let pollApplied = 0;
 
+/* Run one render step of a poll on its own. The steps used to share the
+   fetch's try/catch, so one bad field (a render bug, not an outage) marked
+   the wall "offline" and skipped every step after it. Now it is logged and
+   the rest still paint. */
+function renderStep(name, fn) {
+  try {
+    fn();
+  } catch (e) {
+    console.error(`poll: ${name} failed; the rest of the wall still renders`, e);
+  }
+}
+
 async function poll() {
   const seq = ++pollSeq;
+  let data;
   try {
-    const data = await j('/api/hub');
-    if (seq < pollApplied) return;
-    pollApplied = seq;
-    hubData = data;
-    // Auto-reload when a deploy changes the baked frontend (the server's build
-    // token changes), so the kiosk picks up updates without a manual refresh —
-    // but never mid-interaction (defer to a later poll once the wall is idle).
-    if (data.build) {
-      if (loadedBuild === null) loadedBuild = data.build;
-      else if (data.build !== loadedBuild && !wallBusy()) { location.reload(); return; }
-    }
-    data_date = data.date;
-    links = data.links || {};
-    applyHouseTheme(data.theme);   // house default on a fresh (un-overridden) device
-    wirePanels();
-    initTiles();      // camera tiles are config-driven; build once links exist
-    initCamGrid();    // Cameras-tab 2x2 grid, also config-driven
-    renderCalendar(data);
-    renderPeople(data);
-    renderTodoSlot(data);
-    renderIntegrations(data);
-    renderBackup(data);
-    pruneEvIndex();
-    document.body.dataset.conn = 'up';
-    document.getElementById('conn-word').textContent = 'live';
+    data = await j('/api/hub');
+    if (!data || typeof data !== 'object') throw new Error('/api/hub: no payload');
   } catch (e) {
     if (seq < pollApplied) return;   // a newer poll already answered: the hub is up
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
+    return;
   }
+  if (seq < pollApplied) return;
+  pollApplied = seq;
+  hubData = data;
+  // Auto-reload when a deploy changes the baked frontend (the server's build
+  // token changes), so the kiosk picks up updates without a manual refresh,
+  // but never mid-interaction (defer to a later poll once the wall is idle).
+  if (data.build) {
+    if (loadedBuild === null) loadedBuild = data.build;
+    else if (data.build !== loadedBuild && !wallBusy()) { location.reload(); return; }
+  }
+  data_date = data.date;
+  links = data.links || {};
+  // The hub answered, so the wall is live whatever a render step does below.
+  document.body.dataset.conn = 'up';
+  document.getElementById('conn-word').textContent = 'live';
+  renderStep('applyHouseTheme', () => applyHouseTheme(data.theme));   // house default on a fresh (un-overridden) device
+  renderStep('wirePanels', () => wirePanels());
+  renderStep('initTiles', () => initTiles());       // camera tiles are config-driven; build once links exist
+  renderStep('initCamGrid', () => initCamGrid());   // Cameras-tab 2x2 grid, also config-driven
+  renderStep('renderCalendar', () => renderCalendar(data));
+  renderStep('renderPeople', () => renderPeople(data));
+  renderStep('renderTodoSlot', () => renderTodoSlot(data));
+  renderStep('renderIntegrations', () => renderIntegrations(data));
+  renderStep('renderBackup', () => renderBackup(data));
+  renderStep('pruneEvIndex', () => pruneEvIndex());
 }
 
 // Header backup badge: absent when healthy/unknown, amber when the backup has
@@ -3498,9 +3557,28 @@ let scheduledPollInFlight = false;
 function scheduledPoll() {
   if (scheduledPollInFlight) return;
   scheduledPollInFlight = true;
+  const dayBefore = data_date;   // refreshIdleOverlay follows a midnight roll
   poll()
-    .then(refreshIdleTodosView)
+    .then(() => Promise.all([refreshIdleTodosView(), refreshIdleOverlay(dayBefore)]))
     .finally(() => { scheduledPollInFlight = false; });
+}
+
+/* The full calendar and All chores views also fetched only on open, so a
+   wall left on either showed the morning's events and ticks all day. Repaint
+   the open one on the scheduled beat, but only while nobody is using it: not
+   in the chores edit mode (its forms would be wiped), not within a few
+   seconds of a tap, and not while the hub is offline. A chores view that was
+   on today follows today past midnight; one paged to another day stays put.
+   `dayBefore` is data_date from before this beat's poll. */
+function refreshIdleOverlay(dayBefore) {
+  if (document.body.dataset.conn !== 'up') return undefined;
+  if (Date.now() - lastInteraction < INTERACTION_QUIET_MS) return undefined;
+  if (openView === 'calendar') return fetchCalWindow().then(renderCalFull);
+  if (openView === 'chores' && !choreState.editing) {
+    if (choreState.day === dayBefore) choreState.day = data_date;
+    return renderChoresFull(choreState.day === data_date && hubData ? hubData.people : null);
+  }
+  return undefined;
 }
 
 /* An open to-do full view (the wall overlay, or a phone parked on the To-Dos
@@ -3521,7 +3599,7 @@ function refreshIdleTodosView() {
 }
 
 // Same guard, same reason, for the camera probe interval: probeOneCamera's
-// fetches now carry a J_TIMEOUT_MS bound (see fetchTimeout in common.js), but
+// fetches now carry a J_TIMEOUT_MS bound (see probeOk in common.js), but
 // without this an unguarded CAM_PROBE_MS interval would still keep firing a
 // fresh probeCamera() every 30s on top of one still waiting out that timeout,
 // stacking requests toward the browser's connection budget. Direct
@@ -3549,14 +3627,25 @@ function showToast(msg) {
   _toastTimer = setTimeout(() => el.classList.remove('hub-toast-visible'), 4000);
 }
 
-async function toggleChore(id, done) {
+async function toggleChore(id, done, rowDay) {
   // attemptToggle (common.js) returns false if the write failed. Surface it
   // with a toast instead of swallowing: under a PERSISTENT write failure (full
   // disk / read-only SD card on a kiosk) the poll() below re-renders the chore
   // as undone, so a silent catch makes the tap look like it did nothing.
-  // data_date is the day these rows were rendered for; the server credits
-  // that day, not whatever its clock says by the time the tap arrives.
-  const shown = data_date;
+  // `rowDay` is the day the tapped row was drawn for (its data-date); the
+  // server credits that day, not whatever its clock says by the time the tap
+  // arrives. Falls back to data_date for a row drawn without one.
+  const shown = rowDay || data_date;
+  // The All chores overlay isn't repainted when a poll carries data_date past
+  // midnight, so its rows can still show a day that has ended. A write there
+  // would be refused (or land on a day nobody is looking at): repaint the
+  // view as it now stands and say why, instead of writing.
+  if (rowDay && data_date && rowDay !== data_date) {
+    showToast(choreToggleMessage('', true));
+    if (openView === 'chores') renderChoresFull(choreState.day === data_date && hubData ? hubData.people : null);
+    else if (hubData) renderPeople(hubData);
+    return;
+  }
   const ok = await attemptToggle(id, done, shown || undefined);
   await poll();
   // A refused tap on a day that has since rolled over will never succeed on
@@ -4014,6 +4103,7 @@ document.addEventListener('click', (e) => {
   }
   const remrow = e.target.closest('[data-reminder]');
   if (remrow) {
+    if (reminderWrites.has(remrow.dataset.reminder)) return;   // its write is still out
     // Optimistic: flip the row now so the wall feels instant; the write +
     // refresh below reconciles (a completed reminder then drops off the list).
     const rowEl = remrow.closest('.todo-row-full') || remrow.closest('.todo-row') || remrow;
@@ -4025,7 +4115,7 @@ document.addEventListener('click', (e) => {
   // home surfaces (readonly rows carry no data-chore — look, don't touch)
   const chore = e.target.closest('.chore-row');
   if (chore && chore.dataset.chore) {
-    toggleChore(chore.dataset.chore, chore.classList.contains('done'));
+    toggleChore(chore.dataset.chore, chore.classList.contains('done'), chore.dataset.date);
     return;
   }
   if (chore) return;
@@ -4092,6 +4182,9 @@ document.addEventListener('submit', (e) => {
 function applyHouseTheme(theme) {
   if (!theme || typeof theme !== 'object') return;
   try { window.FH_THEME = theme; } catch (e) { /* reference only */ }
+  // theme.js keeps a copy for the next load's first paint (no grey flash
+  // before this poll lands); it swallows its own storage errors
+  if (typeof rememberHouseTheme === 'function') rememberHouseTheme(theme);
   const noOverride = (k) => {
     try { return localStorage.getItem(k) === null; } catch (e) { return true; }
   };

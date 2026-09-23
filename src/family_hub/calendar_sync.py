@@ -46,6 +46,27 @@ def _mark_error_since(status: dict, prior: dict, now: dt.datetime) -> None:
 _EMPTY_KEEP_HOURS = 24
 
 
+def cached_ids_in_window(conn, lo: dt.date, hi: dt.date) -> set:
+    """Calendar ids with at least one cached event overlapping [lo, hi]: it
+    starts on or before `hi` and ends after the start of `lo` (an all-day end
+    is exclusive; a timed event ending on `lo` still overlaps).
+
+    The empty-feed guard asks this, not "has any cached row": a calendar whose
+    only cached events now lie outside the fetch window (its last event aged
+    out of the lookback) returns nothing honestly, and flagging that kept a
+    stale row and a "kept last-synced" error up for a day. Dates are read off
+    the stored text, which the sync already writes in the house zone."""
+    lo_s, hi_s = lo.isoformat(), hi.isoformat()
+    out = set()
+    for e in fdb.list_events(conn):
+        start, end = e["start_ts"][:10], (e["end_ts"] or e["start_ts"])[:10]
+        if start > hi_s:
+            continue
+        if end > lo_s or (not e["all_day"] and end == lo_s):
+            out.add(e["calendar_id"])
+    return out
+
+
 def _is_auth_error(exc) -> bool:
     """True if the exception (or its cause chain) is a Google auth/refresh
     failure — i.e. the saved token was revoked/expired and re-authorization is
@@ -425,8 +446,12 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
         # CONTINUOUS emptiness (rides out maintenance windows), after which a
         # genuinely-emptied calendar is finally allowed to clear instead of
         # showing stale events forever. Per-source "empty since" is tracked in kv.
+        #
+        # Only cached rows INSIDE the new window count: if none overlaps it,
+        # the empty answer is honest (the last event aged out of the lookback)
+        # and is accepted at once rather than flagged for a day.
         synced_ids = {e["calendar_id"] for e in events} | answered_ids
-        cached_ids = fdb.event_calendar_ids(conn)
+        cached_ids = cached_ids_in_window(conn, lo_dt.date(), hi_dt.date())
         empty_since = fdb.kv_get(conn, "calendar_empty_since") or {}
         suspicious_empty = []
         for cal in cfg.calendars:
@@ -437,7 +462,9 @@ def sync_once(client, conn, cfg, now: dt.datetime, ics_fetch=None) -> dict:
                 empty_since.pop(cid, None)     # returned events -> reset the empty clock
                 continue
             if cid not in cached_ids:
-                continue                        # genuinely empty (never had events)
+                # genuinely empty: never had events, or none left in the window
+                empty_since.pop(cid, None)
+                continue
             since = empty_since.get(cid)
             if since is None:
                 empty_since[cid] = now.isoformat()   # first empty: start the clock, keep

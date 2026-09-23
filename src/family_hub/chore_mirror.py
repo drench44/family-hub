@@ -24,6 +24,10 @@ log = logging.getLogger("family_hub.caldav")
 
 DEFAULT_HORIZON_DAYS = 7
 
+# (person id, list id) pairs already warned about as mapped to a list that is
+# gone from iCloud, so the warning is logged once per process, not every tick.
+_GONE_WARNED: set = set()
+
 
 def _title(chore: dict) -> str:
     icon = (chore.get("icon") or "").strip()
@@ -35,6 +39,12 @@ def _sig(chore: dict) -> str:
     icon, times). reconcile re-pushes when it drifts from the mirrored copy."""
     payload = [_title(chore), sorted(chore.get("due_times") or [])]
     return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _list_of(ledger_row: dict) -> str:
+    """The Reminders list a mirrored occurrence lives in ('caldav:<slug>'), the
+    first part of its cal_objects id."""
+    return ledger_row["cal_object_id"].split("/", 1)[0]
 
 
 def _queue_create(conn, chore, diso, person_id, list_id, tz, now, now_iso) -> None:
@@ -211,8 +221,23 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
     per-occurrence failures are isolated so one poison row can't stall the rest."""
     zero = {"created": 0, "moved": 0, "updated": 0, "deleted": 0}
     try:
-        mapped = {p["id"]: p["reminder_list_id"]
-                  for p in fdb.list_people(conn) if p.get("reminder_list_id")}
+        # Only lists iCloud still has. The sync drops a list that was deleted
+        # or unshared; a person still mapped to it would otherwise get fresh
+        # reminders queued into it every day that could never be sent.
+        known = {c["id"] for c in fdb.list_caldav_collections(conn, "VTODO")}
+        mapped = {}
+        for p in fdb.list_people(conn):
+            lid = p.get("reminder_list_id")
+            if not lid:
+                continue
+            if lid in known:
+                mapped[p["id"]] = lid
+                _GONE_WARNED.discard((p["id"], lid))
+            elif (p["id"], lid) not in _GONE_WARNED:    # once, not every tick
+                _GONE_WARNED.add((p["id"], lid))
+                log.warning("chore mirror: %s's Reminders list is gone from "
+                            "iCloud; their chores are not mirrored until a new "
+                            "list is picked", p["name"])
         existing_rows = fdb.list_chore_mirror(conn)
         # Nothing mapped AND nothing already mirrored -> no work. But if rows
         # exist while nothing is mapped (every mapped person was deleted /
@@ -267,7 +292,10 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
                         fdb.delete_chore_mirror(conn, cid, diso)
                     _queue_create(conn, chore, diso, pid, lid, tz, now, now_iso)
                     created += 1
-                elif cur["person_id"] != pid:     # rotation handed off to another person
+                elif cur["person_id"] != pid or _list_of(cur) != lid:
+                    # rotation handed off to another person, or the person now
+                    # uses another Reminders list (the list is part of the
+                    # object id, so it can't be edited in place): move it
                     if not completed:             # never delete a DONE reminder (history)
                         fdb.queue_cal_object_delete(conn, cur["cal_object_id"], now_iso)
                     fdb.delete_chore_mirror(conn, cid, diso)
@@ -301,7 +329,13 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
             if (cid, diso) in desired:
                 continue
             try:
-                coll = m["cal_object_id"].split("/", 1)[0]
+                coll = _list_of(m)
+                if coll not in known:
+                    # the list is gone from iCloud with everything in it:
+                    # nothing to delete there, just forget the ledger row
+                    fdb.delete_chore_mirror(conn, cid, diso)
+                    deleted += 1
+                    continue
                 if synced_collections is not None and coll not in synced_collections:
                     continue
                 obj = fdb.get_cal_object(conn, m["cal_object_id"])

@@ -42,13 +42,12 @@ produced by a **separate service** (not this app, not this repo — on the deplo
 box it's `:8137`; the app is `:8138`). Before reading a new field off it, or
 adding anything that needs forecast/history data, read
 [`docs/weather-feed.md`](docs/weather-feed.md): it inventories every field the
-feed actually provides, says how to pull the live feed off the deploy box, and
-records the load-
-bearing fact that **the feed carries no multi-day forecast** (only today's
-high/low, a 24h temp curve, and a 12h AQI curve). Guessing a feed key already
-cost this repo weeks of a silently-blank chart (`hourlyTemps`); the doc exists so
-that never repeats. The 5-day forecast strip waits on a `dailyForecast` array the
-feed does not yet emit — it renders only once the feed grows one.
+feed actually provides and says how to pull the live feed off the deploy box.
+Guessing a feed key already cost this repo weeks of a silently-blank chart
+(`hourlyTemps`); the doc exists so that never repeats. The feed has carried a
+7-day `dailyForecast` since late August 2026 (it feeds the 5-day strip), plus
+`fcDaily` and `fcHourly`, which nothing reads yet. Check the live feed before
+reading any field the doc doesn't list.
 
 ## Seasonal looks — read the standards before adding one
 
@@ -96,7 +95,7 @@ ANY change that touches mobile CSS, the tab bar, overlays, modals, or embedded
 iframes, do all of:
 
 1. **Render at a real phone width** (≤ 400px) and eyeball spacing on every tab
-   (Chores, To-Dos, Calendar, Cameras, Weather) and every modal/overlay. The
+   (Chores, To-Dos, Calendar, Cameras, Weather, Laundry) and every modal/overlay. The
    automation window here won't shrink below ~1000px, so to preview the phone
    layout temporarily widen the breakpoint in a local copy
    (`@media (max-width: 2000px)`), screenshot, then revert — never commit that.

@@ -27,10 +27,15 @@
 
    Fallback order for each preference:
      1. localStorage  (fh.theme / fh.accent / fh.cols / fh.layout / fh.idleReturn
-                       / fh.season)
-     2. window.FH_THEME  { mode, accent, columns, layout, idleReturn, season },
-        injected by the page from server config (may be undefined)
-     3. hardcoded default  grey / green / none / auto / on / off
+                       / fh.season): this device's own choice
+     2. window.FH_THEME  { mode, accent, columns, layout, idleReturn, season }:
+        the house default. hub.js sets it from each /api/hub poll, so it is
+        only there after first paint (nothing injects it before this script
+        runs); at startup it is normally undefined
+     3. localStorage fh.house: the last house default hub.js handed to
+        rememberHouseTheme, so a reload paints the house theme at once
+        instead of grey-then-house (the next poll corrects a stale copy)
+     4. hardcoded default  grey / green / none / auto / on / off
 
    Exposes setTheme / setAccent / setColumns / setLayout / setIdleReturn /
    setSeason (plus setSeasonLook, see the seasonal looks section): each
@@ -79,10 +84,24 @@
     }
   }
 
-  // The page may inject window.FH_THEME = { mode, accent, columns } from config.
+  // The house default: window.FH_THEME when hub.js has set it (after a poll),
+  // else the copy cached under fh.house by rememberHouseTheme below.
+  var HOUSE_KEY = "fh.house";
+  function cachedHouse() {
+    var raw = readStored(HOUSE_KEY);
+    if (!raw) return undefined;
+    try {
+      var v = JSON.parse(raw);
+      return v && typeof v === "object" ? v : undefined;
+    } catch (e) {
+      return undefined;   // a corrupt copy is ignored; the next poll rewrites it
+    }
+  }
   function configDefault(field) {
     var cfg = window.FH_THEME;
-    return cfg && typeof cfg === "object" ? cfg[field] : undefined;
+    if (cfg && typeof cfg === "object" && cfg[field] !== undefined) return cfg[field];
+    var house = cachedHouse();
+    return house ? house[field] : undefined;
   }
 
   function resolve(allowed, storageKey, configField, hardDefault) {
@@ -92,6 +111,24 @@
     if (allowed.indexOf(cfg) !== -1) return cfg;
     return hardDefault;
   }
+
+  // Keep the house default for the next page load's first paint. Called by
+  // hub.js with each /api/hub `theme`. This is NOT a device choice (those are
+  // the fh.theme/... keys, which it never touches), so a later house change
+  // still reaches every device that never chose. Storage failures are
+  // swallowed: the cache only saves a flash, it must never break a poll.
+  function rememberHouseTheme(theme) {
+    if (!theme || typeof theme !== "object") return;
+    var json;
+    try { json = JSON.stringify(theme); } catch (e) { return; }
+    if (readStored(HOUSE_KEY) === json) return;   // unchanged: skip the write
+    try {
+      window.localStorage.setItem(HOUSE_KEY, json);
+    } catch (e) {
+      // storage blocked: the next load paints grey first, as before
+    }
+  }
+  window.rememberHouseTheme = rememberHouseTheme;
 
   function stampTheme(mode) {
     root.setAttribute("data-theme", mode);

@@ -41,18 +41,29 @@ async function j(url, opts) {
   }
 }
 
-/* Same AbortController-timeout guard as j() above, for callers that only need
-   the raw Response (not j()'s JSON-decode + error-detail contract): the
-   camera snapshot probes in hub.js. Without this, a raw fetch to a connected-
-   but-unresponsive server never resolves, and probes stack up until the
-   browser's ~6-connection-per-origin budget is exhausted on a multi-day kiosk
-   uptime. Same platform guard as j(): falls back to a bare fetch when
-   AbortController isn't available (the vm test sandbox). */
-function fetchTimeout(url, ms = J_TIMEOUT_MS) {
-  if (typeof AbortController === 'undefined') return fetch(url);
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), ms);
-  return fetch(url, { signal: ac.signal }).finally(() => clearTimeout(timer));
+/* Is `url` answering? For the camera snapshot probes in hub.js, which only
+   need the status, not the image. Same AbortController-timeout guard as j()
+   above: without it, a raw fetch to a connected-but-unresponsive server never
+   resolves, and probes stack up until the browser's ~6-connection-per-origin
+   budget is exhausted on a multi-day kiosk uptime. After reading .ok the body
+   is cancelled: every 30s probe used to download a whole snapshot nobody
+   read. The abort timer stays armed until that cancel is done, so a server
+   that sends headers and then stalls can't hold the socket either. Rejects
+   on a network failure or timeout, like fetch. Same platform guard as j():
+   no timer when AbortController isn't available (the vm test sandbox). */
+async function probeOk(url, ms = J_TIMEOUT_MS) {
+  const ac = typeof AbortController === 'undefined' ? null : new AbortController();
+  const timer = ac ? setTimeout(() => ac.abort(), ms) : null;
+  try {
+    const r = await (ac ? fetch(url, { signal: ac.signal }) : fetch(url));
+    const ok = !!r.ok;
+    if (r.body && typeof r.body.cancel === 'function') {
+      try { await r.body.cancel(); } catch (e) { /* already closed or aborted */ }
+    }
+    return ok;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 /* Defense in depth for inline style="" sinks: colors reaching the DOM are all
@@ -942,7 +953,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
     model.rot.splice(Number(b.dataset.rem), 1);
     paintRotation();
   };
-  $('[data-submit]').onclick = () => {
+  $('[data-submit]').onclick = oneSaveAtATime($('[data-submit]'), () => {
     // Serialization lives in buildChorePayload above (pure, tested).
     const assign = model.repeat === 'once' ? 'fixed' : model.assign;
     const err = $('.f-error');
@@ -967,7 +978,28 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       rot: model.rot,
       date: $('.f-date').value,
     });
-    onsubmit(body, err);
+    return onsubmit(body, err);
+  });
+}
+
+/* Wrap a form's Save handler so it runs one write at a time. A double tap
+   (or the OSK Done key clicking Save while a tap's write is still out) used
+   to POST twice and create two chores or two people. The button is disabled
+   and a flag set until `run`'s promise settles; both come back either way,
+   so a failed save can be tried again (on success the form is closed). A
+   `run` that returns no promise (a validation stop, nothing sent) releases
+   at once. */
+function oneSaveAtATime(btn, run) {
+  let busy = false;
+  return () => {
+    if (busy) return undefined;
+    busy = true;
+    btn.disabled = true;
+    const release = () => { busy = false; btn.disabled = false; };
+    let p;
+    try { p = run(); } catch (e) { release(); throw e; }
+    if (!p || typeof p.then !== 'function') { release(); return p; }
+    return p.then(release, (e) => { release(); throw e; });
   };
 }
 
@@ -1070,8 +1102,8 @@ function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
     };
   }
 
-  $('[data-psubmit]').onclick = () =>
-    onsubmit({ name: $('[data-pname]').value.trim(), color: model.color }, $('[data-perror]'));
+  $('[data-psubmit]').onclick = oneSaveAtATime($('[data-psubmit]'), () =>
+    onsubmit({ name: $('[data-pname]').value.trim(), color: model.color }, $('[data-perror]')));
 }
 
 /* Attempt a chore check-off/uncheck; returns true on success, false if the
@@ -1346,10 +1378,17 @@ function caldavPanelHtml(integ, ui) {
   const pendingNote = pending > 0
     ? `<div class="caldav-pending">${pending} change${pending === 1 ? '' : 's'} not yet synced</div>`
     : '';
+  // Parked: edits iCloud refused for good (a read-only list) or whose list is
+  // gone. Kept on the wall, no longer retried, so not "not yet synced".
+  const parked = Number(integ.parked) || 0;
+  const parkedNote = parked > 0
+    ? `<div class="caldav-parked">${parked} change${parked === 1 ? '' : 's'} iCloud would not take (read-only or deleted list); kept on the wall</div>`
+    : '';
   return `<div class="caldav-account">Connected as <strong>${escapeHtml(integ.account || 'unknown')}</strong>`
     + (warn ? `<span class="integ-warn">${warn}</span>` : '')
     + `</div>`
     + pendingNote
+    + parkedNote
     + `<div class="settings-row">`
     + `<span class="settings-k">Sync direction</span>`
     + `<div class="segmented" role="group" aria-label="Sync direction">`
