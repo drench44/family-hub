@@ -13,7 +13,9 @@ class Config:
     port: int = 8138
     climate_base: str = ""     # optional JSON tile proxy (/api/tiles/climate)
     weather_base: str = ""     # optional JSON tile proxy (/api/tiles/weather)
-    go2rtc_base: str = ""      # go2rtc restreamer; empty = no cameras
+    # where the HUB reaches go2rtc (browsers go through the hub's /go2rtc/
+    # proxy, never to go2rtc); GO2RTC_FETCH_BASE overrides it; empty = no cameras
+    go2rtc_base: str = ""
     # Kept in step with config.example.json and the frontend's fixed fetch
     # (hub.js) — a default BELOW the fetch makes an unconfigured install hatch
     # every day past it as "not synced". A guard test pins the three together.
