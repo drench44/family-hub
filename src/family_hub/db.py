@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS cal_objects(
   sync_state TEXT NOT NULL DEFAULT 'SYNCED',
   local_modified_at TEXT,
   sync_attempts INTEGER NOT NULL DEFAULT 0,
+  sync_refusals INTEGER NOT NULL DEFAULT 0, -- lasting refusals only (parking)
   last_sync_error TEXT,
   local_rev INTEGER NOT NULL DEFAULT 0); -- fresh value on every queued wall change
 -- The one counter local_rev values come from (one row, id = 1), so a revision
@@ -278,6 +279,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     cal_cols = {r["name"] for r in conn.execute("PRAGMA table_info(cal_objects)")}
     if "local_rev" not in cal_cols:
         conn.execute("ALTER TABLE cal_objects ADD COLUMN local_rev "
+                     "INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    # 2026-09-23: cal_objects gained sync_refusals, the count of lasting
+    # refusals alone. Transient failures had raised the shared attempt count
+    # to one short of parking, so a single refusal after them parked the row.
+    # Additive ALTER with a default; existing rows start at 0.
+    if "sync_refusals" not in cal_cols:
+        conn.execute("ALTER TABLE cal_objects ADD COLUMN sync_refusals "
                      "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     # Seed the local_rev counter once, above any revision already stored.
@@ -1070,8 +1079,8 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
             "UPDATE cal_objects SET collection_id = ?, comp_type = ?, uid = ?, "
             "href = ?, etag = ?, base_etag = ?, summary = ?, raw_ics = ?, "
             "sequence = ?, last_modified = ?, sync_state = 'SYNCED', "
-            "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
-            "WHERE id = ? AND local_rev = ?",
+            "local_modified_at = NULL, sync_attempts = 0, sync_refusals = 0, "
+            "last_sync_error = NULL WHERE id = ? AND local_rev = ?",
             (obj["collection_id"], obj["comp_type"], obj["uid"],
              obj.get("href"), obj.get("etag"), obj.get("etag"),
              obj.get("summary", ""), obj.get("raw_ics"),
@@ -1090,8 +1099,8 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
         "base_etag = excluded.base_etag, summary = excluded.summary, "
         "raw_ics = excluded.raw_ics, sequence = excluded.sequence, "
         "last_modified = excluded.last_modified, sync_state = 'SYNCED', "
-        "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
-        "WHERE cal_objects.sync_state = 'SYNCED' OR ?",
+        "local_modified_at = NULL, sync_attempts = 0, sync_refusals = 0, "
+        "last_sync_error = NULL WHERE cal_objects.sync_state = 'SYNCED' OR ?",
         (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
          obj.get("href"), obj.get("etag"), obj.get("etag"),
          obj.get("summary", ""), obj.get("raw_ics"),
@@ -1168,7 +1177,8 @@ def prune_cal_objects(conn, collection_id: str, keep_ids) -> None:
 # list is gone from iCloud. A parked row keeps its PENDING_* state (so the edit
 # is never lost and no pull overwrites it) but the flush stops retrying it and
 # it no longer counts as "not yet synced". A fresh wall edit to the row resets
-# sync_attempts to 0 (every queue_* path does), which un-parks it.
+# sync_attempts and sync_refusals to 0 (every queue_* path does), which
+# un-parks it. Refusals are counted on their own (record_cal_object_error).
 CAL_PARK_ATTEMPTS = 5
 
 
@@ -1205,8 +1215,8 @@ def unpark_cal_objects(conn, collection_id: str, reason_prefix: str) -> int:
     """Put a collection's rows parked for `reason_prefix` back in the outbox
     (their list is back in iCloud). Returns how many."""
     cur = conn.execute(
-        "UPDATE cal_objects SET sync_attempts = 0, last_sync_error = NULL "
-        "WHERE collection_id = ? AND sync_state != 'SYNCED' "
+        "UPDATE cal_objects SET sync_attempts = 0, sync_refusals = 0, "
+        "last_sync_error = NULL WHERE collection_id = ? AND sync_state != 'SYNCED' "
         "AND sync_attempts >= ? AND substr(last_sync_error, 1, ?) = ?",
         (collection_id, CAL_PARK_ATTEMPTS, len(reason_prefix), reason_prefix))
     conn.commit()
@@ -1272,8 +1282,8 @@ def queue_cal_object_update(conn, oid: str, raw_ics: str, summary: str,
             "UPDATE cal_objects SET raw_ics = ?, summary = ?, "
             "sync_state = CASE WHEN sync_state = 'PENDING_CREATE' "
             "THEN 'PENDING_CREATE' ELSE 'PENDING_UPDATE' END, "
-            "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL, "
-            "local_rev = ? WHERE id = ? AND sync_state != 'PENDING_DELETE'",
+            "local_modified_at = ?, sync_attempts = 0, sync_refusals = 0, "
+            "last_sync_error = NULL, local_rev = ? WHERE id = ? AND sync_state != 'PENDING_DELETE'",
             (raw_ics, summary, now_iso, rev, oid))
         return cur.rowcount > 0
 
@@ -1308,7 +1318,8 @@ def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
             "sync_state = CASE WHEN cal_objects.href IS NOT NULL "
             "THEN 'PENDING_UPDATE' ELSE 'PENDING_CREATE' END, "
             "local_modified_at = excluded.local_modified_at, sync_attempts = 0, "
-            "last_sync_error = NULL, local_rev = excluded.local_rev",
+            "sync_refusals = 0, last_sync_error = NULL, "
+            "local_rev = excluded.local_rev",
             (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
              obj.get("summary", ""), obj.get("raw_ics"), now_iso, rev))
 
@@ -1333,8 +1344,8 @@ def queue_cal_object_delete(conn, oid: str, now_iso: str) -> bool:
         rev = _next_cal_rev(conn)
         cur = conn.execute(
             "UPDATE cal_objects SET sync_state = 'PENDING_DELETE', "
-            "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL, "
-            "local_rev = ? WHERE id = ?", (now_iso, rev, oid))
+            "local_modified_at = ?, sync_attempts = 0, sync_refusals = 0, "
+            "last_sync_error = NULL, local_rev = ? WHERE id = ?", (now_iso, rev, oid))
         return cur.rowcount > 0
 
 
@@ -1390,7 +1401,7 @@ def mark_cal_object_pushed(conn, oid: str, href, etag, pushed_rev: int) -> str:
     caller must remove the server copy the PUT just made)."""
     row = conn.execute(
         "UPDATE cal_objects SET href = ?, etag = ?, base_etag = ?, "
-        "sync_attempts = 0, last_sync_error = NULL, "
+        "sync_attempts = 0, sync_refusals = 0, last_sync_error = NULL, "
         "sync_state = CASE WHEN local_rev = ? THEN 'SYNCED' "
         "WHEN sync_state = 'PENDING_CREATE' THEN 'PENDING_UPDATE' "
         "ELSE sync_state END "
@@ -1428,16 +1439,21 @@ def record_cal_object_error(conn, oid: str, err: str, now_iso: str,
     """A push failed: keep the row PENDING, bump the attempt count and record the
     error so it retries next sync and the operator can see why it's stuck.
 
-    Only a `permanent` refusal can carry the count up to CAL_PARK_ATTEMPTS
-    (parked). A transient failure (network, 5xx, a timeout) stops one short, so
-    an iCloud outage never parks a change that would go through once it is
-    back. Returns True if the row is now parked."""
+    Only `permanent` refusals park a row, and they are counted on their own
+    (sync_refusals): it takes CAL_PARK_ATTEMPTS of them. A transient failure
+    (network, 5xx, a timeout) bumps sync_attempts but stops it one short, so an
+    iCloud outage never parks a change that would go through once it is back,
+    and a run of outages never leaves one refusal enough to park it. Returns
+    True if the row is now parked."""
     row = conn.execute(
-        "UPDATE cal_objects SET sync_attempts = CASE WHEN ? "
-        "THEN sync_attempts + 1 ELSE MIN(sync_attempts + 1, ?) END, "
+        "UPDATE cal_objects SET "
+        "sync_refusals = sync_refusals + ?, "
+        "sync_attempts = CASE WHEN sync_refusals + ? >= ? "
+        "THEN MAX(sync_attempts + 1, ?) ELSE MIN(sync_attempts + 1, ?) END, "
         "last_sync_error = ?, local_modified_at = COALESCE(local_modified_at, ?) "
         "WHERE id = ? RETURNING sync_attempts",
-        (1 if permanent else 0, CAL_PARK_ATTEMPTS - 1, err[:500], now_iso,
+        (1 if permanent else 0, 1 if permanent else 0, CAL_PARK_ATTEMPTS,
+         CAL_PARK_ATTEMPTS, CAL_PARK_ATTEMPTS - 1, err[:500], now_iso,
          oid)).fetchone()
     conn.commit()
     return bool(row and row["sync_attempts"] >= CAL_PARK_ATTEMPTS)

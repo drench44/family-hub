@@ -59,16 +59,44 @@ FLUSH_BUDGET_S = 90
 _PULL_BATCH = 200
 
 
+def _http_status(exc):
+    """The HTTP status an exception chain carries, read from its type and
+    fields, never from its message text: the message holds the URL, and chore
+    reminder URLs carry the chore id (familyhub-chore-403-...), so a text scan
+    read a 503 on chore 403 as a refusal. Our own CalDavHTTPError (and
+    CalDavRejected) carry `status`. The caldav library raises AuthorizationError
+    for both 401 and 403 with no status, only the server's reason phrase in its
+    `reason` field, so that field (not the message) tells them apart; an unknown
+    reason reads as 401, the dead-password case. None if nothing in the chain
+    says."""
+    e, seen = exc, 0
+    while e is not None and seen < 10:
+        status = getattr(e, "status", None)
+        if isinstance(status, int) and not isinstance(status, bool) and status:
+            return status
+        name = type(e).__name__
+        if name == "ForbiddenError":
+            return 403
+        if name == "AuthorizationError":
+            reason = str(getattr(e, "reason", "") or "").strip().lower()
+            return 403 if reason == "forbidden" else 401
+        e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+        seen += 1
+    return None
+
+
 def _is_auth_error(exc) -> bool:
     """True if the exception chain is a CalDAV authentication failure — a
-    revoked or expired app-specific password, or wrong credentials. Matched by
-    class name / 401 / 403 / 'unauthorized' / 'forbidden' so it works without the
-    caldav library imported and across its version churn (mirrors
-    calendar_sync._is_auth_error for Google). iCloud answers a dead app password
-    with 401 OR 403 depending on the path, so both must flag needs_auth. Distinct
-    from a transient network/throttle error: an auth failure is surfaced as
-    needs_auth so the wall shows 'Reconnect iCloud' and keeps serving the cached
-    view, instead of silently going stale.
+    revoked or expired app-specific password, or wrong credentials. Decided by
+    the status the chain carries (_http_status) when it has one. Otherwise it
+    falls back to matching the text: 401 / 403 / 'unauthorized' / 'forbidden',
+    so an untyped error from discovery still counts, across the caldav
+    library's version churn (mirrors calendar_sync._is_auth_error for Google).
+    iCloud answers a dead app password with 401 OR 403 depending on the path,
+    so both must flag needs_auth. Distinct from a transient network/throttle
+    error: an auth failure is surfaced as needs_auth so the wall shows
+    'Reconnect iCloud' and keeps serving the cached view, instead of silently
+    going stale.
 
     Known limitation: 403 is less clean than 401 — WebDAV can also return it for a
     permission-denied on one shared calendar the account can see but not read, so
@@ -77,12 +105,13 @@ def _is_auth_error(exc) -> bool:
     answers a dead app password with 403 on some paths, and a stuck banner is a
     better failure than silent staleness; revisit with a live-account error
     sample if false 'reconnect' prompts show up."""
+    status = _http_status(exc)
+    if status is not None:
+        return status in (401, 403)
     e, seen = exc, 0
     while e is not None and seen < 10:
-        name = type(e).__name__
         msg = str(e).lower()
-        if name in ("AuthorizationError", "ForbiddenError") \
-                or "unauthorized" in msg or "forbidden" in msg \
+        if "unauthorized" in msg or "forbidden" in msg \
                 or re.search(r"\b40[13]\b", msg):   # \b so an id like 'room4012' doesn't match
             return True
         e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
@@ -92,22 +121,19 @@ def _is_auth_error(exc) -> bool:
 
 def _is_refusal(exc) -> bool:
     """True if a PUSH failed because iCloud refuses that one write for good: a
-    CalDavRejected (a lasting 4xx), or a 403 / forbidden anywhere in the chain
-    (the caldav library raises AuthorizationError for 403 too). Only asked of
-    push errors: discovery and the pull already worked with these credentials
-    this tick, so a 403 here is the list refusing the write (read-only or
-    shared), not a dead password, and 'Reconnect iCloud' would not help."""
+    CalDavRejected (a lasting 4xx) or a 403 anywhere in the chain (the caldav
+    library raises AuthorizationError for 403 too). Decided from the status
+    (_http_status), never the message text. Only asked of push errors:
+    discovery and the pull already worked with these credentials this tick, so
+    a 403 here is the list refusing the write (read-only or shared), not a dead
+    password, and 'Reconnect iCloud' would not help."""
     e, seen = exc, 0
     while e is not None and seen < 10:
         if isinstance(e, CalDavRejected):
             return True
-        msg = str(e).lower()
-        if type(e).__name__ == "ForbiddenError" or "forbidden" in msg \
-                or re.search(r"\b403\b", msg):
-            return True
         e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
         seen += 1
-    return False
+    return _http_status(exc) == 403
 
 
 def _apply_error_persistence(conn, st, now, hard_error: bool) -> None:
@@ -317,7 +343,9 @@ def _record_push_failure(conn, row, what: str, exc, now_iso: str,
                          errors: list) -> bool:
     """Record one failed push. A lasting refusal (_is_refusal) counts toward
     parking the row; anything else stays retryable. Returns True if the failure
-    was auth-shaped and NOT a refusal (the caller surfaces needs_auth)."""
+    was a 401 (the caller surfaces needs_auth). Both are read from the status
+    the error carries, never its text, so a URL like familyhub-chore-403-...
+    can't make a network error look like either."""
     refused = _is_refusal(exc)
     parked = fdb.record_cal_object_error(conn, row["id"], f"{what}{exc}", now_iso,
                                          permanent=refused)
@@ -328,7 +356,7 @@ def _record_push_failure(conn, row, what: str, exc, now_iso: str,
                     "retried): %s", row["id"], fdb.CAL_PARK_ATTEMPTS, exc)
     else:
         errors.append(f"{row['id']}: {what}{exc}")
-    return not refused and _is_auth_error(exc)
+    return not refused and _http_status(exc) == 401
 
 
 def flush_pending(client, conn, collections, now_iso: str,

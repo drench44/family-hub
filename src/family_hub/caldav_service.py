@@ -110,15 +110,21 @@ class CalDavConflict(Exception):
     other writer's change — the TECHNICAL_DESIGN §5.6 optimistic-concurrency path."""
 
 
-class CalDavRejected(RuntimeError):
-    """The server refused a write for a reason retrying will not fix (a 4xx such
-    as 403 on a read-only or shared list, 400, 405, 409, 415). flush_pending
-    counts these toward parking the row instead of retrying it forever, and never
-    reads one as a dead password. `status` is the HTTP status."""
+class CalDavHTTPError(RuntimeError):
+    """A write or fetch answered with an error status. `status` is the HTTP
+    status, so callers decide from it and never from the message text (which
+    holds the URL, and chore reminder URLs carry numbers like 403)."""
 
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
+
+
+class CalDavRejected(CalDavHTTPError):
+    """The server refused a write for a reason retrying will not fix (a 4xx such
+    as 403 on a read-only or shared list, 400, 405, 409, 415). flush_pending
+    counts these toward parking the row instead of retrying it forever, and never
+    reads one as a dead password. `status` is the HTTP status."""
 
 
 # 4xx answers that can clear up on their own, so they stay plain retryable
@@ -133,7 +139,7 @@ def _raise_for_write(method: str, url: str, resp, status: int) -> None:
     msg = f"{method} {url} -> {status} {reason}"
     if 400 <= status < 500 and status not in _RETRYABLE_4XX:
         raise CalDavRejected(status, msg)
-    raise RuntimeError(msg)
+    raise CalDavHTTPError(status, msg)
 
 
 _ICAL_CT = "text/calendar; charset=utf-8"
@@ -346,7 +352,8 @@ class CalDavClient:
         if status == 404:
             return None
         if status and not (200 <= status < 300):
-            raise RuntimeError(f"GET {href} -> {status} {getattr(resp, 'reason', '')}")
+            raise CalDavHTTPError(
+                status, f"GET {href} -> {status} {getattr(resp, 'reason', '')}")
         body = getattr(resp, "raw", None)
         if isinstance(body, bytes):
             body = body.decode("utf-8", "replace")

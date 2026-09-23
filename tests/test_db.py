@@ -509,6 +509,35 @@ def test_cal_objects_local_rev_migration_keeps_old_rows(tmp_path):
     c.close()
 
 
+def test_cal_objects_sync_refusals_migration_keeps_old_rows(tmp_path):
+    """sync_refusals lands on an existing cal_objects table by additive ALTER:
+    a queued row keeps its attempt count and starts with no refusals, so one
+    refusal after old transient failures does not park it."""
+    c = fdb.connect(str(tmp_path / "old.db"))
+    c.executescript("""
+      CREATE TABLE cal_objects(
+        id TEXT PRIMARY KEY, collection_id TEXT NOT NULL,
+        comp_type TEXT NOT NULL, uid TEXT NOT NULL, href TEXT, etag TEXT,
+        base_etag TEXT, summary TEXT NOT NULL DEFAULT '', raw_ics TEXT,
+        sequence INTEGER NOT NULL DEFAULT 0, last_modified TEXT,
+        sync_state TEXT NOT NULL DEFAULT 'SYNCED', local_modified_at TEXT,
+        sync_attempts INTEGER NOT NULL DEFAULT 0, last_sync_error TEXT,
+        local_rev INTEGER NOT NULL DEFAULT 0);
+      INSERT INTO cal_objects(id, collection_id, comp_type, uid, href, etag,
+        base_etag, summary, raw_ics, sync_state, local_modified_at,
+        sync_attempts)
+        VALUES('caldav:rem/t1', 'caldav:rem', 'VTODO', 't1', 'h/1', 'e1',
+               'e1', 'Buy milk', 'ICS', 'PENDING_UPDATE', 't0', 4);""")
+    c.commit()
+    fdb.ensure_schema(c)
+    row = fdb.get_cal_object(c, "caldav:rem/t1")
+    assert (row["sync_attempts"], row["sync_refusals"]) == (4, 0)
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    assert fdb.record_cal_object_error(c, "caldav:rem/t1", "no", "t1",
+                                       permanent=True) is False
+    c.close()
+
+
 def test_cal_rev_counter_starts_above_every_stored_revision(tmp_path):
     """The shared revision counter is seeded once from the highest stored
     local_rev, so a queued change never repeats a revision an upload holds."""

@@ -123,6 +123,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 - If iCloud does not say whether a collection is a calendar or a reminder
   list, the sync uses what it knew before instead of treating it as a
   calendar for a round.
+- A short iCloud outage no longer sets a chore reminder aside just because
+  the chore's number (say 403) is in its web address, and a real sign-in
+  failure on such a reminder now asks you to reconnect. The sync reads the
+  answer's status code, not the words in the error.
+- A wall change is set aside only after iCloud refuses it 5 times. Before,
+  a few failed tries during an outage plus one refusal were enough.
 
 ## [1.8.1] — 2026-09-22
 

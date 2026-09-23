@@ -306,6 +306,17 @@ def test_is_auth_error_detects_403_and_forbidden():
     assert caldav_sync._is_auth_error(RuntimeError("HTTP 500 Server Error")) is False
 
 
+def test_is_auth_error_reads_the_status_not_the_url():
+    """A typed error decides by its status; a 403 or 401 in its URL means
+    nothing (chore reminder URLs carry the chore id)."""
+    err = caldav_service.CalDavHTTPError(
+        503, "PUT https://x/familyhub-chore-403-2026-09-24.ics -> 503 Forbidden")
+    assert caldav_sync._is_auth_error(err) is False
+    assert caldav_sync._is_refusal(err) is False
+    assert caldav_sync._is_auth_error(
+        caldav_service.CalDavHTTPError(401, "PUT h -> 401")) is True
+
+
 def test_caldav_sync_flags_needs_auth_and_keeps_cache(conn):
     # a previously-cached CalDAV event; an expired login must NOT wipe it
     fdb.replace_events_caldav(conn, [{"id": "old", "calendar_id": "caldav:cal",
@@ -848,7 +859,7 @@ def test_flush_isolates_and_records_error_keeping_pending(conn):
 
     class Boom(WriteFake):
         def put_object(self, collection, href, ics, base_etag=None, uid=None):
-            raise RuntimeError("HTTP 401 Unauthorized")
+            raise caldav_service.CalDavHTTPError(401, "PUT h -> 401 Unauthorized")
 
     client = Boom([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
     res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
@@ -1337,7 +1348,7 @@ def test_delete_during_create_push_that_fails_is_reported(conn):
 
     class DeleteFails(MidFlightEdit):
         def delete_object(self, collection, href, base_etag=None):
-            raise RuntimeError("HTTP 401 Unauthorized")
+            raise caldav_service.CalDavHTTPError(401, "DELETE h -> 401 Unauthorized")
 
     client = DeleteFails(
         [{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
@@ -1974,11 +1985,12 @@ def test_a_forbidden_push_is_not_a_reconnect_prompt(conn):
 
 
 def test_caldav_library_forbidden_error_on_push_is_not_auth(conn):
-    class AuthorizationError(Exception):
-        pass
+    # the library raises AuthorizationError for 401 and 403 alike; only its
+    # `reason` field (the server's reason phrase) tells a 403 apart
+    from caldav.lib import error as dav_error
     _queue_one(conn)
     client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
-                      AuthorizationError("AuthorizationError at 'h', reason Forbidden"))
+                      dav_error.AuthorizationError(url="h", reason="Forbidden"))
     res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
     assert res["needs_auth"] is False
 
@@ -2020,6 +2032,122 @@ def test_transient_push_failures_never_park(conn):
         caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
     assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
     assert fdb.caldav_parked(conn) == []
+
+
+_CHORE_URL = "https://x/cal/familyhub-chore-403-2026-09-24.ics"
+
+
+def _put_error(status, reason, url=_CHORE_URL):
+    """The exception the real CalDavClient.put_object raises for `status`."""
+    resp = _Resp(status)
+    resp.reason = reason
+    cl, col = _client_and_col(_DAV(put_resp=resp))
+    try:
+        cl.put_object(col, url, "ICS", base_etag="e0")
+    except Exception as e:
+        return e
+    raise AssertionError(f"put_object did not raise for {status}")
+
+
+def test_a_503_on_a_chore_403_url_is_never_parked(conn):
+    """Chore reminder URLs carry the chore id. A transient 503 on chore 403
+    must not read as a refusal just because '403' is in the URL."""
+    err = _put_error(503, "Service Unavailable")
+    assert "-403-" in str(err)
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], err)
+    for n in range(15):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+        assert res["needs_auth"] is False
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_5xx_whose_reason_says_forbidden_is_not_a_refusal(conn):
+    err = _put_error(502, "Upstream said Forbidden")
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], err)
+    for n in range(fdb.CAL_PARK_ATTEMPTS * 2):
+        caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_rate_limit_on_a_chore_403_url_is_not_a_refusal(conn):
+    from caldav.lib import error as dav_error
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      dav_error.RateLimitError(url=_CHORE_URL, reason="Busy"))
+    for n in range(fdb.CAL_PARK_ATTEMPTS * 2):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+        assert res["needs_auth"] is False
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_real_401_on_a_chore_403_url_asks_to_reconnect(conn):
+    from caldav.lib import error as dav_error
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      dav_error.AuthorizationError(url=_CHORE_URL,
+                                                   reason="Unauthorized"))
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["needs_auth"] is True
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_real_403_on_a_chore_url_still_parks_after_five(conn):
+    from caldav.lib import error as dav_error
+    for exc in (_put_error(403, "Forbidden"),
+                dav_error.AuthorizationError(url=_CHORE_URL, reason="Forbidden")):
+        conn.execute("DELETE FROM cal_objects")
+        conn.commit()
+        _queue_one(conn)
+        client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], exc)
+        for n in range(fdb.CAL_PARK_ATTEMPTS - 1):
+            res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+            assert res["needs_auth"] is False
+        assert fdb.caldav_parked(conn) == []
+        caldav_sync.flush_pending(client, conn, client.discover(), "tlast")
+        assert [r["id"] for r in fdb.caldav_parked(conn)] == ["caldav:rem/U1"]
+
+
+def test_transient_failures_then_one_refusal_does_not_park(conn):
+    """Transient failures raise the attempt count; they must not count as
+    refusals, so one refusal after them does not park the row."""
+    _queue_one(conn)
+    col = [{"id": "rem", "name": "R", "comp": "VTODO"}]
+    flaky = _Refuses(col, RuntimeError("connection reset"))
+    for n in range(6):
+        caldav_sync.flush_pending(flaky, conn, flaky.discover(), f"t{n}")
+    refuses = _Refuses(col, _forbidden())
+    caldav_sync.flush_pending(refuses, conn, refuses.discover(), "t7")
+    assert fdb.caldav_parked(conn) == []
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+    # four more refusals (five in all) park it
+    for n in range(fdb.CAL_PARK_ATTEMPTS - 1):
+        caldav_sync.flush_pending(refuses, conn, refuses.discover(), f"r{n}")
+    assert [r["id"] for r in fdb.caldav_parked(conn)] == ["caldav:rem/U1"]
+
+
+def test_record_cal_object_error_counts_refusals_on_their_own(conn):
+    _queue_one(conn)
+    for n in range(6):
+        assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "x", "t") is False
+    assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                       permanent=True) is False
+    for n in range(3):
+        assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                           permanent=True) is False
+    assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                       permanent=True) is True
+
+
+def test_a_new_wall_edit_resets_the_refusal_count(conn):
+    _queue_one(conn)
+    for n in range(fdb.CAL_PARK_ATTEMPTS - 1):
+        fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t", permanent=True)
+    fdb.queue_cal_object_update(conn, "caldav:rem/U1", "X", "x", "t2")
+    assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                       permanent=True) is False
 
 
 def test_a_new_wall_edit_unparks_a_row(conn):
