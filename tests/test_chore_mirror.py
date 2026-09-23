@@ -656,5 +656,9 @@ def test_reconcile_completions_ignores_a_future_day_ticked_on_the_phone(conn):
         "sequence": 1, "last_modified": None}, force=True)
     assert chore_mirror.reconcile_completions(conn, _NOW) == 0
     assert not fdb.completion_exists(conn, cid, tomorrow)
-    # the day it comes due, the tick counts
-    assert chore_mirror.reconcile_completions(conn, _NOW + dt.timedelta(days=1)) == 1
+    # refused, not deferred: the phone's reminder is reopened, so the day it
+    # comes due it does NOT start done
+    obj = fdb.get_cal_object(conn, oid)
+    assert "STATUS:COMPLETED" not in obj["raw_ics"]
+    assert chore_mirror.reconcile_completions(conn, _NOW + dt.timedelta(days=1)) == 0
+    assert not fdb.completion_exists(conn, cid, tomorrow)

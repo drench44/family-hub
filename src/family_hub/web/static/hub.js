@@ -3562,9 +3562,8 @@ async function toggleChore(id, done) {
   // A refused tap on a day that has since rolled over will never succeed on
   // retry, so don't tell anyone to tap again: say the day has ended.
   if (!ok) {
-    showToast(shown && data_date && data_date !== shown
-      ? 'That day has ended, so it can’t be changed now.'
-      : 'Couldn’t save — check the hub and tap again.');
+    showToast(choreToggleMessage(attemptToggle.lastError,
+      Boolean(shown && data_date && data_date !== shown)));
   }
   // keep the full-screen chores view in step when it's open on today
   if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
