@@ -434,6 +434,16 @@ changelog is the single source for the release notes too. The asset `?v=`
 cache-busts are unified to the app version, so one release busts every asset at
 once (a test guards against any drift).
 
+The release commit is the only commit that reaches `main` without a pull
+request. Two shared checks from
+[drench44/ci-policy](https://github.com/drench44/ci-policy) run here:
+`pr-policy` on every PR (the body states which review band ran, a PR that says
+it fixes a regression changes a test, and a size limit), and `main-watch` on
+every push to `main`, which opens an issue labeled `main-watch` for any commit
+that did not come through a merged PR with green checks. Its allowlist accepts
+exactly `release: vX.Y.Z` commits that touch only `VERSION`, `CHANGELOG.md` and
+`src/family_hub/web/static/index.html`, which is what `release.py` writes.
+
 ## Tests
 
 Four layers, no external services needed (Python 3.12):
