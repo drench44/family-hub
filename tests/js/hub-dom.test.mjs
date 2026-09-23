@@ -1719,6 +1719,9 @@ test('buildPersonForm: a mapped list that is gone says so instead of an empty-lo
   // the server decides: an id missing from the array is not "gone" on its own
   assert.equal(mk('caldav:deleted', false).querySelector('[data-plist-gone]'), null,
     'the server says the list is fine: no note');
+  assert.match(mk('caldav:deleted', false).innerHTML,
+    /<option value="caldav:deleted" selected disabled>\(current list\)<\/option>/,
+    'but the saved id still holds the selection, so choosing none stays a real change');
 });
 
 test('buildPersonForm: every list gone still says gone, not "connect iCloud"', () => {
@@ -1730,6 +1733,51 @@ test('buildPersonForm: every list gone still says gone, not "connect iCloud"', (
   assert.equal(host.querySelector('[data-plist-empty]'), null, 'no connect-iCloud line: iCloud is connected');
   assert.doesNotMatch(host.innerHTML, /Connect iCloud in Settings/);
   assert.ok(host.querySelector('[data-plist]'), 'the picker stays so the mapping can be cleared');
+});
+
+// A real browser shows the SELECTED option and fires change only when the
+// choice differs. If nothing matched the gone id, the none option would show as
+// already chosen and picking it would never save. The fake <select> can't
+// reflect options, so the markup is asserted: the gone list holds the
+// selection, the none option does not.
+test('buildPersonForm: a gone list holds the selection so choosing none is a real change', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:<gone>', listGone: true, twoWay: true, onListChange: () => true });
+  const html = host.innerHTML;
+  assert.match(html, /<option value="caldav:&lt;gone&gt;" selected disabled>\(list gone\)<\/option>/,
+    'the gone list is the selected, unpickable option (value escaped)');
+  assert.match(html, /<option value="">\u2014 none \u2014<\/option>/, 'the none option is not preselected');
+  assert.ok(html.indexOf('(list gone)') < html.indexOf('\u2014 none \u2014'), 'the gone option comes first');
+});
+
+test('buildPersonForm: with every list gone, choosing none saves and clears', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  const calls = [];
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:deleted', listGone: true, twoWay: true,
+      onListChange: (v) => { calls.push(v); return true; } });
+  const sel = host.querySelector('[data-plist]');
+  sel.value = ''; await sel.onchange();
+  assert.deepEqual(calls, [''], 'the clear was sent');
+  assert.equal(sandbox.reminderListBody(calls[0]).reminder_list_id, null, 'and it clears to null');
+  assert.ok(host.querySelector('[data-plist-gone]').classList.contains('hidden'), 'the gone note goes');
+});
+
+test('buildPersonForm: a failed clear of a gone list puts the gone option back, not a blank', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  sandbox.buildPersonForm(host, { name: 'Ada', color: '#5BC9F0' }, 'Save', () => {},
+    { edit: true, reminderLists: [], reminderListId: 'caldav:deleted', listGone: true, twoWay: true, onListChange: () => false });
+  const sel = host.querySelector('[data-plist]');
+  sel.value = ''; await sel.onchange();
+  assert.equal(sel.value, 'caldav:deleted', 'reverted to the saved (gone) id');
+  assert.match(host.innerHTML, /<option value="caldav:deleted" selected disabled>\(list gone\)<\/option>/,
+    'an option for that id exists, so the picker reads "(list gone)", not blank');
+  assert.ok(!host.querySelector('[data-plist-gone]').classList.contains('hidden'), 'the gone note stays');
+  assert.ok(!host.querySelector('[data-plist-err]').classList.contains('hidden'), 'the error shows');
 });
 
 test('buildPersonForm: the gone note goes away once a new list is saved, and stays on a failed save', async () => {
@@ -2428,6 +2476,27 @@ test('people admin: every iCloud list gone still badges "list gone" and the edit
   const editor = ctx.registry['chore-editor'];
   assert.ok(editor.querySelector('[data-plist-gone]'), 'the editor says the list is gone');
   assert.equal(editor.querySelector('[data-plist-empty]'), null, 'not "connect iCloud"');
+});
+
+test('people admin: picking a new list for a person whose list is gone clears "list gone" everywhere', async () => {
+  const admin = adminWithLists();
+  admin.reminder_lists = [{ id: 'caldav:home', name: 'Home' }];   // Sam's list is gone
+  admin.people[0].list_gone = true;
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, admin);
+  await enterEditWithPeople(ctx);
+  ctx.tap('[data-pedit="1"]');
+  const sel = ctx.registry['chore-editor'].querySelector('[data-plist]');
+  sel.value = 'caldav:home';
+  await sel.onchange();
+  const patch = ctx.adminPeopleCalls.find((c) => c.url === '/api/admin/people/1' && c.method === 'PATCH');
+  assert.equal(patch.body.reminder_list_id, 'caldav:home', 'the new list was saved');
+  const html = ctx.choresFull.innerHTML;
+  const samRow = html.slice(html.indexOf('data-padmin="1"'), html.indexOf('data-padmin="2"'));
+  assert.match(samRow, /iCloud ✓/, 'the badge is back to a tick');
+  assert.doesNotMatch(samRow, /iCloud list gone/);
+  ctx.tap('[data-pedit="1"]');                 // reopen the editor
+  assert.equal(ctx.registry['chore-editor'].querySelector('[data-plist-gone]'), null,
+    'the reopened editor no longer says the list is gone');
 });
 
 test('people admin: a mapped person the server calls fine keeps "iCloud ✓" even if the list is not in the array', async () => {
