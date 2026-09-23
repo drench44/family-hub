@@ -1669,6 +1669,9 @@ body.overlay-open { overflow: hidden; }
   border-bottom: 1px solid var(--edge);
 }
 .padmin-row.inactive { opacity: 0.5; }
+/* "No one to do these": chores with no active owner, listed above People so
+   they can be reassigned (review, 2026-09-22) */
+.padmin-unassigned .padmin-head-label { color: var(--warn); }
 .padmin-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; font-size: 17px; }
 /* At-a-glance "this person mirrors to an iCloud list" tag — informational, not
    a control (no tap target). Accent pill from tokens so it reads in every
