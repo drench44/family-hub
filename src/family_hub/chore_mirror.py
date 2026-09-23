@@ -24,6 +24,9 @@ log = logging.getLogger("family_hub.caldav")
 
 DEFAULT_HORIZON_DAYS = 7
 
+# Every mirrored reminder's UID starts with this (then <chore id>-<date>).
+UID_PREFIX = "familyhub-chore-"
+
 # (person id, list id) pairs already warned about as mapped to a list that is
 # gone from iCloud, so the warning is logged once per process, not every tick.
 _GONE_WARNED: set = set()
@@ -49,7 +52,7 @@ def _list_of(ledger_row: dict) -> str:
 
 def _queue_create(conn, chore, diso, person_id, list_id, tz, now, now_iso) -> None:
     d = dt.date.fromisoformat(diso)
-    uid = f"familyhub-chore-{chore['id']}-{diso}"
+    uid = f"{UID_PREFIX}{chore['id']}-{diso}"
     oid = f"{list_id}/{uid}"
     title = _title(chore)
     ics = remlogic.build_chore_vtodo(uid, title, d,
