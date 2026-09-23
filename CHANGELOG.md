@@ -16,6 +16,30 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Security
+- go2rtc's API is no longer published on the LAN. It has no login, and
+  `/api/streams` and `/api/config` handed any device on the network every
+  camera URL (often a password or token) and let it rewrite go2rtc's
+  config. The hub now serves the camera player itself at `/go2rtc/` and
+  passes the player's WebSocket through to go2rtc for the configured
+  cameras only (the video itself still comes straight from go2rtc's WebRTC
+  port). `data/go2rtc.yaml` is mounted read-only. go2rtc's and the
+  Wyze bridge's own web pages are on the server's loopback, for debugging
+  over ssh.
+
+### Fixed
+- go2rtc kept being killed for running out of memory. A camera snapshot
+  costs go2rtc an ffmpeg, and every screen probed every camera on its own:
+  now screens asking about the same camera at once share one snapshot, and
+  a good one is reused for 5 seconds. go2rtc gets 768 MB with no swap (it
+  died at 256 MB plus 256 MB of swap) and a Go memory target, so a runaway
+  restarts in seconds instead of swapping first.
+- go2rtc and the Wyze bridge have Docker health checks, and their `/config`
+  folders are named volumes, so a `docker compose down` no longer leaves an
+  unnamed volume behind each time.
+- The Wyze bridge's web page is published on the port it really listens on
+  (5080; the old mapping pointed at 5000, where nothing answers).
+
 ### Added
 - `GET /health/full`: a report of whether the hub actually works, for deploy
   gates and people. Every source the wall shows (calendar, laundry, weather,

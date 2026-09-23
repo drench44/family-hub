@@ -14,12 +14,16 @@ services:
     # your Linux user's uid:gid — must own ./data (id -u; id -g)
     user: "${HUB_UID:-1000}:${HUB_GID:-1000}"
     restart: unless-stopped
+    # memswap_limit = mem_limit on every service: no swap. A container at its
+    # limit should be killed and restarted in seconds, not swap for minutes
+    # first (go2rtc did, 2026-09-22, and the wall's cameras hung meanwhile).
     mem_limit: 256m
+    memswap_limit: 256m
     logging: *capped-logs
     environment:
       - TZ=${TZ:-America/Los_Angeles}
-      # camera fetches go over the compose network — a container can't hairpin
-      # its own stack's published LAN port (browser links stay on the LAN IP)
+      # Where the hub reaches go2rtc: over the compose network. Browsers never
+      # talk to go2rtc directly; the hub proxies the player at /go2rtc/.
       - GO2RTC_FETCH_BASE=http://go2rtc:1984
       # iCloud CalDAV bot credentials (optional; see .env). Empty = off.
       - ICLOUD_CALDAV_USER=${ICLOUD_CALDAV_USER:-}
@@ -58,7 +62,16 @@ services:
     container_name: family-hub-wyze-bridge
     restart: unless-stopped
     mem_limit: 256m
+    memswap_limit: 256m
     logging: *capped-logs
+    # The image has busybox wget (no curl). /api/health answers
+    # {"status":"ok",...} once the WebUI is up.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "4", "-O", "/dev/null", "http://127.0.0.1:5080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - TZ=${TZ:-America/Los_Angeles}
       - WB_AUTH=False          # LAN-only WebUI, same trust model as the hub
@@ -70,21 +83,74 @@ services:
     env_file:
       - path: ./data/wyze.env
         required: false
+    # The WebUI (setup/debug; this fork serves it on 5080) has no auth and
+    # shows every camera, so it is published on the box's loopback only.
+    # From another machine: ssh -L 5050:127.0.0.1:5050 <box>, then open
+    # http://127.0.0.1:5050/ there.
     ports:
-      - "${HUB_BIND:-0.0.0.0}:5050:5000"   # WebUI (setup/debug), LAN-only
+      - "127.0.0.1:5050:5080"
+    # The image declares /config and /media volumes. Named, so a recreate or a
+    # `down` does not leave another anonymous volume behind each time;
+    # /config also keeps the bridge's Wyze login state across recreates.
+    volumes:
+      - wyze-bridge-config:/config
+      - wyze-bridge-media:/media
   go2rtc:
     # OPTIONAL — only needed for camera tiles. Pin the digest after your
     # first pull (docker compose pull go2rtc; record the sha256 here).
+    # 1.9.14 is the newest release (checked 2026-09-23).
     image: alexxit/go2rtc:1.9.14
     container_name: family-hub-go2rtc
     restart: unless-stopped
-    # 128m was OOM-killed five times in nine days with a few camera streams
-    # open; 256m gives it room.
-    mem_limit: 256m
+    # Memory, from the OOM kills on a real box: 128m died five times, then
+    # 256m (with 256m of swap on top) died too, on 2026-09-22 with BOTH full:
+    # go2rtc itself held ~170 MB resident plus ~250 MB swapped, with ffmpeg
+    # children beside it. So this stack has needed ~512 MB at a peak, and
+    # 768m is that plus half again. No swap (memswap_limit = mem_limit): a
+    # runaway is killed and restarted in seconds instead of thrashing.
+    # GOMEMLIMIT makes go2rtc's Go garbage collector work harder as its heap
+    # nears 512 MiB (by default Go lets the heap reach twice its live size),
+    # leaving the rest for the ffmpeg go2rtc starts for each snapshot.
+    mem_limit: 768m
+    memswap_limit: 768m
     logging: *capped-logs
-    environment: [ "TZ=${TZ:-America/Los_Angeles}" ]
+    environment:
+      - TZ=${TZ:-America/Los_Angeles}
+      - GOMEMLIMIT=512MiB
+    # The image has curl. /api is go2rtc's cheapest answer (its version info).
+    # Like wyze-bridge's, this check only REPORTS: docker's restart policy
+    # ignores health, so an unhealthy container keeps running until a watcher
+    # (a deploy gate, a monitor reading .State.Health) acts on it. It proves
+    # the process answers, not that any camera streams; /health/full on the
+    # hub checks go2rtc knows every configured stream.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "--max-time", "4", "http://127.0.0.1:1984/api"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # go2rtc's API (1984) has NO access control: /api/streams and /api/config
+    # hand out every camera URL (often a password or token) and let anyone
+    # rewrite the config. Browsers reach only the player, through the hub's
+    # /go2rtc/ proxy; the hub reaches go2rtc over the compose network. 1984 is
+    # published on the box's loopback only, for debugging over ssh
+    # (ssh -L 1984:127.0.0.1:1984 <box>, then http://127.0.0.1:1984/).
+    # 8555 is WebRTC media, which browsers do connect to directly; it carries
+    # no API.
     ports:
-      - "${HUB_BIND:-0.0.0.0}:1984:1984"
+      - "127.0.0.1:1984:1984"
       - "${HUB_BIND:-0.0.0.0}:8555:8555/tcp"
       - "${HUB_BIND:-0.0.0.0}:8555:8555/udp"
-    volumes: [ "./data/go2rtc.yaml:/config/go2rtc.yaml" ]
+    volumes:
+      # Read-only: nothing may rewrite the config through the API (a stream
+      # added there could run a command). Edit data/go2rtc.yaml on the box
+      # and `docker compose restart go2rtc`.
+      - ./data/go2rtc.yaml:/config/go2rtc.yaml:ro
+      # The image declares a /config volume. Named, so a recreate or a `down`
+      # does not leave another anonymous volume behind each time.
+      - go2rtc-config:/config
+
+volumes:
+  go2rtc-config:
+  wyze-bridge-config:
+  wyze-bridge-media:
