@@ -69,9 +69,12 @@ services:
     memswap_limit: 256m
     logging: *capped-logs
     # The image has busybox wget (no curl). /api/health answers
-    # {"status":"ok",...} once the WebUI is up.
+    # {"status":"ok",...} once the WebUI is up. The bridge's own internal
+    # go2rtc (127.0.0.1:1984 inside this container) is probed too: on
+    # 2026-09-23 it exited 1 s after a recreate, 4.5.0 never relaunched it,
+    # and both Wyze tiles were dead while /api/health still said ok.
     healthcheck:
-      test: ["CMD", "wget", "-q", "-T", "4", "-O", "/dev/null", "http://127.0.0.1:5080/api/health"]
+      test: ["CMD-SHELL", "wget -q -T 4 -O /dev/null http://127.0.0.1:5080/api/health && wget -q -T 4 -O /dev/null http://127.0.0.1:1984/api"]
       interval: 30s
       timeout: 5s
       retries: 3
