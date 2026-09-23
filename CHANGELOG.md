@@ -132,9 +132,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The note for wall changes iCloud would not take now says they are kept
   but not sent. It said "kept on the wall", but a change whose list is gone
   is not shown on the wall.
-- A reminder list is dropped only after a full day of good syncs have all
-  found it missing. Before, a list seen missing once, then a day of iCloud
-  errors, was dropped on the next good sync.
+- A reminder list is dropped only after a full day in which every good sync
+  found it missing, and a garbled saved record of that day starts it over
+  instead of stopping the iCloud sync. Before, a list seen missing once,
+  then a day of iCloud errors, was dropped on the next good sync.
 - Settings says when a person's iCloud chore list is gone (deleted,
   unshared or moved), even when every list is gone: the iCloud panel shows
   "Sam's iCloud chore list is gone; pick a new one", the person's editor

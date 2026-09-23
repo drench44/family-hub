@@ -516,16 +516,28 @@ def _drop_gone_lists(conn, discovered: list[dict], now: dt.datetime) -> None:
         if cid in seen:
             continue
         clock = missing.get(cid)
-        since = last = None
+        since_dt = last_dt = None
         if isinstance(clock, dict):
-            since, last = clock.get("since"), clock.get("last")
-        try:
-            since_dt = dt.datetime.fromisoformat(since) if since else None
-            last_dt = dt.datetime.fromisoformat(last) if last else None
-        except Exception:
-            log.warning("caldav_missing_since for %s unparseable (%r); resetting",
-                        cid, clock)
-            since_dt = last_dt = None
+            try:
+                since, last = clock.get("since"), clock.get("last")
+                since_dt = dt.datetime.fromisoformat(since) if since else None
+                last_dt = dt.datetime.fromisoformat(last) if last else None
+                # a stamp with a zone can't be compared with a clock without
+                # one (or the reverse); the subtraction below would stop the
+                # whole sync every tick
+                for stamp in (since_dt, last_dt):
+                    if stamp is not None and \
+                            (stamp.tzinfo is None) != (now.tzinfo is None):
+                        raise ValueError("time zone does not match")
+            except Exception:
+                log.warning("caldav_missing_since for %s unparseable (%r); "
+                            "its missing clock starts over", cid, clock)
+                since_dt = last_dt = None
+        elif clock is not None and not isinstance(clock, str):
+            # a bare time string is the older version's clock (restarts
+            # below, quietly); anything else is garbled
+            log.warning("caldav_missing_since for %s unparseable (%r); "
+                        "its missing clock starts over", cid, clock)
         # No last sighting (a first sighting, or a clock the older version
         # saved as a bare time) or too long since it: start over.
         if since_dt is None or last_dt is None or \
