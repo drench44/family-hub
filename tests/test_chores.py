@@ -555,3 +555,47 @@ def test_occurrences_before_interval_brute_force():
         if ch.occurs(c, d):
             count += 1
         d += dt.timedelta(days=1)
+
+
+# ---- review 2026-09-22: one person away moves only their own turns ----
+
+FIVE = [{"id": i, "name": n, "color": "#000"} for i, n in
+        [(1, "Ana"), (2, "Ben"), (3, "Cal"), (4, "Dee"), (5, "Eli")]]
+
+
+def test_away_person_hands_only_their_own_turns_to_the_next_person_home():
+    chore = _rot(9, [1, 2, 3, 4, 5])
+    start = dt.date(2026, 9, 21)
+    for k in range(14):
+        d = start + dt.timedelta(days=k)
+        normal = ch.plan_rows([chore], FIVE, d)[0]["person_id"]
+        row = ch.plan_rows([chore], FIVE, d, {"ids": {1}, "backup": {}})[0]
+        if normal == 1:
+            # person 1's turn goes to the next person in the order who is home
+            assert (row["person_id"], row["covering_for"]) == (2, 1), d
+        else:
+            # everyone else keeps exactly their usual day
+            assert (row["person_id"], row["covering_for"]) == (normal, None), d
+
+
+def test_cover_skips_past_anyone_else_who_is_away():
+    chore = _rot(9, [1, 2, 3])
+    d = next(dt.date(2026, 9, 21) + dt.timedelta(days=k) for k in range(3)
+             if ch.plan_rows([chore], FIVE[:3], dt.date(2026, 9, 21) + dt.timedelta(days=k))[0]["person_id"] == 1)
+    row = ch.plan_rows([chore], FIVE[:3], d, {"ids": {1, 2}, "backup": {}})[0]
+    assert (row["person_id"], row["covering_for"]) == (3, 1)
+    assert ch.plan_rows([chore], FIVE[:3], d, {"ids": {1, 2, 3}, "backup": {}}) == []
+
+
+def test_a_person_with_two_slots_covers_from_the_right_slot():
+    # a rotation can hold one person twice (two turns in the cycle), on purpose
+    chore = _rot(9, [2, 3, 1, 4, 5, 5])
+    start = dt.date(2026, 9, 21)
+    for k in range(12):
+        d = start + dt.timedelta(days=k)
+        normal = ch.plan_rows([chore], FIVE, d)[0]["person_id"]
+        row = ch.plan_rows([chore], FIVE, d, {"ids": {5}, "backup": {}})[0]
+        if normal == 5:
+            assert (row["person_id"], row["covering_for"]) == (2, 5), d  # wraps to the start
+        else:
+            assert row["person_id"] == normal, d

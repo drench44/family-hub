@@ -18,6 +18,18 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A brief Google hiccup no longer flashes "Calendar sync hit a snag"; it
   shows only if the problem lasts an hour. An outage at Google's sign-in
   server no longer asks you to reconnect.
+- Chores already checked off today stay done when someone is paused or a
+  chore's days are edited. Before, "Pause everyone" could erase that day's
+  finished chores.
+- When someone is away, only their own rotation turns pass to the next
+  person home ("for <name>"); everyone else keeps their usual days.
+- A chore whose owner was deleted or turned off no longer vanishes: the
+  chores edit mode lists it under "No one to do these" with a Reassign
+  button. Deleting a person keeps check-offs they made on someone else's
+  chore.
+- A chore can't be assigned to a person who doesn't exist, and a future
+  day can't be checked off.
+- Very long titles wrap instead of running past the edge of a row.
 
 ## [1.8.0] — 2026-09-22
 
