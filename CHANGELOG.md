@@ -14,8 +14,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The Wyze bridge's health check now also probes the bridge's own internal
   go2rtc. That relay can exit alone right after the container starts, and
   the bridge never relaunches it, so the Wyze cameras went dark while the
-  container still reported healthy. Now it reports unhealthy, which the
-  watchdog and the deploy gate can see.
+  container still reported healthy. After three failed tries the check now
+  restarts the bridge, which brings the relay back.
 
 ## [1.9.0] — 2026-09-23
 
