@@ -477,7 +477,7 @@ def test_timed_events_are_stored_in_the_house_time_zone():
     item = {"id": "c", "summary": "Class",
             "start": {"dateTime": "2026-11-03T15:45:00-07:00"},
             "end": {"dateTime": "2026-11-03T16:45:00-07:00"}}
-    ev = cs.normalize_event(item, "tauni", LA)
+    ev = cs.normalize_event(item, "cal-a", LA)
     assert ev["start_ts"] == "2026-11-03T14:45:00-08:00"
     assert ev["end_ts"] == "2026-11-03T15:45:00-08:00"
     # a UTC invite late in the evening lands on the right LOCAL day
@@ -486,15 +486,15 @@ def test_timed_events_are_stored_in_the_house_time_zone():
             "end": {"dateTime": "2026-09-23T04:00:00Z"}}
     assert cs.normalize_event(late, "x", LA)["start_ts"].startswith("2026-09-22T20:30")
     # all-day stays a plain date; no zone given leaves the text as sent
-    assert cs.normalize_event(item, "tauni")["start_ts"] == "2026-11-03T15:45:00-07:00"
+    assert cs.normalize_event(item, "cal-a")["start_ts"] == "2026-11-03T15:45:00-07:00"
 
 
 def test_sync_passes_the_house_zone_through(conn):
     item = {"id": "c", "summary": "Class",
             "start": {"dateTime": "2026-11-03T15:45:00-07:00"},
             "end": {"dateTime": "2026-11-03T16:45:00-07:00"}}
-    cfg = make_cfg(calendars=[{"id": "tauni", "label": "T", "kind": "google"}])
-    cs.sync_once(FakeClient({"tauni": [item]}), conn, cfg,
+    cfg = make_cfg(calendars=[{"id": "cal-a", "label": "T", "kind": "google"}])
+    cs.sync_once(FakeClient({"cal-a": [item]}), conn, cfg,
                  dt.datetime(2026, 10, 30, 12, 0, tzinfo=LA))
     assert fdb.list_events(conn)[0]["start_ts"] == "2026-11-03T14:45:00-08:00"
 

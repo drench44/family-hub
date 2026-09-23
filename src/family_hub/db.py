@@ -516,10 +516,11 @@ def update_person(conn, pid: int, **fields) -> None:
 def delete_person(conn, pid: int) -> bool:
     """Hard-delete a person, history-safe, as ONE transaction. Their live
     check-offs (completions) are removed — required anyway to clear the
-    completions -> people(id) FK — and they're stripped from every chore's
-    assignment: dropped from any rotation_order, and a fixed assignment to them
-    nulled (that chore then simply goes unassigned until reassigned, exactly as
-    plan_rows already treats an unresolvable assignee). The frozen
+    completions -> people(id) FK, except a check-off they made on someone
+    else's chore, which passes to that chore's owner. They're stripped from
+    every chore's assignment: dropped from any rotation_order, and a fixed
+    assignment to them nulled (the chore then goes unassigned until
+    reassigned; the chores edit mode lists it under "No one to do these"). The frozen
     occurrence_log is deliberately left untouched — past days keep their
     snapshot — but those rows won't render once the person is gone, since the
     day plan only builds cards for current people. Returns True if the person
@@ -538,6 +539,18 @@ def delete_person(conn, pid: int) -> bool:
                     (json.dumps([x for x in order if x != pid]), ch["id"]))
         conn.execute("UPDATE chores SET fixed_person_id = NULL "
                      "WHERE fixed_person_id = ?", (pid,))
+        # A check-off this person made on SOMEONE ELSE'S chore (covering, or a
+        # sibling tapping it) is that owner's completed day: hand it to the
+        # owner the log recorded instead of deleting it, or the owner's past
+        # streak breaks (review, 2026-09-22). Only their own are removed.
+        conn.execute(
+            "UPDATE completions SET person_id = ("
+            "  SELECT o.person_id FROM occurrence_log o"
+            "  WHERE o.date = completions.date AND o.chore_id = completions.chore_id)"
+            " WHERE person_id = ? AND EXISTS ("
+            "  SELECT 1 FROM occurrence_log o JOIN people p ON p.id = o.person_id"
+            "  WHERE o.date = completions.date AND o.chore_id = completions.chore_id"
+            "  AND o.person_id != ?)", (pid, pid))
         conn.execute("DELETE FROM completions WHERE person_id = ?", (pid,))
         conn.execute("DELETE FROM away_periods WHERE person_id = ?", (pid,))
         conn.execute("UPDATE away_periods SET backup_person_id = NULL "

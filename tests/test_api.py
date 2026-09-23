@@ -5442,3 +5442,96 @@ def test_a_brief_google_hiccup_does_not_flash_the_snag_banner(tmp_path, monkeypa
         appmod.fdb.kv_set(c, "calendar_status", {"ok": False, "needs_auth": True, "last_sync": old, "error_since": fresh})
         assert tc.get("/api/calendar").json()["status"].get("needs_auth") is True
 
+
+
+# ---- review 2026-09-22: chores keep finished work, validate people, no future ticks ----
+
+def _today_chores(client, pid):
+    people = client.get("/api/hub").json()["people"]
+    return next(p for p in people if p["person"]["id"] == pid)["chores"]
+
+
+def test_pause_everyone_keeps_chores_already_done_today(client, app_mod):
+    # 2026-08-26: thirteen morning check-offs vanished from that day when
+    # "Pause everyone" started the same day.
+    pid = _mk_person(client, "Ana")
+    done_id = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    open_id = client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    client.get("/api/hub")                                   # today's plan is served
+    assert client.post(f"/api/chores/{done_id}/complete").status_code == 200
+    assert client.post("/api/admin/away/everyone", json={}).status_code == 200
+    rows = {c["id"]: c for c in _today_chores(client, pid)}
+    assert rows[done_id]["done"] is True                     # the finished work stays
+    assert open_id not in rows                               # the rest pauses as before
+    today = app_mod._today().isoformat()
+    assert {r["chore_id"] for r in app_mod.fdb.day_log(app_mod._db(), today)} == {done_id}
+
+
+def test_editing_a_chore_off_today_keeps_todays_check_off(client, app_mod):
+    # 2026-09-12: a Saturday check-off was dropped when the chore was edited
+    # to Fridays only.
+    pid = _mk_person(client, "Ben")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Clean Bedroom", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    other_day = 1 << ((app_mod._today().weekday() + 3) % 7)
+    assert client.patch(f"/api/admin/chores/{cid}", json={
+        "schedule_kind": "days", "days_mask": other_day}).status_code == 200
+    rows = {c["id"]: c for c in _today_chores(client, pid)}
+    assert rows[cid]["done"] is True
+    # undo still works on the kept row, and then it follows the new schedule
+    assert client.delete(f"/api/chores/{cid}/complete").status_code == 200
+    assert cid not in {c["id"] for c in _today_chores(client, pid)}
+
+
+def test_a_chore_cannot_be_assigned_to_someone_who_does_not_exist(client, app_mod):
+    pid = _mk_person(client)
+    base = {"title": "x", "schedule_kind": "daily"}
+    assert client.post("/api/admin/chores", json={**base, "assign_kind": "fixed",
+                       "fixed_person_id": 999}).status_code == 422
+    assert client.post("/api/admin/chores", json={**base, "assign_kind": "rotation",
+                       "rotation_order": [pid, 999]}).status_code == 422
+    # someone listed twice is allowed on purpose (two turns in the cycle)
+    assert client.post("/api/admin/chores", json={**base, "assign_kind": "rotation",
+                       "rotation_order": [pid, pid]}).status_code == 200
+
+
+def test_a_future_day_cannot_be_checked_off(client, app_mod):
+    pid = _mk_person(client)
+    cid = client.post("/api/admin/chores", json={
+        "title": "x", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    tomorrow = (app_mod._today() + dt.timedelta(days=1)).isoformat()
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": tomorrow})
+    assert r.status_code == 422
+
+
+def test_deleting_a_person_keeps_their_check_off_on_someone_elses_chore(client, app_mod):
+    a = _mk_person(client, "Owner")
+    b = _mk_person(client, "Helper")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Feed dog", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": a}).json()["id"]
+    client.get("/api/hub")                                   # freezes today: owned by a
+    today = app_mod._today().isoformat()
+    assert client.post(f"/api/chores/{cid}/complete", json={"person_id": b}).status_code == 200
+    assert client.delete(f"/api/admin/people/{b}").status_code == 200
+    comps = app_mod.fdb.completions_between(app_mod._db(), today, today)
+    assert [(r["chore_id"], r["person_id"]) for r in comps] == [(cid, a)]
+
+
+def test_a_fixed_chore_of_a_deleted_person_is_listed_not_lost(client, app_mod):
+    a = _mk_person(client, "Gone")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Feed dog", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": a}).json()["id"]
+    client.delete(f"/api/admin/people/{a}")
+    ch = next(c for c in client.get("/api/admin/state").json()["chores"] if c["id"] == cid)
+    # still active and still there to reassign (the edit mode lists it)
+    assert ch["active"] in (1, True) and ch["fixed_person_id"] is None

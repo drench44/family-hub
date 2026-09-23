@@ -939,6 +939,23 @@ def diag_viewport_recent():
     return {"recent": list(_VIEWPORT_DIAG), "reloads": list(_VIEWPORT_RELOADS)}
 
 
+def _keep_done_rows(c, d_str: str, rows: list[dict]) -> list[dict]:
+    """Today's plan, with every chore ALREADY checked off today kept exactly as
+    it was served when it was done. Re-resolving today after the fact (someone
+    paused, a chore's days edited) must not erase finished work: on 2026-08-26
+    thirteen morning check-offs vanished from that day when "Pause everyone"
+    started, and on 09-12 a Saturday check-off was dropped when the chore was
+    edited to Fridays (review, 2026-09-22). Chores not yet done follow the new
+    plan as before."""
+    done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
+    if not done:
+        return rows
+    served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)}
+    kept = [served[cid] for cid in done if cid in served]
+    kept_ids = {r["chore_id"] for r in kept}
+    return [r for r in rows if r["chore_id"] not in kept_ids] + kept
+
+
 def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
     """Write the day's live-resolved plan into the occurrence log — the moment
     history becomes frozen. Skips the write when the frozen rows already match,
@@ -1001,6 +1018,8 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         rows = fdb.day_log(c, d_str)
     else:
         rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
+        if d == today:
+            rows = _keep_done_rows(c, d_str, rows)
         # Only freeze a plan built WITH the away overlay. A degraded build
         # treats everyone as present, and the log is permanent history: it
         # would record the wrong owner for good. The next healthy serve
@@ -1225,6 +1244,10 @@ def complete(chore_id: int, body: CompleteBody | None = None):
     today = _today()
     if abs((d - today).days) > 366:
         raise HTTPException(422, "date out of range")
+    if d > today:
+        # The wall shows future days read-only; a future check-off would make
+        # that day start already done (review, 2026-09-22).
+        raise HTTPException(422, "can't check off a day that hasn't come yet")
     person_id = body.person_id
     if d < today:
         # Frozen day: the occurrence log is the truth about what occurred and
@@ -1286,6 +1309,11 @@ def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
         if d < _today():
             row = fdb.log_row(c, chore_id, date_str)
             return row["person_id"] if row else None
+        if d == _today() and fdb.completion_exists(c, chore_id, date_str):
+            # a chore done today is kept as it was served (_keep_done_rows)
+            row = fdb.log_row(c, chore_id, date_str)
+            if row is not None:
+                return row["person_id"]
         _, away_view, _ = _away_view(c, d)
         rows = chlogic.plan_rows(fdb.list_chores(c), fdb.list_people(c), d,
                                  away_view)
@@ -1800,6 +1828,14 @@ def _validate_chore(merged: dict) -> None:
         raise HTTPException(422, "pick a person for a fixed chore")
     if merged["assign_kind"] == "rotation" and not merged.get("rotation_order"):
         raise HTTPException(422, "add people to the rotation")
+    # Every assignee must be a real person: an unknown id was accepted and made
+    # the chore invisible on every card (review, 2026-09-22). A person listed
+    # twice in a rotation is allowed on purpose (two turns in the cycle).
+    known = {p["id"] for p in fdb.list_people(_db(), include_inactive=True)}
+    ids = ([merged.get("fixed_person_id")] if merged["assign_kind"] == "fixed"
+           else list(merged.get("rotation_order") or []))
+    if any(not isinstance(i, int) or isinstance(i, bool) or i not in known for i in ids):
+        raise HTTPException(422, "that person doesn't exist")
 
 
 def _person_row(c, pid: int) -> dict:
