@@ -72,8 +72,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A camera whose name has a quote in it no longer breaks the camera
   health check.
 - One part of the wall failing to draw no longer shows the hub as
-  "offline" or stops the other parts from updating. The error is logged
-  and the rest of the wall still refreshes.
+  "offline" or stops the other parts from updating. The error is logged,
+  the rest of the wall still refreshes, and the header reads "live · 1
+  panel failed" (or "1 part" for something that is not a panel, like the
+  backup badge) in amber until it draws again; hovering names it
+  ("Calendar").
 - A full-screen dashboard that scales to fit now re-fits when the phone is
   turned or the window changes size, not just when it opens.
 - A fast double tap on an iCloud reminder no longer ticks and unticks it
@@ -93,20 +96,33 @@ rolls that section to a dated version via `python scripts/release.py`.
   instead of re-reading and re-saving every one (completed ones included)
   each time, saves each list in one go, and no longer keeps copies of
   calendar events or of the whole reminder list that nothing used.
-- A reminder list deleted or unshared in iCloud is dropped after a day. Wall
-  changes still waiting for it are kept and set aside (and logged) instead of
-  counting as "not yet synced" forever; they go out again if the list comes
-  back.
+- A reminder list deleted or unshared in iCloud is dropped once every good
+  sync for a full day has found it missing (failed syncs in between start
+  that day over). Wall changes still waiting for it are kept and set aside
+  (and logged) instead of counting as "not yet synced" forever. If the list
+  comes back they go out again, except chore reminders for days that have
+  passed, which are not sent.
 - A wall change iCloud keeps refusing (for example on a read-only list) is set
-  aside after 5 tries instead of retrying forever, the sync status says how
-  many are set aside, and a refused write no longer asks you to reconnect
-  iCloud. Sending changes now stops after 90 seconds a round, so a slow
-  iCloud cannot hold up the Google calendar sync.
-- Settings shows how many wall changes iCloud would not take, next to the
-  "not yet synced" count.
+  aside after iCloud refuses it 5 times, instead of retrying forever; failed
+  tries during an outage do not count toward that. The sync status says how
+  many are set aside, and settings shows how many changes iCloud would not
+  take ("kept but not sent") next to the "not yet synced" count. Sending
+  changes now stops after 90 seconds a round, so a slow iCloud cannot hold
+  up the Google calendar sync.
+- A wall change iCloud refuses no longer asks you to reconnect iCloud, and
+  neither does a failed change whose web address happens to contain 401 or
+  403 (a chore's number, say). The sync reads the answer's status code, not
+  the words in the error.
 - Picking a different Reminders list for a person now moves their chore
   reminders to it (done ones stay where they are), and a person whose list
   is gone from iCloud no longer gets reminders queued into it every day.
+- Settings says when a person's iCloud chore list is gone (deleted, unshared
+  or moved), even when every list is gone: the iCloud panel shows "Sam's
+  iCloud chore list is gone; pick a new one", the person's editor says the
+  same above the list picker (until a new list is saved), and their badge
+  reads "iCloud list gone" instead of a tick. The sync status names them
+  too. Before, their chores failed to reach iCloud with nothing on screen
+  saying why.
 - A calendar whose last event has moved out of the synced date range no
   longer shows "kept last-synced" for a day when it comes back empty; the
   empty-calendar guard now only holds when events inside the range vanish.
@@ -123,36 +139,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - If iCloud does not say whether a collection is a calendar or a reminder
   list, the sync uses what it knew before instead of treating it as a
   calendar for a round.
-- A short iCloud outage no longer sets a chore reminder aside just because
-  the chore's number (say 403) is in its web address, and a real sign-in
-  failure on such a reminder now asks you to reconnect. The sync reads the
-  answer's status code, not the words in the error.
-- A wall change is set aside only after iCloud refuses it 5 times. Before,
-  a few failed tries during an outage plus one refusal were enough.
-- The note for wall changes iCloud would not take now says they are kept
-  but not sent. It said "kept on the wall", but a change whose list is gone
-  is not shown on the wall.
-- A reminder list is dropped only after a full day in which every good sync
-  found it missing, and a garbled saved record of that day starts it over
-  instead of stopping the iCloud sync. Before, a list seen missing once,
-  then a day of iCloud errors, was dropped on the next good sync.
-- Settings says when a person's iCloud chore list is gone (deleted,
-  unshared or moved), even when every list is gone: the iCloud panel shows
-  "Sam's iCloud chore list is gone; pick a new one", the person's editor
-  says the same above the list picker (and drops the note once a new list
-  is saved), and their badge reads "iCloud list gone" instead of a tick.
-  The sync and chore-mirror status name them too. Before, their chores just
-  stopped reaching iCloud with only a log line.
-- When part of the wall fails to draw, the header reads "live · 1 panel
-  failed" (or "1 part" for something that is not a panel, like the backup
-  badge) in amber until it draws again, and hovering names it in plain
-  words ("Calendar"), instead of plain "live" while it kept showing old
-  data.
 - A reminder marked done with a lower-case status ("completed") now reads
   as done, as the iCloud standard says it should.
-- A chore reminder list that comes back after being gone for a while no
-  longer sends chore reminders for days that have passed. Only the days
-  still ahead are sent, once each.
 
 ## [1.8.1] — 2026-09-22
 
