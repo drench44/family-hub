@@ -31,15 +31,17 @@ below.** If it doesn't, the feed does not provide it — do not guess a key name
   (only the keys `weather_tile` copies), not the raw feed — so it is NOT the place
   to look for fields the card doesn't yet use.
 
-## What the feed provides (verified 2026-08-24)
+## What the feed provides (verified 2026-09-23)
 
-It is a **single-station, real-time** feed. Ranges beyond "now" are limited:
+It is a real-time feed for one location, plus a multi-day forecast:
 
 | Horizon | What exists | Field(s) |
 |---|---|---|
 | Now | current conditions | `temp` `tempUnit` `feelsLike` `feelsDesc` `conditions` `humidity` `dewPoint` `uvIndex` `uvDesc` `aqi` `aqiCategory` `windSpd`/`windGust`/`windCardinal` `slp` `rainToday`/`rainRate` |
 | Today | observed + forecast high/low | `obsLow`/`obsHigh` (observed so far), `fcLow`/`fcHigh` (today's forecast) |
 | ±12h | hourly **temperature** curve | `tempSeries` = `{"temps": [24 hourly °, oldest→newest], "nowIndex": i}` |
+| +48h | hourly **forecast** | `fcHourly` (48 entries). Not read by the card yet |
+| +7d | **daily forecast** | `dailyForecast` = `[{day, hi, lo, cond}, …]` (7 entries, today first; feeds the 5-day strip). `fcDaily` carries the same days with more fields (`date, today, hi, lo, code, pp, qpf, gust`), not read by the card yet |
 | +12h | hourly **AQI** curve | `aqiForecast` = `[[epoch, aqi], …]` (12 points), plus `aqiPeak`/`aqiPeakTime`/`aqiTrend` |
 | Astronomy | sun/moon | `sunrise` `sunset` `daylight` `moonPhase` `moonIllum` `moonrise` `moonset` `nextFull` `nextNew` |
 | Meta | staleness/alerts | `weatherStale` `weatherAgeSec` `aqiStale` `alerts` `alertCount` |
@@ -63,26 +65,30 @@ lastRainDate, lastRainAmt, uvIndex, uvDesc, radiation, radUnit, sunrise, sunset,
 sunFrac, daylight, peakSun, aqi, aqiCategory, aqiPm25, aqiForecast, aqiPeak,
 aqiPeakTime, aqiForecastCat, aqiTrend, aqiTrendText, aqiStale, weatherStale,
 weatherAgeSec, alerts, alertCount, alertsStale, alertsAsOf, moonPhase, moonIllum,
-moonrise, moonset, nextFull, nextNew, lightning*, sager*`.
+moonrise, moonset, nextFull, nextNew, lightning*, sager*, fcHourly, fcDaily,
+dailyForecast, fcStale, fcModel, fcAgeSec, aqiAgeSec, alertsAgeSec, obsSource,
+obsFields, obsTs, obsAgeSec, dayStartTs, conditionsSource, stationDerived,
+slpSeries, slpOutlook, rain* (Source, TotalsFrom, SeamAdjusted, Fields,
+RateAgeSec, MissingDays, RateMm), radar`.
 
-### ⚠️ There is NO multi-day (5-day / weekly) forecast in the feed
+### The multi-day forecast arrived in late August 2026
 
-The only forward-looking data is **today's** `fcLow`/`fcHigh`, the 24h `tempSeries`,
-and the 12h `aqiForecast`. There is no array of daily highs/lows for the coming
-days. Any "5-day forecast" UI therefore **cannot** be backed by the feed as it
-stands — the producer must add it first (next section).
+Until then the feed had no daily forecast, and this page said so. It now emits
+`dailyForecast` (the contract below) and the richer `fcDaily`/`fcHourly`
+arrays. Only `dailyForecast` is read today, by the 5-day strip. Before reading
+`fcDaily` or `fcHourly`, check their shape against the live feed as described
+above.
 
 ## The 5-day forecast strip — the contract it waits for
 
 The weather card renders a 5-day strip (`wxForecastHtml`) from a
 `weather_tile` payload key **`forecast`**, and `weather_tile` builds that from a
-feed key **`dailyForecast`**. Until the feed grows that key, the strip is absent
+feed key **`dailyForecast`**. If the key is ever missing, the strip is absent
 by design (fail-soft: fewer than 2 usable days → nothing renders, exactly like the
-temp chart's <2-point rule). Nothing on the family-hub side needs to change when
-the data appears — it lights up on the next poll.
+temp chart's <2-point rule).
 
-**What the feed producer must add** — a `dailyForecast` array, today first, up to
-~7 entries (the card shows the first 5):
+**The contract** (the live feed follows it): a `dailyForecast` array, today
+first, up to ~7 entries (the card shows the first 5):
 
 ```json
 "dailyForecast": [

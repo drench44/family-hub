@@ -340,7 +340,7 @@ def test_hub_shape_end_to_end(client, app_mod):
     c = app_mod._db()
     today = app_mod._today()
     epoch = today.isoformat()
-    p1 = fdb.add_person(c, "Remy", "#5BC9F0")
+    p1 = fdb.add_person(c, "Ben", "#5BC9F0")
     p2 = fdb.add_person(c, "Dad", "#8AE0AD")
     cid1 = fdb.add_chore(c, title="Dishes", icon="🍽️", schedule_kind="daily",
                          days_mask=0, assign_kind="fixed", fixed_person_id=p1,
@@ -353,12 +353,12 @@ def test_hub_shape_end_to_end(client, app_mod):
     hub = client.get("/api/hub").json()
     assert hub["date"] == epoch
     people = {row["person"]["name"]: row for row in hub["people"]}
-    assert people["Remy"]["done_count"] >= 1
-    # Dishes should be marked done for Remy
-    dishes = [ch for ch in people["Remy"]["chores"] if ch["title"] == "Dishes"][0]
+    assert people["Ben"]["done_count"] >= 1
+    # Dishes should be marked done for Ben
+    dishes = [ch for ch in people["Ben"]["chores"] if ch["title"] == "Dishes"][0]
     assert dishes["done"] is True
-    assert "streak" in people["Remy"] and "week" in people["Remy"]
-    assert len(people["Remy"]["week"]) == 7
+    assert "streak" in people["Ben"] and "week" in people["Ben"]
+    assert len(people["Ben"]["week"]) == 7
     # rotation chore (Trash) carries the rot flag; fixed (Dishes) does not
     assert dishes["rot"] is False
     trash = [ch for row in hub["people"] for ch in row["chores"] if ch["title"] == "Trash"]
@@ -404,7 +404,7 @@ def test_hub_calendar_events_joined(client, app_mod):
 def test_complete_and_uncomplete_roundtrip(client, app_mod):
     c = app_mod._db()
     today = app_mod._today().isoformat()
-    pid = fdb.add_person(c, "Remy", "#5BC9F0")
+    pid = fdb.add_person(c, "Ben", "#5BC9F0")
     cid = fdb.add_chore(c, title="Bed", icon="", schedule_kind="daily", days_mask=0,
                         assign_kind="fixed", fixed_person_id=pid, rotation_order=[],
                         rotation_epoch=today)
@@ -417,7 +417,7 @@ def test_complete_and_uncomplete_roundtrip(client, app_mod):
 def test_complete_404_and_422(client, app_mod):
     c = app_mod._db()
     today = app_mod._today()
-    pid = fdb.add_person(c, "Remy", "#5BC9F0")
+    pid = fdb.add_person(c, "Ben", "#5BC9F0")
     cid = fdb.add_chore(c, title="Bed", icon="", schedule_kind="daily", days_mask=0,
                         assign_kind="fixed", fixed_person_id=pid, rotation_order=[],
                         rotation_epoch=today.isoformat())
@@ -438,7 +438,7 @@ def test_complete_rejects_unknown_person_id(client, app_mod):
     request can't record an invisible orphan completion (audit finding)."""
     c = app_mod._db()
     today = app_mod._today().isoformat()
-    pid = fdb.add_person(c, "Remy", "#5BC9F0")
+    pid = fdb.add_person(c, "Ben", "#5BC9F0")
     cid = fdb.add_chore(c, title="Bed", icon="", schedule_kind="daily", days_mask=0,
                         assign_kind="fixed", fixed_person_id=pid, rotation_order=[],
                         rotation_epoch=today)
@@ -542,7 +542,7 @@ def test_hub_todos_ok_by_default(client, app_mod):
 
 
 def test_admin_people_crud_and_validation(client, app_mod):
-    r = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
+    r = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"})
     assert r.status_code == 200
     pid = r.json()["id"]
     assert client.post("/api/admin/people", json={"name": "x", "color": "blue"}).status_code == 422
@@ -551,10 +551,10 @@ def test_admin_people_crud_and_validation(client, app_mod):
     # malformed color would otherwise reach the client as a CSS value.
     assert client.post("/api/admin/people",
                        json={"name": "x", "color": "#5BC9F0\n"}).status_code == 422
-    assert client.patch(f"/api/admin/people/{pid}", json={"name": "Remy2"}).status_code == 200
+    assert client.patch(f"/api/admin/people/{pid}", json={"name": "Ben2"}).status_code == 200
     assert client.patch("/api/admin/people/9999", json={"name": "z"}).status_code == 404
     state = client.get("/api/admin/state").json()
-    assert state["people"][0]["name"] == "Remy2"
+    assert state["people"][0]["name"] == "Ben2"
 
 
 def test_calendar_exposes_synced_window(tmp_path, monkeypatch):
@@ -847,7 +847,7 @@ def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod
     NOT NULL column is a 422, not a 500 from the DB write. fixed_person_id (the
     one nullable chore field) still accepts null."""
     pid = client.post("/api/admin/people",
-                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+                      json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     assert client.patch(f"/api/admin/people/{pid}", json={"sort": None}).status_code == 422
     assert client.patch(f"/api/admin/people/{pid}", json={"active": None}).status_code == 422
     cid = client.post("/api/admin/chores", json={
@@ -855,6 +855,15 @@ def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod
         "fixed_person_id": pid}).json()["id"]
     assert client.patch(f"/api/admin/chores/{cid}", json={"icon": None}).status_code == 422
     assert client.patch(f"/api/admin/chores/{cid}", json={"active": None}).status_code == 422
+    # active is a 0/1 flag: any other number is a bad request, not a row the
+    # `active = 1` filters then silently treat as inactive
+    for bad in (2, -1, 7):
+        assert client.patch(f"/api/admin/people/{pid}",
+                            json={"active": bad}).status_code == 422
+        assert client.patch(f"/api/admin/chores/{cid}",
+                            json={"active": bad}).status_code == 422
+    assert client.patch(f"/api/admin/people/{pid}",
+                        json={"active": 1}).status_code == 200
     # fixed_person_id: null is legitimate (clearing the fixed assignee) -> 200
     assert client.patch(f"/api/admin/chores/{cid}",
                         json={"assign_kind": "rotation", "rotation_order": [pid],
@@ -865,7 +874,7 @@ def test_admin_delete_person_hard_removes_and_404s(client, app_mod):
     """The hard-delete endpoint removes the person entirely (distinct from the
     PATCH active=0 deactivate path); an unknown id is a 404."""
     pid = client.post("/api/admin/people",
-                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+                      json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     # a chore fixed to them, to prove the delete clears assignments too
     cid = client.post("/api/admin/chores", json={
         "title": "Trash", "schedule_kind": "daily", "assign_kind": "fixed",
@@ -880,7 +889,7 @@ def test_admin_delete_person_hard_removes_and_404s(client, app_mod):
 
 
 def test_admin_chores_crud_and_validation(client, app_mod):
-    pr = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
+    pr = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"})
     pid = pr.json()["id"]
     ok = client.post("/api/admin/chores", json={
         "title": "Dishes", "icon": "🍽️", "schedule_kind": "daily", "days_mask": 0,
@@ -913,7 +922,7 @@ def test_delete_chore_keeps_past_days_and_clears_today(client, app_mod):
     c = app_mod._db()
     today = app_mod._today()
     yesterday = (today - dt.timedelta(days=1)).isoformat()
-    pr = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
+    pr = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"})
     pid = pr.json()["id"]
     ok = client.post("/api/admin/chores", json={
         "title": "Dishes", "icon": "🍽️", "schedule_kind": "daily", "days_mask": 0,
@@ -944,7 +953,7 @@ def test_admin_once_chore_add_patch_and_validation(client, app_mod):
     that day, and its validation rejects a missing/bad date and any rotation."""
     today = app_mod._today()
     due = (today + dt.timedelta(days=2)).isoformat()
-    pr = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"})
+    pr = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"})
     pid = pr.json()["id"]
 
     ok = client.post("/api/admin/chores", json={
@@ -994,7 +1003,7 @@ def test_once_chore_patch_edge_cases(client, app_mod):
     today = app_mod._today()
     due = (today + dt.timedelta(days=3)).isoformat()
     pid = client.post("/api/admin/people",
-                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+                      json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     cid = client.post("/api/admin/chores", json={
         "title": "Books", "icon": "", "schedule_kind": "once",
         "assign_kind": "fixed", "fixed_person_id": pid, "date": due}).json()["id"]
@@ -1039,7 +1048,7 @@ def test_once_chore_rejects_past_date_on_add(client, app_mod):
     today = app_mod._today()
     past = (today - dt.timedelta(days=1)).isoformat()
     pid = client.post("/api/admin/people",
-                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+                      json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     assert client.post("/api/admin/chores", json={
         "title": "X", "schedule_kind": "once", "assign_kind": "fixed",
         "fixed_person_id": pid, "date": past}).status_code == 422
@@ -1315,6 +1324,38 @@ def test_camera_snapshot_allows_camera_page_only_streams(tmp_path, monkeypatch):
     assert "cam2" in seen and "cam2_hd" in seen
 
 
+def test_camera_probe_skips_a_non_dict_entry(tmp_path, monkeypatch):
+    """One non-object camera entry (a bare string typo) used to 500 EVERY
+    probe (`entry.get` on a str). It is skipped, like _camera_links does."""
+    appmod = _reload_with(tmp_path, monkeypatch, {
+        "go2rtc_base": "http://cam",
+        "cameras": ["Driveway", {"src": "cam", "label": "Driveway"}]})
+
+    async def ok(hclient, cfg, src="cam"):
+        return (b"\xff\xd8jpeg", "image/jpeg")
+    monkeypatch.setattr("family_hub.tiles.camera_snapshot", ok)
+    with TestClient(appmod.app) as c:
+        assert c.get("/api/tiles/camera.jpg?src=cam").status_code == 200
+        assert c.get("/api/tiles/camera.jpg?src=Driveway").status_code == 404
+
+
+def test_camera_probe_is_404_when_no_cameras_are_configured(tmp_path,
+                                                             monkeypatch):
+    """With no cameras, the allowlist used to fall back to {"cam"}, so a hub
+    with no cameras still proxied a probe of a go2rtc stream named `cam`."""
+    appmod = _reload_with(tmp_path, monkeypatch, {"go2rtc_base": "http://cam"})
+    seen = []
+
+    async def ok(hclient, cfg, src="cam"):
+        seen.append(src)
+        return (b"\xff\xd8jpeg", "image/jpeg")
+    monkeypatch.setattr("family_hub.tiles.camera_snapshot", ok)
+    with TestClient(appmod.app) as c:
+        assert c.get("/api/tiles/camera.jpg").status_code == 404
+        assert c.get("/api/tiles/camera.jpg?src=cam").status_code == 404
+    assert seen == []
+
+
 def test_html_is_never_heuristically_cached(client):
     """Phones cached a stale index.html past a deploy (2026-08-13, missing tab
     bar): the HTML must say no-cache so browsers revalidate. API JSON is left
@@ -1523,7 +1564,7 @@ def test_todos_uncomplete_open_item_is_noop_and_delete_removes(client):
 
 def _seed_person_chore(client, title="Dishes", icon="", **chore_kw):
     pid = client.post("/api/admin/people",
-                      json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+                      json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     body = {"title": title, "icon": icon, "schedule_kind": "daily",
             "days_mask": 0, "assign_kind": "fixed", "fixed_person_id": pid,
             "rotation_order": []}
@@ -1700,7 +1741,7 @@ def test_legacy_db_backfills_occurrence_log_once(app_mod):
     fdb.ensure_schema(conn)
     today = dt.date.fromisoformat(app_mod._today().isoformat())
     epoch = (today - dt.timedelta(days=10)).isoformat()
-    pid = fdb.add_person(conn, "Remy", "#5BC9F0")
+    pid = fdb.add_person(conn, "Ben", "#5BC9F0")
     cid = fdb.add_chore(conn, title="Dishes", icon="", schedule_kind="daily",
                         days_mask=0, assign_kind="fixed", fixed_person_id=pid,
                         rotation_order=[], rotation_epoch=epoch)
@@ -1877,7 +1918,7 @@ def test_admin_state_includes_away_periods(client, app_mod):
 
 def test_admin_away_create_close_delete(client, app_mod, monkeypatch):
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    p1 = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     p2 = client.post("/api/admin/people", json={"name": "Sam", "color": "#F05B5B"}).json()["id"]
 
     # started a few days back, so the default "I'm back" (end=yesterday) is a
@@ -1891,7 +1932,7 @@ def test_admin_away_create_close_delete(client, app_mod, monkeypatch):
     pid = body["id"]
     assert body["person_id"] == p1
     assert body["backup_person_id"] == p2
-    assert body["person_name"] == "Remy"
+    assert body["person_name"] == "Ben"
     assert body["backup_name"] == "Sam"
     assert body["start_date"] == "2026-08-12"
     assert body["end_date"] is None
@@ -1915,7 +1956,7 @@ def test_admin_away_create_close_delete(client, app_mod, monkeypatch):
 
 def test_admin_away_patch_and_back_with_explicit_date(client, app_mod, monkeypatch):
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    p1 = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
 
     r = client.patch(f"/api/admin/away/{pid}", json={"start_date": "2026-08-10"})
@@ -1936,7 +1977,7 @@ def test_admin_away_patch_and_back_with_explicit_date(client, app_mod, monkeypat
 
 
 def test_admin_away_validation(client, app_mod):
-    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    p1 = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
 
     assert client.post("/api/admin/away", json={"person_id": 9999}).status_code == 404
     assert client.post("/api/admin/away",
@@ -1947,7 +1988,7 @@ def test_admin_away_validation(client, app_mod):
 
 def test_admin_away_everyone_opens_for_all_active(client, app_mod, monkeypatch):
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = client.post("/api/admin/people", json={"name": "Remy", "color": "#5BC9F0"}).json()["id"]
+    p1 = client.post("/api/admin/people", json={"name": "Ben", "color": "#5BC9F0"}).json()["id"]
     p2 = client.post("/api/admin/people", json={"name": "Sam", "color": "#F05B5B"}).json()["id"]
     # deactivated person must be skipped entirely
     p3 = client.post("/api/admin/people", json={"name": "Nan", "color": "#5BFF5B"}).json()["id"]
@@ -2129,7 +2170,7 @@ def test_away_back_same_day_cancels_the_period(client, app_mod, monkeypatch):
     never took effect, so the plain tap removes it and succeeds. The wall
     treats the person as present again straight away."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = _make_person(client, "Remy")
+    p1 = _make_person(client, "Ben")
     pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
     r = client.post(f"/api/admin/away/{pid}/back")
     assert r.status_code == 200 and r.json() == {"ok": True}
@@ -2145,7 +2186,7 @@ def test_away_back_on_a_planned_future_trip_still_refuses(client, app_mod,
     """Only a period that started TODAY is cancelled by a plain tap. A trip
     planned for later must not be deleted by one tap on the wrong button."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = _make_person(client, "Remy")
+    p1 = _make_person(client, "Ben")
     pid = client.post("/api/admin/away", json={
         "person_id": p1, "start_date": "2026-08-20"}).json()["id"]
     assert client.post(f"/api/admin/away/{pid}/back").status_code == 422
@@ -2157,7 +2198,7 @@ def test_away_back_same_day_explicit_end_still_closes(client, app_mod,
     """An explicit end_date keeps the old meaning: close the period on that
     day (here: away for today only), and an end before the start is a 422."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = _make_person(client, "Remy")
+    p1 = _make_person(client, "Ben")
     pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
     assert client.post(f"/api/admin/away/{pid}/back",
                        json={"end_date": "2026-08-16"}).status_code == 422
@@ -2169,7 +2210,7 @@ def test_away_back_same_day_explicit_end_still_closes(client, app_mod,
 def test_away_patch_rejects_end_before_start(client, app_mod, monkeypatch):
     """S2: PATCH end_date earlier than the row's start_date is 422."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = _make_person(client, "Remy")
+    p1 = _make_person(client, "Ben")
     pid = client.post("/api/admin/away",
                       json={"person_id": p1, "start_date": "2026-08-15"}).json()["id"]
     assert client.patch(f"/api/admin/away/{pid}",
@@ -2185,7 +2226,7 @@ def test_away_patch_rejects_start_after_stored_end(client, app_mod, monkeypatch)
     already-stored end_date, without re-supplying end_date, must 422 -- not
     silently void the whole period via away_map's a>b skip."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = _make_person(client, "Remy")
+    p1 = _make_person(client, "Ben")
     pid = client.post("/api/admin/away",
                       json={"person_id": p1, "start_date": "2026-08-10"}).json()["id"]
     # close the period so it has a stored end_date
@@ -2217,7 +2258,7 @@ def test_away_patch_backup_validation(client, app_mod, monkeypatch):
     """S4: PATCH backup_person_id is validated like open -- 422 on self,
     404 on unknown, 200 on a real other person."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = _make_person(client, "Remy")
+    p1 = _make_person(client, "Ben")
     p2 = _make_person(client, "Sam", "#F05B5B")
     pid = client.post("/api/admin/away", json={"person_id": p1}).json()["id"]
     assert client.patch(f"/api/admin/away/{pid}",
@@ -2232,7 +2273,7 @@ def test_away_open_twice_conflicts(client, app_mod, monkeypatch):
     """F1b: a second open period for a person 409s, so overlapping rows never
     reach the wall."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
-    p1 = _make_person(client, "Remy")
+    p1 = _make_person(client, "Ben")
     assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 200
     assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 409
     # after they're back, opening a fresh period is allowed again
@@ -2536,7 +2577,7 @@ def test_interrupted_backfill_rolls_back_whole_then_retries(app_mod, monkeypatch
     fdb.ensure_schema(conn)
     today = dt.date.fromisoformat(app_mod._today().isoformat())
     epoch = (today - dt.timedelta(days=10)).isoformat()
-    pid = fdb.add_person(conn, "Remy", "#5BC9F0")
+    pid = fdb.add_person(conn, "Ben", "#5BC9F0")
     cid = fdb.add_chore(conn, title="Dishes", icon="", schedule_kind="daily",
                         days_mask=0, assign_kind="fixed", fixed_person_id=pid,
                         rotation_order=[], rotation_epoch=epoch)
@@ -3037,6 +3078,20 @@ def test_caldav_credentials_endpoints_never_leak_the_password(tmp_path, monkeypa
         assert "icloud_caldav" not in ids()                       # disconnected
 
 
+def test_caldav_settings_entry_carries_pending_and_parked_counts(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_CALDAV_USER", "bot@icloud.com")
+    monkeypatch.setenv("ICLOUD_CALDAV_APP_PASSWORD", "abcd-efgh")
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        entry = lambda: {i["id"]: i for i in
+                         tc.get("/api/integrations").json()["integrations"]}["icloud_caldav"]
+        assert entry()["parked"] == 0                  # absent status reads as none
+        appmod.fdb.kv_set(appmod._db(), "caldav_status",
+                          {"ok": False, "pending": 1, "parked": 2})
+        e = entry()
+        assert (e["pending"], e["parked"]) == (1, 2)
+
+
 def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
     appmod = _reload_with(tmp_path, monkeypatch, {})
     with TestClient(appmod.app) as tc:
@@ -3372,6 +3427,108 @@ def test_disconnect_resets_icloud_todo_source(tmp_path, monkeypatch):
         appmod.fdb.kv_set(appmod._db(), "todo_source", "icloud")
         assert tc.delete("/api/integrations/icloud_caldav/credentials").status_code == 200
         assert appmod.fdb.kv_get(appmod._db(), "todo_source") == "local"
+
+
+def test_reminder_delete_refuses_a_calendar_event(tmp_path, monkeypatch):
+    """The delete endpoint takes any cal_objects id, and events live in the same
+    store. Queuing an EVENT's delete would remove it from the family's iCloud
+    calendar, so only a reminder (VTODO) may be deleted here, like toggle."""
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        fdb.upsert_cal_object_synced(c, {
+            "id": "caldav:cal/ev1", "collection_id": "caldav:cal",
+            "comp_type": "VEVENT", "uid": "ev1", "href": "h/cal/ev1",
+            "etag": "e1", "summary": "Dentist", "raw_ics": "X", "sequence": 0,
+            "last_modified": None})
+        c.close()
+        r = tc.post("/api/reminders/delete", json={"id": "caldav:cal/ev1"})
+        assert r.status_code == 404
+        c = fdb.connect(str(tmp_path / "hub.db"))
+        assert fdb.get_cal_object(c, "caldav:cal/ev1")["sync_state"] == "SYNCED"
+        c.close()
+
+
+def test_reminder_delete_unknown_id_is_404(tmp_path, monkeypatch):
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        _seed_reminder(tmp_path, readonly=False)
+        r = tc.post("/api/reminders/delete", json={"id": "caldav:rem/nope"})
+        assert r.status_code == 404
+
+
+def test_env_icloud_credentials_refuse_a_settings_save(tmp_path, monkeypatch):
+    """Env credentials win over the settings file, so saving new ones in settings
+    used to answer ok while the env account stayed in use. Say so instead."""
+    _caldav_env(monkeypatch)
+    monkeypatch.setenv("CALDAV_CREDS_PATH", str(tmp_path / "caldav.json"))
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        r = tc.post("/api/integrations/icloud_caldav/credentials",
+                    json={"user": "partner@icloud.com", "app_password": "zzzz"})
+        assert r.status_code == 409
+        assert "environment" in r.json()["detail"]
+        assert not (tmp_path / "caldav.json").exists()      # nothing written
+        integ = {i["id"]: i for i in tc.get("/api/integrations").json()["integrations"]}
+        assert integ["icloud_caldav"]["account"] == "bot@icloud.com"
+
+
+def test_env_icloud_credentials_refuse_a_disconnect(tmp_path, monkeypatch):
+    """Disconnect only removes the settings file; with env credentials the hub
+    stayed connected while the reply said ok. Refuse it with the reason."""
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app) as tc:
+        appmod.fdb.kv_set(appmod._db(), "todo_source", "icloud")
+        r = tc.delete("/api/integrations/icloud_caldav/credentials")
+        assert r.status_code == 409
+        assert "environment" in r.json()["detail"]
+        # still connected, so the To-Do surface is left alone
+        assert appmod.fdb.kv_get(appmod._db(), "todo_source") == "icloud"
+        ids = {i["id"] for i in tc.get("/api/integrations").json()["integrations"]}
+        assert "icloud_caldav" in ids
+
+
+def test_visible_reminders_skip_completed_rows_without_parsing(tmp_path, monkeypatch):
+    """Completed reminders pile up (the chore mirror leaves one per chore per
+    day). The wall never shows them, so they must be dropped before the costly
+    icalendar parse, not after it."""
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app):
+        c = appmod._db()
+        _seed_reminder_object(appmod, c, "caldav:x", "open1", "Open one")
+        for i in range(3):
+            _seed_reminder_object(appmod, c, "caldav:x", f"done{i}", f"Done {i}",
+                                  completed=True)
+        parsed = []
+        real = appmod.remlogic.parse_vtodo
+
+        def spy(ics, *a, **kw):
+            parsed.append(ics)
+            return real(ics, *a, **kw)
+
+        monkeypatch.setattr(appmod.remlogic, "parse_vtodo", spy)
+        titles = [r["title"] for r in appmod._visible_reminders(c)]
+        assert titles == ["Open one"]
+        assert len(parsed) == 1, "completed rows must not reach the parser"
+
+
+def test_visible_reminders_hide_rows_of_a_list_no_longer_known(tmp_path, monkeypatch):
+    """A reminder list dropped from iCloud (deleted or unshared) leaves its
+    parked, unsent wall edits in the store. They must not render under a
+    nameless list on the wall."""
+    _caldav_env(monkeypatch)
+    appmod = _reload_with(tmp_path, monkeypatch, {})
+    with TestClient(appmod.app):
+        c = appmod._db()
+        _seed_reminder_object(appmod, c, "caldav:x", "r1", "Kept")
+        _seed_reminder_object(appmod, c, "caldav:gone", "r2", "Orphan",
+                              seed_collection=False)
+        assert [r["title"] for r in appmod._visible_reminders(c)] == ["Kept"]
 
 
 def test_tiles_laundry_route_stamps_and_serves_completion(client, monkeypatch):
@@ -5689,3 +5846,54 @@ def test_a_deleted_persons_fixed_chore_stays_active_to_be_reassigned(client, app
     client.delete(f"/api/admin/people/{a}")
     ch = next(c for c in client.get("/api/admin/state").json()["chores"] if c["id"] == cid)
     assert ch["active"] in (1, True) and ch["fixed_person_id"] is None
+
+
+def test_db_rolls_back_a_transaction_left_open_on_the_thread(app_mod):
+    """If a write on this thread's connection failed without rolling back,
+    the next _db() must not hand out that half-open transaction: reads would
+    see a frozen snapshot and the WAL could not checkpoint."""
+    conn = app_mod._db()
+    conn.execute("INSERT INTO kv(key, value) VALUES('stray', '1')")
+    assert conn.in_transaction
+    again = app_mod._db()
+    assert again is conn
+    assert not again.in_transaction
+    assert fdb.kv_get(again, "stray") is None   # the stray write was undone
+
+
+def test_async_routes_never_touch_sqlite_directly(app_mod):
+    """sqlite calls block. Inside an `async def` route they stall the whole
+    event loop (every other request, the laundry watcher) for as long as the
+    query or a busy lock takes. A route that reads the DB is a plain `def`
+    (FastAPI runs it in the thread pool) or hands the work to
+    asyncio.to_thread, like /health/full."""
+    import inspect
+    offenders = []
+    for r in app_mod.app.routes:
+        ep = getattr(r, "endpoint", None)
+        if ep is None or not inspect.iscoroutinefunction(ep):
+            continue
+        body = inspect.getsource(ep)
+        if "_db()" in body or "fdb." in body:
+            offenders.append(r.path)
+    assert offenders == []
+
+
+def test_hub_reads_integration_availability_once_per_request(client, app_mod,
+                                                              monkeypatch):
+    """Availability includes the iCloud credential state, which reads and
+    parses a file on disk. /api/hub asked for it about six times per poll
+    (every _integration_on call); it is computed once per request now."""
+    calls = []
+    real = app_mod.caldav_service.configured
+
+    def counting(env=None):
+        calls.append(1)
+        return real(env)
+    monkeypatch.setattr(app_mod.caldav_service, "configured", counting)
+    assert client.get("/api/hub").status_code == 200
+    assert len(calls) == 1
+    # and the memo does not leak into the next request
+    calls.clear()
+    assert client.get("/api/hub").status_code == 200
+    assert len(calls) == 1

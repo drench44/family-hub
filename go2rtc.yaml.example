@@ -37,3 +37,21 @@ streams:
 webrtc:
   # Your box's LAN IP — browsers connect here for the live WebRTC streams.
   candidates: [ "192.168.1.50:8555" ]
+
+# LOCK DOWN THE API. Out of the box, anyone on your LAN can call go2rtc's API on
+# :1984: read this whole file back from /api/config, rewrite it, and restart
+# go2rtc. go2rtc's own README warns that API access means full access to the
+# box. Only these paths are needed: "/" serves the player page and its scripts
+# that the camera tiles load, /api/ws carries the live stream, /api/streams
+# lets the hub's health check see which streams exist (and lets you add one
+# with PUT, as the README describes), and /api/frame.jpeg is the hub's
+# snapshot probe. The go2rtc web UI still loads, but its config editor and
+# restart stop working. Note that a GET on /api/streams still lists each
+# stream's source URL; that gives nothing beyond watching the cameras, which
+# anyone on the LAN can already do through the player.
+api:
+  allow_paths: [ "/", "/api", "/api/ws", "/api/streams", "/api/frame.jpeg" ]
+
+# Only ffmpeg may be run as an exec: source.
+exec:
+  allow_paths: [ ffmpeg ]

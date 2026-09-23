@@ -30,3 +30,18 @@ def test_every_service_caps_its_logs():
 
 def test_go2rtc_has_room_above_its_old_oom_limit():
     assert _services()["go2rtc"]["mem_limit"] == "256m"
+
+
+def test_web_service_is_hardened():
+    """The hub needs no Linux capabilities and never escalates: it runs as
+    a fixed non-root uid, serves an unprivileged port and writes only /data.
+    Dropping every capability and forbidding new privileges costs nothing
+    and turns a code-execution bug into much less. go2rtc and wyze-bridge
+    are third-party images whose needs are not pinned down, so only the
+    web service carries these."""
+    web = _services()["web"]
+    assert web["user"] == "${HUB_UID:-1000}:${HUB_GID:-1000}"
+    assert "no-new-privileges:true" in web.get("security_opt", [])
+    assert web.get("cap_drop") == ["ALL"]
+    assert "cap_add" not in web
+    assert not web.get("privileged")

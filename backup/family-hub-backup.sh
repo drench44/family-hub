@@ -17,11 +17,13 @@
 # pruned away. Each coarser tier keeps the latest snapshot for its period.
 #
 # OFF-BOX: set FH_REMOTE to a path that survives losing the data dir/box (a NAS
-# mount, a second disk, an rsync-over-ssh module) and every run mirrors the
-# whole tiered tree there. A NAS host/credentials are the operator's to
-# configure on the box -- they never live in this public repo. A remote failure
-# exits 2 AFTER the local snapshot is safely committed, so a NAS outage is loud
-# but never costs the local backup.
+# mount, a second disk, an rsync-over-ssh module) and every run copies the
+# whole tiered tree there (adding files only, then pruning each tier there by
+# the same keep counts; it never mirrors deletions, so a new or empty local
+# tree can't wipe the off-box history). A NAS host/credentials are the
+# operator's to configure on the box -- they never live in this public repo.
+# A remote failure exits 2 AFTER the local snapshot is safely committed, so a
+# NAS outage is loud but never costs the local backup.
 #
 # FAIL-LOUD: a missing/corrupt source, a failed integrity check, an
 # undersized/partial file, or a bad keep-count all abort non-zero and never
@@ -88,30 +90,50 @@ mkdir -p "$OUT/hourly" "$OUT/daily" "$OUT/weekly" "$OUT/monthly" \
   || fail "cannot mkdir under $OUT"
 
 # Sweep orphaned temp files from a previous hard-kill / power loss (the prune
-# glob only matches hub-*.db, so partials would otherwise accumulate forever
-# and get mirrored off-box).
-rm -f "$OUT"/hourly/.partial-*.db "$OUT"/daily/.partial-*.db \
-      "$OUT"/weekly/.partial-*.db "$OUT"/monthly/.partial-*.db 2>/dev/null
+# glob only matches hub-*.db, so partials would otherwise accumulate forever).
+# That includes the -wal/-shm sidecars a killed integrity check can leave: the
+# snapshot starts out in the live db's WAL mode (see below).
+for tier in hourly daily weekly monthly; do
+  rm -f "$OUT/$tier"/.partial-*.db "$OUT/$tier"/.partial-*.db-wal \
+        "$OUT/$tier"/.partial-*.db-shm 2>/dev/null
+done
 
 # One WAL-safe online-backup snapshot, then VERIFY it opens and passes
 # integrity_check before trusting it. Temp file -> size-check -> atomic move.
+# The online backup copies the live db's WAL journal mode, so opening the copy
+# makes -wal/-shm sidecars next to it. It is switched to a plain rollback
+# journal before it is closed: that folds everything into the one file, leaves
+# no sidecar behind (some SQLite builds keep an empty -wal after close), and a
+# restore copies one plain file.
 TMP="$OUT/hourly/.partial-$HOURLY.db"
-python3 - "$DB" "$TMP" <<'PY' || { rm -f "$TMP"; fail "snapshot or integrity check failed"; }
+drop_tmp() { rm -f "$TMP" "$TMP-wal" "$TMP-shm"; }
+python3 - "$DB" "$TMP" <<'PY' || { drop_tmp; fail "snapshot or integrity check failed"; }
 import sqlite3, sys
 src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
 dst = sqlite3.connect(sys.argv[2])
 src.backup(dst)
 src.close()
 row = dst.execute("PRAGMA integrity_check").fetchone()
-dst.close()
 if not row or row[0] != "ok":
+    dst.close()
     sys.stderr.write("integrity_check: %r\n" % (row,))
     sys.exit(3)
+mode = dst.execute("PRAGMA journal_mode=DELETE").fetchone()
+dst.close()
+if not mode or mode[0].lower() != "delete":
+    sys.stderr.write("could not take the snapshot out of WAL mode: %r\n" % (mode,))
+    sys.exit(4)
 PY
+# Some SQLite builds (Apple's) keep the -shm, or an empty -wal, after close
+# even in rollback mode. With the copy closed and out of WAL they hold
+# nothing, so they go; a -wal with content would mean frames were not folded
+# in, and that snapshot is not trusted.
+[ ! -s "$TMP-wal" ] || { drop_tmp; fail "snapshot left a non-empty WAL behind"; }
+rm -f "$TMP-wal" "$TMP-shm"
 
 BYTES=$(wc -c < "$TMP")
-[ "$BYTES" -ge 8192 ] || { rm -f "$TMP"; fail "undersized snapshot ($BYTES bytes)"; }
-mv "$TMP" "$OUT/hourly/hub-$HOURLY.db" || { rm -f "$TMP"; fail "atomic move failed"; }
+[ "$BYTES" -ge 8192 ] || { drop_tmp; fail "undersized snapshot ($BYTES bytes)"; }
+mv "$TMP" "$OUT/hourly/hub-$HOURLY.db" || { drop_tmp; fail "atomic move failed"; }
 SNAP="$OUT/hourly/hub-$HOURLY.db"
 
 # Promote into the coarser tiers -- ATOMICALLY (temp copy -> rename). Each tier
@@ -209,8 +231,38 @@ PY
   fi
 }
 
-# Off-box mirror of the whole tiered tree, unless suppressed (FH_SKIP_REMOTE=1,
+# Prune one tier of the off-box copy to its keep count, by the same rule as
+# prune() above: newest-first by the stamp in the name. rsync lists the tier
+# and deletes the extras, so this works the same for a mounted path and a
+# 'host:/path' target. Only hub-<stamp>.db files are ever touched; anything
+# else the operator keeps there stays. rsync deletes a file on the target
+# that is --include'd but absent from the (empty) source, so the include list
+# is exactly the files to remove.
+remote_prune() {  # <tier> <keep>
+  local tier="$1" keep="$2" listing extra empty rc f
+  listing="$(rsync --list-only "$REMOTE/$tier/")" || return 1
+  extra="$(printf '%s\n' "$listing" | awk '{print $NF}' \
+    | grep -E '^hub-[0-9W-]+\.db$' | sort -r | tail -n +$(( keep + 1 )))"
+  [ -n "$extra" ] || return 0
+  empty="$(mktemp -d)" || return 1
+  set --
+  while IFS= read -r f; do set -- "$@" "--include=$f"; done <<< "$extra"
+  rsync -r --delete "$@" --exclude='*' "$empty/" "$REMOTE/$tier/"
+  rc=$?
+  rmdir "$empty"
+  return "$rc"
+}
+
+# Off-box copy of the whole tiered tree, unless suppressed (FH_SKIP_REMOTE=1,
 # used by the pre-deploy snapshot which only needs a local restore point).
+#
+# ADD, THEN PRUNE -- never `rsync --delete` from the local tree. With --delete
+# a new or empty local tree (a replaced disk, a changed FH_OUT) would mirror
+# its emptiness and wipe every snapshot on the NAS on its first run, the one
+# moment the off-box copy is all that is left. So the copy only adds files,
+# and each off-box tier is then pruned to the same keep count as the local
+# one (remote_prune): a fresh local tree adds to the NAS history and the old
+# snapshots age out at the normal pace. .partial-* temp files never leave.
 #
 # NOT `rsync -a`: a NAS export (the intended target) commonly squashes client
 # uids to one account, so preserving owner/group/perms fails with EPERM (rsync
@@ -254,11 +306,20 @@ PY
     record_remote false
     exit 2
   fi
-  if ! rsync -rt --delete --no-owner --no-group --no-perms "$OUT/" "$REMOTE/"; then
+  if ! rsync -rt --no-owner --no-group --no-perms --exclude='.partial-*' "$OUT/" "$REMOTE/"; then
     echo "family-hub-backup REMOTE FAIL: $REMOTE $(date -u +%FT%TZ)" >&2
     record_remote false
     exit 2
   fi
+  for spec in "hourly $HOURLY_KEEP" "daily $DAILY_KEEP" \
+              "weekly $WEEKLY_KEEP" "monthly $MONTHLY_KEEP"; do
+    # shellcheck disable=SC2086  # two words on purpose: <tier> <keep>
+    if ! prune_err="$(remote_prune $spec 2>&1)"; then
+      echo "family-hub-backup REMOTE FAIL (prune ${spec%% *}: $prune_err): $REMOTE $(date -u +%FT%TZ)" >&2
+      record_remote false
+      exit 2
+    fi
+  done
   record_remote true
   echo "family-hub-backup REMOTE OK: $REMOTE"
 fi

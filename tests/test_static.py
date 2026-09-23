@@ -2230,3 +2230,28 @@ def test_long_titles_wrap_instead_of_overflowing():
     ev = re.search(r"(?m)^\.ev-title\s*\{([^}]*)\}", CSS)
     assert ev and "overflow-wrap: anywhere" in ev.group(1)
 
+
+
+def test_camera_probe_never_builds_a_selector_from_a_config_src():
+    """cam.src comes from config. Interpolated raw into a querySelector
+    string, a src with a quote or backslash in it breaks (or changes) the
+    selector. probeOneCamera matches tiles on dataset.cam instead."""
+    assert not re.search(r"querySelector(All)?\(`[^`]*\$\{cam\.src\}", HUB), \
+        "match camera tiles on dataset.cam, never a selector built from cam.src"
+
+
+def test_every_css_custom_property_is_read_somewhere():
+    """Dead tokens rot: --p1 was defined in six theme blocks and never read.
+    Every custom property styles.css defines must be read by a var() in the
+    static files, or named as a string in JS (setProperty/getPropertyValue)."""
+    src = CSS + ALL_JS + ALL_HTML
+    defined = set(re.findall(r"(--[\w-]+)\s*:", CSS))
+    unused = sorted(d for d in defined
+                    if not re.search(r"var\(\s*" + re.escape(d) + r"(?![\w-])", src)
+                    and f"'{d}'" not in ALL_JS and f'"{d}"' not in ALL_JS)
+    assert not unused, f"custom properties defined but never read: {unused}"
+
+
+def test_no_dead_micro_class():
+    """.micro was styled but no markup used it."""
+    assert not re.search(r"(?m)^\.micro\s*\{", CSS)
