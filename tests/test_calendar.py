@@ -461,3 +461,252 @@ def test_sync_total_failure_leaves_cache_untouched(conn):
                       dt.datetime(2026, 8, 13, 9, 0), ics_fetch=fetch)
     assert st["ok"] is False
     assert [e["title"] for e in fdb.list_events(conn)] == ["Kept"]
+
+
+# ---- review 2026-09-22: house time zone, cancelled/declined, retryable auth ----
+
+from zoneinfo import ZoneInfo  # noqa: E402
+
+LA = ZoneInfo("America/Los_Angeles")
+
+
+def test_timed_events_are_stored_in_the_house_time_zone():
+    # The real shape: a Google calendar set to a fixed UTC-7 zone keeps -07:00
+    # after the clocks change, so the weekly 2:45 class read 3:45 on the wall
+    # from November on (the wall reads the clock time straight off the text).
+    item = {"id": "c", "summary": "Class",
+            "start": {"dateTime": "2026-11-03T15:45:00-07:00"},
+            "end": {"dateTime": "2026-11-03T16:45:00-07:00"}}
+    ev = cs.normalize_event(item, "cal-a", LA)
+    assert ev["start_ts"] == "2026-11-03T14:45:00-08:00"
+    assert ev["end_ts"] == "2026-11-03T15:45:00-08:00"
+    # a UTC invite late in the evening lands on the right LOCAL day
+    late = {"id": "d", "summary": "Call",
+            "start": {"dateTime": "2026-09-23T03:30:00Z"},
+            "end": {"dateTime": "2026-09-23T04:00:00Z"}}
+    assert cs.normalize_event(late, "x", LA)["start_ts"].startswith("2026-09-22T20:30")
+    # all-day stays a plain date; no zone given leaves the text as sent
+    assert cs.normalize_event(item, "cal-a")["start_ts"] == "2026-11-03T15:45:00-07:00"
+
+
+def test_sync_passes_the_house_zone_through(conn):
+    item = {"id": "c", "summary": "Class",
+            "start": {"dateTime": "2026-11-03T15:45:00-07:00"},
+            "end": {"dateTime": "2026-11-03T16:45:00-07:00"}}
+    cfg = make_cfg(calendars=[{"id": "cal-a", "label": "T", "kind": "google"}])
+    cs.sync_once(FakeClient({"cal-a": [item]}), conn, cfg,
+                 dt.datetime(2026, 10, 30, 12, 0, tzinfo=LA))
+    assert fdb.list_events(conn)[0]["start_ts"] == "2026-11-03T14:45:00-08:00"
+
+
+def test_declined_invites_and_non_event_entries_are_dropped():
+    base = {"summary": "x", "start": {"dateTime": "2026-09-23T10:00:00-07:00"},
+            "end": {"dateTime": "2026-09-23T11:00:00-07:00"}}
+    declined = {**base, "id": "a", "attendees": [
+        {"email": "me@example.com", "self": True, "responseStatus": "declined"}]}
+    accepted = {**base, "id": "b", "attendees": [
+        {"email": "me@example.com", "self": True, "responseStatus": "accepted"},
+        {"email": "you@example.com", "responseStatus": "declined"}]}
+    assert cs.normalize_event(declined, "c") is None
+    assert cs.normalize_event(accepted, "c") is not None      # someone else declining is fine
+    assert cs.normalize_event({**base, "id": "w", "eventType": "workingLocation"}, "c") is None
+    assert cs.normalize_event({**base, "id": "f", "eventType": "focusTime"}, "c") is None
+    assert cs.normalize_event({**base, "id": "o", "eventType": "outOfOffice"}, "c") is not None
+
+
+CANCELLED_ICS = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//t//t//EN
+BEGIN:VEVENT
+UID:gone
+DTSTART:20260910T170000Z
+DTEND:20260910T180000Z
+SUMMARY:Called off
+STATUS:CANCELLED
+END:VEVENT
+BEGIN:VEVENT
+UID:weekly
+DTSTART:20260907T170000Z
+DTEND:20260907T180000Z
+RRULE:FREQ=WEEKLY;COUNT=3
+SUMMARY:Swim
+END:VEVENT
+BEGIN:VEVENT
+UID:weekly
+RECURRENCE-ID:20260914T170000Z
+DTSTART:20260914T170000Z
+DTEND:20260914T180000Z
+SUMMARY:Swim
+STATUS:CANCELLED
+END:VEVENT
+END:VCALENDAR
+"""
+
+
+def test_ics_cancelled_events_and_occurrences_are_dropped():
+    evs = cs.ics_events(CANCELLED_ICS, "ical", dt.date(2026, 9, 1), dt.date(2026, 9, 30), LA)
+    titles = [(e["title"], e["start_ts"][:10]) for e in evs]
+    assert ("Called off", "2026-09-10") not in titles
+    assert [d for t, d in titles if t == "Swim"] == ["2026-09-07", "2026-09-21"]
+    # and the ICS times are local too (17:00Z = 10:00 PDT)
+    assert evs[0]["start_ts"].endswith("-07:00") and "T10:00" in evs[0]["start_ts"]
+
+
+def test_a_retryable_refresh_error_is_an_outage_not_an_expired_sign_in(conn):
+    # google-auth raises RefreshError for a 5xx at its token server too, and
+    # marks it retryable; that must not tell the family to reconnect.
+    class RefreshError(Exception):
+        def __init__(self, msg, retryable=False):
+            super().__init__(msg)
+            self.retryable = retryable
+
+    class Outage:
+        def configured(self):
+            return True
+
+        def fetch_events(self, *a):
+            raise RefreshError("internal_failure", retryable=True)
+
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    st = cs.sync_once(Outage(), conn, cfg, dt.datetime(2026, 8, 12, tzinfo=LA))
+    assert st["ok"] is False and st.get("needs_auth") is not True
+    assert cs._is_auth_error(RefreshError("revoked")) is True
+
+
+def test_error_since_is_carried_until_a_clean_sync(conn):
+    class Boom:
+        def configured(self):
+            return True
+
+        def fetch_events(self, *a):
+            raise RuntimeError("503")
+
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA)
+    first = cs.sync_once(Boom(), conn, cfg, t0)
+    later = cs.sync_once(Boom(), conn, cfg, t0 + dt.timedelta(minutes=10))
+    assert first["error_since"] == later["error_since"] == t0.isoformat()
+    ok = cs.sync_once(FakeClient({"cal": [TIMED_FIXTURE]}), conn, cfg, t0 + dt.timedelta(minutes=20))
+    assert "error_since" not in ok
+
+
+def test_a_calendar_whose_every_event_was_filtered_is_not_a_suspicious_empty(conn):
+    # review 2026-09-22: declining the only event made the empty guard keep it
+    # for a day and raise a false "snag"
+    item = {"id": "s", "summary": "Soccer",
+            "start": {"dateTime": "2026-09-23T17:00:00-07:00"},
+            "end": {"dateTime": "2026-09-23T18:00:00-07:00"}}
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 9, 22, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [item]}), conn, cfg, t0)
+    assert [e["title"] for e in fdb.list_events(conn)] == ["Soccer"]
+    declined = {**item, "attendees": [{"self": True, "responseStatus": "declined"}]}
+    st = cs.sync_once(FakeClient({"cal": [declined]}), conn, cfg, t0 + dt.timedelta(hours=1))
+    assert st["ok"] is True
+    assert fdb.list_events(conn) == []
+
+
+def test_an_ics_feed_whose_only_event_was_cancelled_is_not_a_suspicious_empty(conn):
+    only = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//t//t//EN
+BEGIN:VEVENT
+UID:gone
+DTSTART:20260910T170000Z
+DTEND:20260910T180000Z
+SUMMARY:Called off
+END:VEVENT
+END:VCALENDAR
+"""
+    cfg = make_cfg(calendars=[{"id": "ic", "label": "Feed", "kind": "ics", "url": "https://x/c.ics"}])
+    t0 = dt.datetime(2026, 9, 1, 9, 0, tzinfo=LA)
+    cs.sync_once(None, conn, cfg, t0, ics_fetch=lambda url: only)
+    assert len(fdb.list_events(conn)) == 1
+    cancelled = only.replace(b"SUMMARY:Called off\n", b"SUMMARY:Called off\nSTATUS:CANCELLED\n")
+    st = cs.sync_once(None, conn, cfg, t0 + dt.timedelta(hours=1), ics_fetch=lambda url: cancelled)
+    assert st["ok"] is True and fdb.list_events(conn) == []
+
+
+def test_error_since_on_a_partial_failure_and_on_the_exception_path(conn, monkeypatch):
+    class Half(FakeClient):
+        def fetch_events(self, cal_id, lo, hi):
+            if cal_id == "bad":
+                raise RuntimeError("503")
+            return super().fetch_events(cal_id, lo, hi)
+
+    cfg = make_cfg(calendars=[{"id": "good", "label": "G", "kind": "google"},
+                              {"id": "bad", "label": "B", "kind": "google"}])
+    t0 = dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA)
+    st = cs.sync_once(Half({"good": [TIMED_FIXTURE]}), conn, cfg, t0)
+    assert st["ok"] is False and st["error_since"] == t0.isoformat()
+
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(cs.fdb, "replace_events", boom)
+    st2 = cs.sync_once(FakeClient({"good": [TIMED_FIXTURE], "bad": [TIMED_FIXTURE]}),
+                       conn, cfg, t0 + dt.timedelta(minutes=5))
+    assert st2["ok"] is False and st2["error_since"] == t0.isoformat()
+
+
+def test_an_error_already_running_is_dated_from_the_last_good_sync(conn):
+    # the first sync after deploy (no error_since yet) must not restart the
+    # clock on an error that has been going on for days
+    fdb.kv_set(conn, "calendar_status", {"ok": False, "error": "503",
+                                         "last_sync": "2026-08-10T09:00:00-07:00"})
+
+    class Boom:
+        def configured(self):
+            return True
+
+        def fetch_events(self, *a):
+            raise RuntimeError("503")
+
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    st = cs.sync_once(Boom(), conn, cfg, dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA))
+    assert st["error_since"] == "2026-08-10T09:00:00-07:00"
+
+
+def test_a_feed_of_only_unreadable_items_is_still_a_suspicious_empty(conn):
+    # only intended drops (declined, cancelled, hidden types) count as "the
+    # calendar answered"; a feed that suddenly sends broken items keeps its
+    # last-good events and says so
+    item = {"id": "s", "summary": "Soccer",
+            "start": {"dateTime": "2026-09-23T17:00:00-07:00"},
+            "end": {"dateTime": "2026-09-23T18:00:00-07:00"}}
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 9, 22, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [item]}), conn, cfg, t0)
+    broken = {"id": "x", "summary": "no start"}
+    st = cs.sync_once(FakeClient({"cal": [broken]}), conn, cfg, t0 + dt.timedelta(hours=1))
+    assert st["ok"] is False
+    assert [e["title"] for e in fdb.list_events(conn)] == ["Soccer"]
+
+
+def test_a_google_calendar_that_suddenly_returns_nothing_keeps_its_events(conn):
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [TIMED_FIXTURE]}), conn, cfg, t0)
+    st = cs.sync_once(FakeClient({"cal": []}), conn, cfg, t0 + dt.timedelta(hours=1))
+    assert [e["title"] for e in fdb.list_events(conn)] == ["Dentist"]
+    assert st["ok"] is False and "no events" in st["error"]
+
+
+def test_the_error_clock_starts_fresh_after_a_clean_sync_and_ignores_an_auth_status(conn):
+    class Boom:
+        def configured(self):
+            return True
+
+        def fetch_events(self, *a):
+            raise RuntimeError("503")
+
+    cfg = make_cfg(calendars=[{"id": "cal", "label": "Fam", "kind": "google"}])
+    t0 = dt.datetime(2026, 8, 12, 9, 0, tzinfo=LA)
+    cs.sync_once(FakeClient({"cal": [TIMED_FIXTURE]}), conn, cfg, t0)
+    later = t0 + dt.timedelta(hours=3)
+    assert cs.sync_once(Boom(), conn, cfg, later)["error_since"] == later.isoformat()
+    # a prior expired-sign-in status is not "an error already running"
+    fdb.kv_set(conn, "calendar_status", {"ok": False, "needs_auth": True,
+                                         "last_sync": "2026-08-01T09:00:00-07:00"})
+    after = t0 + dt.timedelta(hours=5)
+    assert cs.sync_once(Boom(), conn, cfg, after)["error_since"] == after.isoformat()
+

@@ -636,3 +636,29 @@ def test_reconcile_return_moves_reminder_back_to_owner(conn):
     assert res["moved"] == 8
     rows = fdb.list_chore_mirror(conn)
     assert rows and all(m["person_id"] == milo for m in rows)
+
+
+def test_reconcile_completions_ignores_a_future_day_ticked_on_the_phone(conn):
+    # review 2026-09-22: the mirror covers today + a few days; ticking a FUTURE
+    # reminder in iOS made that day start already done (the wall refuses it)
+    from family_hub import reminders as rem
+    pid, cid = _mirrored(conn)
+    tomorrow = (_NOW.date() + dt.timedelta(days=1)).isoformat()
+    m = fdb.get_chore_mirror(conn, cid, tomorrow)
+    assert m is not None, "the mirror covers tomorrow"
+    oid = m["cal_object_id"]
+    coll = oid.split("/", 1)[0]
+    utcnow = _NOW.replace(tzinfo=dt.timezone.utc)
+    done = rem.set_completed(fdb.get_cal_object(conn, oid)["raw_ics"], True, utcnow)
+    fdb.upsert_cal_object_synced(conn, {
+        "id": oid, "collection_id": coll, "comp_type": "VTODO", "uid": m["uid"],
+        "href": "https://x", "etag": "e2", "summary": "Dishes", "raw_ics": done,
+        "sequence": 1, "last_modified": None}, force=True)
+    assert chore_mirror.reconcile_completions(conn, _NOW) == 0
+    assert not fdb.completion_exists(conn, cid, tomorrow)
+    # refused, not deferred: the phone's reminder is reopened, so the day it
+    # comes due it does NOT start done
+    obj = fdb.get_cal_object(conn, oid)
+    assert "STATUS:COMPLETED" not in obj["raw_ics"]
+    assert chore_mirror.reconcile_completions(conn, _NOW + dt.timedelta(days=1)) == 0
+    assert not fdb.completion_exists(conn, cid, tomorrow)

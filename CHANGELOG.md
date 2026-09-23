@@ -10,6 +10,40 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-09-22
+
+### Fixed
+- Calendar times are shown in the house time zone. A calendar set to a
+  fixed zone would have shown its events an hour late from November 1.
+- Cancelled events from calendar links and iCloud, invites you declined,
+  and Google's "working location" and "focus time" entries no longer show.
+- A brief Google hiccup no longer flashes "Calendar sync hit a snag"; it
+  shows only if the problem lasts an hour. An outage at Google's sign-in
+  server no longer asks you to reconnect.
+- Chores already checked off today stay done when someone is paused or a
+  chore's days are edited. Before, "Pause everyone" could erase that day's
+  finished chores.
+- When someone is away, only their own rotation turns pass to the next
+  person home ("for <name>"); everyone else keeps their usual days.
+- A chore whose owner was deleted or turned off no longer vanishes: the
+  chores edit mode lists it under "No one to do these" with a Reassign
+  button. Deleting a person keeps check-offs they made on someone else's
+  chore.
+- A chore can't be assigned to a person who doesn't exist, and a future
+  day can't be checked off.
+- Very long titles wrap instead of running past the edge of a row.
+- A finished chore that is still due today still moves to whoever now owns
+  it, so an owner back from being away keeps their streak.
+- A finished chore kept on the wall after a pause is locked: it stays done
+  and can't be unticked by accident. Deleting a chore still takes it off
+  today, and ticking tomorrow's reminder on the phone no longer marks
+  tomorrow done.
+- Declining the only event in a calendar (or it being cancelled) removes it
+  at once, instead of keeping it for a day with a "sync hit a snag" note.
+- A reminder ticked on the phone for a future day is reopened there, so the
+  phone and the wall agree. A refused untick on the wall says why ("it stays
+  done") instead of asking you to tap again.
+
 ## [1.8.0] — 2026-09-22
 
 ### Fixed

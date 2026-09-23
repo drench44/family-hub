@@ -1215,3 +1215,33 @@ test('assignLanes: an all-day event with end == start (server allows it) is a on
   assert.notEqual(by.t.lane, by.o.lane, 'two events on the same day never share a lane');
   assert.deepEqual([by.b.c0, by.b.c1], [4, 4], 'end-before-start clamps to the start day');
 });
+
+/* review 2026-09-22: a chore nobody can do used to vanish from every card */
+test('unassignedChores: fixed owner gone or turned off, or a rotation with nobody active', () => {
+  const people = [{ id: 1, active: 1 }, { id: 2, active: 0 }];
+  const chores = [
+    { id: 10, active: 1, assign_kind: 'fixed', fixed_person_id: 1 },       // fine
+    { id: 11, active: 1, assign_kind: 'fixed', fixed_person_id: 2 },       // owner turned off
+    { id: 12, active: 1, assign_kind: 'fixed', fixed_person_id: null },    // owner deleted
+    { id: 13, active: 1, assign_kind: 'rotation', rotation_order: [2] },   // nobody active
+    { id: 14, active: 1, assign_kind: 'rotation', rotation_order: [2, 1] }, // fine
+    { id: 15, active: 0, assign_kind: 'fixed', fixed_person_id: null },    // chore itself off
+    { id: 16, active: 1, assign_kind: 'rotation', rotation_order: [] },    // everyone deleted
+  ];
+  assert.deepEqual([...sandbox.unassignedChores(chores, people)].map((c) => c.id), [11, 12, 13, 16]);
+});
+
+test('unassignedChoresHtml: a Reassign button per chore that opens the editor; nothing when empty', () => {
+  assert.equal(sandbox.unassignedChoresHtml([]), '');
+  const html = sandbox.unassignedChoresHtml([{ id: 12, icon: '🐶', title: 'Feed <dog>' }]);
+  assert.match(html, /No one to do these/);
+  assert.match(html, /data-edit-chore="12"/);
+  assert.match(html, /Feed &lt;dog&gt;/);
+});
+
+test('choreToggleMessage: a locked chore says it stays done, never "tap again"', () => {
+  assert.equal(sandbox.choreToggleMessage('this chore was finished before it came off today’s plan; it stays done', false),
+    'That one was already finished, so it stays done.');
+  assert.equal(sandbox.choreToggleMessage('', true), 'That day has ended, so it can’t be changed now.');
+  assert.match(sandbox.choreToggleMessage('boom', false), /tap again/);
+});
