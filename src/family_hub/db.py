@@ -1211,6 +1211,25 @@ def park_cal_object(conn, oid: str, reason: str, now_iso: str) -> None:
     conn.commit()
 
 
+def drop_untracked_parked_creates(conn, collection_id: str, reason_prefix: str,
+                                  uid_prefix: str) -> int:
+    """Delete a collection's never-sent creates parked for `reason_prefix`
+    whose uid starts with `uid_prefix` and that no chore_mirror row tracks.
+    For the chore mirror: while a list was gone it forgot these, and when the
+    list comes back it queues what is still wanted again (same ids), so
+    sending the old ones would bring back past days. Returns how many."""
+    cur = conn.execute(
+        "DELETE FROM cal_objects WHERE collection_id = ? "
+        "AND sync_state = 'PENDING_CREATE' AND href IS NULL "
+        "AND sync_attempts >= ? AND substr(last_sync_error, 1, ?) = ? "
+        "AND substr(uid, 1, ?) = ? "
+        "AND id NOT IN (SELECT cal_object_id FROM chore_mirror)",
+        (collection_id, CAL_PARK_ATTEMPTS, len(reason_prefix), reason_prefix,
+         len(uid_prefix), uid_prefix))
+    conn.commit()
+    return cur.rowcount
+
+
 def unpark_cal_objects(conn, collection_id: str, reason_prefix: str) -> int:
     """Put a collection's rows parked for `reason_prefix` back in the outbox
     (their list is back in iCloud). Returns how many."""

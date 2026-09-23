@@ -2111,6 +2111,46 @@ def test_an_old_style_missing_clock_restarts(conn):
     assert "caldav:old" in _collection_ids(conn)
 
 
+class _PutsFail(WriteFake):
+    def put_object(self, collection, href, ics, base_etag=None, uid=None):
+        raise RuntimeError("connection reset")
+
+
+def test_a_list_back_after_the_mirror_forgot_it_sends_no_old_or_double_chores(conn):
+    """Chore reminders queued for a list that then went away are parked, and the
+    mirror forgets them (their list is gone). When the list comes back days
+    later, those parked creates must not go out: the old days would come back
+    as fresh reminders on the phone, and the mirror queues today's again, so
+    they must not be sent twice either."""
+    _two_way_mirror_fixture(conn)
+    other = {"id": "other", "name": "Other", "comp": "VTODO", "todos": []}
+    rem = {"id": "rem", "name": "Emma", "comp": "VTODO", "todos": []}
+    # day 1: the mirror queues Aug 17..24, but nothing reaches iCloud
+    caldav_sync.sync_once(_PutsFail([rem, other]), conn, _CFG, _NOW)
+    assert len(fdb.caldav_pending(conn)) == 8
+    # the list disappears for over a day: dropped, its unsent creates parked,
+    # and the mirror forgets them
+    _sync_hourly(_PutsFail([other]), conn, 1, 25)
+    assert "caldav:rem" not in _collection_ids(conn)
+    assert fdb.list_chore_mirror(conn) == []
+    assert len(fdb.caldav_parked(conn)) >= 8     # Aug 17.. (the day rolled once)
+    # three days later it is back
+    back = WriteFake([rem, other])
+    later = _NOW + dt.timedelta(days=3)          # Aug 20
+    caldav_sync.sync_once(back, conn, _CFG, later)
+    # chore reminder uids are familyhub-chore-<chore id>-<YYYY-MM-DD>
+    uids = [remlogic.parse_vtodo(ics, "c")[0]["id"].split("/", 1)[1]
+            for _cid, _href, ics in back.puts]
+    dates = sorted(u[-10:] for u in uids)
+    assert len(uids) == len(set(uids)), f"a chore reminder was sent twice: {uids}"
+    assert dates and min(dates) >= "2026-08-20", f"old days came back: {dates}"
+    assert dates == [f"2026-08-{d}" for d in range(20, 28)]
+    assert fdb.caldav_parked(conn) == [] and fdb.caldav_pending(conn) == []
+    # the old days are gone locally too, not left queued
+    assert not [o["uid"] for o in fdb.list_cal_objects(conn, "VTODO")
+                if o["uid"][-10:] < "2026-08-20"]
+
+
 # --- pushes iCloud refuses for good ---------------------------------------------
 
 def _queue_one(conn, uid="U1"):
