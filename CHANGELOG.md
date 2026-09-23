@@ -147,6 +147,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   reads "iCloud list gone" instead of a tick. The sync status names them
   too. Before, their chores failed to reach iCloud with nothing on screen
   saying why.
+- A person's gone iCloud list shows as "(list gone)" in their list picker,
+  so picking "none" really clears it, even when no other lists exist.
+  Before, "none" already looked chosen and picking it saved nothing.
 - A calendar whose last event has moved out of the synced date range no
   longer shows "kept last-synced" for a day when it comes back empty; the
   empty-calendar guard now only holds when events inside the range vanish.

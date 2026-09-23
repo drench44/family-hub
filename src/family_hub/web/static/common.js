@@ -1050,16 +1050,25 @@ function mirrorFieldHtml(opts) {
   const options = `<option value=""${listId ? '' : ' selected'}>— none —</option>`
     + lists.map((l) =>
       `<option value="${escapeHtml(l.id)}"${l.id === listId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
+  // A saved id that matches no list still needs its own option. Without one
+  // the browser shows the none option as already chosen, and picking it
+  // fires no change, so the mapping could never be cleared (and a failed
+  // save's undo would blank the picker). It is selected but disabled: it
+  // shows what is saved and can't be picked again, so choosing none is
+  // always a real change.
+  const savedOption = listId && !lists.some((l) => l.id === listId)
+    ? `<option value="${escapeHtml(listId)}" selected disabled>${gone ? '(list gone)' : '(current list)'}</option>`
+    : '';
   const offNow = !!listId && !opts.twoWay;
-  // Mapped to a list the sync no longer has: the picker would just look
-  // empty (the none option), so say what happened. With no lists left the
-  // picker still offers "none" to clear the mapping.
+  // Mapped to a list the sync no longer has: say what happened above the
+  // picker. The picker shows "(list gone)" and still offers none to clear
+  // the mapping, even when no lists are left.
   const goneText = lists.length
     ? 'This person’s iCloud chore list is gone; pick a new one.'
     : 'This person’s iCloud chore list is gone, and iCloud has no other lists. Make or share one in iCloud Reminders, then pick it here.';
   return `<div class="field"><label>iCloud chore list</label>`
     + (gone ? `<div class="form-error" data-plist-gone>${goneText}</div>` : '')
-    + `<select class="txt-input" data-plist>${options}</select>`
+    + `<select class="txt-input" data-plist>${savedOption}${options}</select>`
     + `<div class="hint" data-plist-share>Chores are written to this person’s list in the hub’s iCloud account. To see them on their own iPhone, share that list to their Apple ID once from iCloud Reminders (open the list → Share List).</div>`
     + `<div class="hint${offNow ? '' : ' hidden'}" data-plist-readonly>Two-way sync is off, so chores won’t reach iCloud yet. Turn it on in Settings → iCloud.</div>`
     + `<div class="form-error hidden" data-plist-err></div></div>`;
