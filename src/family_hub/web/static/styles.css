@@ -1680,6 +1680,12 @@ body.overlay-open { overflow: hidden; }
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: 999px; padding: 3px 8px;
 }
+/* The mapped iCloud list is gone: chores stopped mirroring for this person. */
+.padmin-badge-warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 32%, transparent);
+}
 .padmin-btn {
   font-family: var(--mono); font-size: 12px; font-weight: 600;
   letter-spacing: 0.04em;
@@ -2238,6 +2244,7 @@ body.overlay-open { overflow: hidden; }
 /* Outbox backlog note: wall edits still queued for the next push. Quiet (--dim,
    not an alarm colour) — a transient, self-clearing state, not an error. */
 .caldav-pending, .caldav-parked { font-size: 13px; color: var(--dim); }
+.caldav-gone { font-size: 13px; color: var(--warn); }
 /* The Calendars picker: same heading/caption pair as the Display rows above
    (.settings-k / .hint), then a plain list of .integ-row toggles - gap:0 so
    only the shared .integ-row + .integ-row border-top separates them, same as

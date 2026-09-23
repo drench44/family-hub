@@ -771,7 +771,9 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
                              "created": mres.get("created", 0),
                              "moved": mres.get("moved", 0),
                              "updated": mres.get("updated", 0),
-                             "deleted": mres.get("deleted", 0)}
+                             "deleted": mres.get("deleted", 0),
+                             # people left out: their chore list is gone
+                             "lists_gone": mres.get("lists_gone", [])}
             if mres.get("error"):
                 log.error("chore mirror reconcile reported a failed tick")
             fdb.kv_set(conn, "chore_mirror_status", mirror_status)
@@ -796,6 +798,11 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
               # the settings menu can surface it instead of it being invisible.
               "pending": len(fdb.caldav_pending(conn)),
               **_parked_status(conn)}
+        # people whose chore list is gone: left out of the mirror until a new
+        # list is picked (named here so it is not only a log line)
+        from . import chore_mirror
+        st["lists_gone"] = [p["name"]
+                            for p in chore_mirror.people_with_gone_lists(conn)]
         if errors:
             st["error"] = "; ".join(errors)
         # Only FETCH-scope failures may hold coverage back. `errors` also
