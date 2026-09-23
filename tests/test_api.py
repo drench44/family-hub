@@ -5419,3 +5419,26 @@ def test_hub_survives_backup_read_error(client, monkeypatch):
     r = client.get("/api/hub")
     assert r.status_code == 200
     assert r.json()["backup"]["known"] is False
+
+
+def test_a_brief_google_hiccup_does_not_flash_the_snag_banner(tmp_path, monkeypatch):
+    # review 2026-09-22: one failed fetch showed "sync hit a snag" at once.
+    # Within the grace window, with a last good sync on screen, the wall says
+    # nothing; past it, the error shows; with no prior sync it shows at once.
+    appmod = _reload_with(tmp_path, monkeypatch, {"calendars": [
+        {"id": "fam", "kind": "google", "label": "Family"}]})
+    with TestClient(appmod.app) as tc:
+        c = appmod._db()
+        now = appmod._now_local()
+        fresh = (now - dt.timedelta(minutes=5)).isoformat()
+        old = (now - dt.timedelta(minutes=appmod.CALENDAR_ERROR_GRACE_MIN + 5)).isoformat()
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": False, "error": "503", "last_sync": old, "error_since": fresh})
+        assert tc.get("/api/calendar").json()["status"]["ok"] is True
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": False, "error": "503", "last_sync": old, "error_since": old})
+        assert tc.get("/api/calendar").json()["status"]["ok"] is False
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": False, "error": "503", "last_sync": None, "error_since": fresh})
+        assert tc.get("/api/calendar").json()["status"]["ok"] is False
+        # an expired sign-in is never held back
+        appmod.fdb.kv_set(c, "calendar_status", {"ok": False, "needs_auth": True, "last_sync": old, "error_since": fresh})
+        assert tc.get("/api/calendar").json()["status"].get("needs_auth") is True
+
