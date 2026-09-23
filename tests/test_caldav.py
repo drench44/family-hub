@@ -1745,3 +1745,15 @@ def test_every_queue_path_takes_a_revision_above_all_others(conn):
     before = top()
     fdb.queue_cal_object_update(conn, "caldav:rem/U-NEW", "X", "Oops", "t4")
     assert rev("caldav:rem/U-NEW") > before
+
+
+def test_caldav_timed_events_are_stored_in_the_house_time_zone(conn):
+    # review 2026-09-22: the same "2:45 class shows 3:45" bug, via iCloud
+    from zoneinfo import ZoneInfo
+    ics = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:t1\r\n"
+           "SUMMARY:Class\r\nDTSTART:20260820T170000Z\r\nDTEND:20260820T180000Z\r\n"
+           "END:VEVENT\r\nEND:VCALENDAR\r\n")
+    client = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": [ics]}])
+    now = dt.datetime(2026, 8, 17, 12, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    caldav_sync.sync_once(client, conn, _CFG, now)
+    assert fdb.list_events(conn)[0]["start_ts"] == "2026-08-20T10:00:00-07:00"

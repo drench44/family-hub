@@ -1226,8 +1226,9 @@ test('unassignedChores: fixed owner gone or turned off, or a rotation with nobod
     { id: 13, active: 1, assign_kind: 'rotation', rotation_order: [2] },   // nobody active
     { id: 14, active: 1, assign_kind: 'rotation', rotation_order: [2, 1] }, // fine
     { id: 15, active: 0, assign_kind: 'fixed', fixed_person_id: null },    // chore itself off
+    { id: 16, active: 1, assign_kind: 'rotation', rotation_order: [] },    // everyone deleted
   ];
-  assert.deepEqual([...sandbox.unassignedChores(chores, people)].map((c) => c.id), [11, 12, 13]);
+  assert.deepEqual([...sandbox.unassignedChores(chores, people)].map((c) => c.id), [11, 12, 13, 16]);
 });
 
 test('unassignedChoresHtml: a Reassign button per chore that opens the editor; nothing when empty', () => {

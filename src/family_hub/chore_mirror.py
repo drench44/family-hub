@@ -168,7 +168,13 @@ def reconcile_completions(conn, now: dt.datetime) -> int:
     if not rows:
         return 0
     owners = _OwnerResolver(conn, {m["date"] for m in rows})
+    today = now.date().isoformat()
     for m in rows:
+        if m["date"] > today:
+            # the phone mirrors a few days ahead; a future day ticked there must
+            # not start the day already done (the wall refuses it too)
+            log.debug("chore completion reconcile: %s is a future day, left for later", m["date"])
+            continue
         try:      # isolate per row so one poison object can't stall all streaks
             obj = fdb.get_cal_object(conn, m["cal_object_id"])
             if not obj or "STATUS:COMPLETED" not in (obj.get("raw_ics") or ""):

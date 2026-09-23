@@ -5485,9 +5485,9 @@ def test_editing_a_chore_off_today_keeps_todays_check_off(client, app_mod):
         "schedule_kind": "days", "days_mask": other_day}).status_code == 200
     rows = {c["id"]: c for c in _today_chores(client, pid)}
     assert rows[cid]["done"] is True
-    # undo still works on the kept row, and then it follows the new schedule
-    assert client.delete(f"/api/chores/{cid}/complete").status_code == 200
-    assert cid not in {c["id"] for c in _today_chores(client, pid)}
+    # the kept row is locked: undo is refused and it stays done for the day
+    assert client.delete(f"/api/chores/{cid}/complete").status_code == 409
+    assert rows[cid]["locked"] is True
 
 
 def test_a_chore_cannot_be_assigned_to_someone_who_does_not_exist(client, app_mod):
@@ -5526,12 +5526,97 @@ def test_deleting_a_person_keeps_their_check_off_on_someone_elses_chore(client, 
     assert [(r["chore_id"], r["person_id"]) for r in comps] == [(cid, a)]
 
 
-def test_a_fixed_chore_of_a_deleted_person_is_listed_not_lost(client, app_mod):
-    a = _mk_person(client, "Gone")
+def test_a_kept_chore_is_locked_and_cannot_be_unticked(client, app_mod):
+    # unticking a chore kept after a pause would drop it with no way back
+    pid = _mk_person(client, "Ana")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    # before the pause it is an ordinary done row
+    assert _today_chores(client, pid)[0]["locked"] is False
+    client.post("/api/admin/away/everyone", json={})
+    row = next(c for c in _today_chores(client, pid) if c["id"] == cid)
+    assert row["done"] is True and row["locked"] is True
+    r = client.delete(f"/api/chores/{cid}/complete")
+    assert r.status_code == 409
+    assert next(c for c in _today_chores(client, pid) if c["id"] == cid)["done"] is True
+
+
+def test_deleting_a_chore_done_today_takes_it_off_today(client, app_mod):
+    pid = _mk_person(client, "Ana")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    assert client.delete(f"/api/admin/chores/{cid}").status_code == 200
+    assert cid not in {c["id"] for c in _today_chores(client, pid)}
+
+
+def test_editing_a_chore_that_names_a_turned_off_person_still_works(client, app_mod):
+    a = _mk_person(client, "Ana")
+    b = _mk_person(client, "Ben")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "daily", "assign_kind": "rotation",
+        "rotation_order": [a, b]}).json()["id"]
+    assert client.patch(f"/api/admin/people/{b}", json={"active": False}).status_code == 200
+    assert client.patch(f"/api/admin/chores/{cid}", json={"title": "Bins"}).status_code == 200
+
+
+def test_deleting_the_owner_then_the_helper_never_orphans_a_check_off(client, app_mod):
+    # the hand-off must only go to an owner who still exists
+    a = _mk_person(client, "Owner")
+    b = _mk_person(client, "Helper")
     cid = client.post("/api/admin/chores", json={
         "title": "Feed dog", "schedule_kind": "daily", "assign_kind": "fixed",
         "fixed_person_id": a}).json()["id"]
-    client.delete(f"/api/admin/people/{a}")
-    ch = next(c for c in client.get("/api/admin/state").json()["chores"] if c["id"] == cid)
-    # still active and still there to reassign (the edit mode lists it)
-    assert ch["active"] in (1, True) and ch["fixed_person_id"] is None
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete", json={"person_id": b})
+    assert client.delete(f"/api/admin/people/{a}").status_code == 200
+    assert client.delete(f"/api/admin/people/{b}").status_code == 200
+    c = app_mod._db()
+    orphans = c.execute("SELECT COUNT(*) FROM completions WHERE person_id NOT IN "
+                        "(SELECT id FROM people)").fetchone()[0]
+    assert orphans == 0
+
+
+def test_a_helpers_past_check_off_keeps_the_owners_streak_when_the_helper_is_deleted(
+        client, app_mod, monkeypatch):
+    today = dt.date(2026, 8, 17)
+    yesterday = today - dt.timedelta(days=1)
+    monkeypatch.setattr(app_mod, "_today", lambda: yesterday)
+    a = _mk_person(client, "Owner")
+    b = _mk_person(client, "Helper")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Feed dog", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": a, "date": None}).json()["id"]
+    client.get("/api/hub")                                   # freeze yesterday onto the owner
+    client.post(f"/api/chores/{cid}/complete", json={"person_id": b})
+    monkeypatch.setattr(app_mod, "_today", lambda: today)
+    assert client.delete(f"/api/admin/people/{b}").status_code == 200
+    comps = app_mod.fdb.completions_between(app_mod._db(), yesterday.isoformat(), yesterday.isoformat())
+    assert [(r["chore_id"], r["person_id"]) for r in comps] == [(cid, a)]
+    owner = next(p for p in client.get("/api/hub").json()["people"] if p["person"]["id"] == a)
+    assert owner["week"][-2] == "done"
+
+
+def test_undo_on_a_chore_done_today_reopens_the_mirror_under_the_logged_owner(client, app_mod, monkeypatch):
+    a = _mk_person(client, "Ana")
+    b = _mk_person(client, "Ben")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": a}).json()["id"]
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    # the plan now names someone else, but the log still says a did it
+    client.patch(f"/api/admin/chores/{cid}", json={"fixed_person_id": b})
+    seen = []
+    monkeypatch.setattr(app_mod.chore_mirror, "push_completion",
+                        lambda c, ch, d, done, expected_person_id=None: seen.append(expected_person_id))
+    today = app_mod._today().isoformat()
+    assert app_mod._resolved_owner(app_mod._db(), cid, today) == a
+    client.delete(f"/api/chores/{cid}/complete")
+    assert seen == [a]
+

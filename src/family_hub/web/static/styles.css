@@ -1186,6 +1186,9 @@ body {
 }
 .chore-body { flex: 1; display: flex; align-items: center; gap: 8px; }
 .chore-icon { font-size: 17px; }
+/* a chore finished before it came off today's plan (paused, or edited off
+   today): shown done, not tappable (app._keep_done_rows) */
+.chore-row.locked { cursor: default; }
 .chore-title { font-size: 17px; color: var(--ink); position: relative; min-width: 0; overflow-wrap: anywhere; }
 .chore-row.done .chore-title { color: var(--dim); }
 /* the strike sweeps through in their color — one-shot, like the check pop */

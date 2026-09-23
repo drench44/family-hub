@@ -588,14 +588,20 @@ def test_cover_skips_past_anyone_else_who_is_away():
 
 
 def test_a_person_with_two_slots_covers_from_the_right_slot():
-    # a rotation can hold one person twice (two turns in the cycle), on purpose
-    chore = _rot(9, [2, 3, 1, 4, 5, 5])
+    # a rotation can hold one person twice (two turns in the cycle), on
+    # purpose. With 5 away in [5, 1, 5, 2], the slot-0 turn goes to 1 and the
+    # slot-2 turn goes to 2: the cover must start from the turn's own slot.
+    chore = _rot(9, [5, 1, 5, 2])
     start = dt.date(2026, 9, 21)
+    seen = set()
     for k in range(12):
         d = start + dt.timedelta(days=k)
-        normal = ch.plan_rows([chore], FIVE, d)[0]["person_id"]
+        slot = ch.occurrences_before(chore, d) % 4
         row = ch.plan_rows([chore], FIVE, d, {"ids": {5}, "backup": {}})[0]
-        if normal == 5:
-            assert (row["person_id"], row["covering_for"]) == (2, 5), d  # wraps to the start
-        else:
-            assert row["person_id"] == normal, d
+        if slot == 0:
+            assert (row["person_id"], row["covering_for"]) == (1, 5), d
+            seen.add(0)
+        elif slot == 2:
+            assert (row["person_id"], row["covering_for"]) == (2, 5), d
+            seen.add(2)
+    assert seen == {0, 2}

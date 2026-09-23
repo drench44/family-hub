@@ -955,8 +955,15 @@ def _keep_done_rows(c, d_str: str, rows: list[dict]) -> list[dict]:
     if not done:
         return rows
     planned = {r["chore_id"] for r in rows}
+    # a chore that was DELETED or turned off leaves today's wall as before
+    # (db.delete_chore); only pause/edit-off keeps its finished row
+    live = {ch["id"] for ch in fdb.list_chores(c)}
     served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)}
-    kept = [served[cid] for cid in sorted(done - planned) if cid in served]
+    # Kept rows are LOCKED: shown done, not tappable, and uncomplete() refuses
+    # them. Unticking one would drop it from today with no way to tick it
+    # back (it is no longer due, or its owner is paused).
+    kept = [{**served[cid], "locked": True}
+            for cid in sorted((done - planned) & live) if cid in served]
     return rows + kept
 
 
@@ -1340,6 +1347,14 @@ def uncomplete(chore_id: int, date: str | None = None):
         raise HTTPException(422, "bad date")
     if abs((d - _today()).days) > 366:
         raise HTTPException(422, "date out of range")
+    if d == _today() and fdb.completion_exists(c, chore_id, date_str):
+        _, away_view, away_ok = _away_view(c, d)
+        if away_ok and not any(
+                r["chore_id"] == chore_id for r in chlogic.plan_rows(
+                    fdb.list_chores(c), fdb.list_people(c), d, away_view)):
+            # a finished chore kept on the wall after a pause or an edit
+            # (_keep_done_rows): unticking it would lose it for the day
+            raise HTTPException(409, "this chore was finished before it came off today's plan; it stays done")
     # Resolve the current owner BEFORE clearing, so the reopen can't be pushed
     # onto a mirror ledger row that still names the other person (M3).
     owner = _resolved_owner(c, chore_id, date_str)
@@ -1833,12 +1848,15 @@ def _validate_chore(merged: dict) -> None:
     if merged["assign_kind"] == "rotation" and not merged.get("rotation_order"):
         raise HTTPException(422, "add people to the rotation")
     # Every assignee must be a real person: an unknown id was accepted and made
-    # the chore invisible on every card (review, 2026-09-22). A person listed
-    # twice in a rotation is allowed on purpose (two turns in the cycle).
+    # the chore invisible on every card (review, 2026-09-22). A turned-off
+    # person is still a person (editing a chore that names one must keep
+    # working); a chore left with no ACTIVE owner shows in the chores edit
+    # mode under "No one to do these". A person listed twice in a rotation is
+    # allowed on purpose (two turns in the cycle).
     known = {p["id"] for p in fdb.list_people(_db(), include_inactive=True)}
     ids = ([merged.get("fixed_person_id")] if merged["assign_kind"] == "fixed"
            else list(merged.get("rotation_order") or []))
-    if any(not isinstance(i, int) or isinstance(i, bool) or i not in known for i in ids):
+    if any(not isinstance(i, int) or i not in known for i in ids):
         raise HTTPException(422, "that person doesn't exist")
 
 
@@ -3087,9 +3105,15 @@ def _open_sync_conn():
                 # backoff loop would leak one connection per iteration.
                 with contextlib.closing(fdb.connect(DB_PATH)) as sc:
                     prior = fdb.kv_get(sc, "calendar_status") or {}
-                    fdb.kv_set(sc, "calendar_status",
-                               {"ok": False, "error": f"sync startup: {e}",
-                                "last_sync": prior.get("last_sync")})
+                    st = {"ok": False, "error": f"sync startup: {e}",
+                          "last_sync": prior.get("last_sync"),
+                          # keep the running error's clock and a known
+                          # expired sign-in, so neither is reset here
+                          "error_since": prior.get("error_since")
+                          or prior.get("last_sync")}
+                    if prior.get("needs_auth"):
+                        st["needs_auth"] = True
+                    fdb.kv_set(sc, "calendar_status", st)
             except Exception:
                 pass
             time.sleep(backoff)
