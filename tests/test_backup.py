@@ -11,6 +11,7 @@ The script is driven entirely by env so it is deterministic under test:
   and the per-tier keep counts (…_KEEP) are overridable.
 """
 import json
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -542,15 +543,74 @@ def test_offbox_copy_does_not_use_delete():
 
 
 def test_partials_are_never_copied_off_box(tmp_path):
+    """Only the rsync exclude keeps a partial off the NAS when the sweep
+    doesn't remove it first. The sweep matches .partial-*.db (and its -wal /
+    -shm), so a partial with another suffix, like a promote cut short or a
+    concurrent run's temp, is still there at copy time."""
     db = tmp_path / "hub.db"
     _make_db(db)
     out = tmp_path / "out"
     remote = tmp_path / "nas"
     _run(db, out, remote=remote)
-    # a partial that appears between the sweep and the copy (a concurrent run)
-    (out / "daily" / ".partial-x.db").write_bytes(b"half")
+    (out / "daily" / ".partial-x.db.tmp").write_bytes(b"half")
+    (out / "hourly" / ".partial-y").write_bytes(b"half")
     _run(db, out, remote=remote, now="202608181030")
+    assert (out / "daily" / ".partial-x.db.tmp").exists(), \
+        "the sweep leaves it, so the exclude alone is under test"
     assert not list((remote / "daily").glob(".partial*"))
+    assert not list((remote / "hourly").glob(".partial*"))
+    assert (remote / "hourly" / "hub-20260818-1030.db").exists(), \
+        "the real snapshot still went across"
+
+
+def test_remote_prune_failure_exits_2_and_records_it(tmp_path):
+    """If the NAS tier can't be listed for the prune, the run is a remote
+    failure: exit 2, the heartbeat says the remote copy failed, and the local
+    snapshot is kept."""
+    db = tmp_path / "hub.db"
+    _make_kv_db(db)
+    out = tmp_path / "out"
+    remote = tmp_path / "nas"
+    _run(db, out, remote=remote)
+    assert _status(db)["remote_ok"] is True
+    # writable (the add step still works) but not listable (the prune fails)
+    (remote / "hourly").chmod(0o300)
+    extra = None
+    if os.access(remote / "hourly", os.R_OK):
+        # root ignores directory modes (a CI runner may be root): fail the
+        # listing with an rsync shim instead, so the test never skips
+        shim = tmp_path / "bin"
+        shim.mkdir()
+        real = subprocess.run(["which", "rsync"], capture_output=True,
+                              text=True).stdout.strip()
+        (shim / "rsync").write_text(
+            "#!/bin/bash\n"
+            'case "$*" in *--list-only*hourly/*) '
+            'echo "opendir: Permission denied" >&2; exit 23;; esac\n'
+            f'exec {real} "$@"\n')
+        (shim / "rsync").chmod(0o755)
+        extra = {"PATH": f"{shim}:/usr/bin:/bin:/usr/local/bin"}
+    try:
+        r = _run(db, out, remote=remote, now="202608181030", check=False,
+                 extra_env=extra)
+    finally:
+        (remote / "hourly").chmod(0o755)
+    assert r.returncode == 2, f"a failed prune is a remote failure: {r.stderr}"
+    assert "prune hourly" in r.stderr
+    assert _status(db)["remote_ok"] is False
+    assert (out / "hourly" / "hub-20260818-1030.db").exists(), "local snapshot kept"
+
+
+def test_remote_weekly_tier_is_pruned_by_its_keep_count(tmp_path):
+    """Weekly names are YYYY-Www, not digits only; the remote prune must
+    match and order them too, across a year boundary."""
+    db = tmp_path / "hub.db"
+    _make_db(db)
+    remote = tmp_path / "nas"
+    _seed_remote(remote, "weekly", ["2025-W52", "2026-W01", "2026-W30", "2026-W33"])
+    _run(db, tmp_path / "out", remote=remote, extra_env={"WEEKLY_KEEP": "3"})
+    assert [p.name for p in _snaps(remote, "weekly")] == [
+        "hub-2026-W30.db", "hub-2026-W33.db", "hub-2026-W34.db"]
 
 
 def test_stale_partial_wal_and_shm_sidecars_are_swept(tmp_path):
