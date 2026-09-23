@@ -24,6 +24,13 @@ log = logging.getLogger("family_hub.caldav")
 
 DEFAULT_HORIZON_DAYS = 7
 
+# Every mirrored reminder's UID starts with this (then <chore id>-<date>).
+UID_PREFIX = "familyhub-chore-"
+
+# (person id, list id) pairs already warned about as mapped to a list that is
+# gone from iCloud, so the warning is logged once per process, not every tick.
+_GONE_WARNED: set = set()
+
 
 def _title(chore: dict) -> str:
     icon = (chore.get("icon") or "").strip()
@@ -37,9 +44,15 @@ def _sig(chore: dict) -> str:
     return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def _list_of(ledger_row: dict) -> str:
+    """The Reminders list a mirrored occurrence lives in ('caldav:<slug>'), the
+    first part of its cal_objects id."""
+    return ledger_row["cal_object_id"].split("/", 1)[0]
+
+
 def _queue_create(conn, chore, diso, person_id, list_id, tz, now, now_iso) -> None:
     d = dt.date.fromisoformat(diso)
-    uid = f"familyhub-chore-{chore['id']}-{diso}"
+    uid = f"{UID_PREFIX}{chore['id']}-{diso}"
     oid = f"{list_id}/{uid}"
     title = _title(chore)
     ics = remlogic.build_chore_vtodo(uid, title, d,
@@ -199,6 +212,18 @@ def reconcile_completions(conn, now: dt.datetime) -> int:
     return added
 
 
+def people_with_gone_lists(conn, include_inactive: bool = False) -> list[dict]:
+    """Active people (all people with `include_inactive`) mapped to a Reminders
+    list the sync no longer has (it was deleted, unshared or re-addressed in
+    iCloud and dropped after a day). Their chores are left out of the mirror
+    until a new list is picked, so settings names them instead of looking
+    healthy. [{id, name, list_id}]."""
+    known = {c["id"] for c in fdb.list_caldav_collections(conn, "VTODO")}
+    return [{"id": p["id"], "name": p["name"], "list_id": p["reminder_list_id"]}
+            for p in fdb.list_people(conn, include_inactive=include_inactive)
+            if p.get("reminder_list_id") and p["reminder_list_id"] not in known]
+
+
 def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
     """Bring each mapped person's iCloud list in line with the wall's chore plan
     over [today, today+H]. No past day: the wall FREEZES history in occurrence_log,
@@ -207,19 +232,39 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
     catches a late completion. `synced_collections` (when given) is the set of
     VTODO list ids that pulled OK this tick; the prune only trusts a list's state
     when it actually synced, so a per-list outage can't delete a reminder and lose
-    an iOS completion. Returns {created, moved, updated, deleted}. Never raises;
-    per-occurrence failures are isolated so one poison row can't stall the rest."""
-    zero = {"created": 0, "moved": 0, "updated": 0, "deleted": 0}
+    an iOS completion. Returns {created, moved, updated, deleted, lists_gone}
+    (lists_gone: names of the people left out because their list is gone).
+    Never raises; per-occurrence failures are isolated so one poison row can't
+    stall the rest."""
+    zero = {"created": 0, "moved": 0, "updated": 0, "deleted": 0, "lists_gone": []}
     try:
-        mapped = {p["id"]: p["reminder_list_id"]
-                  for p in fdb.list_people(conn) if p.get("reminder_list_id")}
+        # Only lists iCloud still has. The sync drops a list that was deleted
+        # or unshared; a person still mapped to it would otherwise get fresh
+        # reminders queued into it every day that could never be sent.
+        known = {c["id"] for c in fdb.list_caldav_collections(conn, "VTODO")}
+        gone = people_with_gone_lists(conn)
+        gone_ids = {p["id"] for p in gone}
+        lists_gone = [p["name"] for p in gone]
+        mapped = {}
+        for p in fdb.list_people(conn):
+            lid = p.get("reminder_list_id")
+            if not lid:
+                continue
+            if p["id"] not in gone_ids:
+                mapped[p["id"]] = lid
+                _GONE_WARNED.discard((p["id"], lid))
+            elif (p["id"], lid) not in _GONE_WARNED:    # once, not every tick
+                _GONE_WARNED.add((p["id"], lid))
+                log.warning("chore mirror: %s's Reminders list is gone from "
+                            "iCloud; their chores are not mirrored until a new "
+                            "list is picked", p["name"])
         existing_rows = fdb.list_chore_mirror(conn)
         # Nothing mapped AND nothing already mirrored -> no work. But if rows
         # exist while nothing is mapped (every mapped person was deleted /
         # unmapped), we must still fall through to PRUNE them — otherwise their
         # reminders orphan in iCloud forever.
         if not mapped and not existing_rows:
-            return dict(zero)
+            return {**zero, "lists_gone": lists_gone}
         tz = now.tzinfo             # wall zone (None in tests -> all-day fallback)
         now_iso = now.isoformat()
         today = now.date()
@@ -267,7 +312,10 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
                         fdb.delete_chore_mirror(conn, cid, diso)
                     _queue_create(conn, chore, diso, pid, lid, tz, now, now_iso)
                     created += 1
-                elif cur["person_id"] != pid:     # rotation handed off to another person
+                elif cur["person_id"] != pid or _list_of(cur) != lid:
+                    # rotation handed off to another person, or the person now
+                    # uses another Reminders list (the list is part of the
+                    # object id, so it can't be edited in place): move it
                     if not completed:             # never delete a DONE reminder (history)
                         fdb.queue_cal_object_delete(conn, cur["cal_object_id"], now_iso)
                     fdb.delete_chore_mirror(conn, cid, diso)
@@ -301,7 +349,13 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
             if (cid, diso) in desired:
                 continue
             try:
-                coll = m["cal_object_id"].split("/", 1)[0]
+                coll = _list_of(m)
+                if coll not in known:
+                    # the list is gone from iCloud with everything in it:
+                    # nothing to delete there, just forget the ledger row
+                    fdb.delete_chore_mirror(conn, cid, diso)
+                    deleted += 1
+                    continue
                 if synced_collections is not None and coll not in synced_collections:
                     continue
                 obj = fdb.get_cal_object(conn, m["cal_object_id"])
@@ -314,7 +368,7 @@ def reconcile(conn, cfg, now: dt.datetime, synced_collections=None) -> dict:
                             cid, diso, exc_info=True)
 
         return {"created": created, "moved": moved, "updated": updated,
-                "deleted": deleted}
+                "deleted": deleted, "lists_gone": lists_gone}
     except Exception:
         log.exception("chore mirror reconcile failed (non-fatal)")
         return {**zero, "error": True}

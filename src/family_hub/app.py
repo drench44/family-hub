@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import contextvars
 import dataclasses
 import datetime as dt
 import json
@@ -24,6 +25,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from typing import Literal
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -320,6 +322,13 @@ def _db():
     if conn is None:
         conn = fdb.connect(DB_PATH)
         _tls.conn = conn
+    elif conn.in_transaction:
+        # A write that failed mid-way (e.g. "database is locked") leaves its
+        # implicit transaction open on this thread's handle. Handed out as-is,
+        # every later read here sees that frozen snapshot and the WAL can't
+        # checkpoint past it. Nothing between requests is meant to be pending.
+        log.warning("db handle had an open transaction; rolling it back")
+        conn.rollback()
     # Ensure the one-time whole-DB setup has run — retried here if a prior
     # attempt failed, or if a test reset _db_initialized to force a fresh init.
     if not _db_initialized:
@@ -487,7 +496,10 @@ def _calendar_block(c, today: dt.date, days: int, past_days: int = 0) -> dict:
     # VISIBLE copy wins its calendar's color (a copy hidden by the picker doesn't
     # claim the row).
     seen_keys: set = set()
-    for e in fdb.list_events(c):
+    # SQL narrows to rows whose raw span touches the window (a superset); the
+    # exact per-row trim below still decides. Every wall polls this each
+    # minute, so loading the whole cached table each time was pure waste.
+    for e in fdb.events_overlapping(c, lo, horizon):
         # Keep an event whose SPAN overlaps [lo, horizon] — not just its start.
         # A multi-day event that began before the window but is still running
         # today must stay on the wall (e.g. a vacation the family is living);
@@ -643,6 +655,25 @@ def _links(enabled_ids: set | None = None) -> dict:
     return {"cameras": cameras, "panels": panels, "camera_page": camera_page}
 
 
+# One request's answer from _available_only(), set by _available_once(). The
+# answer includes the iCloud credential state, which reads and parses a file
+# on disk, and one /api/hub build asks for it about six times (every
+# _integration_on gate). A ContextVar, so it is scoped to the request that set
+# it and never leaks to another thread or the next poll.
+_avail_memo: contextvars.ContextVar = contextvars.ContextVar(
+    "family_hub_avail_memo", default=None)
+
+
+@contextlib.contextmanager
+def _available_once():
+    """Compute _available_only() once and reuse it for the rest of the block."""
+    token = _avail_memo.set(_available_only())
+    try:
+        yield
+    finally:
+        _avail_memo.reset(token)
+
+
 def _available_only():
     """The available integrations, with iCloud CalDAV availability reflecting the
     REAL credential state (env OR the server-side creds file), so UI-entered
@@ -650,7 +681,11 @@ def _available_only():
     DEMO overlay: the demo serves placeholder cameras and canned weather/climate
     (see _camera_links and the DEMO branches) even though config leaves them
     unset, so the registry must call them available or the layout engine and
-    tab bar hide the demo's columns."""
+    tab bar hide the demo's columns. Inside _available_once() the request's
+    one computed answer is returned instead (callers only read it)."""
+    memo = _avail_memo.get()
+    if memo is not None:
+        return memo
     items = fintegrations.available_integrations(
         cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
     demo_ids = {"cameras", "weather", "climate", "laundry", "fleet"} if DEMO else set()
@@ -676,15 +711,19 @@ def _visible_reminders(c) -> list:
     an overlay) is what makes a wall edit show instantly AND stay put: there's no
     stale pulled-snapshot to transiently revert to once the push lands and the row
     flips back to SYNCED. Respects the calendar picker (a reminder list unchecked
-    in settings is hidden) and skips objects queued for deletion."""
+    in settings is hidden) and skips objects queued for deletion.
+
+    Completed reminders are left out in SQL, before any parse: they pile up
+    (the chore mirror leaves one per chore per person per day) and the wall
+    never shows them, yet this runs on every /api/hub poll. Rows of a list
+    iCloud no longer has (deleted or unshared; caldav_sync drops it and parks
+    its unsent edits) are skipped too, rather than shown under no list."""
     cols = fdb.list_caldav_collections(c)
     names = {col["id"]: col["display_name"] for col in cols}
-    disabled = {col["id"] for col in cols if not col["enabled"]}
+    shown = {col["id"] for col in cols if col["enabled"]}
     out = []
-    for o in fdb.list_cal_objects(c, "VTODO"):
-        if o["sync_state"] == "PENDING_DELETE" or o["collection_id"] in disabled:
-            continue
-        if not o.get("raw_ics"):
+    for o in fdb.list_open_vtodo_objects(c):
+        if o["collection_id"] not in shown:
             continue
         try:
             out.extend(remlogic.parse_vtodo(o["raw_ics"], o["collection_id"],
@@ -802,6 +841,14 @@ def _integrations_state(c) -> dict:
             # un-pushed wall edits still queued (0 normally); lets settings warn
             # "N changes not yet synced" instead of the backlog being invisible.
             entry["pending"] = caldav_status.get("pending", 0)
+            # wall edits iCloud refused for good, or whose list is gone: kept
+            # but no longer sent, so they get their own note.
+            entry["parked"] = caldav_status.get("parked", 0)
+            # people whose chore list is gone from iCloud: left out of the
+            # mirror until a new list is picked. Read live, so picking one
+            # clears the settings line at once.
+            entry["lists_gone"] = [
+                p["name"] for p in chore_mirror.people_with_gone_lists(c)]
         lst.append(entry)
     return {"list": lst, "enabled_ids": enabled_ids}
 
@@ -1018,6 +1065,7 @@ async def health_full():
             configured="cameras" in avail, enabled=cams_on,
             wanted=_camera_srcs(), streams=streams, error=streams_err),
     }
+    config_err = getattr(cfg, "laundry_config_error", None)
     settings = {
         "ha_token": deep_health.setting(
             laundry_configured and not DEMO,
@@ -1027,8 +1075,9 @@ async def health_full():
             has_google and google_on and not DEMO, local["google_token"],
             f"Google calendars are configured, so {TOKEN_PATH} must exist"),
         "config": deep_health.setting(
-            True, not getattr(cfg, "laundry_config_error", None),
-            f"config.json: {getattr(cfg, 'laundry_config_error', None)}"),
+            True, not config_err,
+            "config.json must load cleanly"
+            + (f": {config_err}" if config_err else "")),
     }
     return deep_health.assemble(
         now=now, started_at=PROCESS_STARTED_AT, version=APP_VERSION, build=BUILD,
@@ -1074,8 +1123,21 @@ async def diag_viewport(request: Request):
     clen = request.headers.get("content-length")
     if clen and clen.isdigit() and int(clen) > _MAX_DIAG_BODY:
         return {"ok": True}
+    # A chunked body declares no length, so read the stream ourselves and
+    # stop at the cap: request.body() would buffer all of it first.
+    buf = bytearray()
     try:
-        raw = (await request.body())[:_MAX_DIAG_BODY]
+        async for chunk in request.stream():
+            buf += chunk
+            if len(buf) > _MAX_DIAG_BODY:
+                return {"ok": True}
+    except Exception:
+        # client went away mid-body; nothing to record, and this endpoint
+        # never raises (see the docstring)
+        log.debug("viewport diag: body read failed", exc_info=True)
+        return {"ok": True}
+    try:
+        raw = bytes(buf)
         # parse_constant neutralizes NaN / Infinity / -Infinity — json.loads
         # accepts those non-standard tokens, but Starlette's JSONResponse
         # serializes with allow_nan=False, so a stored NaN would 500 the GET.
@@ -1250,24 +1312,29 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         # future days aren't logged; their live plan is the owner of record
         for r in rows:
             owner[(d_str, r["chore_id"])] = r["person_id"]
+    # Group the ~370 days of log and completion rows by person ONCE, instead
+    # of re-walking both lists for every person on every poll.
+    occ_by_pid: dict[int, dict[str, set]] = {}
+    for r in logs:
+        by_day = occ_by_pid.setdefault(r["person_id"], {})
+        by_day.setdefault(r["date"], set()).add(r["chore_id"])
+    cbd_by_pid: dict[int, dict[str, set]] = {}
+    for r in history:
+        # a day with no log row at all (server was down, pre-install) falls
+        # back to the completion's own person_id rather than vanishing
+        who = owner.get((r["date"], r["chore_id"]), r["person_id"])
+        by_day = cbd_by_pid.setdefault(who, {})
+        by_day.setdefault(r["date"], set()).add(r["chore_id"])
     for entry in plan:
         pid = entry["person"]["id"]
-        occ: dict[str, set] = {}
-        for r in logs:
-            if r["person_id"] == pid:
-                occ.setdefault(r["date"], set()).add(r["chore_id"])
+        occ = occ_by_pid.get(pid, {})
         if d > today:
             # future days aren't logged; overlay d's live rows so the browser
             # can show a prospective streak/week for that day
             live = {r["chore_id"] for r in rows if r["person_id"] == pid}
             if live:
                 occ[d_str] = live
-        cbd: dict[str, set] = {}
-        for r in history:
-            # a day with no log row at all (server was down, pre-install) falls
-            # back to the completion's own person_id rather than vanishing
-            if owner.get((r["date"], r["chore_id"]), r["person_id"]) == pid:
-                cbd.setdefault(r["date"], set()).add(r["chore_id"])
+        cbd = cbd_by_pid.get(pid, {})
         away_dates = amap.get(pid, {}).get("dates", set())
         entry["away"] = pid in away_today
         entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
@@ -1337,6 +1404,11 @@ def _build_backup(conn, now=None, stale_s=BACKUP_STALE_S):
 
 @app.get("/api/hub")
 def hub():
+    with _available_once():
+        return _hub_payload()
+
+
+def _hub_payload() -> dict:
     c = _db()
     today = _today()
     # same fails-soft philosophy as _links(): a single bad todos row (or any
@@ -1577,10 +1649,10 @@ def _validate_todo(merged: dict) -> None:
 
 
 def _todo_row(c, tid: int) -> dict:
-    for row in fdb.list_todos(c):
-        if row["id"] == tid:
-            return row
-    raise HTTPException(404, "unknown todo")
+    row = fdb.get_todo(c, tid)
+    if row is None:
+        raise HTTPException(404, "unknown todo")
+    return row
 
 
 @app.get("/api/todos")
@@ -1685,6 +1757,11 @@ def integrations_patch(iid: str, body: IntegrationPatch):
 
 # --- iCloud CalDAV credentials (entered in settings, stored server-side) ---
 
+_CALDAV_ENV_CREDS_MSG = ("iCloud is set by the ICLOUD_CALDAV_USER and "
+                         "ICLOUD_CALDAV_APP_PASSWORD environment variables on "
+                         "the server; change or remove them there")
+
+
 class CalDavCreds(BaseModel):
     user: str
     app_password: str
@@ -1699,6 +1776,10 @@ def caldav_set_credentials(body: CalDavCreds):
     pw = (body.app_password or "").strip()
     if not (user and pw):
         raise HTTPException(422, "user and app_password are required")
+    # Env credentials win over the settings file, so a save here would answer
+    # ok while the env account stayed in use. Refuse it and say why.
+    if caldav_service.env_credentials_set(os.environ):
+        raise HTTPException(409, _CALDAV_ENV_CREDS_MSG)
     caldav_service.store_credentials(user, pw)
     global _caldav_client_built
     _caldav_client_built = False          # next sync/test rebuilds with new creds
@@ -1709,6 +1790,10 @@ def caldav_set_credentials(body: CalDavCreds):
 @app.delete("/api/integrations/icloud_caldav/credentials")
 def caldav_clear_credentials():
     c = _db()
+    # Disconnect only removes the settings file; with env credentials set the
+    # hub would stay connected behind an ok reply.
+    if caldav_service.env_credentials_set(os.environ):
+        raise HTTPException(409, _CALDAV_ENV_CREDS_MSG)
     caldav_service.clear_credentials()
     global _caldav_client_built
     _caldav_client_built = False
@@ -1872,6 +1957,11 @@ def reminders_delete(body: ReminderDelete):
     sync)."""
     c = _db()
     _require_reminders_write(c)
+    # Events share the cal_objects store. Only a reminder may be deleted here,
+    # or a stray id would queue a family calendar event for removal in iCloud.
+    obj = fdb.get_cal_object(c, body.id)
+    if obj is None or obj["comp_type"] != "VTODO":
+        raise HTTPException(404, "unknown reminder")
     now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
     if not fdb.queue_cal_object_delete(c, body.id, now_iso):
         raise HTTPException(404, "unknown reminder")
@@ -1889,7 +1979,9 @@ class PersonPatch(BaseModel):
     name: str | None = None
     color: str | None = None
     sort: int | None = None
-    active: int | None = None
+    # 0/1 only: the `active = 1` filters would silently read any other number
+    # as inactive. JSON true/false still parse to 1/0.
+    active: Literal[0, 1] | None = None
     # The iCloud reminder list (caldav:<slug>) this person's chores mirror into;
     # null clears the mapping. Nullable, so absent from _PERSON_NONNULL_PATCH.
     reminder_list_id: str | None = None
@@ -1944,7 +2036,7 @@ class ChorePatch(BaseModel):
     rotation_order: list[int] | None = None
     date: str | None = None
     sort: int | None = None
-    active: int | None = None
+    active: Literal[0, 1] | None = None   # 0/1 only, as on PersonPatch
 
 
 # An explicit JSON null for a field backed by a NOT NULL column is a bad request
@@ -2068,7 +2160,14 @@ def _chore_row(c, cid: int) -> dict:
 @app.get("/api/admin/state")
 def admin_state():
     c = _db()
-    return {"people": fdb.list_people(c, include_inactive=True),
+    # list_gone: mapped to a list the sync dropped. Decided here, not on the
+    # wall: an empty list array means "every list gone" as much as "not
+    # connected", and only the server can tell them apart.
+    gone = {p["id"] for p in
+            chore_mirror.people_with_gone_lists(c, include_inactive=True)}
+    people = [{**p, "list_gone": p["id"] in gone}
+              for p in fdb.list_people(c, include_inactive=True)]
+    return {"people": people,
             "chores": fdb.list_chores(c, include_inactive=True),
             "away_periods": fdb.list_away_periods(c),
             # iCloud VTODO lists a person's chores can mirror into (P2 picker);
@@ -2376,7 +2475,8 @@ def calendar(days: int = CAL_FETCH_DAYS, past: int = CAL_FETCH_PAST):
     if not (0 <= days <= CAL_MAX_DAYS and 0 <= past <= CAL_MAX_DAYS):
         raise HTTPException(422, "days/past out of range")
     c = _db()
-    return _calendar_block(c, _today(), days, past_days=past)
+    with _available_once():
+        return _calendar_block(c, _today(), days, past_days=past)
 
 
 @app.get("/api/tiles/climate")
@@ -3172,12 +3272,13 @@ def _laundry_fix_placeholder(c, machines: list[dict]) -> None:
 
 
 @app.get("/api/laundry/log")
-async def laundry_log_route(machine: str | None = None, limit: int = 200):
+def laundry_log_route(machine: str | None = None, limit: int = 200):
     """The laundry cycle log: observed phase transitions newest-first — the
     evidence base for tuning finish detection (projection accuracy, watcher
     cadence, missed-done hold) and diagnosing any finish the wall got wrong.
     Fail-soft like every tile read: a DB hiccup serves an empty list loudly
-    logged, never a 500."""
+    logged, never a 500. A plain `def` so FastAPI runs the blocking sqlite
+    read in its thread pool instead of on the event loop."""
     if not (1 <= limit <= 1000):
         # loud 422 like the calendar route — silent truncation is the wrong
         # default for a log someone pages through by hand (the db-side
@@ -3211,10 +3312,10 @@ def _camera_stream_names() -> set[str]:
 
 @app.get("/api/tiles/camera.jpg")
 async def tile_camera(src: str = "cam"):
-    # Both the primary src (tile liveness) and any "hd" twin (full-screen
-    # readiness probe) may be probed; nothing else.
-    allowed = _camera_stream_names() or {"cam"}
-    if src not in allowed:
+    # Only configured streams may be probed (the src and any "hd" twin, from
+    # both the wall column and the camera page), nothing else, and no cameras
+    # configured means nothing is probe-able.
+    if src not in _camera_stream_names():
         raise HTTPException(404, "unknown camera")
     result = await tiles.camera_snapshot(_http, _fetch_cfg, src)
     if result is None:

@@ -710,3 +710,57 @@ def test_the_error_clock_starts_fresh_after_a_clean_sync_and_ignores_an_auth_sta
     after = t0 + dt.timedelta(hours=5)
     assert cs.sync_once(Boom(), conn, cfg, after)["error_since"] == after.isoformat()
 
+
+
+def test_empty_feed_whose_cache_aged_out_of_the_window_is_accepted(conn):
+    """A calendar whose last event is now older than the lookback returns
+    nothing, honestly. With no cached row inside the new window there is
+    nothing to protect, so it is not flagged for 24h as a suspicious empty."""
+    cfg = make_cfg([{"id": "feed", "label": "F", "kind": "ics", "url": "https://f/x.ics"}])
+    fdb.replace_events(conn, [{
+        "id": "old", "calendar_id": "feed", "title": "Long ago",
+        "start_ts": "2026-06-01", "end_ts": "2026-06-02", "all_day": 1,
+        "updated": None}])
+    st = cs.sync_once(NotConfiguredClient(), conn, cfg,
+                      dt.datetime(2026, 8, 13, 9, 0), ics_fetch=lambda u: EMPTY_ICS)
+    assert st["ok"] is True and "error" not in st
+    assert fdb.list_events(conn) == []
+    assert "feed" not in (fdb.kv_get(conn, "calendar_empty_since") or {})
+
+
+def test_empty_feed_with_a_timed_cached_event_inside_the_window_is_kept(conn):
+    """The guard still holds for the real case: cached rows inside the window
+    that all vanish at once."""
+    cfg = make_cfg([{"id": "feed", "label": "F", "kind": "ics", "url": "https://f/x.ics"}])
+    fdb.replace_events(conn, [{
+        "id": "soon", "calendar_id": "feed", "title": "Soon",
+        "start_ts": "2026-08-20T10:00:00-07:00",
+        "end_ts": "2026-08-20T11:00:00-07:00", "all_day": 0, "updated": None}])
+    st = cs.sync_once(NotConfiguredClient(), conn, cfg,
+                      dt.datetime(2026, 8, 13, 9, 0), ics_fetch=lambda u: EMPTY_ICS)
+    assert st["ok"] is False and "no events" in st["error"]
+    assert [e["title"] for e in fdb.list_events(conn)] == ["Soon"]
+
+
+def test_cached_ids_in_window_uses_overlap():
+    """An event overlaps the window if it starts on or before its last day and
+    ends after its first (all-day ends are exclusive)."""
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    fdb.ensure_schema(c)
+    lo, hi = dt.date(2026, 8, 1), dt.date(2026, 8, 31)
+    fdb.replace_events(c, [
+        {"id": "1", "calendar_id": "ends_on_lo", "title": "x", "all_day": 1,
+         "start_ts": "2026-07-31", "end_ts": "2026-08-01", "updated": None},
+        {"id": "2", "calendar_id": "spans_lo", "title": "x", "all_day": 1,
+         "start_ts": "2026-07-30", "end_ts": "2026-08-02", "updated": None},
+        {"id": "3", "calendar_id": "timed_on_lo", "title": "x", "all_day": 0,
+         "start_ts": "2026-08-01T09:00:00-07:00",
+         "end_ts": "2026-08-01T10:00:00-07:00", "updated": None},
+        {"id": "4", "calendar_id": "on_hi", "title": "x", "all_day": 1,
+         "start_ts": "2026-08-31", "end_ts": "2026-09-01", "updated": None},
+        {"id": "5", "calendar_id": "after_hi", "title": "x", "all_day": 1,
+         "start_ts": "2026-09-01", "end_ts": "2026-09-02", "updated": None},
+    ])
+    assert cs.cached_ids_in_window(c, lo, hi) == {"spans_lo", "timed_on_lo", "on_hi"}

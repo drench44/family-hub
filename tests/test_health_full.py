@@ -656,3 +656,27 @@ def test_the_report_carries_every_field_a_deploy_gate_reads(hub):
             assert isinstance(src[k], bool), (name, k)
         if stamp and src["status"] != "off":
             assert src[stamp] is None or dh.parse_ts(src[stamp]) is not None, (name, stamp)
+
+
+def test_route_config_setting_reads_sensibly_when_fine(hub):
+    """settings.config said `"why": "config.json: None"` on a healthy hub."""
+    _, client, _, _ = hub
+    assert _full(client)["settings"]["config"] == {
+        "required": True, "present": True, "ok": True,
+        "why": "config.json must load cleanly"}
+
+
+def test_route_config_setting_names_the_error(tmp_path, monkeypatch):
+    cfgp = _write_cfg(tmp_path, laundry={"ha_base": "http://ha:8123",
+                                         "machines": [{"label": "typo"}]})
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("DISABLE_SYNC", "1")
+    monkeypatch.setenv("CONFIG_PATH", str(cfgp))
+    import family_hub.app as appmod
+    importlib.reload(appmod)
+    _offline(appmod, monkeypatch)
+    with TestClient(appmod.app) as client:
+        s = _full(client)["settings"]["config"]
+    assert s["ok"] is False
+    assert s["why"] == ("config.json must load cleanly: "
+                        "no valid machines in the laundry block")

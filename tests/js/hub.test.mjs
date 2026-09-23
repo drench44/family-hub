@@ -755,6 +755,33 @@ test('caldavPanelHtml: an outbox backlog shows a quiet "not yet synced" note; 0/
   assert.match(many, /caldav-pending">3 changes not yet synced/, 'plural copy');
 });
 
+test('caldavPanelHtml: parked wall changes get their own note; 0/absent shows nothing', () => {
+  const none = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true }, {});
+  assert.doesNotMatch(none, /caldav-parked/, 'no note when parked is absent');
+  const zero = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, parked: 0 }, {});
+  assert.doesNotMatch(zero, /caldav-parked/, 'no note when parked is 0');
+  const one = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, parked: 1 }, {});
+  assert.match(one, /caldav-parked">1 change iCloud would not take/, 'singular copy');
+  const many = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, parked: 2 }, {});
+  assert.match(many, /caldav-parked">2 changes iCloud would not take/, 'plural copy');
+  // A change parked because its list is gone is hidden from the wall, so the
+  // note must not promise it is "on the wall".
+  const note = one.match(/caldav-parked">([^<]*)</)[1];
+  assert.match(note, /kept but not sent/, 'says it is kept and not sent');
+  assert.doesNotMatch(note, /on the wall/, 'never claims it shows on the wall');
+});
+
+test('caldavPanelHtml: a person whose chore list is gone gets a plain line; none shows nothing', () => {
+  const none = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true }, {});
+  assert.doesNotMatch(none, /caldav-gone/, 'no line when lists_gone is absent');
+  const empty = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true, lists_gone: [] }, {});
+  assert.doesNotMatch(empty, /caldav-gone/, 'no line when nobody is affected');
+  const two = caldavPanelHtml({ id: 'icloud_caldav', account: 'a@b.com', enabled: true,
+    lists_gone: ['Sam', '<b>Bo</b>'] }, {});
+  assert.match(two, /caldav-gone">Sam’s iCloud chore list is gone; pick a new one\.</, 'one line per person');
+  assert.match(two, /caldav-gone">&lt;b&gt;Bo&lt;\/b&gt;’s iCloud chore list/, 'names are escaped');
+});
+
 test('caldavPanelHtml: connected + testing shows progress text and disables the Test button', () => {
   const html = caldavPanelHtml(
     { id: 'icloud_caldav', account: 'a@b.com', enabled: true }, { testing: true });
@@ -953,7 +980,7 @@ test('j: preserves a caller-supplied AbortSignal and arms no internal timeout', 
   }
 });
 
-test('fetchTimeout: aborts a hung request when the timeout fires (shares j()\'s guard)', async () => {
+test('probeOk: aborts a hung request when the timeout fires (shares j()\'s guard)', async () => {
   // Same drive-by-hand pattern as the j() timeout test above: inject a real
   // AbortController + a capturable timer so the abort is provable, not assumed.
   const orig = { fetch: sandbox.fetch, AC: sandbox.AbortController,
@@ -967,7 +994,7 @@ test('fetchTimeout: aborts a hung request when the timeout fires (shares j()\'s 
     opts.signal.addEventListener('abort', () => { aborted = true; rej(new Error('aborted')); });
   });
   try {
-    const p = sandbox.fetchTimeout('/api/tiles/camera.jpg?src=drive&probe=1');
+    const p = sandbox.probeOk('/api/tiles/camera.jpg?src=drive&probe=1');
     assert.equal(typeof fireTimeout, 'function', 'a timeout was armed');
     fireTimeout();                       // simulate the timeout elapsing
     await assert.rejects(p);             // the hang becomes a rejection, not a forever-pending promise

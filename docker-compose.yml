@@ -13,6 +13,10 @@ services:
     container_name: family-hub
     # your Linux user's uid:gid — must own ./data (id -u; id -g)
     user: "${HUB_UID:-1000}:${HUB_GID:-1000}"
+    # The hub needs no Linux capabilities (unprivileged port, writes only
+    # /data) and never needs to gain privileges.
+    security_opt: [ "no-new-privileges:true" ]
+    cap_drop: [ ALL ]
     restart: unless-stopped
     # memswap_limit = mem_limit on every service: no swap. A container at its
     # limit should be killed and restarted in seconds, not swap for minutes

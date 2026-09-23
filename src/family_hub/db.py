@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS cal_objects(
   sync_state TEXT NOT NULL DEFAULT 'SYNCED',
   local_modified_at TEXT,
   sync_attempts INTEGER NOT NULL DEFAULT 0,
+  sync_refusals INTEGER NOT NULL DEFAULT 0, -- lasting refusals only (parking)
   last_sync_error TEXT,
   local_rev INTEGER NOT NULL DEFAULT 0); -- fresh value on every queued wall change
 -- The one counter local_rev values come from (one row, id = 1), so a revision
@@ -278,6 +279,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     cal_cols = {r["name"] for r in conn.execute("PRAGMA table_info(cal_objects)")}
     if "local_rev" not in cal_cols:
         conn.execute("ALTER TABLE cal_objects ADD COLUMN local_rev "
+                     "INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    # 2026-09-23: cal_objects gained sync_refusals, the count of lasting
+    # refusals alone. Transient failures had raised the shared attempt count
+    # to one short of parking, so a single refusal after them parked the row.
+    # Additive ALTER with a default; existing rows start at 0.
+    if "sync_refusals" not in cal_cols:
+        conn.execute("ALTER TABLE cal_objects ADD COLUMN sync_refusals "
                      "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     # Seed the local_rev counter once, above any revision already stored.
@@ -489,9 +498,9 @@ def _rebuild_with_autoincrement(conn: sqlite3.Connection, table: str,
 # --- people ---------------------------------------------------------------
 
 def add_person(conn, name: str, color: str) -> int:
-    cur = conn.execute(
-        "INSERT INTO people(name, color) VALUES(?, ?)", (name, color))
-    conn.commit()
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO people(name, color) VALUES(?, ?)", (name, color))
     return int(cur.lastrowid)
 
 
@@ -508,9 +517,9 @@ def update_person(conn, pid: int, **fields) -> None:
     if not cols:
         return
     assignments = ", ".join(f"{k} = ?" for k in cols)
-    conn.execute(f"UPDATE people SET {assignments} WHERE id = ?",
-                 (*cols.values(), pid))
-    conn.commit()
+    with conn:
+        conn.execute(f"UPDATE people SET {assignments} WHERE id = ?",
+                     (*cols.values(), pid))
 
 
 def delete_person(conn, pid: int) -> bool:
@@ -570,11 +579,11 @@ _AWAY_FIELDS = {"start_date", "end_date", "backup_person_id"}
 def add_away_period(conn, person_id: int, start_date: str,
                     end_date: str | None = None,
                     backup_person_id: int | None = None) -> int:
-    cur = conn.execute(
-        "INSERT INTO away_periods(person_id, start_date, end_date, "
-        "backup_person_id, created_at) VALUES(?, ?, ?, ?, ?)",
-        (person_id, start_date, end_date, backup_person_id, _now_iso()))
-    conn.commit()
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO away_periods(person_id, start_date, end_date, "
+            "backup_person_id, created_at) VALUES(?, ?, ?, ?, ?)",
+            (person_id, start_date, end_date, backup_person_id, _now_iso()))
     return int(cur.lastrowid)
 
 
@@ -585,9 +594,9 @@ def get_away_period(conn, period_id: int) -> dict | None:
 
 
 def close_away_period(conn, period_id: int, end_date: str) -> bool:
-    cur = conn.execute("UPDATE away_periods SET end_date = ? WHERE id = ?",
-                       (end_date, period_id))
-    conn.commit()
+    with conn:
+        cur = conn.execute("UPDATE away_periods SET end_date = ? WHERE id = ?",
+                           (end_date, period_id))
     return cur.rowcount > 0
 
 
@@ -596,9 +605,9 @@ def update_away_period(conn, period_id: int, **fields) -> bool:
     if not cols:
         return get_away_period(conn, period_id) is not None
     assignments = ", ".join(f"{k} = ?" for k in cols)
-    cur = conn.execute(f"UPDATE away_periods SET {assignments} WHERE id = ?",
-                       (*cols.values(), period_id))
-    conn.commit()
+    with conn:
+        cur = conn.execute(f"UPDATE away_periods SET {assignments} WHERE id = ?",
+                           (*cols.values(), period_id))
     return cur.rowcount > 0
 
 
@@ -661,15 +670,15 @@ def away_map(conn, from_date: str, to_date: str) -> dict[int, dict]:
 def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,
               fixed_person_id, rotation_order, rotation_epoch,
               week_interval=1, interval_days=None, due_times=None) -> int:
-    cur = conn.execute(
-        """INSERT INTO chores(title, icon, schedule_kind, days_mask, week_interval,
-                              interval_days, due_times, assign_kind,
-                              fixed_person_id, rotation_order, rotation_epoch)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (title, icon, schedule_kind, days_mask, week_interval, interval_days,
-         json.dumps(due_times or []), assign_kind, fixed_person_id,
-         json.dumps(rotation_order), rotation_epoch))
-    conn.commit()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO chores(title, icon, schedule_kind, days_mask, week_interval,
+                                  interval_days, due_times, assign_kind,
+                                  fixed_person_id, rotation_order, rotation_epoch)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (title, icon, schedule_kind, days_mask, week_interval, interval_days,
+             json.dumps(due_times or []), assign_kind, fixed_person_id,
+             json.dumps(rotation_order), rotation_epoch))
     return int(cur.lastrowid)
 
 
@@ -697,9 +706,9 @@ def update_chore(conn, cid: int, **fields) -> None:
     if "due_times" in cols:
         cols["due_times"] = json.dumps(cols["due_times"] or [])
     assignments = ", ".join(f"{k} = ?" for k in cols)
-    conn.execute(f"UPDATE chores SET {assignments} WHERE id = ?",
-                 (*cols.values(), cid))
-    conn.commit()
+    with conn:
+        conn.execute(f"UPDATE chores SET {assignments} WHERE id = ?",
+                     (*cols.values(), cid))
 
 
 def delete_chore(conn, cid: int) -> bool:
@@ -776,17 +785,17 @@ def backfill_occurrence_log(conn, day_rows: list, done_flag_key: str) -> None:
 # --- completions ----------------------------------------------------------
 
 def set_completion(conn, chore_id: int, date: str, person_id: int) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO completions(chore_id, date, person_id, done_at) "
-        "VALUES(?, ?, ?, ?)",
-        (chore_id, date, person_id, _now_iso()))
-    conn.commit()
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO completions(chore_id, date, person_id, done_at) "
+            "VALUES(?, ?, ?, ?)",
+            (chore_id, date, person_id, _now_iso()))
 
 
 def clear_completion(conn, chore_id: int, date: str) -> None:
-    conn.execute("DELETE FROM completions WHERE chore_id = ? AND date = ?",
-                 (chore_id, date))
-    conn.commit()
+    with conn:
+        conn.execute("DELETE FROM completions WHERE chore_id = ? AND date = ?",
+                     (chore_id, date))
 
 
 def completion_exists(conn, chore_id: int, date: str) -> bool:
@@ -806,10 +815,10 @@ def completions_between(conn, date_from: str, date_to: str) -> list[dict]:
 # --- todos ----------------------------------------------------------------
 
 def add_todo(conn, title: str, bucket: str) -> int:
-    cur = conn.execute(
-        "INSERT INTO todos(title, bucket, created_at) VALUES(?, ?, ?)",
-        (title, bucket, _now_iso()))
-    conn.commit()
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO todos(title, bucket, created_at) VALUES(?, ?, ?)",
+            (title, bucket, _now_iso()))
     return int(cur.lastrowid)
 
 
@@ -823,26 +832,44 @@ def update_todo(conn, tid: int, **fields) -> None:
     if not cols:
         return
     assignments = ", ".join(f"{k} = ?" for k in cols)
-    conn.execute(f"UPDATE todos SET {assignments} WHERE id = ?",
-                 (*cols.values(), tid))
-    conn.commit()
+    with conn:
+        conn.execute(f"UPDATE todos SET {assignments} WHERE id = ?",
+                     (*cols.values(), tid))
+
+
+def get_todo(conn, tid: int) -> dict | None:
+    r = conn.execute("SELECT * FROM todos WHERE id = ?", (tid,)).fetchone()
+    return dict(r) if r is not None else None
+
+
+# Finished to-dos are restorable for 30 days (todos.recent_done); keep them
+# twice that, then drop them so the table doesn't grow forever.
+TODO_DONE_KEEP_DAYS = 60
 
 
 def set_todo_done(conn, tid: int, done_date: str) -> None:
-    conn.execute("UPDATE todos SET done_at = ?, done_date = ? WHERE id = ?",
-                 (_now_iso(), done_date, tid))
-    conn.commit()
+    """Check a to-do off, and drop items finished more than
+    TODO_DONE_KEEP_DAYS before `done_date` (the local today). Finished items
+    only pile up through here, so pruning inline, like the laundry log, needs
+    no scheduled job that could silently stop running."""
+    cutoff = (date.fromisoformat(done_date)
+              - timedelta(days=TODO_DONE_KEEP_DAYS)).isoformat()
+    with conn:
+        conn.execute("UPDATE todos SET done_at = ?, done_date = ? WHERE id = ?",
+                     (_now_iso(), done_date, tid))
+        conn.execute("DELETE FROM todos WHERE done_date IS NOT NULL "
+                     "AND done_date < ?", (cutoff,))
 
 
 def clear_todo_done(conn, tid: int) -> None:
-    conn.execute("UPDATE todos SET done_at = NULL, done_date = NULL WHERE id = ?",
-                 (tid,))
-    conn.commit()
+    with conn:
+        conn.execute("UPDATE todos SET done_at = NULL, done_date = NULL WHERE id = ?",
+                     (tid,))
 
 
 def delete_todo(conn, tid: int) -> None:
-    conn.execute("DELETE FROM todos WHERE id = ?", (tid,))
-    conn.commit()
+    with conn:
+        conn.execute("DELETE FROM todos WHERE id = ?", (tid,))
 
 
 # --- events ---------------------------------------------------------------
@@ -888,6 +915,19 @@ def list_events(conn) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def events_overlapping(conn, lo: str, hi: str) -> list[dict]:
+    """Events whose raw span touches the days [lo, hi] ('YYYY-MM-DD'), in
+    list_events order. A coarse superset: the caller still trims all-day
+    (exclusive end) and midnight-ending events itself. Timestamps are ISO
+    text, so a plain string compare works: a start on or before `hi` sorts
+    below the day after it, and an end on or after `lo` sorts at or above it."""
+    after_hi = (date.fromisoformat(hi) + timedelta(days=1)).isoformat()
+    rows = conn.execute(
+        "SELECT * FROM events WHERE start_ts < ? AND end_ts >= ? "
+        "ORDER BY start_ts", (after_hi, lo))
+    return [dict(r) for r in rows]
+
+
 def event_calendar_ids(conn) -> set:
     """The set of calendar_ids that currently have at least one cached event.
     Used by the sync to tell a source that just went (suspiciously) empty from
@@ -904,9 +944,9 @@ def kv_get(conn, key: str) -> Any | None:
 
 
 def kv_set(conn, key: str, value: Any) -> None:
-    conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
-                 (key, json.dumps(value)))
-    conn.commit()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
+                     (key, json.dumps(value)))
 
 
 # --- laundry cycle log ----------------------------------------------------
@@ -939,16 +979,16 @@ def laundry_log_add(conn, machine: str, prev_phase: str | None, phase: str,
     older than the keep window on every write — a few rows per laundry day
     keeps the table tiny, so inline pruning is cheaper than a scheduled job
     that could silently stop running."""
-    conn.execute(
-        "INSERT INTO laundry_log(ts, machine, prev_phase, phase, status,"
-        " finishes_at, status_since, note) VALUES(?,?,?,?,?,?,?,?)",
-        (_now_iso(), machine, prev_phase, phase, status, finishes_at,
-         status_since, note))
-    conn.execute(
-        "DELETE FROM laundry_log WHERE ts < ?",
-        ((datetime.now(timezone.utc)
-          - timedelta(days=LAUNDRY_LOG_KEEP_DAYS)).isoformat(),))
-    conn.commit()
+    with conn:
+        conn.execute(
+            "INSERT INTO laundry_log(ts, machine, prev_phase, phase, status,"
+            " finishes_at, status_since, note) VALUES(?,?,?,?,?,?,?,?)",
+            (_now_iso(), machine, prev_phase, phase, status, finishes_at,
+             status_since, note))
+        conn.execute(
+            "DELETE FROM laundry_log WHERE ts < ?",
+            ((datetime.now(timezone.utc)
+              - timedelta(days=LAUNDRY_LOG_KEEP_DAYS)).isoformat(),))
 
 
 def laundry_log_recent(conn, machine: str | None = None,
@@ -970,11 +1010,11 @@ def laundry_log_recent(conn, machine: str | None = None,
 def seed_integration(conn, iid: str, kind: str, sort: int = 0) -> None:
     """Insert an integration row if absent (default enabled). Idempotent, so a
     re-seed on startup never flips an operator's existing toggle."""
-    conn.execute(
-        "INSERT OR IGNORE INTO integrations(id, kind, enabled, config_json, "
-        "sort, created_at) VALUES(?, ?, 1, '{}', ?, ?)",
-        (iid, kind, sort, _now_iso()))
-    conn.commit()
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO integrations(id, kind, enabled, config_json, "
+            "sort, created_at) VALUES(?, ?, 1, '{}', ?, ?)",
+            (iid, kind, sort, _now_iso()))
 
 
 def list_integrations(conn) -> list[dict]:
@@ -1002,16 +1042,17 @@ def integration_enabled(conn, iid: str, default: bool = True) -> bool:
 
 def set_integration_enabled(conn, iid: str, enabled: bool) -> bool:
     """Toggle an integration. Returns False if no such row (caller seeds first)."""
-    cur = conn.execute("UPDATE integrations SET enabled = ? WHERE id = ?",
-                       (1 if enabled else 0, iid))
-    conn.commit()
+    with conn:
+        cur = conn.execute("UPDATE integrations SET enabled = ? WHERE id = ?",
+                           (1 if enabled else 0, iid))
     return cur.rowcount > 0
 
 
 # --- caldav object store (two-way foundation) -----------------------------
 
 def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
-                             expected_rev: int | None = None) -> bool:
+                             expected_rev: int | None = None,
+                             commit: bool = True) -> bool:
     """Store an object pulled from the server as SYNCED. By default NEVER
     overwrites a row that has un-pushed local changes (sync_state PENDING_*), so
     a routine pull can't stomp a queued edit. `force=True` is the conflict
@@ -1029,14 +1070,17 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
     sent: a wall change queued since then is newer than the conflict and is
     left alone. It is also a plain UPDATE, never an insert, so a row deleted
     on the wall in the meantime is not brought back. Returns True if the row
-    was written."""
+    was written.
+
+    `commit=False` leaves the write in the caller's open transaction (the pull
+    commits a batch at once instead of once per object)."""
     if force and expected_rev is not None:
         cur = conn.execute(
             "UPDATE cal_objects SET collection_id = ?, comp_type = ?, uid = ?, "
             "href = ?, etag = ?, base_etag = ?, summary = ?, raw_ics = ?, "
             "sequence = ?, last_modified = ?, sync_state = 'SYNCED', "
-            "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
-            "WHERE id = ? AND local_rev = ?",
+            "local_modified_at = NULL, sync_attempts = 0, sync_refusals = 0, "
+            "last_sync_error = NULL WHERE id = ? AND local_rev = ?",
             (obj["collection_id"], obj["comp_type"], obj["uid"],
              obj.get("href"), obj.get("etag"), obj.get("etag"),
              obj.get("summary", ""), obj.get("raw_ics"),
@@ -1055,14 +1099,15 @@ def upsert_cal_object_synced(conn, obj: dict, force: bool = False,
         "base_etag = excluded.base_etag, summary = excluded.summary, "
         "raw_ics = excluded.raw_ics, sequence = excluded.sequence, "
         "last_modified = excluded.last_modified, sync_state = 'SYNCED', "
-        "local_modified_at = NULL, sync_attempts = 0, last_sync_error = NULL "
-        "WHERE cal_objects.sync_state = 'SYNCED' OR ?",
+        "local_modified_at = NULL, sync_attempts = 0, sync_refusals = 0, "
+        "last_sync_error = NULL WHERE cal_objects.sync_state = 'SYNCED' OR ?",
         (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
          obj.get("href"), obj.get("etag"), obj.get("etag"),
          obj.get("summary", ""), obj.get("raw_ics"),
          int(obj.get("sequence") or 0), obj.get("last_modified"),
          1 if force else 0))
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.rowcount > 0
 
 
@@ -1076,30 +1121,147 @@ def list_cal_objects(conn, comp_type: str | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# An open reminder, told apart from a completed one without parsing: a VTODO
+# row with a body, not queued for delete, and no STATUS:COMPLETED property line
+# (char(10) anchors it to the start of a line, so the words inside a
+# description don't count; LIKE ignores ASCII case, as ICS does). Completed
+# reminders pile up and the wall never shows them, so they are dropped here,
+# before anything loads or parses them.
+_OPEN_VTODO_WHERE = (
+    "comp_type = 'VTODO' AND sync_state != 'PENDING_DELETE' "
+    "AND raw_ics IS NOT NULL "
+    "AND raw_ics NOT LIKE '%' || char(10) || 'STATUS:COMPLETED%'")
+
+
+def list_open_vtodo_objects(conn) -> list[dict]:
+    """The reminders the wall can show (see _OPEN_VTODO_WHERE), ordered by id."""
+    rows = conn.execute(
+        f"SELECT * FROM cal_objects WHERE {_OPEN_VTODO_WHERE} ORDER BY id")
+    return [dict(r) for r in rows]
+
+
+def count_open_vtodo_objects(conn) -> int:
+    return conn.execute(
+        f"SELECT COUNT(*) FROM cal_objects WHERE {_OPEN_VTODO_WHERE}").fetchone()[0]
+
+
+def cal_object_index(conn, collection_id: str) -> dict:
+    """href -> {id, etag} for a collection's stored objects, so a pull can skip
+    an object whose ETag has not changed (no parse, no write)."""
+    rows = conn.execute(
+        "SELECT id, href, etag FROM cal_objects WHERE collection_id = ? "
+        "AND href IS NOT NULL", (collection_id,))
+    return {r["href"]: {"id": r["id"], "etag": r["etag"]} for r in rows}
+
+
 def prune_cal_objects(conn, collection_id: str, keep_ids) -> None:
     """Drop SYNCED objects in a collection not seen this pull (deleted remotely).
-    Keeps PENDING_* rows (un-pushed local work)."""
-    keep = tuple(keep_ids)
+    Keeps PENDING_* rows (un-pushed local work).
+
+    The set difference is taken here rather than in an `id NOT IN (?, ...)`
+    list: a reminder list grows by thousands of completed reminders a year,
+    past SQLite's bound-parameter limit on older builds."""
+    keep = set(keep_ids)
     with conn:
-        if keep:
-            q = ",".join("?" * len(keep))
-            conn.execute(
-                f"DELETE FROM cal_objects WHERE collection_id = ? "
-                f"AND sync_state = 'SYNCED' AND id NOT IN ({q})",
-                (collection_id, *keep))
-        else:
-            conn.execute(
-                "DELETE FROM cal_objects WHERE collection_id = ? "
-                "AND sync_state = 'SYNCED'", (collection_id,))
+        stale = [(r["id"],) for r in conn.execute(
+            "SELECT id FROM cal_objects WHERE collection_id = ? "
+            "AND sync_state = 'SYNCED'", (collection_id,))
+            if r["id"] not in keep]
+        conn.executemany(
+            "DELETE FROM cal_objects WHERE id = ? AND sync_state = 'SYNCED'",
+            stale)
+
+
+# A queued wall change is PARKED once sync_attempts reaches this: iCloud kept
+# refusing it for a reason retrying won't fix (a read-only list, a 4xx), or its
+# list is gone from iCloud. A parked row keeps its PENDING_* state (so the edit
+# is never lost and no pull overwrites it) but the flush stops retrying it and
+# it no longer counts as "not yet synced". A fresh wall edit to the row resets
+# sync_attempts and sync_refusals to 0 (every queue_* path does), which
+# un-parks it. Refusals are counted on their own (record_cal_object_error).
+CAL_PARK_ATTEMPTS = 5
 
 
 def caldav_pending(conn) -> list[dict]:
     """The outbox: objects with un-pushed local changes, oldest first (the write
-    slice flushes these to iCloud)."""
+    slice flushes these to iCloud). Parked rows are left out (caldav_parked)."""
     rows = conn.execute(
         "SELECT * FROM cal_objects WHERE sync_state != 'SYNCED' "
-        "ORDER BY local_modified_at, id")
+        "AND sync_attempts < ? ORDER BY local_modified_at, id",
+        (CAL_PARK_ATTEMPTS,))
     return [dict(r) for r in rows]
+
+
+def caldav_parked(conn) -> list[dict]:
+    """Queued wall changes that are parked (see CAL_PARK_ATTEMPTS)."""
+    rows = conn.execute(
+        "SELECT * FROM cal_objects WHERE sync_state != 'SYNCED' "
+        "AND sync_attempts >= ? ORDER BY local_modified_at, id",
+        (CAL_PARK_ATTEMPTS,))
+    return [dict(r) for r in rows]
+
+
+def park_cal_object(conn, oid: str, reason: str, now_iso: str) -> None:
+    """Park one queued change now, recording why (see CAL_PARK_ATTEMPTS)."""
+    conn.execute(
+        "UPDATE cal_objects SET sync_attempts = MAX(sync_attempts, ?), "
+        "last_sync_error = ?, local_modified_at = COALESCE(local_modified_at, ?) "
+        "WHERE id = ? AND sync_state != 'SYNCED'",
+        (CAL_PARK_ATTEMPTS, reason[:500], now_iso, oid))
+    conn.commit()
+
+
+def drop_untracked_parked_creates(conn, collection_id: str, reason_prefix: str,
+                                  uid_prefix: str) -> int:
+    """Delete a collection's never-sent creates parked for `reason_prefix`
+    whose uid starts with `uid_prefix` and that no chore_mirror row tracks.
+    For the chore mirror: while a list was gone it forgot these, and when the
+    list comes back it queues what is still wanted again (same ids), so
+    sending the old ones would bring back past days. Returns how many."""
+    cur = conn.execute(
+        "DELETE FROM cal_objects WHERE collection_id = ? "
+        "AND sync_state = 'PENDING_CREATE' AND href IS NULL "
+        "AND sync_attempts >= ? AND substr(last_sync_error, 1, ?) = ? "
+        "AND substr(uid, 1, ?) = ? "
+        "AND id NOT IN (SELECT cal_object_id FROM chore_mirror)",
+        (collection_id, CAL_PARK_ATTEMPTS, len(reason_prefix), reason_prefix,
+         len(uid_prefix), uid_prefix))
+    conn.commit()
+    return cur.rowcount
+
+
+def unpark_cal_objects(conn, collection_id: str, reason_prefix: str) -> int:
+    """Put a collection's rows parked for `reason_prefix` back in the outbox
+    (their list is back in iCloud). Returns how many."""
+    cur = conn.execute(
+        "UPDATE cal_objects SET sync_attempts = 0, sync_refusals = 0, "
+        "last_sync_error = NULL WHERE collection_id = ? AND sync_state != 'SYNCED' "
+        "AND sync_attempts >= ? AND substr(last_sync_error, 1, ?) = ?",
+        (collection_id, CAL_PARK_ATTEMPTS, len(reason_prefix), reason_prefix))
+    conn.commit()
+    return cur.rowcount
+
+
+def drop_caldav_collection(conn, cid: str) -> list[dict]:
+    """Forget a collection iCloud no longer has: its picker row and its pulled
+    (SYNCED) objects go. Queued wall changes for it are NOT deleted; they are
+    returned so the caller can park and log them. One transaction."""
+    with conn:
+        conn.execute("DELETE FROM caldav_collections WHERE id = ?", (cid,))
+        conn.execute("DELETE FROM cal_objects WHERE collection_id = ? "
+                     "AND sync_state = 'SYNCED'", (cid,))
+        rows = conn.execute(
+            "SELECT * FROM cal_objects WHERE collection_id = ? ORDER BY id",
+            (cid,))
+        return [dict(r) for r in rows]
+
+
+def delete_synced_cal_objects(conn, comp_type: str) -> int:
+    """Drop every pulled (SYNCED) object of one kind. Returns how many."""
+    cur = conn.execute("DELETE FROM cal_objects WHERE comp_type = ? "
+                       "AND sync_state = 'SYNCED'", (comp_type,))
+    conn.commit()
+    return cur.rowcount
 
 
 def get_cal_object(conn, oid: str) -> dict | None:
@@ -1139,8 +1301,8 @@ def queue_cal_object_update(conn, oid: str, raw_ics: str, summary: str,
             "UPDATE cal_objects SET raw_ics = ?, summary = ?, "
             "sync_state = CASE WHEN sync_state = 'PENDING_CREATE' "
             "THEN 'PENDING_CREATE' ELSE 'PENDING_UPDATE' END, "
-            "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL, "
-            "local_rev = ? WHERE id = ? AND sync_state != 'PENDING_DELETE'",
+            "local_modified_at = ?, sync_attempts = 0, sync_refusals = 0, "
+            "last_sync_error = NULL, local_rev = ? WHERE id = ? AND sync_state != 'PENDING_DELETE'",
             (raw_ics, summary, now_iso, rev, oid))
         return cur.rowcount > 0
 
@@ -1175,7 +1337,8 @@ def queue_cal_object_create(conn, obj: dict, now_iso: str) -> None:
             "sync_state = CASE WHEN cal_objects.href IS NOT NULL "
             "THEN 'PENDING_UPDATE' ELSE 'PENDING_CREATE' END, "
             "local_modified_at = excluded.local_modified_at, sync_attempts = 0, "
-            "last_sync_error = NULL, local_rev = excluded.local_rev",
+            "sync_refusals = 0, last_sync_error = NULL, "
+            "local_rev = excluded.local_rev",
             (obj["id"], obj["collection_id"], obj["comp_type"], obj["uid"],
              obj.get("summary", ""), obj.get("raw_ics"), now_iso, rev))
 
@@ -1200,8 +1363,8 @@ def queue_cal_object_delete(conn, oid: str, now_iso: str) -> bool:
         rev = _next_cal_rev(conn)
         cur = conn.execute(
             "UPDATE cal_objects SET sync_state = 'PENDING_DELETE', "
-            "local_modified_at = ?, sync_attempts = 0, last_sync_error = NULL, "
-            "local_rev = ? WHERE id = ?", (now_iso, rev, oid))
+            "local_modified_at = ?, sync_attempts = 0, sync_refusals = 0, "
+            "last_sync_error = NULL, local_rev = ? WHERE id = ?", (now_iso, rev, oid))
         return cur.rowcount > 0
 
 
@@ -1257,7 +1420,7 @@ def mark_cal_object_pushed(conn, oid: str, href, etag, pushed_rev: int) -> str:
     caller must remove the server copy the PUT just made)."""
     row = conn.execute(
         "UPDATE cal_objects SET href = ?, etag = ?, base_etag = ?, "
-        "sync_attempts = 0, last_sync_error = NULL, "
+        "sync_attempts = 0, sync_refusals = 0, last_sync_error = NULL, "
         "sync_state = CASE WHEN local_rev = ? THEN 'SYNCED' "
         "WHEN sync_state = 'PENDING_CREATE' THEN 'PENDING_UPDATE' "
         "ELSE sync_state END "
@@ -1290,14 +1453,29 @@ def finish_cal_object_delete(conn, oid: str, deleted_rev: int) -> str:
     return "superseded" if cur.rowcount else "deleted"
 
 
-def record_cal_object_error(conn, oid: str, err: str, now_iso: str) -> None:
+def record_cal_object_error(conn, oid: str, err: str, now_iso: str,
+                            permanent: bool = False) -> bool:
     """A push failed: keep the row PENDING, bump the attempt count and record the
-    error so it retries next sync and the operator can see why it's stuck."""
-    conn.execute(
-        "UPDATE cal_objects SET sync_attempts = sync_attempts + 1, "
+    error so it retries next sync and the operator can see why it's stuck.
+
+    Only `permanent` refusals park a row, and they are counted on their own
+    (sync_refusals): it takes CAL_PARK_ATTEMPTS of them. A transient failure
+    (network, 5xx, a timeout) bumps sync_attempts but stops it one short, so an
+    iCloud outage never parks a change that would go through once it is back,
+    and a run of outages never leaves one refusal enough to park it. Returns
+    True if the row is now parked."""
+    row = conn.execute(
+        "UPDATE cal_objects SET "
+        "sync_refusals = sync_refusals + ?, "
+        "sync_attempts = CASE WHEN sync_refusals + ? >= ? "
+        "THEN MAX(sync_attempts + 1, ?) ELSE MIN(sync_attempts + 1, ?) END, "
         "last_sync_error = ?, local_modified_at = COALESCE(local_modified_at, ?) "
-        "WHERE id = ?", (err[:500], now_iso, oid))
+        "WHERE id = ? RETURNING sync_attempts",
+        (1 if permanent else 0, 1 if permanent else 0, CAL_PARK_ATTEMPTS,
+         CAL_PARK_ATTEMPTS, CAL_PARK_ATTEMPTS - 1, err[:500], now_iso,
+         oid)).fetchone()
     conn.commit()
+    return bool(row and row["sync_attempts"] >= CAL_PARK_ATTEMPTS)
 
 
 def integration_config(conn, iid: str) -> dict:
@@ -1316,9 +1494,9 @@ def set_integration_config(conn, iid: str, config: dict) -> None:
     """Persist an integration's JSON config. Raises if the integration has no row
     (seed it first) rather than silently dropping the write — a swallowed config
     update is how a 'two-way' toggle would appear to save yet never take effect."""
-    cur = conn.execute("UPDATE integrations SET config_json = ? WHERE id = ?",
-                        (json.dumps(config), iid))
-    conn.commit()
+    with conn:
+        cur = conn.execute("UPDATE integrations SET config_json = ? WHERE id = ?",
+                            (json.dumps(config), iid))
     if cur.rowcount == 0:
         raise KeyError(f"no integration row {iid!r} (seed it before set config)")
 

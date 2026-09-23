@@ -2,6 +2,8 @@ import datetime as dt
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from family_hub import caldav_service, caldav_sync
 from family_hub import db as fdb
 from family_hub import reminders as remlogic
@@ -33,13 +35,19 @@ class FakeCalDav:
 
     def fetch_ics(self, collection, lo, hi):
         col = next(c for c in self._cols if c["id"] == collection["id"])
-        return [{"href": f"h/{collection['id']}/{i}", "etag": f"e{i}", "ics": s}
+        return [{"href": f"h/{collection['id']}/{i}", "etag": _etag(s), "ics": s}
                 for i, s in enumerate(col.get("ics", []))]
 
     def fetch_todos(self, collection):
         col = next(c for c in self._cols if c["id"] == collection["id"])
-        return [{"href": f"h/{collection['id']}/{i}", "etag": f"e{i}", "ics": s}
+        return [{"href": f"h/{collection['id']}/{i}", "etag": _etag(s), "ics": s}
                 for i, s in enumerate(col.get("todos", []))]
+
+
+def _etag(ics):
+    """Like a real server: the ETag changes exactly when the object does."""
+    import hashlib
+    return "e" + hashlib.sha1(ics.encode()).hexdigest()[:8]
 
 
 _CFG = SimpleNamespace(calendar_window_days=28, calendar_past_days=45)
@@ -267,9 +275,96 @@ def test_caldav_sync_pulls_reminders(conn):
     ])
     st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
     assert st["reminders"] == 1 and st["events"] == 1
-    rems = fdb.kv_get(conn, "caldav_reminders")
-    assert [r["title"] for r in rems] == ["Buy milk"]
-    assert rems[0]["list_name"] == "Groceries"
+    assert _stored_reminder_titles(conn) == ["Buy milk"]
+    cols = {c["id"]: c for c in fdb.list_caldav_collections(conn)}
+    assert cols["caldav:rem"]["display_name"] == "Groceries"
+
+
+def test_batched_reminder_pull_commits_every_batch_and_the_tail(conn, tmp_path,
+                                                                 monkeypatch):
+    """A list's pulled changes are saved in batches of _PULL_BATCH. With a batch
+    of 2 and 5 new reminders: a second connection sees the first batch while
+    the pull is still going, and once the list is done (checked before the
+    next list is fetched, since later status writes commit anyway) no
+    transaction is left open and all five are visible."""
+    monkeypatch.setattr(caldav_sync, "_PULL_BATCH", 2)
+    todos = [_VTODO.replace("UID:t1", f"UID:b{i}").replace("Buy milk", f"R{i}")
+             for i in range(5)]
+    other = fdb.connect(str(tmp_path / "hub.db"))
+
+    def visible():
+        return {r["summary"] for r in other.execute(
+            "SELECT summary FROM cal_objects WHERE collection_id = 'caldav:a'")}
+
+    seen = {}
+
+    class Batched(FakeCalDav):
+        def fetch_todos(self, collection):
+            if collection["id"] == "b":         # list a is fully pulled by now
+                seen["in_tx"] = conn.in_transaction
+                seen["after"] = visible()
+                return []
+            return self._list_a()
+
+        def _list_a(self):
+            for i, ics in enumerate(todos):
+                if i == 3:                       # two batches written so far
+                    seen["mid"] = visible()
+                yield {"href": f"h/a/{i}", "etag": _etag(ics), "ics": ics}
+
+    try:
+        caldav_sync.sync_once(Batched([
+            {"id": "a", "name": "A", "comp": "VTODO"},
+            {"id": "b", "name": "B", "comp": "VTODO"}]), conn, _CFG, _NOW)
+    finally:
+        other.close()
+    assert seen["mid"] == {"R0", "R1"}, "a full batch is saved mid-pull"
+    assert seen["in_tx"] is False, "the last partial batch is saved too"
+    assert seen["after"] == {f"R{i}" for i in range(5)}
+    assert not conn.in_transaction
+
+
+def test_a_list_that_fails_mid_pull_still_saves_its_partial_batch(conn, tmp_path,
+                                                                    monkeypatch):
+    """The prune commits a clean list's tail, but a list that raises part way
+    skips the prune. What parsed before the failure is still saved (the
+    `finally` commit), and no transaction is left open for the next list."""
+    monkeypatch.setattr(caldav_sync, "_PULL_BATCH", 2)
+    todos = [_VTODO.replace("UID:t1", f"UID:b{i}").replace("Buy milk", f"R{i}")
+             for i in range(3)]
+    other = fdb.connect(str(tmp_path / "hub.db"))
+    seen = {}
+
+    class FailsPartWay(FakeCalDav):
+        def fetch_todos(self, collection):
+            if collection["id"] == "b":
+                seen["in_tx"] = conn.in_transaction
+                seen["after"] = {r["summary"] for r in other.execute(
+                    "SELECT summary FROM cal_objects "
+                    "WHERE collection_id = 'caldav:a'")}
+                return []
+            return self._list_a()
+
+        def _list_a(self):
+            for i, ics in enumerate(todos):
+                yield {"href": f"h/a/{i}", "etag": _etag(ics), "ics": ics}
+            raise RuntimeError("connection reset mid-list")
+
+    try:
+        st = caldav_sync.sync_once(FailsPartWay([
+            {"id": "a", "name": "A", "comp": "VTODO"},
+            {"id": "b", "name": "B", "comp": "VTODO"}]), conn, _CFG, _NOW)
+    finally:
+        other.close()
+    assert st["ok"] is False and "connection reset" in st["error"]
+    assert seen["in_tx"] is False
+    assert seen["after"] == {"R0", "R1", "R2"}
+
+
+def _stored_reminder_titles(conn):
+    """Open reminders as the wall reads them (cal_objects, not a kv copy)."""
+    return sorted(r["title"] for o in fdb.list_open_vtodo_objects(conn)
+                  for r in remlogic.parse_vtodo(o["raw_ics"], o["collection_id"]))
 
 
 def test_is_auth_error_detects_401_and_ignores_transient():
@@ -292,6 +387,17 @@ def test_is_auth_error_detects_403_and_forbidden():
     # other 4xx/5xx are NOT auth — guards the 40[13] class from widening to 4xx
     assert caldav_sync._is_auth_error(RuntimeError("HTTP 404 Not Found")) is False
     assert caldav_sync._is_auth_error(RuntimeError("HTTP 500 Server Error")) is False
+
+
+def test_is_auth_error_reads_the_status_not_the_url():
+    """A typed error decides by its status; a 403 or 401 in its URL means
+    nothing (chore reminder URLs carry the chore id)."""
+    err = caldav_service.CalDavHTTPError(
+        503, "PUT https://x/familyhub-chore-403-2026-09-24.ics -> 503 Forbidden")
+    assert caldav_sync._is_auth_error(err) is False
+    assert caldav_sync._is_refusal(err) is False
+    assert caldav_sync._is_auth_error(
+        caldav_service.CalDavHTTPError(401, "PUT h -> 401")) is True
 
 
 def test_caldav_sync_flags_needs_auth_and_keeps_cache(conn):
@@ -399,8 +505,7 @@ def test_caldav_sync_one_bad_reminder_does_not_freeze_the_list(conn):
         ]},
     ]), conn, _CFG, _NOW)
     assert st["ok"] is True
-    titles = {r["title"] for r in (fdb.kv_get(conn, "caldav_reminders") or [])}
-    assert titles == {"Buy milk", "Buy eggs"}
+    assert _stored_reminder_titles(conn) == ["Buy eggs", "Buy milk"]
 
 
 class _NonAuthFlaky(FakeCalDav):
@@ -516,7 +621,7 @@ def test_caldav_sync_keeps_reminders_of_a_failing_list(conn):
     caldav_sync.sync_once(
         FakeCalDav([{"id": "rem", "name": "R", "comp": "VTODO", "todos": [_VTODO]}]),
         conn, _CFG, _NOW)
-    assert [r["title"] for r in fdb.kv_get(conn, "caldav_reminders")] == ["Buy milk"]
+    assert _stored_reminder_titles(conn) == ["Buy milk"]
 
     class BadTodos(FakeCalDav):
         def fetch_todos(self, collection):
@@ -524,7 +629,7 @@ def test_caldav_sync_keeps_reminders_of_a_failing_list(conn):
     caldav_sync.sync_once(
         BadTodos([{"id": "rem", "name": "R", "comp": "VTODO", "todos": []}]),
         conn, _CFG, _NOW)
-    assert [r["title"] for r in fdb.kv_get(conn, "caldav_reminders")] == ["Buy milk"]
+    assert _stored_reminder_titles(conn) == ["Buy milk"]
 
 
 def test_is_auth_error_walks_chain_and_class_name_and_no_false_positive():
@@ -547,23 +652,24 @@ def test_caldav_sync_stores_objects_with_round_trip_fields(conn):
     ])
     caldav_sync.sync_once(client, conn, _CFG, _NOW)
     objs = {o["id"]: o for o in fdb.list_cal_objects(conn)}
-    ev = objs["caldav:cal/u1"]
-    assert ev["comp_type"] == "VEVENT" and ev["uid"] == "u1"
-    assert ev["raw_ics"] and "Dentist" in ev["raw_ics"]          # C1 fidelity
-    assert ev["href"] and ev["etag"] and ev["base_etag"] == ev["etag"]
-    assert ev["sync_state"] == "SYNCED"
-    assert objs["caldav:rem/t1"]["comp_type"] == "VTODO"          # VTODO stored too
+    rem = objs["caldav:rem/t1"]
+    assert rem["comp_type"] == "VTODO" and rem["uid"] == "t1"
+    assert rem["raw_ics"] and "Buy milk" in rem["raw_ics"]        # C1 fidelity
+    assert rem["href"] and rem["etag"] and rem["base_etag"] == rem["etag"]
+    assert rem["sync_state"] == "SYNCED"
+    assert "caldav:cal/u1" not in objs             # events are not kept here
 
 
 def test_caldav_sync_prunes_remotely_deleted_objects(conn):
-    caldav_sync.sync_once(FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT",
-        "ics": [_ics("u1", "A", "20260820", "20260821"),
-                _ics("u2", "B", "20260820", "20260821")]}]), conn, _CFG, _NOW)
-    assert len(fdb.list_cal_objects(conn, "VEVENT")) == 2
-    # u2 deleted remotely -> gone from cal_objects after the next pull
-    caldav_sync.sync_once(FakeCalDav([{"id": "cal", "name": "F", "comp": "VEVENT",
-        "ics": [_ics("u1", "A", "20260820", "20260821")]}]), conn, _CFG, _NOW)
-    assert {o["uid"] for o in fdb.list_cal_objects(conn, "VEVENT")} == {"u1"}
+    t2 = _VTODO.replace("t1", "t2")
+    caldav_sync.sync_once(FakeCalDav([{"id": "rem", "name": "R", "comp": "VTODO",
+        "todos": [_VTODO, t2]}]), conn, _CFG, _NOW)
+    assert len(fdb.list_cal_objects(conn, "VTODO")) == 2
+    # t1 deleted remotely -> gone from cal_objects after the next pull (t2 now
+    # sits at the first href, as a server listing would shift)
+    caldav_sync.sync_once(FakeCalDav([{"id": "rem", "name": "R", "comp": "VTODO",
+        "todos": [t2]}]), conn, _CFG, _NOW)
+    assert {o["uid"] for o in fdb.list_cal_objects(conn, "VTODO")} == {"t2"}
 
 
 def test_upsert_cal_object_synced_never_clobbers_pending(conn):
@@ -672,6 +778,41 @@ def test_caldav_credentials_file_storage(tmp_path):
     assert caldav_service.caldav_credentials(env2) == ("env@x", "envpw")
     caldav_service.clear_credentials(env)
     assert caldav_service.configured(env) is False
+
+
+def test_caldav_credentials_rewrite_tightens_a_loose_file_and_is_atomic(
+        tmp_path, monkeypatch):
+    """os.open's 0600 only applies on create, so rewriting an existing 0644 file
+    kept it world-readable. The write is also atomic: a crash mid-write must
+    leave the old file whole, not a half one that reads as not connected."""
+    import os
+    import stat
+
+    from family_hub import calendar_sync
+    path = tmp_path / "caldav.json"
+    path.write_text('{"user": "old", "app_password": "old"}')
+    os.chmod(path, 0o644)
+    env = {"CALDAV_CREDS_PATH": str(path)}
+    caldav_service.store_credentials("bot@icloud.com", "abcd-efgh", env)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert caldav_service.caldav_credentials(env) == ("bot@icloud.com", "abcd-efgh")
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(calendar_sync.os, "fsync", boom)
+    try:
+        caldav_service.store_credentials("partner@icloud.com", "zzzz", env)
+    except OSError:
+        pass
+    assert caldav_service.caldav_credentials(env) == ("bot@icloud.com", "abcd-efgh")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["caldav.json"]
+
+
+def test_env_credentials_set_needs_both_values():
+    assert caldav_service.env_credentials_set(
+        {"ICLOUD_CALDAV_USER": "a", "ICLOUD_CALDAV_APP_PASSWORD": "b"}) is True
+    assert caldav_service.env_credentials_set({"ICLOUD_CALDAV_USER": "a"}) is False
+    assert caldav_service.env_credentials_set({}) is False
 
 
 def test_caldav_collections_upsert_preserves_toggle(conn):
@@ -801,7 +942,7 @@ def test_flush_isolates_and_records_error_keeping_pending(conn):
 
     class Boom(WriteFake):
         def put_object(self, collection, href, ics, base_etag=None, uid=None):
-            raise RuntimeError("HTTP 401 Unauthorized")
+            raise caldav_service.CalDavHTTPError(401, "PUT h -> 401 Unauthorized")
 
     client = Boom([{"id": "rem", "name": "Groceries", "comp": "VTODO"}])
     res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
@@ -1098,6 +1239,20 @@ def test_sync_once_records_chore_mirror_status(conn):
     st = fdb.kv_get(conn, "chore_mirror_status")
     assert st["ok"] is True and st["at"] == _NOW.isoformat()
     assert st["created"] >= 1 and st["deleted"] == 0
+    assert st["lists_gone"] == []
+
+
+def test_sync_status_names_people_whose_chore_list_is_gone(conn):
+    """A person whose list was dropped is left out of the mirror. The mirror
+    status and the sync status name them, instead of only a log line."""
+    client = _two_way_mirror_fixture(conn)
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    fdb.drop_caldav_collection(conn, "caldav:rem")
+    gone = WriteFake([{"id": "other", "name": "Other", "comp": "VTODO",
+                       "todos": []}])
+    st = caldav_sync.sync_once(gone, conn, _CFG, _NOW + dt.timedelta(minutes=5))
+    assert fdb.kv_get(conn, "chore_mirror_status")["lists_gone"] == ["Emma"]
+    assert st["lists_gone"] == ["Emma"]
 
 
 def test_sync_once_records_chore_mirror_failure(conn, monkeypatch):
@@ -1290,7 +1445,7 @@ def test_delete_during_create_push_that_fails_is_reported(conn):
 
     class DeleteFails(MidFlightEdit):
         def delete_object(self, collection, href, base_etag=None):
-            raise RuntimeError("HTTP 401 Unauthorized")
+            raise caldav_service.CalDavHTTPError(401, "DELETE h -> 401 Unauthorized")
 
     client = DeleteFails(
         [{"id": "rem", "name": "Groceries", "comp": "VTODO"}],
@@ -1757,3 +1912,740 @@ def test_caldav_timed_events_are_stored_in_the_house_time_zone(conn):
     now = dt.datetime(2026, 8, 17, 12, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
     caldav_sync.sync_once(client, conn, _CFG, now)
     assert fdb.list_events(conn)[0]["start_ts"] == "2026-08-20T10:00:00-07:00"
+
+
+# --- sync cost: unchanged objects, completed pile-up, write-only VEVENTs -----
+
+def _done_vtodo(uid, title="Done thing"):
+    return remlogic.set_completed(
+        _VTODO.replace("t1", uid).replace("Buy milk", title), True, _UTC_NOW)
+
+
+def test_unchanged_reminders_are_not_reparsed_or_rewritten(conn, monkeypatch):
+    """Every tick re-parsed and re-committed every reminder, completed ones
+    included, whether or not it changed. An object whose ETag is unchanged is
+    now skipped outright; a changed one is still picked up."""
+    todos = [_VTODO] + [_done_vtodo(f"d{i}") for i in range(5)]
+    client = FakeCalDav([{"id": "rem", "name": "R", "comp": "VTODO",
+                          "todos": todos}])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert len(fdb.list_cal_objects(conn, "VTODO")) == 6
+
+    parsed = []
+    real = caldav_sync._object_meta
+    monkeypatch.setattr(caldav_sync, "_object_meta",
+                        lambda ics: parsed.append(ics) or real(ics))
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["ok"] is True and parsed == []
+    assert st["reminders"] == 1                   # the open one, from the store
+    assert len(fdb.list_cal_objects(conn, "VTODO")) == 6   # nothing pruned
+
+    todos[0] = _VTODO.replace("Buy milk", "Buy oat milk")   # edited on a phone
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert len(parsed) == 1
+    assert fdb.get_cal_object(conn, "caldav:rem/t1")["summary"] == "Buy oat milk"
+
+
+def test_reminders_are_no_longer_copied_into_kv(conn):
+    """The wall renders reminders from cal_objects. The whole-list kv copy
+    (completed ones and all) was rewritten every tick and read by nothing."""
+    caldav_sync.sync_once(FakeCalDav([{"id": "rem", "name": "R", "comp": "VTODO",
+                                       "todos": [_VTODO]}]), conn, _CFG, _NOW)
+    assert fdb.kv_get(conn, "caldav_reminders") is None
+
+
+def test_every_reminder_unparseable_still_flags_the_list(conn):
+    st = caldav_sync.sync_once(FakeCalDav([
+        {"id": "rem", "name": "R", "comp": "VTODO",
+         "todos": ["NOT ICS", "ALSO NOT ICS"]}]), conn, _CFG, _NOW)
+    assert st["ok"] is False and "parsed 0 of 2" in st["error"]
+
+
+def test_calendar_events_are_not_copied_into_the_object_store(conn):
+    """Nothing reads VEVENT rows from cal_objects (events render from the
+    events table and only reminders are ever written back), so the pull stops
+    storing them and clears the ones an older version left behind."""
+    fdb.upsert_cal_object_synced(conn, {
+        "id": "caldav:cal/old", "collection_id": "caldav:cal",
+        "comp_type": "VEVENT", "uid": "old", "href": "h/old", "etag": "e",
+        "summary": "Old", "raw_ics": "X", "sequence": 0, "last_modified": None})
+    st = caldav_sync.sync_once(FakeCalDav([
+        {"id": "cal", "name": "F", "comp": "VEVENT",
+         "ics": [_ics("u1", "Dentist", "20260820", "20260821")]}]),
+        conn, _CFG, _NOW)
+    assert st["ok"] is True and st["events"] == 1
+    assert fdb.list_cal_objects(conn, "VEVENT") == []
+
+
+# --- reminder lists that are gone from iCloud ---------------------------------
+
+def _gone_list_setup(conn):
+    """Two reminder lists synced; 'old' holds a pulled reminder and an unsent
+    wall edit (two-way on). Returns a client whose discover no longer has 'old'."""
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": True})
+    client = WriteFake([
+        {"id": "keep", "name": "Keep", "comp": "VTODO", "todos": [_VTODO]},
+        {"id": "old", "name": "Old", "comp": "VTODO",
+         "todos": [_VTODO.replace("t1", "o1")]}])
+    caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    fdb.queue_cal_object_create(conn, {
+        "id": "caldav:old/NEW", "collection_id": "caldav:old",
+        "comp_type": "VTODO", "uid": "NEW", "summary": "Unsent",
+        "raw_ics": remlogic.build_vtodo("NEW", "Unsent", _UTC_NOW)}, "t0")
+    return WriteFake([{"id": "keep", "name": "Keep", "comp": "VTODO",
+                       "todos": [_VTODO]}])
+
+
+def _sync_hourly(client, conn, start_h, end_h):
+    """sync_once every hour from start_h to end_h (inclusive), the way the
+    background sync keeps discovering. Returns the last status."""
+    st = None
+    for h in range(start_h, end_h + 1):
+        st = caldav_sync.sync_once(client, conn, _CFG, _NOW + dt.timedelta(hours=h))
+    return st
+
+
+def _collection_ids(conn):
+    return {c["id"] for c in fdb.list_caldav_collections(conn)}
+
+
+def test_a_list_missing_briefly_is_kept(conn):
+    later = _gone_list_setup(conn)
+    st = caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    assert "caldav:old" in {c["id"] for c in fdb.list_caldav_collections(conn)}
+    assert fdb.get_cal_object(conn, "caldav:old/o1") is not None
+    assert st["pending"] == 1                   # still waiting, still counted
+
+
+def test_a_list_gone_a_day_is_dropped_and_its_unsent_edit_parked(conn, caplog):
+    later = _gone_list_setup(conn)
+    _sync_hourly(later, conn, 1, 25)
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        st = caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=26))
+    assert "caldav:old" not in {c["id"] for c in fdb.list_caldav_collections(conn)}
+    assert fdb.get_cal_object(conn, "caldav:old/o1") is None   # pulled copy gone
+    kept = fdb.get_cal_object(conn, "caldav:old/NEW")          # the edit is kept
+    assert kept is not None and kept["sync_state"] == "PENDING_CREATE"
+    assert "no longer in iCloud" in kept["last_sync_error"]
+    assert st["pending"] == 0 and st["parked"] == 1
+    assert later.puts == []                                    # never pushed
+    assert any("Old" in r.getMessage() and "1 unsent" in r.getMessage()
+               for r in caplog.records)
+    # it stays out of the backlog on the next ticks too
+    st = caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=27))
+    assert st["pending"] == 0 and st["parked"] == 1 and st["ok"] is True
+
+
+def test_an_empty_discover_never_counts_toward_dropping_a_list(conn):
+    _gone_list_setup(conn)
+    empty = WriteFake([])
+    caldav_sync.sync_once(empty, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    caldav_sync.sync_once(empty, conn, _CFG, _NOW + dt.timedelta(hours=30))
+    assert {"caldav:keep", "caldav:old"} <= \
+        {c["id"] for c in fdb.list_caldav_collections(conn)}
+
+
+def test_a_list_that_comes_back_retries_its_parked_edits(conn):
+    later = _gone_list_setup(conn)
+    _sync_hourly(later, conn, 1, 26)
+    assert "caldav:old" not in _collection_ids(conn)
+    back = WriteFake([
+        {"id": "keep", "name": "Keep", "comp": "VTODO", "todos": [_VTODO]},
+        {"id": "old", "name": "Old", "comp": "VTODO", "todos": []}])
+    st = caldav_sync.sync_once(back, conn, _CFG, _NOW + dt.timedelta(hours=30))
+    assert [p[0] for p in back.puts] == ["old"]
+    assert fdb.get_cal_object(conn, "caldav:old/NEW")["sync_state"] == "SYNCED"
+    assert st["parked"] == 0
+
+
+class _DiscoverFails(WriteFake):
+    def discover(self):
+        raise RuntimeError("iCloud unreachable")
+
+
+def test_failed_syncs_do_not_age_a_missing_list(conn):
+    """Seen missing once, then a day of failed syncs: the next good sync is only
+    the second sighting, so the list is kept. The missing sightings must span
+    24h of good discovers."""
+    later = _gone_list_setup(conn)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    _sync_hourly(_DiscoverFails([]), conn, 2, 30)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=31))
+    assert "caldav:old" in _collection_ids(conn)
+    # a full day of good sightings after that does drop it
+    _sync_hourly(later, conn, 32, 54)
+    assert "caldav:old" in _collection_ids(conn)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=55))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+def test_a_list_back_for_one_sync_restarts_its_clock(conn):
+    """Missing 20h, back for one sync, missing 5h more: kept."""
+    later = _gone_list_setup(conn)
+    back = WriteFake([
+        {"id": "keep", "name": "Keep", "comp": "VTODO", "todos": [_VTODO]},
+        {"id": "old", "name": "Old", "comp": "VTODO", "todos": []}])
+    _sync_hourly(later, conn, 1, 20)
+    caldav_sync.sync_once(back, conn, _CFG, _NOW + dt.timedelta(hours=21))
+    _sync_hourly(later, conn, 22, 27)
+    assert "caldav:old" in _collection_ids(conn)
+
+
+def test_a_list_is_dropped_at_exactly_24h_of_sightings(conn):
+    later = _gone_list_setup(conn)
+    _sync_hourly(later, conn, 1, 24)
+    edge = _NOW + dt.timedelta(hours=25) - dt.timedelta(seconds=1)
+    caldav_sync.sync_once(later, conn, _CFG, edge)
+    assert "caldav:old" in _collection_ids(conn)      # 23h59m59s: kept
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)  # 24h exactly: dropped
+
+
+def test_an_old_style_missing_clock_restarts(conn):
+    """A clock saved by the older version (a bare time, no last sighting) can't
+    show the sightings were continuous, so it starts over rather than drop."""
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since",
+               {"caldav:old": (_NOW - dt.timedelta(hours=40)).isoformat()})
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=1))
+    assert "caldav:old" in _collection_ids(conn)
+
+
+def test_sightings_two_hours_apart_keep_the_missing_clock_running(conn):
+    """A gap of exactly _MISSING_GAP_HOURS between good discovers still counts
+    as continuous: sightings every 2h from hour 1 drop the list at hour 25."""
+    later = _gone_list_setup(conn)
+    for h in range(1, 24, 2):                               # 1, 3, ... 23
+        caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=h))
+    assert "caldav:old" in _collection_ids(conn)
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"]["since"] == \
+        (_NOW + dt.timedelta(hours=1)).isoformat()          # never restarted
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+def test_a_gap_just_over_two_hours_restarts_the_missing_clock(conn):
+    """2h and one minute with no good discover: nothing says the list stayed
+    gone, so the clock starts over at that sighting."""
+    later = _gone_list_setup(conn)
+    _sync_hourly(later, conn, 1, 13)
+    restart = _NOW + dt.timedelta(hours=15, minutes=1)      # 2h01m after hour 13
+    caldav_sync.sync_once(later, conn, _CFG, restart)
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"]["since"] == \
+        restart.isoformat()
+    for h in range(16, 39):                                 # hourly again
+        caldav_sync.sync_once(later, conn, _CFG,
+                              _NOW + dt.timedelta(hours=h, minutes=1))
+    assert "caldav:old" in _collection_ids(conn)            # 23h since the restart
+    caldav_sync.sync_once(later, conn, _CFG, restart + dt.timedelta(hours=24))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+@pytest.mark.parametrize("clock", [
+    {"since": "garbage", "last": "garbage"},
+    {"since": 12345, "last": None},
+    # a stamp with a zone against a clock without one can't be compared
+    {"since": "2026-08-16T12:00:00+00:00", "last": "2026-08-17T11:00:00+00:00"},
+    ["not", "a", "clock"],
+], ids=["text", "number", "other-zone", "list"])
+def test_a_garbled_missing_clock_warns_and_restarts(conn, caplog, clock):
+    """A stored clock that can't be read is logged and started over. It
+    never drops the list, and never stops the sync."""
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since", {"caldav:old": clock})
+    now = _NOW + dt.timedelta(hours=1)
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        st = caldav_sync.sync_once(later, conn, _CFG, now)
+    assert st["ok"] is True, st
+    assert "caldav:old" in _collection_ids(conn)
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"] == \
+        {"since": now.isoformat(), "last": now.isoformat()}
+    assert any("caldav_missing_since" in r.getMessage() and "caldav:old" in
+               r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+
+
+def test_a_missing_clock_stamped_in_the_future_warns_and_restarts(conn, caplog):
+    """A stamp later than now would read as a negative age: the list would
+    never drop until real time caught up, and nothing would say so. It is
+    garbled: warn and start over."""
+    later = _gone_list_setup(conn)
+    now = _NOW + dt.timedelta(hours=1)
+    ahead = (now + dt.timedelta(days=30)).isoformat()
+    for clock in ({"since": ahead, "last": now.isoformat()},
+                  {"since": now.isoformat(), "last": ahead}):
+        fdb.kv_set(conn, "caldav_missing_since", {"caldav:old": clock})
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+            st = caldav_sync.sync_once(later, conn, _CFG, now)
+        assert st["ok"] is True, st
+        assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"] == \
+            {"since": now.isoformat(), "last": now.isoformat()}, clock
+        assert any("caldav_missing_since" in r.getMessage() and "caldav:old" in
+                   r.getMessage() for r in caplog.records
+                   if r.levelno >= logging.WARNING), clock
+    # restarted at hour 1, the clock then runs normally: gone at hour 25
+    _sync_hourly(later, conn, 2, 24)
+    assert "caldav:old" in _collection_ids(conn)
+    caldav_sync.sync_once(later, conn, _CFG, _NOW + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+@pytest.mark.parametrize("stored", [["not", "a", "dict"], "garbage", 42],
+                         ids=["list", "text", "number"])
+def test_a_garbled_missing_clock_store_warns_and_starts_empty(conn, caplog, stored):
+    """If the whole caldav_missing_since value is not a dict, reading a clock
+    off it would throw and fail every sync. Warn and start from nothing."""
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since", stored)
+    now = _NOW + dt.timedelta(hours=1)
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        st = caldav_sync.sync_once(later, conn, _CFG, now)
+    assert st["ok"] is True, st
+    assert "caldav:old" in _collection_ids(conn)
+    assert fdb.kv_get(conn, "caldav_missing_since") == \
+        {"caldav:old": {"since": now.isoformat(), "last": now.isoformat()}}
+    assert any("caldav_missing_since" in r.getMessage()
+               for r in caplog.records if r.levelno >= logging.WARNING)
+
+
+def test_the_missing_clock_runs_on_a_zoned_clock_like_the_wall(conn):
+    """The wall syncs with a zoned now, not the naive test clock: the stored
+    stamps carry the zone and the day still counts right."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Los_Angeles")
+    base = _NOW.replace(tzinfo=tz)
+    later = _gone_list_setup(conn)
+    for h in range(1, 25):
+        caldav_sync.sync_once(later, conn, _CFG, base + dt.timedelta(hours=h))
+    assert "caldav:old" in _collection_ids(conn)
+    clock = fdb.kv_get(conn, "caldav_missing_since")["caldav:old"]
+    assert clock["since"] == (base + dt.timedelta(hours=1)).isoformat()
+    caldav_sync.sync_once(later, conn, _CFG, base + dt.timedelta(hours=25))
+    assert "caldav:old" not in _collection_ids(conn)
+
+
+def test_a_naive_missing_clock_against_a_zoned_now_warns_and_restarts(conn, caplog):
+    """The other half of the zone mismatch: stamps saved without a zone read
+    by a wall whose clock has one. Warn, start over, keep syncing."""
+    from zoneinfo import ZoneInfo
+    now = (_NOW + dt.timedelta(hours=1)).replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+    later = _gone_list_setup(conn)
+    fdb.kv_set(conn, "caldav_missing_since", {"caldav:old": {
+        "since": (_NOW - dt.timedelta(hours=30)).isoformat(),
+        "last": _NOW.isoformat()}})
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        st = caldav_sync.sync_once(later, conn, _CFG, now)
+    assert st["ok"] is True, st
+    assert "caldav:old" in _collection_ids(conn)      # never dropped on a bad clock
+    assert fdb.kv_get(conn, "caldav_missing_since")["caldav:old"] == \
+        {"since": now.isoformat(), "last": now.isoformat()}
+    assert any("caldav_missing_since" in r.getMessage() and "caldav:old" in
+               r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+
+
+class _PutsFail(WriteFake):
+    def put_object(self, collection, href, ics, base_etag=None, uid=None):
+        raise RuntimeError("connection reset")
+
+
+def test_a_list_back_after_the_mirror_forgot_it_sends_no_old_or_double_chores(conn):
+    """Chore reminders queued for a list that then went away are parked, and the
+    mirror forgets them (their list is gone). When the list comes back days
+    later, those parked creates must not go out: the old days would come back
+    as fresh reminders on the phone, and the mirror queues today's again, so
+    they must not be sent twice either."""
+    _two_way_mirror_fixture(conn)
+    other = {"id": "other", "name": "Other", "comp": "VTODO", "todos": []}
+    rem = {"id": "rem", "name": "Emma", "comp": "VTODO", "todos": []}
+    # day 1: the mirror queues Aug 17..24, but nothing reaches iCloud
+    caldav_sync.sync_once(_PutsFail([rem, other]), conn, _CFG, _NOW)
+    assert len(fdb.caldav_pending(conn)) == 8
+    # the list disappears for over a day: dropped, its unsent creates parked,
+    # and the mirror forgets them
+    _sync_hourly(_PutsFail([other]), conn, 1, 25)
+    assert "caldav:rem" not in _collection_ids(conn)
+    assert fdb.list_chore_mirror(conn) == []
+    assert len(fdb.caldav_parked(conn)) >= 8     # Aug 17.. (the day rolled once)
+    # three days later it is back
+    back = WriteFake([rem, other])
+    later = _NOW + dt.timedelta(days=3)          # Aug 20
+    caldav_sync.sync_once(back, conn, _CFG, later)
+    # chore reminder uids are familyhub-chore-<chore id>-<YYYY-MM-DD>
+    uids = [remlogic.parse_vtodo(ics, "c")[0]["id"].split("/", 1)[1]
+            for _cid, _href, ics in back.puts]
+    dates = sorted(u[-10:] for u in uids)
+    assert len(uids) == len(set(uids)), f"a chore reminder was sent twice: {uids}"
+    assert dates and min(dates) >= "2026-08-20", f"old days came back: {dates}"
+    assert dates == [f"2026-08-{d}" for d in range(20, 28)]
+    assert fdb.caldav_parked(conn) == [] and fdb.caldav_pending(conn) == []
+    # the old days are gone locally too, not left queued
+    assert not [o["uid"] for o in fdb.list_cal_objects(conn, "VTODO")
+                if o["uid"][-10:] < "2026-08-20"]
+
+
+# --- pushes iCloud refuses for good ---------------------------------------------
+
+def _queue_one(conn, uid="U1"):
+    _seed_vtodo_collection(conn)
+    fdb.queue_cal_object_create(conn, {
+        "id": f"caldav:rem/{uid}", "collection_id": "caldav:rem",
+        "comp_type": "VTODO", "uid": uid, "summary": "x",
+        "raw_ics": remlogic.build_vtodo(uid, "x", _UTC_NOW)}, "t0")
+
+
+class _Refuses(WriteFake):
+    def __init__(self, cols, exc):
+        super().__init__(cols)
+        self.exc = exc
+
+    def put_object(self, collection, href, ics, base_etag=None, uid=None):
+        self.puts.append((collection["id"], href, ics))
+        raise self.exc
+
+
+def _forbidden():
+    return caldav_service.CalDavRejected(403, "PUT h -> 403 Forbidden")
+
+
+def test_a_forbidden_push_is_not_a_reconnect_prompt(conn):
+    """Discovery just worked with these credentials, so a 403 on one PUT is the
+    list refusing the write (read-only or shared), not a dead password.
+    'Reconnect iCloud' would not help."""
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], _forbidden())
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["needs_auth"] is False and len(res["errors"]) == 1
+
+
+def test_caldav_library_forbidden_error_on_push_is_not_auth(conn):
+    # the library raises AuthorizationError for 401 and 403 alike; only its
+    # `reason` field (the server's reason phrase) tells a 403 apart
+    from caldav.lib import error as dav_error
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      dav_error.AuthorizationError(url="h", reason="Forbidden"))
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["needs_auth"] is False
+
+
+def test_a_refused_push_is_parked_after_repeated_attempts(conn):
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], _forbidden())
+    for n in range(fdb.CAL_PARK_ATTEMPTS):
+        caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+    assert len(client.puts) == fdb.CAL_PARK_ATTEMPTS
+    assert fdb.caldav_pending(conn) == []
+    assert [r["id"] for r in fdb.caldav_parked(conn)] == ["caldav:rem/U1"]
+    row = fdb.get_cal_object(conn, "caldav:rem/U1")
+    assert row["sync_state"] == "PENDING_CREATE"         # the edit is kept
+    caldav_sync.flush_pending(client, conn, client.discover(), "tx")
+    assert len(client.puts) == fdb.CAL_PARK_ATTEMPTS     # and no longer retried
+
+
+def test_sync_status_reports_parked_changes_and_goes_ok(conn):
+    _queue_one(conn)
+    fdb.seed_integration(conn, "icloud_caldav", "caldav")
+    fdb.set_integration_config(conn, "icloud_caldav", {"readonly": False})
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO", "todos": []}],
+                      _forbidden())
+    for n in range(fdb.CAL_PARK_ATTEMPTS):
+        st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["parked"] == 1 and st["pending"] == 0
+    assert "refused" in st["error"] and not st.get("needs_auth")
+    st = caldav_sync.sync_once(client, conn, _CFG, _NOW)
+    assert st["ok"] is True and st["parked"] == 1 and st["pending"] == 0
+    assert "refused" in st["parked_note"]
+    # a change parked because its list is gone is hidden from the wall, so
+    # the note must not say it is kept "on the wall"
+    assert "kept but not sent" in st["parked_note"]
+    assert "on the wall" not in st["parked_note"]
+
+
+def test_transient_push_failures_never_park(conn):
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      RuntimeError("connection reset"))
+    for n in range(fdb.CAL_PARK_ATTEMPTS * 3):
+        caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+    assert fdb.caldav_parked(conn) == []
+
+
+_CHORE_URL = "https://x/cal/familyhub-chore-403-2026-09-24.ics"
+
+
+def _put_error(status, reason, url=_CHORE_URL):
+    """The exception the real CalDavClient.put_object raises for `status`."""
+    resp = _Resp(status)
+    resp.reason = reason
+    cl, col = _client_and_col(_DAV(put_resp=resp))
+    try:
+        cl.put_object(col, url, "ICS", base_etag="e0")
+    except Exception as e:
+        return e
+    raise AssertionError(f"put_object did not raise for {status}")
+
+
+def test_a_503_on_a_chore_403_url_is_never_parked(conn):
+    """Chore reminder URLs carry the chore id. A transient 503 on chore 403
+    must not read as a refusal just because '403' is in the URL."""
+    err = _put_error(503, "Service Unavailable")
+    assert "-403-" in str(err)
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], err)
+    for n in range(15):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+        assert res["needs_auth"] is False
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_5xx_whose_reason_says_forbidden_is_not_a_refusal(conn):
+    err = _put_error(502, "Upstream said Forbidden")
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], err)
+    for n in range(fdb.CAL_PARK_ATTEMPTS * 2):
+        caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_rate_limit_on_a_chore_403_url_is_not_a_refusal(conn):
+    from caldav.lib import error as dav_error
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      dav_error.RateLimitError(url=_CHORE_URL, reason="Busy"))
+    for n in range(fdb.CAL_PARK_ATTEMPTS * 2):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+        assert res["needs_auth"] is False
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_real_401_on_a_chore_403_url_asks_to_reconnect(conn):
+    from caldav.lib import error as dav_error
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      dav_error.AuthorizationError(url=_CHORE_URL,
+                                                   reason="Unauthorized"))
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["needs_auth"] is True
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_an_authorization_error_with_no_reason_reads_as_401():
+    """The caldav library's AuthorizationError carries no status; with no
+    reason phrase it is the dead-password case, 401."""
+    from caldav.lib import error as dav_error
+    assert caldav_sync._http_status(dav_error.AuthorizationError(url=_CHORE_URL)) == 401
+
+
+def test_a_reasonless_authorization_error_on_a_push_asks_to_reconnect_and_never_parks(conn):
+    from caldav.lib import error as dav_error
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      dav_error.AuthorizationError(url=_CHORE_URL))
+    for n in range(fdb.CAL_PARK_ATTEMPTS * 2):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+        assert res["needs_auth"] is True
+    assert fdb.caldav_parked(conn) == []
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+
+
+def test_an_untyped_push_error_saying_401_does_not_ask_to_reconnect(conn):
+    """Deliberate: a push error is read by its status, never its text. An
+    untyped error that only says 401 (it could be a URL) is a plain failure,
+    retried, not a reconnect prompt. Discovery and the pull, which run first
+    with the same password, still catch a dead one."""
+    _queue_one(conn)
+    client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}],
+                      RuntimeError("PUT https://x/cal/a.ics -> 401 Unauthorized"))
+    res = caldav_sync.flush_pending(client, conn, client.discover(), "t1")
+    assert res["needs_auth"] is False
+    assert fdb.caldav_parked(conn) == []
+
+
+def test_a_real_403_on_a_chore_url_still_parks_after_five(conn):
+    from caldav.lib import error as dav_error
+    for exc in (_put_error(403, "Forbidden"),
+                dav_error.AuthorizationError(url=_CHORE_URL, reason="Forbidden")):
+        conn.execute("DELETE FROM cal_objects")
+        conn.commit()
+        _queue_one(conn)
+        client = _Refuses([{"id": "rem", "name": "R", "comp": "VTODO"}], exc)
+        for n in range(fdb.CAL_PARK_ATTEMPTS - 1):
+            res = caldav_sync.flush_pending(client, conn, client.discover(), f"t{n}")
+            assert res["needs_auth"] is False
+        assert fdb.caldav_parked(conn) == []
+        caldav_sync.flush_pending(client, conn, client.discover(), "tlast")
+        assert [r["id"] for r in fdb.caldav_parked(conn)] == ["caldav:rem/U1"]
+
+
+def test_transient_failures_then_one_refusal_does_not_park(conn):
+    """Transient failures raise the attempt count; they must not count as
+    refusals, so one refusal after them does not park the row."""
+    _queue_one(conn)
+    col = [{"id": "rem", "name": "R", "comp": "VTODO"}]
+    flaky = _Refuses(col, RuntimeError("connection reset"))
+    for n in range(6):
+        caldav_sync.flush_pending(flaky, conn, flaky.discover(), f"t{n}")
+    refuses = _Refuses(col, _forbidden())
+    caldav_sync.flush_pending(refuses, conn, refuses.discover(), "t7")
+    assert fdb.caldav_parked(conn) == []
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+    # four more refusals (five in all) park it
+    for n in range(fdb.CAL_PARK_ATTEMPTS - 1):
+        caldav_sync.flush_pending(refuses, conn, refuses.discover(), f"r{n}")
+    assert [r["id"] for r in fdb.caldav_parked(conn)] == ["caldav:rem/U1"]
+
+
+def test_record_cal_object_error_counts_refusals_on_their_own(conn):
+    _queue_one(conn)
+    for n in range(6):
+        assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "x", "t") is False
+    assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                       permanent=True) is False
+    for n in range(3):
+        assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                           permanent=True) is False
+    assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                       permanent=True) is True
+
+
+def test_a_new_wall_edit_resets_the_refusal_count(conn):
+    _queue_one(conn)
+    for n in range(fdb.CAL_PARK_ATTEMPTS - 1):
+        fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t", permanent=True)
+    fdb.queue_cal_object_update(conn, "caldav:rem/U1", "X", "x", "t2")
+    assert fdb.record_cal_object_error(conn, "caldav:rem/U1", "no", "t",
+                                       permanent=True) is False
+
+
+def test_a_new_wall_edit_unparks_a_row(conn):
+    _queue_one(conn)
+    fdb.park_cal_object(conn, "caldav:rem/U1", "refused", "t")
+    assert fdb.caldav_pending(conn) == []
+    fdb.queue_cal_object_update(conn, "caldav:rem/U1", "X", "x", "t2")
+    assert [r["id"] for r in fdb.caldav_pending(conn)] == ["caldav:rem/U1"]
+
+
+def test_flush_stops_at_its_time_budget(conn, caplog):
+    """A half-down iCloud answering each request just inside its timeout must not
+    hold the sync thread (which also runs the Google sync) for the whole
+    outbox. The rest waits for the next tick, untouched."""
+    for uid in ("A", "B", "C", "D"):
+        _queue_one(conn, uid)
+    ticks = iter(range(0, 1000, 40))            # each request "takes" 40s
+    client = WriteFake([{"id": "rem", "name": "R", "comp": "VTODO"}])
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        res = caldav_sync.flush_pending(client, conn, client.discover(), "t1",
+                                        budget_s=90, clock=lambda: next(ticks))
+    assert res["pushed"] == 2 and res["deferred"] == 2
+    left = fdb.caldav_pending(conn)
+    assert [r["uid"] for r in left] == ["C", "D"]
+    assert all(r["sync_attempts"] == 0 and r["last_sync_error"] is None
+               for r in left)
+    assert any("time budget" in r.getMessage() for r in caplog.records)
+
+
+def test_put_object_permanent_4xx_raises_rejected():
+    for status in (400, 403, 405, 409, 415, 422):
+        cl, col = _client_and_col(_DAV(put_resp=_Resp(status)))
+        try:
+            cl.put_object(col, "https://x/cal/t1.ics", "ICS", base_etag="e0")
+            assert False, f"expected CalDavRejected for {status}"
+        except caldav_service.CalDavRejected as e:
+            assert e.status == status
+    for status in (401, 408, 429, 500, 503):
+        cl, col = _client_and_col(_DAV(put_resp=_Resp(status)))
+        try:
+            cl.put_object(col, "https://x/cal/t1.ics", "ICS", base_etag="e0")
+            assert False, f"expected an error for {status}"
+        except caldav_service.CalDavRejected:
+            assert False, f"{status} is not a lasting refusal"
+        except RuntimeError:
+            pass
+
+
+def test_delete_object_permanent_4xx_raises_rejected():
+    cl, col = _client_and_col(_DAV(req_resp=_Resp(403)))
+    try:
+        cl.delete_object(col, "https://x/cal/t1.ics", base_etag="e0")
+        assert False, "expected CalDavRejected"
+    except caldav_service.CalDavRejected as e:
+        assert e.status == 403
+
+
+# --- discover: an unreadable component set --------------------------------------
+
+class _PrincipalCal:
+    def __init__(self, url, name, comps):
+        self.url = url
+        self._name = name
+        self._comps = comps
+
+    def get_supported_components(self):
+        if isinstance(self._comps, Exception):
+            raise self._comps
+        return self._comps
+
+    def get_display_name(self):
+        return self._name
+
+    def get_properties(self, props):
+        return {}
+
+
+def _discover(cals):
+    cl = caldav_service.CalDavClient("u", "p")
+    cl._principal = SimpleNamespace(calendars=lambda: cals)
+    return cl.discover()
+
+
+def test_discover_reports_an_unknown_kind_when_components_fail():
+    got = _discover([_PrincipalCal("https://x/r/", "Groceries",
+                                   RuntimeError("PROPFIND timed out")),
+                     _PrincipalCal("https://x/c/", "Family", ["VEVENT"])])
+    assert got[0]["comp"] is None                 # not guessed as a calendar
+    assert got[1]["comp"] == "VEVENT"
+
+
+def test_sync_keeps_a_known_reminder_list_when_its_kind_is_unreadable(conn):
+    """A failed supported-components read used to default to VEVENT, flipping a
+    reminder list into a calendar for a tick. The stored kind is used instead."""
+    caldav_sync.sync_once(FakeCalDav([{"id": "rem", "name": "R", "comp": "VTODO",
+                                       "todos": [_VTODO]}]), conn, _CFG, _NOW)
+
+    class Unknown(FakeCalDav):
+        def discover(self):
+            return [{**c, "comp": None} for c in super().discover()]
+
+    st = caldav_sync.sync_once(Unknown([{"id": "rem", "name": "R", "comp": "VTODO",
+                                         "todos": [_VTODO]}]), conn, _CFG, _NOW)
+    cols = {c["id"]: c for c in fdb.list_caldav_collections(conn)}
+    assert cols["caldav:rem"]["comp_type"] == "VTODO"
+    assert st["ok"] is True and st["reminders"] == 1 and st["events"] == 0
+
+
+def test_sync_skips_a_new_collection_whose_kind_is_unreadable(conn, caplog):
+    class Unknown(FakeCalDav):
+        def discover(self):
+            return [{**c, "comp": None} for c in super().discover()]
+
+    with caplog.at_level(logging.WARNING, logger="family_hub.caldav"):
+        caldav_sync.sync_once(Unknown([{"id": "new", "name": "Mystery",
+                                        "todos": [_VTODO]}]), conn, _CFG, _NOW)
+    assert fdb.list_caldav_collections(conn) == []
+    assert any("Mystery" in r.getMessage() for r in caplog.records)
+
+
+def test_caldav_empty_calendar_whose_cache_aged_out_is_accepted(conn):
+    """Its only event has slipped behind the lookback window, so an empty answer
+    is honest: accept it instead of flagging 'kept last-synced' for a day."""
+    caldav_sync.sync_once(_one_event_client(), conn, _CFG, _NOW)   # event 08-20
+    later = _NOW + dt.timedelta(days=60)                           # lookback 45d
+    empty = FakeCalDav([{"id": "abc", "name": "Family", "comp": "VEVENT", "ics": []}])
+    st = caldav_sync.sync_once(empty, conn, _CFG, later)
+    assert st["ok"] is True and "error" not in st
+    assert fdb.list_events(conn) == []
+    assert fdb.kv_get(conn, "caldav_empty_since") == {}
