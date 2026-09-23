@@ -627,3 +627,32 @@ def test_a_crashing_local_read_is_a_named_problem_not_a_500(hub, monkeypatch):
     r = _full(client)
     assert r["db"]["ok"] is False and "kv exploded" in r["db"]["error"]
     assert r["status"] == "degraded"
+
+
+def test_tile_source_not_configured_is_off_even_if_enabled():
+    s = dh.tile_source("weather", configured=False, enabled=True, state=None,
+                       available=False, now=NOW, max_age_s=600)
+    assert s == {"configured": False, "enabled": False, "ok": True, "status": "off"}
+
+
+def test_the_report_carries_every_field_a_deploy_gate_reads(hub):
+    """The contract with deploy gates (the house one is deploy.conf in the
+    private overlay): these paths exist, with these types, in a green report.
+    Renaming one fails every deploy, so it is pinned here, where it would be
+    renamed."""
+    _, client, _, _ = hub
+    r = _full(client)
+    assert isinstance(r["status"], str) and isinstance(r["problems"], list)
+    assert "deploy" in r and "engine_commit" in (r["deploy"] or {"engine_commit": None})
+    assert isinstance(r["db"]["ok"], bool)
+    assert "matches_deploy" in r["config"]
+    for k in ("ha_token", "google_token", "config"):
+        assert isinstance(r["settings"][k]["ok"], bool), k
+    stamps = {"calendar": "last_sync", "laundry": "last_ok", "weather": "data_ts",
+              "climate": "data_ts", "fleet": "data_ts", "cameras": None}
+    for name, stamp in stamps.items():
+        src = r["sources"][name]
+        for k in ("configured", "enabled", "ok"):
+            assert isinstance(src[k], bool), (name, k)
+        if stamp and src["status"] != "off":
+            assert src[stamp] is None or dh.parse_ts(src[stamp]) is not None, (name, stamp)
