@@ -688,10 +688,10 @@ let awayOpenFor = null;
 function peopleAdminHtml(people, awayPeriods) {
   const away = awayPeriods || [];
   // A mapped list the sync no longer has (deleted or unshared in iCloud) is
-  // not "iCloud ✓": that person's chores stopped mirroring. With no lists at
-  // all iCloud isn't connected, and the editor already says so.
-  const lists = choreAdminReminderLists || [];
-  const listBadge = (lid) => (lists.length && !lists.some((l) => l.id === lid)
+  // not "iCloud ✓": that person's chores stopped mirroring. The server
+  // decides (people[].list_gone): an empty list array can mean "not
+  // connected" or "every list gone", and only it can tell which.
+  const listBadge = (p) => (p.list_gone
     ? `<span class="padmin-badge padmin-badge-warn" title="This person’s iCloud list is gone; pick a new one">iCloud list gone</span>`
     : `<span class="padmin-badge" title="Mirrored to an iCloud list">iCloud ✓</span>`);
   // At most one OPEN (end_date === null) period per person; that invariant is
@@ -731,7 +731,7 @@ function peopleAdminHtml(people, awayPeriods) {
       : '';
     return `<div class="padmin-row${p.active ? '' : ' inactive'}" data-padmin="${p.id}">`
       + `<span class="padmin-name" style="color:${safeColor(p.color)}">${escapeHtml(p.name)}</span>`
-      + (p.reminder_list_id ? listBadge(p.reminder_list_id) : '')
+      + (p.reminder_list_id ? listBadge(p) : '')
       + `<button class="padmin-btn" type="button" data-pedit="${p.id}">Edit</button>`
       + `<button class="padmin-btn" type="button" data-ptoggle="${p.id}">${p.active ? 'Deactivate' : 'Activate'}</button>`
       + `<button class="padmin-btn padmin-del" type="button" data-pdel="${p.id}">Delete</button>`
@@ -3878,6 +3878,7 @@ function openPersonEditor(seed) {
       edit: true,
       reminderLists: choreAdminReminderLists,
       reminderListId: p.reminder_list_id || '',
+      listGone: !!p.list_gone,
       twoWay: !!(integ && integ.readonly === false),
       onListChange: async (value) => {
         try {
@@ -3890,6 +3891,7 @@ function openPersonEditor(seed) {
           return false;
         }
         p.reminder_list_id = value || null;   // keep the admin cache in step (badge + re-open)
+        p.list_gone = false;                  // the PATCH only takes a list iCloud has
         if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
         return true;
       },
