@@ -864,6 +864,21 @@ def test_admin_patch_rejects_explicit_null_on_nonnullable_fields(client, app_mod
                             json={"active": bad}).status_code == 422
     assert client.patch(f"/api/admin/people/{pid}",
                         json={"active": 1}).status_code == 200
+    # JSON true/false still work (they mean 1/0) and are stored as 1/0, which
+    # the `active = 1` filters read correctly
+    people = lambda: {p["id"]: p for p in
+                      client.get("/api/admin/state").json()["people"]}
+    chores = lambda: {c["id"]: c for c in
+                      client.get("/api/admin/state").json()["chores"]}
+    for flag, stored in ((False, 0), (True, 1)):
+        assert client.patch(f"/api/admin/people/{pid}",
+                            json={"active": flag}).status_code == 200
+        got = people()[pid]["active"]
+        assert type(got) is int and got == stored, got   # 1/0, not true/false
+        assert client.patch(f"/api/admin/chores/{cid}",
+                            json={"active": flag}).status_code == 200
+        got = chores()[cid]["active"]
+        assert type(got) is int and got == stored, got   # 1/0, not true/false
     # fixed_person_id: null is legitimate (clearing the fixed assignee) -> 200
     assert client.patch(f"/api/admin/chores/{cid}",
                         json={"assign_kind": "rotation", "rotation_order": [pid],

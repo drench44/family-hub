@@ -89,13 +89,24 @@ const VOID_TAGS = new Set(['input', 'br', 'img', 'hr', 'meta', 'link']);
 let focusDoc = null;
 function fakeFocus(node) { if (focusDoc) focusDoc.activeElement = node; }
 
+// A browser decodes character references in attribute values, so a value
+// escapeHtml wrote as front&quot;yard reads back as front"yard. Decode the
+// ones escapeHtml emits (plus numeric ones); &amp; last, so &amp;quot; stays
+// a literal &quot;.
+function decodeAttr(v) {
+  return v.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&amp;/g, '&');
+}
+
 function parseTagAttrs(attrStr) {
   const attrs = {};
   const re = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*(?:=\s*("([^"]*)"|'([^']*)'|[^\s"'=<>`]+))?/g;
   let m;
   while ((m = re.exec(attrStr))) {
     const val = m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : (m[2] || ''));
-    attrs[m[1].toLowerCase()] = val;
+    attrs[m[1].toLowerCase()] = decodeAttr(val);
   }
   return attrs;
 }
@@ -8673,7 +8684,10 @@ test('choreRowHtml: a tappable row carries the day it was drawn for', () => {
   assert.match(html, /data-chore="7" data-date="2026-09-21"/);
 });
 
-test('chores overlay: a tap sends the day on the row', async () => {
+// Same-day control, not coverage of the midnight fix: the row's day and
+// data_date agree here, so this only pins that a normal tap still writes, with
+// a date. The stale-day case is the repaint test below.
+test('chores overlay: a normal same-day tap still writes, with the date', async () => {
   const { completeCalls, tap } = mountChoresFull(SAMPLE_PEOPLE);
   tap('[data-chore="10"]');
   await flush();
@@ -8694,7 +8708,9 @@ test('chores overlay: a tap on a day that is no longer today repaints instead of
     'the old day repainted as look-only rows');
 });
 
-test('home wall: a tap still sends the day it was drawn for (just after midnight, before the poll)', async () => {
+// Same-day control too: the drawn day equals data_date, so this only pins that
+// toggleChore passes its date through to the write.
+test('home wall: toggleChore passes its date through to the write (same day)', async () => {
   const { sandbox } = newHub();
   const seen = [];
   sandbox.attemptToggle = async (id, done, date) => { seen.push(date); return true; };
@@ -8742,6 +8758,50 @@ test('refreshIdleOverlay: a chores view paged to another day stays on that day',
   assert.equal(vm.runInContext('choreState.day', sandbox), '2026-09-19');
   assert.equal(calls.chores.length, 1);
   assert.equal(calls.chores[0], null, 'a past day is fetched, not painted from today');
+});
+
+test('refreshIdleOverlay: a calendar repaint keeps the month paged to, the day drilled into, and the scroll', async () => {
+  // Real fetchCalWindow + renderCalFull (not the stubs above): the beat must
+  // not snap a family member's paged view back to today or to the top.
+  const { document, sandbox } = newHub();
+  await flush();   // let the load-time poll settle first
+  const panel = document.createElement('div');
+  panel.className = 'overlay-panel';          // the overlay's scroll container
+  const host = document.createElement('div');
+  host._id = 'cal-full';
+  panel.appendChild(host);
+  document.body.appendChild(panel);
+  document.body.dataset.conn = 'up';
+  let fetches = 0;
+  sandbox.fetch = async () => {
+    fetches += 1;
+    return { ok: true, status: 200, json: async () => ({
+      status: { ok: true },
+      window: { from: '2026-08-08', to: '2027-10-27' },
+      events: [{ id: 'e1', title: 'Dentist', calendar_id: 'c', all_day: 1,
+        start_ts: '2026-11-05', end_ts: '2026-11-06' }] }) };
+  };
+  vm.runInContext("data_date = '2026-09-22'; lastInteraction = 0; openView = 'calendar';"
+    + " calState.mode = 'month'; calState.y = 2026; calState.m = 11;"
+    + " calState.weekStart = '2026-09-22'; calState.day = '2026-09-22';", sandbox);
+  panel.scrollTop = 640;
+  // the beat after midnight (the poll moved 09-21 -> 09-22): still stays put
+  await sandbox.refreshIdleOverlay('2026-09-21');
+  assert.equal(fetches, 1, 'the window was refetched');
+  assert.deepEqual([vm.runInContext('calState.mode', sandbox), vm.runInContext('calState.y', sandbox),
+    vm.runInContext('calState.m', sandbox)], ['month', 2026, 11], 'still on the month paged to');
+  assert.match(host.innerHTML, /November 2026/, 'repainted on that month');
+  assert.match(host.innerHTML, /Dentist/, 'with the fresh events');
+  assert.equal(panel.scrollTop, 640, 'scroll kept');
+  assert.equal(document.getElementById('cal-full'), host, 'the scroll container was not rebuilt');
+
+  vm.runInContext("calState.mode = 'day'; calState.day = '2026-11-05';", sandbox);
+  await sandbox.refreshIdleOverlay('2026-09-22');
+  assert.equal(vm.runInContext('calState.mode', sandbox), 'day', 'still drilled into the day');
+  assert.equal(vm.runInContext('calState.day', sandbox), '2026-11-05', 'the same day');
+  assert.match(host.innerHTML, /back to month/);
+  assert.match(host.innerHTML, /Dentist/);
+  assert.equal(panel.scrollTop, 640);
 });
 
 test('refreshIdleOverlay: leaves the view alone mid-use (edit mode, a recent tap, or offline)', async () => {
@@ -8835,9 +8895,15 @@ test('camera probe: a probe answer with no body (older engine) still reads .ok',
 test('camera probe: a src with a quote in it never builds a broken selector', async () => {
   // cam.src comes from config; it went raw into a querySelector string
   const odd = { ...CAM1, src: 'front"yard' };
-  const { sandbox } = hubWithTiles([odd]);
+  const { document, sandbox } = hubWithTiles([odd]);
   sandbox.fetch = async () => ({ ok: true });
   await assert.doesNotReject(sandbox.probeCamera());
+  // and the probe found its tile: it goes live, not left on "offline"
+  const tiles = document.querySelectorAll('.tile-camera');
+  assert.equal(tiles.length, 1);
+  assert.equal(tiles[0].dataset.cam, 'front"yard', 'the attribute decodes back to the src');
+  assert.ok(!tiles[0].classList.contains('is-offline'), 'the camera reads live');
+  assert.ok(!tiles[0].querySelector('.tile-live').classList.contains('hidden'), 'LIVE shows');
 });
 
 // ---- one broken render step must not take the wall "offline" (audit): all
