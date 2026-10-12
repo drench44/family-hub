@@ -2,13 +2,13 @@
 
 Public family wall-dashboard: FastAPI + SQLite + vanilla JS. Keep any
 deployment-specific data (real calendar IDs, LAN IPs, camera URLs, secrets) out
-of this repo — it's public.
+of this repo; it's public.
 
-## Adding a feature — run the gauntlet, every gate
+## Adding a feature: run the gauntlet, every gate
 
 Any new feature (or substantial rework of one) works through
 [`docs/adding-a-feature.md`](docs/adding-a-feature.md) **as a checklist, in
-order, to the last item** — registry toggle, fail-soft server side, DEMO
+order, to the last item**: registry toggle, fail-soft server side, DEMO
 payload, mobile surface + tab-bar re-fit, motion/reduced-motion, tests + the
 structural guards, all visual gates, README + `docs/hub.png` regenerated in
 the same PR, the three-agent review (re-run if the branch grew after the
@@ -17,28 +17,28 @@ real shipped bug that created it; "it renders" is not "it's done". When a
 gate catches something new, fix it AND add both the guard and the checklist
 line that would have caught it.
 
-## Code review before merge — required
+## Code review before merge: required
 
 Any substantive change in this repo goes through review BEFORE it merges (or
 opens as a PR). Run all three review agents on the branch diff and address real
 findings:
 
-- `pr-review-toolkit:silent-failure-hunter` — swallowed errors, weak fallbacks,
+- `pr-review-toolkit:silent-failure-hunter`: swallowed errors, weak fallbacks,
   silent wrong-but-reassuring outcomes
-- `pr-review-toolkit:code-reviewer` — guideline/style/best-practice adherence,
+- `pr-review-toolkit:code-reviewer`: guideline/style/best-practice adherence,
   dead code, public-repo leaks
-- `pr-review-toolkit:pr-test-analyzer` — test-coverage quality; flag tests that
+- `pr-review-toolkit:pr-test-analyzer`: test-coverage quality; flag tests that
   skip silently in CI or assert nothing
 
 Also do a per-change review, and a whole-branch review for multi-task work.
-Verify tests genuinely RUN (not silently skipped). This is the default gate — it
+Verify tests genuinely RUN (not silently skipped). This is the default gate; it
 should happen without being asked. Docs-only changes (`*.md`, comments) are
 exempt.
 
-## Weather feed (`wx.json`) — read the contract before touching the card
+## Weather feed (`wx.json`): read the contract before touching the card
 
 The weather card is fed by ONE external document, `GET {weather_base}/wx.json`,
-produced by a **separate service** (not this app, not this repo — on the deploy
+produced by a **separate service** (not this app, not this repo; on the deploy
 box it's `:8137`; the app is `:8138`). Before reading a new field off it, or
 adding anything that needs forecast/history data, read
 [`docs/weather-feed.md`](docs/weather-feed.md): it inventories every field the
@@ -49,7 +49,7 @@ Guessing a feed key already cost this repo weeks of a silently-blank chart
 `fcDaily` and `fcHourly`, which nothing reads yet. Check the live feed before
 reading any field the doc doesn't list.
 
-## Seasonal looks — read the standards before adding one
+## Seasonal looks: read the standards before adding one
 
 Seasonal and holiday looks (fall and Halloween today; Thanksgiving and
 Christmas to come)
@@ -59,7 +59,7 @@ real public-domain photos and art ship), what comparable products do, the
 glass and readability standards, which sources and licences are allowed in
 this public repo, the step-by-step for a new look, and the lessons from the
 fall and Halloween builds. Don't draw scenes in code, and don't fake an
-animation by squashing one shape — use art that already holds the motion
+animation by squashing one shape; use art that already holds the motion
 (drawn frames stepped through a sprite sheet), and walk anything whose limbs
 must keep time with its body from `hub.js` (`snMotion`). Show the owner real
 candidates and let them pick. Look at every look × all five themes full size, plus
@@ -83,9 +83,9 @@ bottom tab bar). `.is-night` dims the page from 22:00 to 06:00. Because a CSS
 dim is applied to the body's children, never to `<body>` (a test guards it).
 Test all of: full desktop width, the mobile breakpoint, and night mode.
 
-## Mobile & iOS Safari — required checks for anything phone-facing
+## Mobile & iOS Safari: required checks for anything phone-facing
 
-The phone reflow (`@media (max-width: 1000px)`: an app-shell — the body is a
+The phone reflow (`@media (max-width: 1000px)`: an app-shell, where the body is a
 viewport-pinned `position: fixed; inset: 0` flex column, the content `.wrap`
 scrolls inside it, and the tab bar
 is the in-flow bottom row) and the full-screen overlays are used on a real
@@ -98,12 +98,12 @@ iframes, do all of:
    (Chores, To-Dos, Calendar, Cameras, Weather, Laundry) and every modal/overlay. The
    automation window here won't shrink below ~1000px, so to preview the phone
    layout temporarily widen the breakpoint in a local copy
-   (`@media (max-width: 2000px)`), screenshot, then revert — never commit that.
+   (`@media (max-width: 2000px)`), screenshot, then revert. Never commit that.
 2. **Confirm on a real iPhone before calling a mobile change done.** Several
    iOS-only bugs (below) are invisible in Chromium and in the test suite; the
    operator's phone is the real gate. Ask them to verify.
 
-Known iOS Safari traps this repo has already hit (each has a guard test —
+Known iOS Safari traps this repo has already hit (each has a guard test;
 don't reintroduce them):
 
 - **Don't float an interactive `position: fixed` bar over a scrolling body.**
@@ -127,24 +127,24 @@ don't reintroduce them):
   non-interactive `::before`). Guard: `test_no_backdrop_filter_on_fixed_elements`.
 - **No `transform` on a `position: fixed` interactive element.** It's often
   suggested as an iOS "compositing layer" fix, but on a fixed element it
-  misaligns the touch target when the page is scrolled — it CAUSED the tab-bar
+  misaligns the touch target when the page is scrolled; it CAUSED the tab-bar
   bug above, don't reach for it. (On an `absolute` element layered over a
-  CSS-transform-scaled iframe, `translateZ(0)` IS the right fix — iOS otherwise
+  CSS-transform-scaled iframe, `translateZ(0)` IS the right fix: iOS otherwise
   routes taps into the iframe; that's the overlay ⌂ home pill over "fit" panels,
   guarded by `test_overlay_home_pill_stays_tappable_over_scaled_iframes`.)
-- **Scroll resets need every target**, not just `window.scrollTo` — zero the
+- **Scroll resets need every target**, not just `window.scrollTo`; zero the
   scrolling element, both document roots, and the `.wrap` app-shell container
   (`scrollPageToTop` in hub.js).
 - **Tap targets ≥ ~44px** and clear of the very bottom edge (the iOS home-
   indicator / swipe zone).
 
 Prefer encoding a new mobile/iOS fix as a static guard in `test_static.py` (or a
-fake-DOM test) so it can't silently regress — the same pattern as the guards
+fake-DOM test) so it can't silently regress, the same pattern as the guards
 above. A real WebKit/Playwright suite was considered and deliberately not added:
 it fights this project's no-build, minimal-dependency design and its flakiness
 would cost more than it catches here.
 
 ## After cloning
 
-After cloning, run `scripts/install-hooks.sh` — installs the pre-push
+After cloning, run `scripts/install-hooks.sh`; it installs the pre-push
 privacy guard (inert without the operator's private scanner).
