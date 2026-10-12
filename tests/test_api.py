@@ -3160,6 +3160,12 @@ def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
         assert tc.post("/api/integrations/icloud_caldav/test").json() \
             == {"ok": False, "error": "no credentials"}
 
+    # The endpoint syncs against the real clock, so the event must sit inside
+    # the sync window (calendar_past_days back from today). A hard-coded date
+    # expired 45 days after it was written; date it from the house's today.
+    start = appmod._today()
+    end = start + dt.timedelta(days=1)
+
     class _Fake:
         def configured(self):
             return True
@@ -3170,8 +3176,8 @@ def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
         def fetch_ics(self, col, lo, hi):
             return [{"href": "h", "etag": "e", "ics":
                      "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:u1\r\n"
-                     "SUMMARY:E\r\nDTSTART;VALUE=DATE:20260820\r\n"
-                     "DTEND;VALUE=DATE:20260821\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"}]
+                     f"SUMMARY:E\r\nDTSTART;VALUE=DATE:{start:%Y%m%d}\r\n"
+                     f"DTEND;VALUE=DATE:{end:%Y%m%d}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"}]
 
         def fetch_todos(self, col):
             return []
