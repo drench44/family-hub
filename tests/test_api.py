@@ -3160,6 +3160,15 @@ def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
         assert tc.post("/api/integrations/icloud_caldav/test").json() \
             == {"ok": False, "error": "no credentials"}
 
+    # The endpoint syncs against the real clock, so the event must sit inside
+    # the sync window (calendar_past_days back from today). A hard-coded date
+    # expired 45 days after it was written; date it from the house's today.
+    start = appmod._today()
+    end = start + dt.timedelta(days=1)
+    # A year-old event sits outside the look-back, so it must not be counted:
+    # this pins the lower edge of the window the old hard-coded date fell off.
+    old = start - dt.timedelta(days=365)
+
     class _Fake:
         def configured(self):
             return True
@@ -3170,15 +3179,21 @@ def test_caldav_test_endpoint_reports_sync_outcome(tmp_path, monkeypatch):
         def fetch_ics(self, col, lo, hi):
             return [{"href": "h", "etag": "e", "ics":
                      "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:u1\r\n"
-                     "SUMMARY:E\r\nDTSTART;VALUE=DATE:20260820\r\n"
-                     "DTEND;VALUE=DATE:20260821\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"}]
+                     f"SUMMARY:E\r\nDTSTART;VALUE=DATE:{start:%Y%m%d}\r\n"
+                     f"DTEND;VALUE=DATE:{end:%Y%m%d}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"},
+                    {"href": "h-old", "etag": "e-old", "ics":
+                     "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:u-old\r\n"
+                     f"SUMMARY:Old\r\nDTSTART;VALUE=DATE:{old:%Y%m%d}\r\n"
+                     f"DTEND;VALUE=DATE:{old + dt.timedelta(days=1):%Y%m%d}\r\n"
+                     "END:VEVENT\r\nEND:VCALENDAR\r\n"}]
 
         def fetch_todos(self, col):
             return []
     monkeypatch.setattr(appmod, "_get_caldav_client", lambda: _Fake())
     with TestClient(appmod.app) as tc:
         st = tc.post("/api/integrations/icloud_caldav/test").json()
-        assert st["ok"] is True and st["events"] == 1
+        assert st["ok"] is True and "error" not in st
+        assert st["events"] == 1
 
 
 def test_caldav_test_connection_never_overlaps_the_background_sync(
