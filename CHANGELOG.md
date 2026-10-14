@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.10.2] — 2026-10-14
+
 ### Added
 - Thanksgiving gains two more looks, Cranberry Harvest (a bog of floating
   cranberries seen from above) and Vine Rows (red and orange rows on an
