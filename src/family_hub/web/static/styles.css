@@ -2729,6 +2729,174 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#CC4F16; --accent-ink:#FFFFFF; --accent-soft:rgba(204,79,22,.12);
 }
 
+/* ---- Golden Light: sunlit leaves glowing gold (Karl Fredrickson, CC0) ---- */
+:root[data-look="fall-golden-light"][data-theme][data-accent],
+.look-swatch[data-look="fall-golden-light"] {
+  --accent:#F6C04A; --accent-ink:#241700; --accent-soft:rgba(246,192,74,.18);
+  --sn-scene:url("seasons/fall-golden-light.webp"); --sn-pos:center 45%;
+  --sn-leaf-1:#F2B630; --sn-leaf-2:#E8962A; --sn-leaf-3:#F7D66A; --sn-leaf-4:#C9762A;
+}
+:root[data-look="fall-golden-light"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-golden-light"] {
+  --accent:#A06A08; --accent-ink:#FFFFFF; --accent-soft:rgba(160,106,8,.13);
+}
+
+/* ---- Aspen Sky: looking up through golden aspens (Andrew Preble, CC0) ---- */
+:root[data-look="fall-aspen-sky"][data-theme][data-accent],
+.look-swatch[data-look="fall-aspen-sky"] {
+  --accent:#F4C542; --accent-ink:#241B00; --accent-soft:rgba(244,197,66,.18);
+  --sn-scene:url("seasons/fall-aspen-sky.webp"); --sn-pos:center 40%;
+  --sn-leaf-1:#F4C542; --sn-leaf-2:#E8A92E; --sn-leaf-3:#F7D96A; --sn-leaf-4:#D98C2A;
+}
+:root[data-look="fall-aspen-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-aspen-sky"] {
+  --accent:#9C7206; --accent-ink:#FFFFFF; --accent-soft:rgba(156,114,6,.13);
+}
+
+/* ---- Autumn Road: a road through orange woods (Patrick Tomasso, CC0) ---- */
+:root[data-look="fall-autumn-road"][data-theme][data-accent],
+.look-swatch[data-look="fall-autumn-road"] {
+  --accent:#F49A4A; --accent-ink:#2A1200; --accent-soft:rgba(244,154,74,.18);
+  --sn-scene:url("seasons/fall-autumn-road.webp"); --sn-pos:center 45%;
+  --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
+}
+:root[data-look="fall-autumn-road"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-autumn-road"] {
+  --accent:#B5541C; --accent-ink:#FFFFFF; --accent-soft:rgba(181,84,28,.12);
+}
+
+/* ---- White Mountains: Jasper Cropsey, 1857 (Currier Museum of Art, public domain) ---- */
+:root[data-look="fall-white-mountains"][data-theme][data-accent],
+.look-swatch[data-look="fall-white-mountains"] {
+  --accent:#F2B04A; --accent-ink:#2A1500; --accent-soft:rgba(242,176,74,.18);
+  --sn-scene:url("seasons/fall-white-mountains.webp"); --sn-pos:center 40%;
+  --sn-leaf-1:#D9502A; --sn-leaf-2:#F0A04B; --sn-leaf-3:#B83A1E; --sn-leaf-4:#F4C25A;
+}
+:root[data-look="fall-white-mountains"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-white-mountains"] {
+  --accent:#A85A14; --accent-ink:#FFFFFF; --accent-soft:rgba(168,90,20,.13);
+}
+
+/* ---- Sunny Autumn Day: George Inness, 1892 (Cleveland Museum of Art, CC0) ---- */
+:root[data-look="fall-sunny-day"][data-theme][data-accent],
+.look-swatch[data-look="fall-sunny-day"] {
+  --accent:#EE8A5A; --accent-ink:#2A1000; --accent-soft:rgba(238,138,90,.18);
+  --sn-scene:url("seasons/fall-sunny-day.webp"); --sn-pos:center 35%;
+  --sn-leaf-1:#D9573A; --sn-leaf-2:#E8A44A; --sn-leaf-3:#B8462A; --sn-leaf-4:#D9B45A;
+}
+:root[data-look="fall-sunny-day"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-sunny-day"] {
+  --accent:#B04A22; --accent-ink:#FFFFFF; --accent-soft:rgba(176,74,34,.12);
+}
+
+/* ---- Wheat Stacks: Claude Monet, 1890 (Art Institute of Chicago, CC0) ---- */
+:root[data-look="fall-wheat-stacks"][data-theme][data-accent],
+.look-swatch[data-look="fall-wheat-stacks"] {
+  --accent:#F2A28A; --accent-ink:#2A0E06; --accent-soft:rgba(242,162,138,.18);
+  --sn-scene:url("seasons/fall-wheat-stacks.webp"); --sn-pos:center 60%;
+  --sn-leaf-1:#E8946A; --sn-leaf-2:#F2B87A; --sn-leaf-3:#D06A4A; --sn-leaf-4:#F4CC8A;
+}
+:root[data-look="fall-wheat-stacks"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-wheat-stacks"] {
+  --accent:#B05A3A; --accent-ink:#FFFFFF; --accent-soft:rgba(176,90,58,.12);
+}
+
+/* ---- Thanksgiving: shared by every thanksgiving-* look ----
+   Harvest light: a warm amber glow from the top corners over the photo and
+   the theme's wash. Leaves fall in the look's own colours (the fall leaf
+   rules, shown for thanksgiving-* too), and now and then a skein of geese
+   crosses the sky on its way south. */
+:root[data-look^="thanksgiving-"],
+.look-swatch[data-look^="thanksgiving-"] {
+  --sn-goose:#2B2118; --sn-goose-glow:rgba(255,226,180,.35);
+  --sn-haze:radial-gradient(55% 60% at 0% 0%, rgba(255,170,70,.22), transparent 70%),
+    radial-gradient(45% 55% at 100% 0%, rgba(255,196,110,.16), transparent 70%);
+}
+
+/* ---- Pumpkin Patch: pumpkins in late sun (Bonnie Kittle, CC0) ---- */
+:root[data-look="thanksgiving-pumpkin-patch"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-pumpkin-patch"] {
+  --accent:#FF9A3C; --accent-ink:#2A1000; --accent-soft:rgba(255,154,60,.18);
+  --sn-scene:url("seasons/thanksgiving-pumpkin-patch.webp"); --sn-pos:center 55%;
+  --sn-leaf-1:#E8742A; --sn-leaf-2:#F2A33A; --sn-leaf-3:#B8461E; --sn-leaf-4:#F4C25A;
+}
+:root[data-look="thanksgiving-pumpkin-patch"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-pumpkin-patch"] {
+  --accent:#BF560C; --accent-ink:#FFFFFF; --accent-soft:rgba(191,86,12,.13);
+}
+
+/* ---- Golden Hour: hay bales at sundown (Annie Spratt, CC0) ---- */
+:root[data-look="thanksgiving-golden-hour"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-golden-hour"] {
+  --accent:#F6B26B; --accent-ink:#2A1500; --accent-soft:rgba(246,178,107,.18);
+  --sn-scene:url("seasons/thanksgiving-golden-hour.webp"); --sn-pos:65% 55%;
+  --sn-leaf-1:#E8963A; --sn-leaf-2:#F4BE5E; --sn-leaf-3:#C2652A; --sn-leaf-4:#F7D58A;
+}
+:root[data-look="thanksgiving-golden-hour"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-golden-hour"] {
+  --accent:#AD5F1A; --accent-ink:#FFFFFF; --accent-soft:rgba(173,95,26,.13);
+}
+
+/* ---- Cranberry Bog: floating cranberries (Jeff the quiet, CC0) ---- */
+:root[data-look="thanksgiving-cranberry-bog"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-cranberry-bog"] {
+  --accent:#FF6B7D; --accent-ink:#2A0008; --accent-soft:rgba(255,107,125,.18);
+  --sn-scene:url("seasons/thanksgiving-cranberry-bog.webp"); --sn-pos:center 70%;
+  --sn-leaf-1:#C8243C; --sn-leaf-2:#E8563E; --sn-leaf-3:#9E1A2E; --sn-leaf-4:#F2A03A;
+}
+:root[data-look="thanksgiving-cranberry-bog"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-cranberry-bog"] {
+  --accent:#B3203A; --accent-ink:#FFFFFF; --accent-soft:rgba(179,32,58,.12);
+}
+
+/* ---- Corn Shocks: a farm in November (Jeff the quiet, CC0) ---- */
+:root[data-look="thanksgiving-corn-shocks"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-corn-shocks"] {
+  --accent:#EBC27A; --accent-ink:#241700; --accent-soft:rgba(235,194,122,.18);
+  --sn-scene:url("seasons/thanksgiving-corn-shocks.webp"); --sn-pos:center 30%;
+  --sn-leaf-1:#D9A34A; --sn-leaf-2:#E8C070; --sn-leaf-3:#B5772E; --sn-leaf-4:#C9562E;
+}
+:root[data-look="thanksgiving-corn-shocks"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-corn-shocks"] {
+  --accent:#946515; --accent-ink:#FFFFFF; --accent-soft:rgba(148,101,21,.13);
+}
+
+/* ---- Cranberry Harvest: a bog of floating berries from above (Lance Cheung, USDA, public domain) ---- */
+:root[data-look="thanksgiving-cranberry-harvest"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-cranberry-harvest"] {
+  --accent:#FF6F86; --accent-ink:#2A0010; --accent-soft:rgba(255,111,134,.18);
+  --sn-scene:url("seasons/thanksgiving-cranberry-harvest.webp"); --sn-pos:center 40%;
+  --sn-leaf-1:#C8243C; --sn-leaf-2:#E85060; --sn-leaf-3:#9E1A2E; --sn-leaf-4:#F2A03A;
+}
+:root[data-look="thanksgiving-cranberry-harvest"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-cranberry-harvest"] {
+  --accent:#B01E3C; --accent-ink:#FFFFFF; --accent-soft:rgba(176,30,60,.12);
+}
+
+/* ---- Vine Rows: red and orange rows on a hillside (Lukas Budimaier, CC0) ---- */
+:root[data-look="thanksgiving-vine-rows"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-vine-rows"] {
+  --accent:#FF8A4A; --accent-ink:#2A1000; --accent-soft:rgba(255,138,74,.18);
+  --sn-scene:url("seasons/thanksgiving-vine-rows.webp"); --sn-pos:center 65%;
+  --sn-leaf-1:#D9452A; --sn-leaf-2:#F07A2E; --sn-leaf-3:#B8321E; --sn-leaf-4:#F4B04A;
+}
+:root[data-look="thanksgiving-vine-rows"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-vine-rows"] {
+  --accent:#C04A14; --accent-ink:#FFFFFF; --accent-soft:rgba(192,74,20,.12);
+}
+
+/* ---- Hudson Autumn: Jasper Cropsey, 1860 (National Gallery of Art, public domain) ---- */
+:root[data-look="thanksgiving-hudson-autumn"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-hudson-autumn"] {
+  --accent:#F2A04B; --accent-ink:#2A1200; --accent-soft:rgba(242,160,75,.18);
+  --sn-scene:url("seasons/thanksgiving-hudson-autumn.webp"); --sn-pos:center 40%;
+  --sn-leaf-1:#D9502A; --sn-leaf-2:#F0A04B; --sn-leaf-3:#B83A1E; --sn-leaf-4:#F4C25A;
+}
+:root[data-look="thanksgiving-hudson-autumn"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-hudson-autumn"] {
+  --accent:#AD521A; --accent-ink:#FFFFFF; --accent-soft:rgba(173,82,26,.13);
+}
+
 /* ---- Halloween: shared by every halloween-* look ----
    Bats and spiders are near-black with a coloured rim (a purple glow on the
    bats, a green one on the spiders) so they read on a night photo and on
@@ -2890,7 +3058,10 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-leaves { display: none; position: absolute; inset: 0; }
 :root[data-look^="fall-"] body > .season-fx .sn-leaves,
 :root[data-look^="fall-"] body > .season .sn-leaves,
-.look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
+.look-swatch[data-look^="fall-"] .sn-leaves,
+:root[data-look^="thanksgiving-"] body > .season-fx .sn-leaves,
+:root[data-look^="thanksgiving-"] body > .season .sn-leaves,
+.look-swatch[data-look^="thanksgiving-"] .sn-leaves { display: block; }
 .sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); perspective: 260px; }
 .sn-leaf b {
   display: block; width: 100%; height: 100%;
@@ -2950,6 +3121,64 @@ body.integ-off-todos .todo-slot { display: none; }
    wingbeat (on b::before) kept going: a bat hanging in the air flapping on
    the spot. The webs stay, the far leaves rest. */
 :root[data-look]:not([data-look="none"]) body.is-night > .season .sn-bat { display: none; }
+/* the far geese too: paused, a skein would hang mid-sky */
+:root[data-look]:not([data-look="none"]) body.is-night > .season .sn-flock { display: none; }
+
+/* ---- Thanksgiving's geese (every thanksgiving-* look) ----
+   A skein heading south: a V of birds crosses the sky now and then, high
+   over the cards (.season-fx), and a smaller, farther one behind the glass
+   (.season). The wingbeat is real: twelve frames of Muybridge's 1887 flight
+   photographs (Animal Locomotion plate 765), cut to silhouettes in
+   bird-flap.png and painted in the season's colour. The whole V moves as
+   one box (.sn-flock) on a slow, gently climbing line; each bird keeps its
+   place in the V (--gx/--gy) and beats its wings a little out of step with
+   its neighbours, like a real skein. The strip slides behind a window on
+   transform, like the bats, so the compositor draws it. */
+.sn-flock { display: none; position: absolute; left: 0; top: var(--y, 12%);
+  width: calc(240px * var(--sn-k, 1) * var(--flock-k, 1)); height: calc(150px * var(--sn-k, 1) * var(--flock-k, 1));
+  animation: sn-flock-cross var(--d, 84s) linear var(--dl, -6s) infinite; }
+:root[data-look^="thanksgiving-"] body > .season-fx .sn-flock,
+:root[data-look^="thanksgiving-"] body > .season .sn-flock,
+.look-swatch[data-look^="thanksgiving-"] .sn-flock { display: block; }
+.sn-goose { --k: calc(var(--sn-k, 1) * var(--flock-k, 1));
+  position: absolute; left: calc(var(--gx) * var(--k)); top: calc(var(--gy) * var(--k));
+  width: calc(var(--s, 46px) * var(--k)); height: calc(var(--s, 46px) * .83 * var(--k));
+  filter: drop-shadow(0 0 2px var(--sn-goose-glow)); }
+.sn-goose b { display: block; width: 100%; height: 100%; overflow: hidden; }
+.sn-goose b::before {
+  content: ""; display: block; width: 1200%; height: 100%; background: var(--sn-goose);
+  -webkit-mask: url("seasons/bird-flap.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/bird-flap.png") 0 0 / 100% 100% no-repeat;
+  animation: sn-goose-flap var(--flap, .62s) steps(12, jump-none) var(--fl, 0s) infinite;
+}
+@keyframes sn-goose-flap { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-91.6667%, 0, 0); } }
+/* the skein crosses in the first third of its cycle, rising a little, then
+   waits off-screen: geese pass over now and then, they are not a fixture */
+/* it starts its own width (plus a margin) left of the screen, whatever size
+   the phone or the far layer draws it: a fixed -18vw left a phone's
+   half-size V starting inside the screen, birds popping into view */
+@keyframes sn-flock-cross {
+  0% { transform: translate3d(calc(-110% - 2vw), 3vh, 0); }
+  36%, 100% { transform: translate3d(112vw, var(--rise, -6vh), 0); }
+}
+/* the V, leader at the front (right, the way they fly), two trailing arms */
+.sn-goose:nth-child(1) { --gx: 206px; --gy: 62px; --s: 36px; --fl: -.10s; }
+.sn-goose:nth-child(2) { --gx: 174px; --gy: 44px; --s: 34px; --fl: -.31s; }
+.sn-goose:nth-child(3) { --gx: 172px; --gy: 82px; --s: 34px; --fl: -.47s; }
+.sn-goose:nth-child(4) { --gx: 142px; --gy: 26px; --s: 32px; --fl: -.22s; }
+.sn-goose:nth-child(5) { --gx: 138px; --gy: 102px; --s: 32px; --fl: -.55s; }
+.sn-goose:nth-child(6) { --gx: 110px; --gy: 8px;  --s: 30px; --fl: -.38s; }
+.sn-goose:nth-child(7) { --gx: 104px; --gy: 122px; --s: 30px; --fl: -.05s; }
+/* the far skein: smaller, slower, lower in the sky, no shadow, behind the
+   glass so a card it passes behind blurs it. Sized through --flock-k, never
+   `scale`: scale applies after the crossing's translate and would halve the
+   journey too, leaving the far skein hanging mid-screen. */
+.sn-flock.back { --y: 30%; --d: 120s; --dl: -70s; --rise: -3vh; --flock-k: .5; }
+.sn-flock.back .sn-goose { filter: none; opacity: .8; --flap: .7s; }
+/* behind the glass: the mask steps in place, no sliding strip (see the far
+   bats: a strip under a frosted card flashed as a black bar) */
+.sn-flock.back .sn-goose b::before { width: 100%;
+  -webkit-mask-size: 1200% 100%; mask-size: 1200% 100%; animation-name: sn-goose-flap-mask; }
+@keyframes sn-goose-flap-mask { from { -webkit-mask-position: 0% 0; mask-position: 0% 0; } to { -webkit-mask-position: 100% 0; mask-position: 100% 0; } }
 
 /* ---- Halloween's creatures (every halloween-* look) ----
    The same two layers as the leaves. Over the cards (.season-fx): a pair of
@@ -3007,6 +3236,16 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-haunt.front .sn-bat:nth-child(3) { --y: 46%; --s: 72px; --d: 37s; --dl: -24s; --rise: -18vh; --bob: 2.8s; animation-name: sn-bat-rtl; }
 .sn-haunt.front .sn-bat:nth-child(4) { --y: 33%; --s: 40px; --d: 31s; --dl: -13s; --rise: 4vh; --bob: 3.2s; --flap: .56s; }
 .sn-haunt.back .sn-bat { filter: none; opacity: .85; }
+/* Behind the glass a bat flaps by stepping its MASK through the frames in a
+   bat-sized box, never by sliding the 15-frame strip: a frosted card above
+   re-blurs whatever moves under it, and on the wall (Firefox) and a laptop
+   it sometimes blurred the whole strip, unclipped. That painted the strip
+   as a solid near-black bar across the card ("black flickering on the whole
+   row", owner's photo 2026-10-14). Stepping the mask repaints only these
+   few small far shapes; the bats over the cards keep the cheaper strip. */
+.sn-haunt.back .sn-bat b::before { width: 100%;
+  -webkit-mask-size: 1500% 100%; mask-size: 1500% 100%; animation-name: sn-bat-flap-mask; }
+@keyframes sn-bat-flap-mask { from { -webkit-mask-position: 0% 0; mask-position: 0% 0; } to { -webkit-mask-position: 100% 0; mask-position: 100% 0; } }
 .sn-haunt.back .sn-bat:nth-child(3) { --y: 30%; --s: 30px; --d: 46s; --dl: -12s; --rise: -6vh; --flap: .28s; }
 .sn-haunt.back .sn-bat:nth-child(4) { --y: 58%; --s: 24px; --d: 52s; --dl: -33s; --rise: -12vh; --flap: .3s; animation-name: sn-bat-rtl; }
 .sn-haunt.back .sn-bat:nth-child(5) { --y: 12%; --s: 26px; --d: 58s; --dl: -47s; --rise: 6vh; --flap: .26s; }
@@ -3033,19 +3272,24 @@ body.integ-off-todos .todo-slot { display: none; }
   transform: translate3d(-80px, -80px, 0); }
 .sn-crawl b, .sn-dangle b { display: block; width: 100%; height: 100%; overflow: hidden;
   filter: drop-shadow(0 0 4px var(--sn-spider-glow)); }
+/* The spiders step their mask through the seven walking poses in a
+   spider-sized box rather than sliding a 7-frame strip: both can pass under
+   the frosted top bar, and a strip under frosted glass flashed as a black
+   bar (see the far bats). Two small boxes, so the repaint is cheap. */
 .sn-crawl b::before, .sn-dangle b::before {
-  content: ""; display: block; width: 700%; height: 100%; background: var(--sn-spider);
-  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat;
+  content: ""; display: block; width: 100%; height: 100%; background: var(--sn-spider);
+  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat;
 }
 /* a spider on silk hangs head-down from the tip of its abdomen, where the
    thread leaves it (the drawing faces up, so it turns over) */
 .sn-dangle b { transform: rotate(180deg); }
-.sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: sn-walk var(--walk-ms, 520ms) steps(7) infinite; }
-@keyframes sn-walk { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-100%, 0, 0); } }
+.sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: sn-walk var(--walk-ms, 520ms) steps(7, jump-none) infinite; }
+@keyframes sn-walk { from { -webkit-mask-position: 0% 0; mask-position: 0% 0; } to { -webkit-mask-position: 100% 0; mask-position: 100% 0; } }
 @media (max-width: 1000px) {
   /* a phone screen is a fifth of the wall’s width: at wall size one web
      covered the whole first card */
   :root:not([data-layout="desktop"])[data-look^="halloween-"] { --sn-k: .5; }
+  :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] { --sn-k: .5; }
   :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(1) { left: -110px; top: -120px; }
   :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(2) { right: -96px; bottom: -92px; }
 }
@@ -3063,6 +3307,10 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    same tile drew at half size in October and full size in September). */
 .look-swatch { --sn-k: 1; }
 .look-swatch .sn-bat { animation: none; transform: translate3d(var(--tx), 0, 0); }
+.look-swatch .sn-flock { animation: none; transform: translate3d(70px, 0, 0); --y: 8%; --flock-k: .32; }
+/* the tile's birds step their mask like the far ones: hold frame 5 of 12
+   (k / (N - 1) = 4 / 11), wings mid-beat */
+.look-swatch .sn-goose b::before { animation: none; transform: none; -webkit-mask-position: 36.3636% 0; mask-position: 36.3636% 0; }
 .look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(4) { --tx: 128px; --y: 36%; --s: 11px; }
@@ -3083,6 +3331,20 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch[data-look="fall-misty-road"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 [data-look="fall-maple-sky"] .season-mark,
 .look-swatch[data-look="fall-maple-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-golden-light"] .season-mark,
+.look-swatch[data-look="fall-golden-light"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-aspen-sky"] .season-mark,
+.look-swatch[data-look="fall-aspen-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-autumn-road"] .season-mark,
+.look-swatch[data-look="fall-autumn-road"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-white-mountains"] .season-mark,
+.look-swatch[data-look="fall-white-mountains"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-sunny-day"] .season-mark,
+.look-swatch[data-look="fall-sunny-day"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-wheat-stacks"] .season-mark,
+.look-swatch[data-look="fall-wheat-stacks"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look^="thanksgiving-"] .season-mark,
+.look-swatch[data-look^="thanksgiving-"] .look-mark { --mark: url("seasons/grains.svg"); }
 [data-look^="halloween-"] .season-mark,
 .look-swatch[data-look^="halloween-"] .look-mark { --mark: url("seasons/bat.svg"); }
 
@@ -3155,5 +3417,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
   .sn-leaf.fall { top: var(--y); }
   .sn-bat, .sn-bat i, .sn-bat b::before, .sn-dangle.visiting i, .sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-bat { display: none; }
+  .sn-flock, .sn-goose b::before { animation: none; }
+  :root[data-look]:not([data-look="none"]) body > .season .sn-flock { display: none; }
   :root[data-look]:not([data-look="none"]) body > .season-fx { display: none; }
 }
