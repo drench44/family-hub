@@ -44,7 +44,7 @@ at one URL.
   Branches** — bats cross the sky, a spider lets itself down on its thread,
   another lives on the glass, and webs hang in the corners. **Thanksgiving**
   takes November with **Pumpkin Patch** (the default), **Golden Hour**,
-  **Cranberry Bog**, **Corn Shocks** and **Hudson Autumn**: leaves fall in
+  **Cranberry Bog**, **Cranberry Harvest**, **Corn Shocks**, **Vine Rows** and **Hudson Autumn**: leaves fall in
   each photo's colours and a skein of birds crosses the sky now and then.
   Each look is picked per device under **All settings → Seasonal looks**
   from live preview tiles, and none is locked to its dates: **Calendar**

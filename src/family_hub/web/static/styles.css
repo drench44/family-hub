@@ -2789,6 +2789,30 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#946515; --accent-ink:#FFFFFF; --accent-soft:rgba(148,101,21,.13);
 }
 
+/* ---- Cranberry Harvest: a bog of floating berries from above (Lance Cheung, USDA, public domain) ---- */
+:root[data-look="thanksgiving-cranberry-harvest"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-cranberry-harvest"] {
+  --accent:#FF6F86; --accent-ink:#2A0010; --accent-soft:rgba(255,111,134,.18);
+  --sn-scene:url("seasons/thanksgiving-cranberry-harvest.webp"); --sn-pos:center 40%;
+  --sn-leaf-1:#C8243C; --sn-leaf-2:#E85060; --sn-leaf-3:#9E1A2E; --sn-leaf-4:#F2A03A;
+}
+:root[data-look="thanksgiving-cranberry-harvest"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-cranberry-harvest"] {
+  --accent:#B01E3C; --accent-ink:#FFFFFF; --accent-soft:rgba(176,30,60,.12);
+}
+
+/* ---- Vine Rows: red and orange rows on a hillside (Lukas Budimaier, CC0) ---- */
+:root[data-look="thanksgiving-vine-rows"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-vine-rows"] {
+  --accent:#FF8A4A; --accent-ink:#2A1000; --accent-soft:rgba(255,138,74,.18);
+  --sn-scene:url("seasons/thanksgiving-vine-rows.webp"); --sn-pos:center 65%;
+  --sn-leaf-1:#D9452A; --sn-leaf-2:#F07A2E; --sn-leaf-3:#B8321E; --sn-leaf-4:#F4B04A;
+}
+:root[data-look="thanksgiving-vine-rows"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-vine-rows"] {
+  --accent:#C04A14; --accent-ink:#FFFFFF; --accent-soft:rgba(192,74,20,.12);
+}
+
 /* ---- Hudson Autumn: Jasper Cropsey, 1860 (National Gallery of Art, public domain) ---- */
 :root[data-look="thanksgiving-hudson-autumn"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-hudson-autumn"] {
