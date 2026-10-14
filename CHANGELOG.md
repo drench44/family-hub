@@ -14,6 +14,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Seasonal looks are no longer locked to their dates. Tap any look in
   Settings and it shows every day until you change it ("Pick one");
   "Calendar" goes back to changing the look with the dates.
+- Thanksgiving: five harvest looks for November (a pumpkin patch, hay
+  bales at sundown, a cranberry bog, corn shocks by a farmhouse and
+  Jasper Cropsey's 1860 Hudson autumn), with falling leaves in each
+  photo's colours, a grain mark, and a skein of birds now and then
+  crossing the sky, flapping with real frames from Muybridge's 1887
+  flight photographs.
 
 ### Fixed
 - The Wyze bridge's health check now also probes the bridge's own internal

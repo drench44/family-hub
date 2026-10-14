@@ -2736,7 +2736,7 @@ body.integ-off-todos .todo-slot { display: none; }
    crosses the sky on its way south. */
 :root[data-look^="thanksgiving-"],
 .look-swatch[data-look^="thanksgiving-"] {
-  --sn-goose:#2A1E14; --sn-goose-glow:rgba(255,214,150,.30);
+  --sn-goose:#2B2118; --sn-goose-glow:rgba(255,226,180,.35);
   --sn-haze:radial-gradient(55% 60% at 0% 0%, rgba(255,170,70,.22), transparent 70%),
     radial-gradient(45% 55% at 100% 0%, rgba(255,196,110,.16), transparent 70%);
 }
@@ -3025,6 +3025,53 @@ body.integ-off-todos .todo-slot { display: none; }
    wingbeat (on b::before) kept going: a bat hanging in the air flapping on
    the spot. The webs stay, the far leaves rest. */
 :root[data-look]:not([data-look="none"]) body.is-night > .season .sn-bat { display: none; }
+/* the far geese too: paused, a skein would hang mid-sky */
+:root[data-look]:not([data-look="none"]) body.is-night > .season .sn-flock { display: none; }
+
+/* ---- Thanksgiving's geese (every thanksgiving-* look) ----
+   A skein heading south: a V of birds crosses the sky now and then, high
+   over the cards (.season-fx), and a smaller, farther one behind the glass
+   (.season). The wingbeat is real: twelve frames of Muybridge's 1887 flight
+   photographs (Animal Locomotion plate 765), cut to silhouettes in
+   bird-flap.png and painted in the season's colour. The whole V moves as
+   one box (.sn-flock) on a slow, gently climbing line; each bird keeps its
+   place in the V (--gx/--gy) and beats its wings a little out of step with
+   its neighbours, like a real skein. The strip slides behind a window on
+   transform, like the bats, so the compositor draws it. */
+.sn-flock { display: none; position: absolute; left: 0; top: var(--y, 12%);
+  width: calc(240px * var(--sn-k, 1)); height: calc(150px * var(--sn-k, 1));
+  animation: sn-flock-cross var(--d, 84s) linear var(--dl, -6s) infinite; }
+:root[data-look^="thanksgiving-"] body > .season-fx .sn-flock,
+:root[data-look^="thanksgiving-"] body > .season .sn-flock,
+.look-swatch[data-look^="thanksgiving-"] .sn-flock { display: block; }
+.sn-goose { position: absolute; left: calc(var(--gx) * var(--sn-k, 1)); top: calc(var(--gy) * var(--sn-k, 1));
+  width: calc(var(--s, 46px) * var(--sn-k, 1)); height: calc(var(--s, 46px) * .83 * var(--sn-k, 1));
+  filter: drop-shadow(0 0 2px var(--sn-goose-glow)); }
+.sn-goose b { display: block; width: 100%; height: 100%; overflow: hidden; }
+.sn-goose b::before {
+  content: ""; display: block; width: 1200%; height: 100%; background: var(--sn-goose);
+  -webkit-mask: url("seasons/bird-flap.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/bird-flap.png") 0 0 / 100% 100% no-repeat;
+  animation: sn-goose-flap var(--flap, .62s) steps(12, jump-none) var(--fl, 0s) infinite;
+}
+@keyframes sn-goose-flap { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-91.6667%, 0, 0); } }
+/* the skein crosses in the first third of its cycle, rising a little, then
+   waits off-screen: geese pass over now and then, they are not a fixture */
+@keyframes sn-flock-cross {
+  0% { transform: translate3d(-18vw, 3vh, 0); }
+  36%, 100% { transform: translate3d(112vw, var(--rise, -6vh), 0); }
+}
+/* the V, leader at the front (right, the way they fly), two trailing arms */
+.sn-goose:nth-child(1) { --gx: 206px; --gy: 62px; --s: 36px; --fl: -.10s; }
+.sn-goose:nth-child(2) { --gx: 174px; --gy: 44px; --s: 34px; --fl: -.31s; }
+.sn-goose:nth-child(3) { --gx: 172px; --gy: 82px; --s: 34px; --fl: -.47s; }
+.sn-goose:nth-child(4) { --gx: 142px; --gy: 26px; --s: 32px; --fl: -.22s; }
+.sn-goose:nth-child(5) { --gx: 138px; --gy: 102px; --s: 32px; --fl: -.55s; }
+.sn-goose:nth-child(6) { --gx: 110px; --gy: 8px;  --s: 30px; --fl: -.38s; }
+.sn-goose:nth-child(7) { --gx: 104px; --gy: 122px; --s: 30px; --fl: -.05s; }
+/* the far skein: smaller, slower, lower in the sky, no shadow, behind the
+   glass so a card it passes behind blurs it */
+.sn-flock.back { --y: 30%; --d: 120s; --dl: -70s; --rise: -3vh; transform-origin: 0 0; scale: .5; }
+.sn-flock.back .sn-goose { filter: none; opacity: .8; --flap: .7s; }
 
 /* ---- Halloween's creatures (every halloween-* look) ----
    The same two layers as the leaves. Over the cards (.season-fx): a pair of
@@ -3121,6 +3168,7 @@ body.integ-off-todos .todo-slot { display: none; }
   /* a phone screen is a fifth of the wall’s width: at wall size one web
      covered the whole first card */
   :root:not([data-layout="desktop"])[data-look^="halloween-"] { --sn-k: .5; }
+  :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] { --sn-k: .5; }
   :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(1) { left: -110px; top: -120px; }
   :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(2) { right: -96px; bottom: -92px; }
 }
@@ -3138,6 +3186,8 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    same tile drew at half size in October and full size in September). */
 .look-swatch { --sn-k: 1; }
 .look-swatch .sn-bat { animation: none; transform: translate3d(var(--tx), 0, 0); }
+.look-swatch .sn-flock { animation: none; transform: translate3d(70px, 0, 0); --y: 8%; scale: .32; transform-origin: 0 0; }
+.look-swatch .sn-goose b::before { animation: none; transform: translate3d(-33.3333%, 0, 0); }
 .look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(4) { --tx: 128px; --y: 36%; --s: 11px; }
@@ -3232,5 +3282,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
   .sn-leaf.fall { top: var(--y); }
   .sn-bat, .sn-bat i, .sn-bat b::before, .sn-dangle.visiting i, .sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-bat { display: none; }
+  .sn-flock, .sn-goose b::before { animation: none; }
+  :root[data-look]:not([data-look="none"]) body > .season .sn-flock { display: none; }
   :root[data-look]:not([data-look="none"]) body > .season-fx { display: none; }
 }

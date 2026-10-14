@@ -2256,3 +2256,30 @@ def test_every_css_custom_property_is_read_somewhere():
 def test_no_dead_micro_class():
     """.micro was styled but no markup used it."""
     assert not re.search(r"(?m)^\.micro\s*\{", CSS)
+
+
+def test_thanksgiving_geese_beat_real_wings_and_go_when_they_should():
+    """The skein's wingbeat is twelve drawn frames (Muybridge, 1887), so the
+    three numbers that must agree do: steps(12), a 1200% strip, and a slide
+    that stops on the last cell. The V shows only for thanksgiving-* looks,
+    is sized through --sn-k, goes at night (behind the glass) and holds
+    still for reduced motion."""
+    import struct
+    head = (STATIC / "seasons" / "bird-flap.png").read_bytes()[:24]
+    assert head[:8] == b"\x89PNG\r\n\x1a\n"
+    assert struct.unpack(">II", head[16:24]) == (12 * 181, 150), "twelve 181x150 cells, the bat's cell shape"
+    strip = re.search(r"\.sn-goose b::before \{([^}]*)\}", CSS).group(1)
+    assert "width: 1200%" in strip and "steps(12, jump-none)" in strip
+    assert 'url("seasons/bird-flap.png")' in strip and "var(--sn-goose)" in strip
+    assert "translate3d(-91.6667%, 0, 0)" in re.search(r"@keyframes sn-goose-flap \{[^\n]*\}", CSS).group(0)
+    for sel in (r"(?m)^\.sn-flock \{", r"(?m)^\.sn-goose \{"):
+        m = re.search(sel + r"([^}]*)\}", CSS)
+        assert m and "var(--sn-k, 1)" in m.group(1), f"{sel} must size itself through --sn-k"
+    assert ':root[data-look^="thanksgiving-"] body > .season-fx .sn-flock' in CSS
+    assert re.search(r'(?m)^\.sn-flock \{ display: none;', CSS), "hidden unless a Thanksgiving look shows it"
+    assert re.search(r'(?m)^:root\[data-look\]:not\(\[data-look="none"\]\) body\.is-night > \.season \.sn-flock \{ display: none; \}', CSS)
+    _, _, hidden = _last_reduced_motion_selectors()
+    assert ':root[data-look]:not([data-look="none"]) body > .season .sn-flock' in hidden
+    assert '  :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] { --sn-k: .5; }' in CSS, \
+        "the phone block shrinks the geese like the bats"
+    assert "seasonFlockHtml(depth)" in HUB, "both layers carry the skein"
