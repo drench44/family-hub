@@ -10,6 +10,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Fall gains six looks, for nine in all: Golden Light, Aspen Sky and Autumn
+  Road (photos), and paintings by Jasper Cropsey (White Mountains), George
+  Inness (Sunny Autumn Day) and Claude Monet (Wheat Stacks).
+
 ## [1.10.2] — 2026-10-14
 
 ### Added
