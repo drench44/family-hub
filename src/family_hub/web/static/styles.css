@@ -45,6 +45,8 @@
   /* seasonal scene tokens (only painted while a look is active; each look's
      blocks near the end of the file set them — these are neutral defaults) */
   --sn-scene: none; --sn-pos: center;
+  /* none, not unset: an unset var() would void the whole glass background */
+  --sn-glass: none;
   /* Light's glass and wash (other themes set their own near the end) */
   --sn-wash: linear-gradient(180deg, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
   --glass: rgba(255,255,255,.66); --glass-edge: rgba(255,255,255,.50);
@@ -2697,7 +2699,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-aspen-grove"][data-theme][data-accent],
 .look-swatch[data-look="fall-aspen-grove"] {
   --accent:#F4C542; --accent-ink:#241B00; --accent-soft:rgba(244,197,66,.18);
-  --sn-scene:url("seasons/fall-aspen-grove.webp"); --sn-pos:center 35%;
+  --sn-scene:url("seasons/fall-aspen-grove.webp"); --sn-glass:url("seasons/glass/fall-aspen-grove.webp"); --sn-pos:center 35%;
   --sn-leaf-1:#F4C542; --sn-leaf-2:#E8A92E; --sn-leaf-3:#F7D96A; --sn-leaf-4:#D98C2A;
 }
 :root[data-look="fall-aspen-grove"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2709,7 +2711,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-misty-road"][data-theme][data-accent],
 .look-swatch[data-look="fall-misty-road"] {
   --accent:#F29A5B; --accent-ink:#2A1200; --accent-soft:rgba(242,154,91,.18);
-  --sn-scene:url("seasons/fall-misty-road.webp"); --sn-pos:center 60%;
+  --sn-scene:url("seasons/fall-misty-road.webp"); --sn-glass:url("seasons/glass/fall-misty-road.webp"); --sn-pos:center 60%;
   --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
 }
 :root[data-look="fall-misty-road"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2721,7 +2723,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-maple-sky"][data-theme][data-accent],
 .look-swatch[data-look="fall-maple-sky"] {
   --accent:#FF8C4A; --accent-ink:#2A1000; --accent-soft:rgba(255,140,74,.18);
-  --sn-scene:url("seasons/fall-maple-sky.webp"); --sn-pos:center 25%;
+  --sn-scene:url("seasons/fall-maple-sky.webp"); --sn-glass:url("seasons/glass/fall-maple-sky.webp"); --sn-pos:center 25%;
   --sn-leaf-1:#F07A2E; --sn-leaf-2:#F5A142; --sn-leaf-3:#D9502A; --sn-leaf-4:#F6C45A;
 }
 :root[data-look="fall-maple-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2733,7 +2735,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-golden-light"][data-theme][data-accent],
 .look-swatch[data-look="fall-golden-light"] {
   --accent:#F6C04A; --accent-ink:#241700; --accent-soft:rgba(246,192,74,.18);
-  --sn-scene:url("seasons/fall-golden-light.webp"); --sn-pos:center 45%;
+  --sn-scene:url("seasons/fall-golden-light.webp"); --sn-glass:url("seasons/glass/fall-golden-light.webp"); --sn-pos:center 45%;
   --sn-leaf-1:#F2B630; --sn-leaf-2:#E8962A; --sn-leaf-3:#F7D66A; --sn-leaf-4:#C9762A;
 }
 :root[data-look="fall-golden-light"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2745,7 +2747,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-aspen-sky"][data-theme][data-accent],
 .look-swatch[data-look="fall-aspen-sky"] {
   --accent:#F4C542; --accent-ink:#241B00; --accent-soft:rgba(244,197,66,.18);
-  --sn-scene:url("seasons/fall-aspen-sky.webp"); --sn-pos:center 40%;
+  --sn-scene:url("seasons/fall-aspen-sky.webp"); --sn-glass:url("seasons/glass/fall-aspen-sky.webp"); --sn-pos:center 40%;
   --sn-leaf-1:#F4C542; --sn-leaf-2:#E8A92E; --sn-leaf-3:#F7D96A; --sn-leaf-4:#D98C2A;
 }
 :root[data-look="fall-aspen-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2757,7 +2759,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-autumn-road"][data-theme][data-accent],
 .look-swatch[data-look="fall-autumn-road"] {
   --accent:#F49A4A; --accent-ink:#2A1200; --accent-soft:rgba(244,154,74,.18);
-  --sn-scene:url("seasons/fall-autumn-road.webp"); --sn-pos:center 45%;
+  --sn-scene:url("seasons/fall-autumn-road.webp"); --sn-glass:url("seasons/glass/fall-autumn-road.webp"); --sn-pos:center 45%;
   --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
 }
 :root[data-look="fall-autumn-road"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2769,7 +2771,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-white-mountains"][data-theme][data-accent],
 .look-swatch[data-look="fall-white-mountains"] {
   --accent:#F2B04A; --accent-ink:#2A1500; --accent-soft:rgba(242,176,74,.18);
-  --sn-scene:url("seasons/fall-white-mountains.webp"); --sn-pos:center 40%;
+  --sn-scene:url("seasons/fall-white-mountains.webp"); --sn-glass:url("seasons/glass/fall-white-mountains.webp"); --sn-pos:center 40%;
   --sn-leaf-1:#D9502A; --sn-leaf-2:#F0A04B; --sn-leaf-3:#B83A1E; --sn-leaf-4:#F4C25A;
 }
 :root[data-look="fall-white-mountains"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2781,7 +2783,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-sunny-day"][data-theme][data-accent],
 .look-swatch[data-look="fall-sunny-day"] {
   --accent:#EE8A5A; --accent-ink:#2A1000; --accent-soft:rgba(238,138,90,.18);
-  --sn-scene:url("seasons/fall-sunny-day.webp"); --sn-pos:center 35%;
+  --sn-scene:url("seasons/fall-sunny-day.webp"); --sn-glass:url("seasons/glass/fall-sunny-day.webp"); --sn-pos:center 35%;
   --sn-leaf-1:#D9573A; --sn-leaf-2:#E8A44A; --sn-leaf-3:#B8462A; --sn-leaf-4:#D9B45A;
 }
 :root[data-look="fall-sunny-day"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2793,7 +2795,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="fall-wheat-stacks"][data-theme][data-accent],
 .look-swatch[data-look="fall-wheat-stacks"] {
   --accent:#F2A28A; --accent-ink:#2A0E06; --accent-soft:rgba(242,162,138,.18);
-  --sn-scene:url("seasons/fall-wheat-stacks.webp"); --sn-pos:center 60%;
+  --sn-scene:url("seasons/fall-wheat-stacks.webp"); --sn-glass:url("seasons/glass/fall-wheat-stacks.webp"); --sn-pos:center 60%;
   --sn-leaf-1:#E8946A; --sn-leaf-2:#F2B87A; --sn-leaf-3:#D06A4A; --sn-leaf-4:#F4CC8A;
 }
 :root[data-look="fall-wheat-stacks"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2817,7 +2819,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-pumpkin-patch"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-pumpkin-patch"] {
   --accent:#FF9A3C; --accent-ink:#2A1000; --accent-soft:rgba(255,154,60,.18);
-  --sn-scene:url("seasons/thanksgiving-pumpkin-patch.webp"); --sn-pos:center 55%;
+  --sn-scene:url("seasons/thanksgiving-pumpkin-patch.webp"); --sn-glass:url("seasons/glass/thanksgiving-pumpkin-patch.webp"); --sn-pos:center 55%;
   --sn-leaf-1:#E8742A; --sn-leaf-2:#F2A33A; --sn-leaf-3:#B8461E; --sn-leaf-4:#F4C25A;
 }
 :root[data-look="thanksgiving-pumpkin-patch"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2829,7 +2831,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-golden-hour"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-golden-hour"] {
   --accent:#F6B26B; --accent-ink:#2A1500; --accent-soft:rgba(246,178,107,.18);
-  --sn-scene:url("seasons/thanksgiving-golden-hour.webp"); --sn-pos:65% 55%;
+  --sn-scene:url("seasons/thanksgiving-golden-hour.webp"); --sn-glass:url("seasons/glass/thanksgiving-golden-hour.webp"); --sn-pos:65% 55%;
   --sn-leaf-1:#E8963A; --sn-leaf-2:#F4BE5E; --sn-leaf-3:#C2652A; --sn-leaf-4:#F7D58A;
 }
 :root[data-look="thanksgiving-golden-hour"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2841,7 +2843,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-cranberry-bog"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-cranberry-bog"] {
   --accent:#FF6B7D; --accent-ink:#2A0008; --accent-soft:rgba(255,107,125,.18);
-  --sn-scene:url("seasons/thanksgiving-cranberry-bog.webp"); --sn-pos:center 70%;
+  --sn-scene:url("seasons/thanksgiving-cranberry-bog.webp"); --sn-glass:url("seasons/glass/thanksgiving-cranberry-bog.webp"); --sn-pos:center 70%;
   --sn-leaf-1:#C8243C; --sn-leaf-2:#E8563E; --sn-leaf-3:#9E1A2E; --sn-leaf-4:#F2A03A;
 }
 :root[data-look="thanksgiving-cranberry-bog"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2853,7 +2855,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-corn-shocks"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-corn-shocks"] {
   --accent:#EBC27A; --accent-ink:#241700; --accent-soft:rgba(235,194,122,.18);
-  --sn-scene:url("seasons/thanksgiving-corn-shocks.webp"); --sn-pos:center 30%;
+  --sn-scene:url("seasons/thanksgiving-corn-shocks.webp"); --sn-glass:url("seasons/glass/thanksgiving-corn-shocks.webp"); --sn-pos:center 30%;
   --sn-leaf-1:#D9A34A; --sn-leaf-2:#E8C070; --sn-leaf-3:#B5772E; --sn-leaf-4:#C9562E;
 }
 :root[data-look="thanksgiving-corn-shocks"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2865,7 +2867,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-cranberry-harvest"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-cranberry-harvest"] {
   --accent:#FF6F86; --accent-ink:#2A0010; --accent-soft:rgba(255,111,134,.18);
-  --sn-scene:url("seasons/thanksgiving-cranberry-harvest.webp"); --sn-pos:center 40%;
+  --sn-scene:url("seasons/thanksgiving-cranberry-harvest.webp"); --sn-glass:url("seasons/glass/thanksgiving-cranberry-harvest.webp"); --sn-pos:center 40%;
   --sn-leaf-1:#C8243C; --sn-leaf-2:#E85060; --sn-leaf-3:#9E1A2E; --sn-leaf-4:#F2A03A;
 }
 :root[data-look="thanksgiving-cranberry-harvest"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2877,7 +2879,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-vine-rows"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-vine-rows"] {
   --accent:#FF8A4A; --accent-ink:#2A1000; --accent-soft:rgba(255,138,74,.18);
-  --sn-scene:url("seasons/thanksgiving-vine-rows.webp"); --sn-pos:center 65%;
+  --sn-scene:url("seasons/thanksgiving-vine-rows.webp"); --sn-glass:url("seasons/glass/thanksgiving-vine-rows.webp"); --sn-pos:center 65%;
   --sn-leaf-1:#D9452A; --sn-leaf-2:#F07A2E; --sn-leaf-3:#B8321E; --sn-leaf-4:#F4B04A;
 }
 :root[data-look="thanksgiving-vine-rows"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2889,7 +2891,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-hudson-autumn"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-hudson-autumn"] {
   --accent:#F2A04B; --accent-ink:#2A1200; --accent-soft:rgba(242,160,75,.18);
-  --sn-scene:url("seasons/thanksgiving-hudson-autumn.webp"); --sn-pos:center 40%;
+  --sn-scene:url("seasons/thanksgiving-hudson-autumn.webp"); --sn-glass:url("seasons/glass/thanksgiving-hudson-autumn.webp"); --sn-pos:center 40%;
   --sn-leaf-1:#D9502A; --sn-leaf-2:#F0A04B; --sn-leaf-3:#B83A1E; --sn-leaf-4:#F4C25A;
 }
 :root[data-look="thanksgiving-hudson-autumn"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2917,7 +2919,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="halloween-two-lanterns"][data-theme][data-accent],
 .look-swatch[data-look="halloween-two-lanterns"] {
   --accent:#FF8A2A; --accent-ink:#2A1000; --accent-soft:rgba(255,138,42,.18);
-  --sn-scene:url("seasons/halloween-two-lanterns.webp"); --sn-pos:35% 50%;
+  --sn-scene:url("seasons/halloween-two-lanterns.webp"); --sn-glass:url("seasons/glass/halloween-two-lanterns.webp"); --sn-pos:35% 50%;
 }
 :root[data-look="halloween-two-lanterns"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
 :root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-two-lanterns"] {
@@ -2928,7 +2930,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="halloween-purple-sky"][data-theme][data-accent],
 .look-swatch[data-look="halloween-purple-sky"] {
   --accent:#C29BFF; --accent-ink:#1E0B3A; --accent-soft:rgba(194,155,255,.18);
-  --sn-scene:url("seasons/halloween-purple-sky.webp"); --sn-pos:center 55%;
+  --sn-scene:url("seasons/halloween-purple-sky.webp"); --sn-glass:url("seasons/glass/halloween-purple-sky.webp"); --sn-pos:center 55%;
 }
 :root[data-look="halloween-purple-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
 :root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-purple-sky"] {
@@ -2939,7 +2941,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="halloween-purple-pines"][data-theme][data-accent],
 .look-swatch[data-look="halloween-purple-pines"] {
   --accent:#9BFF5C; --accent-ink:#0D2A00; --accent-soft:rgba(155,255,92,.18);
-  --sn-scene:url("seasons/halloween-purple-pines.webp"); --sn-pos:center 60%;
+  --sn-scene:url("seasons/halloween-purple-pines.webp"); --sn-glass:url("seasons/glass/halloween-purple-pines.webp"); --sn-pos:center 60%;
 }
 :root[data-look="halloween-purple-pines"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
 :root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-purple-pines"] {
@@ -2950,7 +2952,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="halloween-moonrise"][data-theme][data-accent],
 .look-swatch[data-look="halloween-moonrise"] {
   --accent:#FFB05C; --accent-ink:#2A1400; --accent-soft:rgba(255,176,92,.18);
-  --sn-scene:url("seasons/halloween-moonrise.webp"); --sn-pos:60% 88%;
+  --sn-scene:url("seasons/halloween-moonrise.webp"); --sn-glass:url("seasons/glass/halloween-moonrise.webp"); --sn-pos:60% 88%;
 }
 :root[data-look="halloween-moonrise"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
 :root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-moonrise"] {
@@ -2961,7 +2963,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="halloween-branches"][data-theme][data-accent],
 .look-swatch[data-look="halloween-branches"] {
   --accent:#C08CFF; --accent-ink:#1B0A33; --accent-soft:rgba(192,140,255,.18);
-  --sn-scene:url("seasons/halloween-branches.webp"); --sn-pos:center 55%;
+  --sn-scene:url("seasons/halloween-branches.webp"); --sn-glass:url("seasons/glass/halloween-branches.webp"); --sn-pos:center 55%;
 }
 :root[data-look="halloween-branches"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
 :root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="halloween-branches"] {
@@ -3030,6 +3032,52 @@ body.integ-off-todos .todo-slot { display: none; }
      wordmark may give way before the page ever scrolls sideways. */
   :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .season-mark { display: none; }
   :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .wordmark { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ---- still glass on wide screens ----
+   On the wall and on computers the glass does not blur live. Each surface
+   paints a ready-blurred, saturated copy of the look's photo
+   (seasons/glass/, made by scripts/make-glass.py) fixed to the viewport at
+   the same focal point and cover size as the photo layer, so it lines up
+   with the photo around it, and lays the haze, wash and glass tint over it.
+   Why: backdrop-filter re-blurs everything under a card each frame a far bat
+   or leaf moves behind it, and on the wall's Firefox and a laptop that
+   re-blur sometimes drew one row of the card as a dark streaky band that
+   blinked on and off ("still glitching", owner, 2026-10-14, after the far
+   creatures stopped sliding their frame strips). A still copy never
+   re-blurs, and the wall's small GPU stops blurring four big cards every
+   frame. The far creatures now pass behind the cards and show in the gaps.
+   Phones keep the live blur: iOS ignores background-attachment: fixed (the
+   @supports test is true only on iOS/iPadOS Safari, where an iPad at
+   desktop width would otherwise paint the whole photo inside each card),
+   and the phone layout scrolls, which would repaint a fixed copy on every
+   frame. At night the copy goes too: the dim filter on .wrap can unpin a
+   fixed background in Firefox, and the night glass is 94% solid anyway. */
+@supports not (-webkit-touch-callout: none) {
+  @media (min-width: 1001px) {
+    :where(:root[data-look]:not([data-look="none"]) .wrap) .card,
+    :where(:root[data-look]:not([data-look="none"]) .wrap) .expand,
+    :where(:root[data-look]:not([data-look="none"]) .wrap) .shead h2,
+    :where(:root[data-look]:not([data-look="none"])) .topbar {
+      -webkit-backdrop-filter: none; backdrop-filter: none;
+      background: linear-gradient(var(--glass), var(--glass)), var(--sn-haze, linear-gradient(transparent, transparent)),
+        var(--sn-wash), var(--sn-glass) var(--sn-pos) / cover no-repeat, var(--ground);
+      background-attachment: fixed;
+    }
+  }
+  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .card,
+  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .expand,
+  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .shead h2,
+  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"])) .topbar {
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    background: linear-gradient(var(--glass), var(--glass)), var(--sn-haze, linear-gradient(transparent, transparent)),
+      var(--sn-wash), var(--sn-glass) var(--sn-pos) / cover no-repeat, var(--ground);
+    background-attachment: fixed;
+  }
+}
+:where(:root[data-look]:not([data-look="none"]) .is-night .wrap) :is(.card, .expand, .shead h2),
+:where(:root[data-look]:not([data-look="none"]) .is-night) .topbar {
+  background: linear-gradient(var(--glass), var(--glass)), var(--ground);
 }
 
 /* ---- drifting leaves (every fall look, in its own colours) ----
@@ -3312,6 +3360,9 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    (k / (N - 1) = 4 / 11), wings mid-beat */
 .look-swatch .sn-goose b::before { animation: none; transform: none; -webkit-mask-position: 36.3636% 0; mask-position: 36.3636% 0; }
 .look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
+/* ...and their wingbeat: the tile's mini glass card blurs live, so nothing
+   under it may move (the blinking-band lesson, docs/seasonal-looks.md) */
+.look-swatch .sn-bat b::before { animation: none; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(4) { --tx: 128px; --y: 36%; --s: 11px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(5) { --tx: 74px; --y: 62%; --s: 9px; }

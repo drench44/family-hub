@@ -33,6 +33,11 @@ Each photo was resized to 2560px wide, converted to sRGB and re-encoded by
 | `thanksgiving-vine-rows.webp` | "Autumn orchard", Lukas Budimaier | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Autumn_orchard_(Unsplash).jpg) (from Unsplash, 2016) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (published under Unsplash's CC0 terms, before its 2017 licence change) |
 | `thanksgiving-hudson-autumn.webp` | *Autumn, On the Hudson River* (1860), Jasper Francis Cropsey, National Gallery of Art | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Autumn--On_the_Hudson_River-1860-Jasper_Francis_Cropsey.jpg) | Public domain (the painter died in 1900) |
 
+`glass/` holds a small, blurred, saturated copy of each photo above, same
+file name, made by `scripts/make-glass.py`. Each copy is a derivative of its
+photo and carries that photo's source and licence. On wide screens the cards
+paint it instead of blurring the photo live.
+
 ## Shapes
 
 | File | Source | Licence |
