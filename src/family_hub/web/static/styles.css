@@ -2781,7 +2781,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-corn-shocks"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-corn-shocks"] {
   --accent:#EBC27A; --accent-ink:#241700; --accent-soft:rgba(235,194,122,.18);
-  --sn-scene:url("seasons/thanksgiving-corn-shocks.webp"); --sn-pos:center 55%;
+  --sn-scene:url("seasons/thanksgiving-corn-shocks.webp"); --sn-pos:center 30%;
   --sn-leaf-1:#D9A34A; --sn-leaf-2:#E8C070; --sn-leaf-3:#B5772E; --sn-leaf-4:#C9562E;
 }
 :root[data-look="thanksgiving-corn-shocks"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
@@ -2793,7 +2793,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look="thanksgiving-hudson-autumn"][data-theme][data-accent],
 .look-swatch[data-look="thanksgiving-hudson-autumn"] {
   --accent:#F2A04B; --accent-ink:#2A1200; --accent-soft:rgba(242,160,75,.18);
-  --sn-scene:url("seasons/thanksgiving-hudson-autumn.webp"); --sn-pos:center 50%;
+  --sn-scene:url("seasons/thanksgiving-hudson-autumn.webp"); --sn-pos:center 40%;
   --sn-leaf-1:#D9502A; --sn-leaf-2:#F0A04B; --sn-leaf-3:#B83A1E; --sn-leaf-4:#F4C25A;
 }
 :root[data-look="thanksgiving-hudson-autumn"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
