@@ -51,7 +51,7 @@ reading any field the doc doesn't list.
 
 ## Seasonal looks: read the standards before adding one
 
-Seasonal and holiday looks (fall and Halloween today; Thanksgiving and
+Seasonal and holiday looks (fall, Halloween and Thanksgiving today;
 Christmas to come)
 follow [`docs/seasonal-looks.md`](docs/seasonal-looks.md): the owner's bar,
 what failed and why (home-made illustrations were rejected three times; only

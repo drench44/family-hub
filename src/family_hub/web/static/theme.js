@@ -12,8 +12,9 @@
      data-idle-return  on | off             (per-device idle auto-return; hub.js
                                               reads it — behavioral, not visual)
      data-season       on | off             (seasonal looks follow the calendar)
-     data-look         none | <look id>     (DERIVED from data-season + today's
-                                              date; see SEASONS below)
+     data-look         none | <look id>     (DERIVED from data-season, a pinned
+                                              look (fh.lookPin) and today's date;
+                                              see SEASONS below)
 
    data-layout is the ONLY layout attribute. In "auto" the phone/wall split
    is decided by a pure-CSS width media query (max-width:1000px) — no JS
@@ -245,6 +246,15 @@
     // `credit` is shown on the Settings tile (full attribution lives in
     // static/seasons/CREDITS.md). Ids are storage keys and image file names:
     // renaming a look is free, changing its id resets that choice everywhere.
+    { id: "thanksgiving", name: "Thanksgiving", from: [11, 1], to: [11, 30], looks: [
+      { id: "thanksgiving-pumpkin-patch", name: "Pumpkin Patch", blurb: "Pumpkins in warm late sun by the corn", credit: "Photo by Bonnie Kittle", default: true },
+      { id: "thanksgiving-golden-hour", name: "Golden Hour", blurb: "Hay bales as the sun goes down", credit: "Photo by Annie Spratt" },
+      { id: "thanksgiving-cranberry-bog", name: "Cranberry Bog", blurb: "A flooded bog full of floating cranberries", credit: "Photo by Jeff the quiet" },
+      { id: "thanksgiving-cranberry-harvest", name: "Cranberry Harvest", blurb: "A bog carpeted in floating cranberries, from above", credit: "Photo by Lance Cheung, USDA" },
+      { id: "thanksgiving-corn-shocks", name: "Corn Shocks", blurb: "Corn shocks by a white farmhouse", credit: "Photo by Jeff the quiet" },
+      { id: "thanksgiving-vine-rows", name: "Vine Rows", blurb: "Red and orange rows on an autumn hillside", credit: "Photo by Lukas Budimaier" },
+      { id: "thanksgiving-hudson-autumn", name: "Hudson Autumn", blurb: "Red and gold trees over the Hudson, 1860", credit: "Painting by Jasper Cropsey" },
+    ] },
     { id: "halloween", name: "Halloween", from: [10, 1], to: [10, 31], looks: [
       { id: "halloween-two-lanterns", name: "Lantern Night", blurb: "Two carved pumpkins glowing in the dark", credit: "Photo by Beth Teutschmann", default: true },
       { id: "halloween-purple-sky", name: "Witching Hour", blurb: "The Milky Way over a violet horizon", credit: "Photo by Vincentiu Solomon" },
@@ -256,6 +266,12 @@
       { id: "fall-aspen-grove", name: "Aspen Grove", blurb: "Sunlit gold under a blue sky", credit: "Photo by Patrick Myers, NPS", default: true },
       { id: "fall-misty-road", name: "Misty Road", blurb: "A quiet road through fog and fallen leaves", credit: "Photo by Bernd Schulz" },
       { id: "fall-maple-sky", name: "Maple Sky", blurb: "Red maple leaves against a clear blue sky", credit: "Photo by Aaron Burden" },
+      { id: "fall-golden-light", name: "Golden Light", blurb: "Sunlit leaves glowing gold", credit: "Photo by Karl Fredrickson" },
+      { id: "fall-aspen-sky", name: "Aspen Sky", blurb: "Looking up through golden aspens", credit: "Photo by Andrew Preble" },
+      { id: "fall-autumn-road", name: "Autumn Road", blurb: "A road through orange autumn woods", credit: "Photo by Patrick Tomasso" },
+      { id: "fall-white-mountains", name: "White Mountains", blurb: "An autumn sunrise in the mountains, 1857", credit: "Painting by Jasper Cropsey" },
+      { id: "fall-sunny-day", name: "Sunny Autumn Day", blurb: "Red and gold trees over a meadow, 1892", credit: "Painting by George Inness" },
+      { id: "fall-wheat-stacks", name: "Wheat Stacks", blurb: "Stacks of wheat at the end of the day, 1890", credit: "Painting by Claude Monet" },
     ] },
   ];
   var SEASON_PREFS = ["on", "off"];
@@ -303,6 +319,25 @@
     return season.looks[0].id;
   }
 
+  // A pinned look paints every day, whatever the date: the owner asked that
+  // looks not be locked to their season. fh.lookPin holds the look id; no key
+  // (or an id no longer in SEASONS) means "follow the calendar". lookPinMem
+  // mirrors it for this session (undefined: not touched yet, read storage;
+  // "": cleared), for the same kiosk-storage reason as lookPicks.
+  var PIN_KEY = "fh.lookPin";
+  var lookPinMem;
+  function pinnedLook() {
+    var id = lookPinMem !== undefined ? lookPinMem : readStored(PIN_KEY);
+    return id && seasonOfLook(id) ? id : null;
+  }
+  function removeStored(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch (e) {
+      try { console.warn("family-hub: could not clear " + key + " (storage unavailable)"); } catch (e2) { /* no console */ }
+    }
+  }
+
   function stampSeason(v) {
     root.setAttribute("data-season", v);
   }
@@ -311,8 +346,10 @@
   // midnight with no reload. `date` is optional (tests pass a fixed one).
   function refreshLook(date) {
     var d = isDate(date) ? date : new Date();
-    var season = root.getAttribute("data-season") === "on" ? seasonFor(d) : null;
-    var look = season ? lookFor(season) : "none";
+    var on = root.getAttribute("data-season") === "on";
+    var pin = on ? pinnedLook() : null;
+    var season = on && !pin ? seasonFor(d) : null;
+    var look = pin || (season ? lookFor(season) : "none");
     if (root.getAttribute("data-look") !== look) root.setAttribute("data-look", look);
     return look;
   }
@@ -334,17 +371,29 @@
     stampSeason(v);
     refreshLook();
   }
-  // Remember a look as this device's favourite for ITS season. Choosing a look
-  // is also a clear "I want seasonal looks", so it turns the season pref on AND
-  // saves that as this device's own choice (even when a house default already
-  // stamped "on": otherwise a later house change to "off" would undo the pick).
-  // Out-of-season picks are kept and paint once their season comes round.
+  // Tapping a look shows it now and keeps it, any day of the year (a pin).
+  // It also becomes that season's favourite, so going back to the calendar
+  // paints it whenever its season comes round. Choosing a look is a clear "I
+  // want seasonal looks", so it turns the season pref on AND saves that as
+  // this device's own choice (even when a house default already stamped "on":
+  // otherwise a later house change to "off" would undo the pick).
   function setSeasonLook(lookId) {
     var season = seasonOfLook(lookId);
     if (!season) return;
     lookPicks[season.id] = lookId;
+    lookPinMem = lookId;
     seasonChosen = true;
     writeStored("fh.look." + season.id, lookId);
+    writeStored(PIN_KEY, lookId);
+    writeStored("fh.season", "on");
+    stampSeason("on");
+    refreshLook();
+  }
+  // Back to the calendar: drop the pin and turn seasonal looks on.
+  function followCalendar() {
+    lookPinMem = "";
+    seasonChosen = true;
+    removeStored(PIN_KEY);
     writeStored("fh.season", "on");
     stampSeason("on");
     refreshLook();
@@ -364,6 +413,8 @@
   window.setSeason = setSeason;
   window.stampSeason = stampSeasonIf;
   window.setSeasonLook = setSeasonLook;
+  window.followCalendar = followCalendar;
+  window.pinnedLook = pinnedLook;
   window.seasonChoiceMade = seasonChoiceMade;
   // The season whose window opens soonest after `date` (or null with no
   // seasons): lets the UI say "Fall starts Sep 1" when nothing is in season.

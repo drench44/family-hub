@@ -38,19 +38,24 @@ at one URL.
   on it as frosted glass in your theme's colours, leaves fall at two depths
   (over the cards and softly behind them), and a matching accent and a small
   mark sit beside the wordmark. Fall (Sep 1 to
-  Nov 30) offers **Aspen Grove** (the default), **Misty Road** and **Maple
-  Sky**, and **Halloween** takes October with **Lantern Night** (the
+  Nov 30) offers **Aspen Grove** (the default), **Misty Road**, **Maple
+  Sky**, **Golden Light**, **Aspen Sky**, **Autumn Road**, and paintings by
+  Cropsey, Inness and Monet, and **Halloween** takes October with **Lantern Night** (the
   default), **Witching Hour**, **Haunted Pines**, **Moonrise** and **Bare
   Branches** — bats cross the sky, a spider lets itself down on its thread,
-  another lives on the glass, and webs hang in the corners. Each look is
-  picked per device under **All settings → Seasonal looks** from
-  live preview tiles. Each of the five themes keeps its own glass: Light and
+  another lives on the glass, and webs hang in the corners. **Thanksgiving**
+  takes November with **Pumpkin Patch** (the default), **Golden Hour**,
+  **Cranberry Bog**, **Cranberry Harvest**, **Corn Shocks**, **Vine Rows** and **Hudson Autumn**: leaves fall in
+  each photo's colours and a skein of birds crosses the sky now and then.
+  Each look is picked per device under **All settings → Seasonal looks**
+  from live preview tiles, and none is locked to its dates: **Calendar**
+  follows them, while tapping any look (**Pick one**) keeps it all year. Each of the five themes keeps its own glass: Light and
   Soft show the photo bright and airy, Blue, Grey and Black at dusk. Nothing
   moves at night or for reduced motion, and the art (public domain, CC0,
   CC-BY and MIT) ships inside the app.
   Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
 
-  ![Seasonal looks: fall and Halloween](docs/seasons.jpg)
+  ![Seasonal looks: Halloween, fall and Thanksgiving](docs/seasons.jpg)
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
   hub in **Safari** and use Share → **Add to Home Screen** for a full-screen
