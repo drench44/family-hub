@@ -5100,7 +5100,7 @@ document.addEventListener('click', (e) => {
   const ss = e.target.closest('.theme-ctl [data-season-set]');
   if (ss) { if (typeof setSeason === 'function') setSeason(ss.dataset.seasonSet); reflectThemeControls(); return; }
   // Settings mode: Calendar drops any pin; Pick one keeps what shows now (or
-  // the season in force's look, or the very first look) until changed.
+  // the season in force's look, or the next season's) until changed.
   const sm = e.target.closest('.theme-ctl [data-season-mode]');
   if (sm) {
     if (sm.dataset.seasonMode === 'calendar') {
@@ -5108,11 +5108,12 @@ document.addEventListener('click', (e) => {
     } else if (typeof setSeasonLook === 'function') {
       const shown = document.documentElement.getAttribute('data-look');
       const now = typeof activeSeason === 'function' ? activeSeason() : null;
-      const first = seasonList()[0];
+      const next = typeof nextSeason === 'function' ? nextSeason() : null;
       const look = (shown && shown !== 'none' && shown)
         || (now && pickedLook(now))
-        || (first && pickedLook(first.id));
+        || (next && pickedLook(next.id));
       if (look) setSeasonLook(look);
+      else console.warn('season: Pick one found no look to keep');
     }
     reflectThemeControls();
     return;
