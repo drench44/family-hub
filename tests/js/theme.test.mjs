@@ -678,3 +678,12 @@ test('on a kiosk that refuses storage a pin and a return to the calendar still a
   assert.equal(win.refreshLook(day(2, 2)), 'none');
   assert.equal(root.getAttribute('data-season'), 'on');
 });
+
+test('a house default never clears a pin', () => {
+  const { win } = loadTheme();
+  win.setSeasonLook('halloween-moonrise');
+  win.stampSeason('off');
+  assert.equal(win.pinnedLook(), 'halloween-moonrise', 'Off from the house hides it but keeps the pick');
+  win.stampSeason('on');
+  assert.equal(win.refreshLook(day(7, 4)), 'halloween-moonrise');
+});

@@ -2283,3 +2283,26 @@ def test_thanksgiving_geese_beat_real_wings_and_go_when_they_should():
     assert '  :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] { --sn-k: .5; }' in CSS, \
         "the phone block shrinks the geese like the bats"
     assert "seasonFlockHtml(depth)" in HUB, "both layers carry the skein"
+
+
+def test_the_preview_tile_shows_the_skein_holding_still():
+    """A Settings tile previews the Thanksgiving skein, still: the crossing
+    and the wingbeat both stop inside a tile, and the V keeps its seven
+    placed birds."""
+    assert '.look-swatch[data-look^="thanksgiving-"] .sn-flock' in CSS
+    tile = re.search(r"(?m)^\.look-swatch \.sn-flock \{([^}]*)\}", CSS)
+    assert tile and "animation: none" in tile.group(1)
+    wings = re.search(r"(?m)^\.look-swatch \.sn-goose b::before \{([^}]*)\}", CSS)
+    assert wings and "animation: none" in wings.group(1)
+    placed = set(re.findall(r"(?m)^\.sn-goose:nth-child\((\d+)\)", CSS))
+    assert placed == {str(i) for i in range(1, 8)}, f"birds 1 to 7 each have a place in the V, not {sorted(placed)}"
+
+
+def test_the_flock_is_never_sized_with_scale():
+    """`scale` applies after the crossing's translate, so a far skein drawn at
+    scale .5 only got halfway across and hung there for the rest of its cycle.
+    Every flock size goes through --flock-k (and the phone's --sn-k)."""
+    for sels, body, _ in _rules():
+        if any(".sn-flock" in sel or ".sn-goose" in sel for sel in sels):
+            assert not re.search(r"(?<![\w-])scale\s*:", body), f"{sels} sizes the flock with scale"
+    assert "--flock-k: .5" in CSS, "the far skein is half size through --flock-k"
