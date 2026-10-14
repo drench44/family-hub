@@ -11,7 +11,7 @@ This document is the standard every look is held to. It exists because the
 first three attempts at fall missed, for reasons worth not repeating. Read it
 before adding Halloween, Christmas, winter, spring, or anything else.
 
-**Shipped so far:** fall (Sep 1 to Nov 30, three looks), Halloween (Oct 1
+**Shipped so far:** fall (Sep 1 to Nov 30, nine looks), Halloween (Oct 1
 to Oct 31, five looks) and Thanksgiving (Nov 1 to Nov 30, seven looks).
 **What's next, in the owner's order:** Christmas. A holiday that sits inside
 a broad season (Halloween and Thanksgiving inside fall) is listed in
