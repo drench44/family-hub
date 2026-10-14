@@ -7728,6 +7728,78 @@ test('tapping the season switch and a look tile calls theme.js\'s setters', () =
   assert.equal(host.querySelector('[data-look-pick="fall-harvest"]').getAttribute('aria-pressed'), 'true');
 });
 
+test('seasonFxHtml: the skein has seven birds over the cards and five far ones behind the glass', () => {
+  const { sandbox } = newHub();
+  const flock = (html, depth) => {
+    const at = html.indexOf(`class="sn-flock ${depth}"`);
+    assert.ok(at >= 0, `the ${depth} layer carries a flock`);
+    return (html.slice(at).match(/class="sn-goose"/g) || []).length;
+  };
+  const front = sandbox.seasonFxHtml('front');
+  const back = sandbox.seasonFxHtml('back');
+  // styles.css places birds 1 to 7 by nth-child: an eighth would sit at 0,0
+  assert.equal(flock(front, 'front'), 7);
+  assert.equal(flock(back, 'back'), 5);
+  assert.match(sandbox.seasonSceneHtml(), /class="sn-flock back"/, 'a preview tile shows a still skein');
+  for (const html of [front, back]) {
+    assert.equal((html.match(/<span\b/g) || []).length, (html.match(/<\/span>/g) || []).length, 'balanced spans');
+  }
+});
+
+// A pin from another season: only the pinned tile is marked, Pick one is
+// lit, and the note says what shows (never "nothing is in season").
+test('reflectThemeControls with a pin from another season marks only the pinned tile', () => {
+  const { document, sandbox } = seasonHub();
+  sandbox.FH_SEASONS = [...FALL, { id: 'halloween', name: 'Halloween', from: [10, 1], to: [10, 31], looks: [
+    { id: 'halloween-moonrise', name: 'Moonrise' }, { id: 'halloween-pines', name: 'Pines' }] }];
+  sandbox.seasonLook = (id) => (id === 'fall' ? 'fall-maple' : 'halloween-pines');
+  sandbox.pinnedLook = () => 'halloween-moonrise';
+  sandbox.activeSeason = () => null;   // July: nothing on the calendar
+  sandbox.nextSeason = () => sandbox.FH_SEASONS[0];
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.setAttribute('data-season', 'on');
+  sandbox.renderSettingsFull();
+  const marked = host.querySelectorAll('[data-look-pick]').filter((b) => b.classList.contains('on'));
+  assert.deepEqual(marked.map((b) => b.dataset.lookPick), ['halloween-moonrise'],
+    'the season favourites are not marked while a pin shows');
+  const lit = host.querySelectorAll('[data-season-mode]').filter((b) => b.classList.contains('on'));
+  assert.deepEqual(lit.map((b) => b.dataset.seasonMode), ['pick']);
+  const note = host.querySelector('.season-idle-note');
+  assert.equal(note.textContent, 'Showing Moonrise every day.');
+  assert.equal(note.hidden, false);
+});
+
+test('Pick one with nothing on screen pins the season in force, else the next season, else nothing', () => {
+  const { document, sandbox, docListeners, calls } = seasonHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.renderSettingsFull();
+  const tapPick = () => {
+    const node = host.querySelector('[data-season-mode="pick"]');
+    node.closest = (s) => (s.includes('[data-season-mode]') ? node : null);
+    (docListeners.click || []).forEach((fn) => fn({ target: node }));
+  };
+  document.documentElement.setAttribute('data-season', 'off');
+  document.documentElement.setAttribute('data-look', 'none');
+  sandbox.activeSeason = () => 'fall';
+  sandbox.seasonLook = () => 'fall-harvest';
+  tapPick();
+  assert.deepEqual(calls.at(-1), ['setSeasonLook', 'fall-harvest'], 'the season in force gives the look');
+  sandbox.activeSeason = () => null;
+  sandbox.nextSeason = () => FALL[0];
+  sandbox.seasonLook = (id) => (id === 'fall' ? 'fall-maple' : null);
+  tapPick();
+  assert.deepEqual(calls.at(-1), ['setSeasonLook', 'fall-maple'], 'out of season: the coming season\'s favourite');
+  const before = calls.length;
+  sandbox.FH_SEASONS = [];
+  sandbox.nextSeason = () => null;
+  tapPick();
+  assert.equal(calls.length, before, 'no seasons at all: nothing to pin, nothing thrown');
+});
+
 test('applyHouseTheme stamps the house season on a fresh device only', () => {
   const fresh = newHub();
   const stamped = [];

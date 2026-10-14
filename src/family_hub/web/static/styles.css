@@ -3039,13 +3039,14 @@ body.integ-off-todos .todo-slot { display: none; }
    its neighbours, like a real skein. The strip slides behind a window on
    transform, like the bats, so the compositor draws it. */
 .sn-flock { display: none; position: absolute; left: 0; top: var(--y, 12%);
-  width: calc(240px * var(--sn-k, 1)); height: calc(150px * var(--sn-k, 1));
+  width: calc(240px * var(--sn-k, 1) * var(--flock-k, 1)); height: calc(150px * var(--sn-k, 1) * var(--flock-k, 1));
   animation: sn-flock-cross var(--d, 84s) linear var(--dl, -6s) infinite; }
 :root[data-look^="thanksgiving-"] body > .season-fx .sn-flock,
 :root[data-look^="thanksgiving-"] body > .season .sn-flock,
 .look-swatch[data-look^="thanksgiving-"] .sn-flock { display: block; }
-.sn-goose { position: absolute; left: calc(var(--gx) * var(--sn-k, 1)); top: calc(var(--gy) * var(--sn-k, 1));
-  width: calc(var(--s, 46px) * var(--sn-k, 1)); height: calc(var(--s, 46px) * .83 * var(--sn-k, 1));
+.sn-goose { --k: calc(var(--sn-k, 1) * var(--flock-k, 1));
+  position: absolute; left: calc(var(--gx) * var(--k)); top: calc(var(--gy) * var(--k));
+  width: calc(var(--s, 46px) * var(--k)); height: calc(var(--s, 46px) * .83 * var(--k));
   filter: drop-shadow(0 0 2px var(--sn-goose-glow)); }
 .sn-goose b { display: block; width: 100%; height: 100%; overflow: hidden; }
 .sn-goose b::before {
@@ -3069,8 +3070,10 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-goose:nth-child(6) { --gx: 110px; --gy: 8px;  --s: 30px; --fl: -.38s; }
 .sn-goose:nth-child(7) { --gx: 104px; --gy: 122px; --s: 30px; --fl: -.05s; }
 /* the far skein: smaller, slower, lower in the sky, no shadow, behind the
-   glass so a card it passes behind blurs it */
-.sn-flock.back { --y: 30%; --d: 120s; --dl: -70s; --rise: -3vh; transform-origin: 0 0; scale: .5; }
+   glass so a card it passes behind blurs it. Sized through --flock-k, never
+   `scale`: scale applies after the crossing's translate and would halve the
+   journey too, leaving the far skein hanging mid-screen. */
+.sn-flock.back { --y: 30%; --d: 120s; --dl: -70s; --rise: -3vh; --flock-k: .5; }
 .sn-flock.back .sn-goose { filter: none; opacity: .8; --flap: .7s; }
 
 /* ---- Halloween's creatures (every halloween-* look) ----
@@ -3186,7 +3189,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    same tile drew at half size in October and full size in September). */
 .look-swatch { --sn-k: 1; }
 .look-swatch .sn-bat { animation: none; transform: translate3d(var(--tx), 0, 0); }
-.look-swatch .sn-flock { animation: none; transform: translate3d(70px, 0, 0); --y: 8%; scale: .32; transform-origin: 0 0; }
+.look-swatch .sn-flock { animation: none; transform: translate3d(70px, 0, 0); --y: 8%; --flock-k: .32; }
 .look-swatch .sn-goose b::before { animation: none; transform: translate3d(-33.3333%, 0, 0); }
 .look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
