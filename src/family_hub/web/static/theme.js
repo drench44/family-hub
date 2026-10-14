@@ -266,6 +266,12 @@
       { id: "fall-aspen-grove", name: "Aspen Grove", blurb: "Sunlit gold under a blue sky", credit: "Photo by Patrick Myers, NPS", default: true },
       { id: "fall-misty-road", name: "Misty Road", blurb: "A quiet road through fog and fallen leaves", credit: "Photo by Bernd Schulz" },
       { id: "fall-maple-sky", name: "Maple Sky", blurb: "Red maple leaves against a clear blue sky", credit: "Photo by Aaron Burden" },
+      { id: "fall-golden-light", name: "Golden Light", blurb: "Sunlit leaves glowing gold", credit: "Photo by Karl Fredrickson" },
+      { id: "fall-aspen-sky", name: "Aspen Sky", blurb: "Looking up through golden aspens", credit: "Photo by Andrew Preble" },
+      { id: "fall-autumn-road", name: "Autumn Road", blurb: "A road through orange autumn woods", credit: "Photo by Patrick Tomasso" },
+      { id: "fall-white-mountains", name: "White Mountains", blurb: "An autumn sunrise in the mountains, 1857", credit: "Painting by Jasper Cropsey" },
+      { id: "fall-sunny-day", name: "Sunny Autumn Day", blurb: "Red and gold trees over a meadow, 1892", credit: "Painting by George Inness" },
+      { id: "fall-wheat-stacks", name: "Wheat Stacks", blurb: "Stacks of wheat at the end of the day, 1890", credit: "Painting by Claude Monet" },
     ] },
   ];
   var SEASON_PREFS = ["on", "off"];

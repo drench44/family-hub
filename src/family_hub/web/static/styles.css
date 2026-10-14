@@ -2729,6 +2729,78 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#CC4F16; --accent-ink:#FFFFFF; --accent-soft:rgba(204,79,22,.12);
 }
 
+/* ---- Golden Light: sunlit leaves glowing gold (Karl Fredrickson, CC0) ---- */
+:root[data-look="fall-golden-light"][data-theme][data-accent],
+.look-swatch[data-look="fall-golden-light"] {
+  --accent:#F6C04A; --accent-ink:#241700; --accent-soft:rgba(246,192,74,.18);
+  --sn-scene:url("seasons/fall-golden-light.webp"); --sn-pos:center 45%;
+  --sn-leaf-1:#F2B630; --sn-leaf-2:#E8962A; --sn-leaf-3:#F7D66A; --sn-leaf-4:#C9762A;
+}
+:root[data-look="fall-golden-light"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-golden-light"] {
+  --accent:#A06A08; --accent-ink:#FFFFFF; --accent-soft:rgba(160,106,8,.13);
+}
+
+/* ---- Aspen Sky: looking up through golden aspens (Andrew Preble, CC0) ---- */
+:root[data-look="fall-aspen-sky"][data-theme][data-accent],
+.look-swatch[data-look="fall-aspen-sky"] {
+  --accent:#F4C542; --accent-ink:#241B00; --accent-soft:rgba(244,197,66,.18);
+  --sn-scene:url("seasons/fall-aspen-sky.webp"); --sn-pos:center 40%;
+  --sn-leaf-1:#F4C542; --sn-leaf-2:#E8A92E; --sn-leaf-3:#F7D96A; --sn-leaf-4:#D98C2A;
+}
+:root[data-look="fall-aspen-sky"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-aspen-sky"] {
+  --accent:#9C7206; --accent-ink:#FFFFFF; --accent-soft:rgba(156,114,6,.13);
+}
+
+/* ---- Autumn Road: a road through orange woods (Patrick Tomasso, CC0) ---- */
+:root[data-look="fall-autumn-road"][data-theme][data-accent],
+.look-swatch[data-look="fall-autumn-road"] {
+  --accent:#F49A4A; --accent-ink:#2A1200; --accent-soft:rgba(244,154,74,.18);
+  --sn-scene:url("seasons/fall-autumn-road.webp"); --sn-pos:center 45%;
+  --sn-leaf-1:#E8783A; --sn-leaf-2:#F2A04A; --sn-leaf-3:#C9562E; --sn-leaf-4:#F4C06A;
+}
+:root[data-look="fall-autumn-road"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-autumn-road"] {
+  --accent:#B5541C; --accent-ink:#FFFFFF; --accent-soft:rgba(181,84,28,.12);
+}
+
+/* ---- White Mountains: Jasper Cropsey, 1857 (Currier Museum of Art, public domain) ---- */
+:root[data-look="fall-white-mountains"][data-theme][data-accent],
+.look-swatch[data-look="fall-white-mountains"] {
+  --accent:#F2B04A; --accent-ink:#2A1500; --accent-soft:rgba(242,176,74,.18);
+  --sn-scene:url("seasons/fall-white-mountains.webp"); --sn-pos:center 40%;
+  --sn-leaf-1:#D9502A; --sn-leaf-2:#F0A04B; --sn-leaf-3:#B83A1E; --sn-leaf-4:#F4C25A;
+}
+:root[data-look="fall-white-mountains"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-white-mountains"] {
+  --accent:#A85A14; --accent-ink:#FFFFFF; --accent-soft:rgba(168,90,20,.13);
+}
+
+/* ---- Sunny Autumn Day: George Inness, 1892 (Cleveland Museum of Art, CC0) ---- */
+:root[data-look="fall-sunny-day"][data-theme][data-accent],
+.look-swatch[data-look="fall-sunny-day"] {
+  --accent:#EE8A5A; --accent-ink:#2A1000; --accent-soft:rgba(238,138,90,.18);
+  --sn-scene:url("seasons/fall-sunny-day.webp"); --sn-pos:center 35%;
+  --sn-leaf-1:#D9573A; --sn-leaf-2:#E8A44A; --sn-leaf-3:#B8462A; --sn-leaf-4:#D9B45A;
+}
+:root[data-look="fall-sunny-day"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-sunny-day"] {
+  --accent:#B04A22; --accent-ink:#FFFFFF; --accent-soft:rgba(176,74,34,.12);
+}
+
+/* ---- Wheat Stacks: Claude Monet, 1890 (Art Institute of Chicago, CC0) ---- */
+:root[data-look="fall-wheat-stacks"][data-theme][data-accent],
+.look-swatch[data-look="fall-wheat-stacks"] {
+  --accent:#F2A28A; --accent-ink:#2A0E06; --accent-soft:rgba(242,162,138,.18);
+  --sn-scene:url("seasons/fall-wheat-stacks.webp"); --sn-pos:center 60%;
+  --sn-leaf-1:#E8946A; --sn-leaf-2:#F2B87A; --sn-leaf-3:#D06A4A; --sn-leaf-4:#F4CC8A;
+}
+:root[data-look="fall-wheat-stacks"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="fall-wheat-stacks"] {
+  --accent:#B05A3A; --accent-ink:#FFFFFF; --accent-soft:rgba(176,90,58,.12);
+}
+
 /* ---- Thanksgiving: shared by every thanksgiving-* look ----
    Harvest light: a warm amber glow from the top corners over the photo and
    the theme's wash. Leaves fall in the look's own colours (the fall leaf
@@ -3259,6 +3331,18 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch[data-look="fall-misty-road"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 [data-look="fall-maple-sky"] .season-mark,
 .look-swatch[data-look="fall-maple-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-golden-light"] .season-mark,
+.look-swatch[data-look="fall-golden-light"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-aspen-sky"] .season-mark,
+.look-swatch[data-look="fall-aspen-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-autumn-road"] .season-mark,
+.look-swatch[data-look="fall-autumn-road"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-white-mountains"] .season-mark,
+.look-swatch[data-look="fall-white-mountains"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look="fall-sunny-day"] .season-mark,
+.look-swatch[data-look="fall-sunny-day"] .look-mark { --mark: url("seasons/leaf-slender.svg"); }
+[data-look="fall-wheat-stacks"] .season-mark,
+.look-swatch[data-look="fall-wheat-stacks"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 [data-look^="thanksgiving-"] .season-mark,
 .look-swatch[data-look^="thanksgiving-"] .look-mark { --mark: url("seasons/grains.svg"); }
 [data-look^="halloween-"] .season-mark,

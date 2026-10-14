@@ -38,8 +38,9 @@ at one URL.
   on it as frosted glass in your theme's colours, leaves fall at two depths
   (over the cards and softly behind them), and a matching accent and a small
   mark sit beside the wordmark. Fall (Sep 1 to
-  Nov 30) offers **Aspen Grove** (the default), **Misty Road** and **Maple
-  Sky**, and **Halloween** takes October with **Lantern Night** (the
+  Nov 30) offers **Aspen Grove** (the default), **Misty Road**, **Maple
+  Sky**, **Golden Light**, **Aspen Sky**, **Autumn Road**, and paintings by
+  Cropsey, Inness and Monet, and **Halloween** takes October with **Lantern Night** (the
   default), **Witching Hour**, **Haunted Pines**, **Moonrise** and **Bare
   Branches** — bats cross the sky, a spider lets itself down on its thread,
   another lives on the glass, and webs hang in the corners. **Thanksgiving**
