@@ -242,6 +242,23 @@ A second look at both seasons, after they shipped, found these:
   glass (the far bats and geese, and the spiders, which pass under the
   frosted top bar) now steps its MASK through the frames in a frame-sized
   box. Only creatures over the cards slide a strip. A guard pins both.
+- **...and that was not the whole story: the live blur itself was the
+  trouble.** After v1.10.3 the band kept blinking ("still glitching"). The
+  owner's video showed a dark streaky band exactly one To-Do row tall, under
+  crisp text, flashing for single frames. Anything moving under a
+  `backdrop-filter` card makes the browser re-blur it every frame, and on
+  the wall's Firefox and a laptop that re-blur sometimes painted a row of
+  the card wrong. Since v1.10.4 wide screens use **still glass**: each look
+  ships `seasons/glass/<look-id>.webp`, a small copy of its photo already
+  blurred and saturated (`scripts/make-glass.py`), and every glass surface
+  paints it with `background-attachment: fixed` at the photo layer's
+  focal point and cover size, so it lines up with the photo around the
+  cards. Nothing re-blurs, and the wall's GPU stops blurring four big
+  cards every frame. The far creatures still fly; they pass behind the
+  cards and show in the gaps. Phones keep the live blur (iOS ignores fixed
+  backgrounds, and the phone layout scrolls). Night drops the copy (the dim
+  filter can unpin a fixed background; night glass is solid anyway).
+  Astra ranked this cause first; the strip fix alone did not hold.
 - **Ask before taking motion away.** The first fix removed everything
   behind the glass; the owner: "I like them flying in the background
   though". Fix the cause, keep the look.
@@ -278,7 +295,10 @@ Read everything above first. Then, in order:
    size with distance. Two depths like the leaves (a far set behind the
    glass is fine: a plain masked shape with no sprite strip is safe there).
    Anything with drawn frames that sits under frosted glass steps its mask,
-   never a sliding strip (see the flicker lesson above).
+   never a sliding strip (see the flicker lesson above). On wide screens
+   the glass is still (no live blur), so far snow passes behind the cards;
+   every new photo needs its `seasons/glass/` copy (prep-season-photo.py
+   writes it). Watch the wall for the blinking band on the first day.
 4. **Accent and mark:** pick the accent from each photo; a snowflake or
    pine mark from Phosphor (MIT) or a CC0 drawing, credited.
 5. **Tests:** add a `"christmas-"` entry to `_SEASON_SHAPE_TOKENS` in
@@ -460,7 +480,9 @@ CC0), Shenandoah NPS rolling hills.
 2. **Prepare it:** `pip install pillow`, then
    `python scripts/prep-season-photo.py original.jpg <look-id>`. That writes
    `static/seasons/<look-id>.webp`: 2560px wide, converted to sRGB,
-   re-encoded and stripped of metadata. **Never soften it or make it narrower
+   re-encoded and stripped of metadata, and also its still-glass copy
+   `static/seasons/glass/<look-id>.webp` (`scripts/make-glass.py`; run it
+   by hand with the look id if you ever replace a photo another way). **Never soften it or make it narrower
    to save bytes.** We tried that on the aspen photo and the wall showed it
    as blur ("some of the pics look blurry"). The hub runs on the home network
    and fetches each photo once per release, so ~2 MB for a leafy photo is
@@ -472,7 +494,8 @@ CC0), Shenandoah NPS rolling hills.
    its date window. List a short holiday (Halloween) *before* the broad
    season it falls inside (fall), because the first window that matches wins.
 5. **Style it** in `styles.css`. Copy an existing look's two blocks: the
-   dark-theme block first (photo `--sn-scene`, focal point `--sn-pos`, leaf
+   dark-theme block first (photo `--sn-scene`, its glass copy `--sn-glass`,
+   focal point `--sn-pos`, leaf
    colours, accent), then the light-theme block (just the deeper accent).
    Add the `.season-mark` rule (one per look, or one for the whole season by
    prefix, as Halloween does). Each season's moving things are shown by its

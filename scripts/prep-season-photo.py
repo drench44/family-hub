@@ -7,7 +7,8 @@
 Writes src/family_hub/web/static/seasons/<name>.webp: at most 2560px wide
 (the wall is 1920px and a phone zooms into the middle, so both stay crisp),
 sRGB, WebP at quality 82, with all metadata stripped (EXIF can carry GPS and
-camera serials, and this repo is public). Prints the result's size.
+camera serials, and this repo is public). Prints the result's size, then
+writes the look's still-glass copy (scripts/make-glass.py).
 
 Sharpness beats file size here: the hub runs on the home network and a photo
 is fetched once per release, then only revalidated. A detailed photo (a whole
@@ -104,7 +105,9 @@ def main(argv):
     print(f"{out.relative_to(REPO).as_posix()}  {img.width}x{img.height}  {size / 1024:.0f} KB")
     if size >= MAX_BYTES:
         print("warning: at or over the 2.6 MB test cap; try --quality 76 before anything that costs sharpness")
-    return 0
+    # the still-glass copy the cards paint on wide screens (make-glass.py)
+    import subprocess
+    return subprocess.call([sys.executable, str(REPO / "scripts" / "make-glass.py"), name])
 
 
 if __name__ == "__main__":
