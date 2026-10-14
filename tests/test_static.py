@@ -2394,3 +2394,26 @@ def test_wide_screens_use_still_glass_not_a_live_blur():
                       r'\.is-night\) \.topbar \{\s*background: linear-gradient\(var\(--glass\), var\(--glass\)\), '
                       r'var\(--ground\);\s*\}', CSS)
     assert night and night.start() > sup, "at night the glass must drop the fixed copy, after the wide rules"
+    assert ".look-swatch" not in block, "the Settings tiles paint their own photo; keep them out of still glass"
+    # the tiles keep a small live blur, so nothing under it may animate
+    assert re.search(r"\.look-swatch \.sn-bat b::before \{ animation: none; \}", CSS)
+
+
+def test_phones_and_ios_keep_the_live_blur():
+    """Outside the wide-screen block the glass still blurs live: phones and
+    iOS/iPadOS have no still copy to fall back on (iOS ignores fixed
+    backgrounds), so losing the blur there would leave bare see-through
+    cards. And the blur is switched off nowhere else."""
+    sup = CSS.index("@supports not (-webkit-touch-callout: none) {")
+    outside = CSS[:sup] + CSS[CSS.index("\n}\n", sup):]
+    for target in (".card", ".expand", ".shead h2", ".topbar"):
+        assert re.search(r"\) " + re.escape(target) + r"[^{]*\{[^}]*backdrop-filter:\s*blur\(", outside), \
+            f"{target} lost its live blur outside the wide-screen block"
+    assert "backdrop-filter: none" not in outside
+
+
+def test_every_glass_copy_belongs_to_a_look():
+    """A retired look must not leave its glass copy behind."""
+    looks = set(_look_ids())
+    for g in (STATIC / "seasons" / "glass").iterdir():
+        assert g.suffix == ".webp" and g.stem in looks, f"seasons/glass/{g.name} belongs to no look"

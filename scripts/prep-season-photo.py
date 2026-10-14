@@ -21,6 +21,7 @@ allowed, how to pick an image that works behind the cards, and what to put
 in static/seasons/CREDITS.md.
 """
 import argparse
+import importlib.util
 import io
 import os
 import re
@@ -105,9 +106,17 @@ def main(argv):
     print(f"{out.relative_to(REPO).as_posix()}  {img.width}x{img.height}  {size / 1024:.0f} KB")
     if size >= MAX_BYTES:
         print("warning: at or over the 2.6 MB test cap; try --quality 76 before anything that costs sharpness")
-    # the still-glass copy the cards paint on wide screens (make-glass.py)
-    import subprocess
-    return subprocess.call([sys.executable, str(REPO / "scripts" / "make-glass.py"), name])
+    write_glass(name)
+    return 0
+
+
+def write_glass(name):
+    """The still-glass copy the cards paint on wide screens (make-glass.py),
+    next to the photo just written."""
+    spec = importlib.util.spec_from_file_location("make_glass", Path(__file__).with_name("make-glass.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.make(name, OUT_DIR)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,8 @@
   /* seasonal scene tokens (only painted while a look is active; each look's
      blocks near the end of the file set them — these are neutral defaults) */
   --sn-scene: none; --sn-pos: center;
+  /* none, not unset: an unset var() would void the whole glass background */
+  --sn-glass: none;
   /* Light's glass and wash (other themes set their own near the end) */
   --sn-wash: linear-gradient(180deg, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
   --glass: rgba(255,255,255,.66); --glass-edge: rgba(255,255,255,.50);
@@ -3358,6 +3360,9 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    (k / (N - 1) = 4 / 11), wings mid-beat */
 .look-swatch .sn-goose b::before { animation: none; transform: none; -webkit-mask-position: 36.3636% 0; mask-position: 36.3636% 0; }
 .look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
+/* ...and their wingbeat: the tile's mini glass card blurs live, so nothing
+   under it may move (the blinking-band lesson, docs/seasonal-looks.md) */
+.look-swatch .sn-bat b::before { animation: none; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(4) { --tx: 128px; --y: 36%; --s: 11px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(5) { --tx: 74px; --y: 62%; --s: 9px; }

@@ -41,6 +41,11 @@ def test_writes_a_2560_webp_with_no_metadata(prep, tmp_path):
     assert b"EXIF" not in data and b"SecretCam" not in data, "metadata must be stripped"
     with Image.open(out) as im:
         assert im.size == (2560, 1707)
+    # ...and its still-glass copy beside it (make-glass.py), also metadata-free
+    glass = tmp_path / "glass" / "fall-test.webp"
+    assert glass.is_file() and b"SecretCam" not in glass.read_bytes()
+    with Image.open(glass) as im:
+        assert im.size == (640, 427)
 
 
 def test_transparency_is_flattened_onto_white_not_black(prep, tmp_path):

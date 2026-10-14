@@ -19,6 +19,7 @@ A still copy never re-blurs. See docs/seasonal-looks.md.
 prep-season-photo.py runs this for the photo it writes, so a new look gets
 its glass copy without a second step.
 """
+import os
 import re
 import sys
 from pathlib import Path
@@ -36,8 +37,9 @@ SIGMA = 26 * (2560 / 1920) * (WIDTH / 2560)
 SATURATE = 1.4
 
 
-def make(name):
-    src = SEASONS / f"{name}.webp"
+def make(name, seasons=SEASONS):
+    """Write seasons/glass/<name>.webp from seasons/<name>.webp; return its path."""
+    src = seasons / f"{name}.webp"
     img = Image.open(src).convert("RGB")
     small = img.resize((WIDTH, round(img.height * WIDTH / img.width)), Image.LANCZOS)
     # pad before blurring so the edges blur toward their own colors, not black
@@ -47,18 +49,28 @@ def make(name):
     big.paste(small, (pad, pad))
     soft = big.filter(ImageFilter.GaussianBlur(SIGMA)).crop((pad, pad, pad + small.width, pad + small.height))
     soft = ImageEnhance.Color(soft).enhance(SATURATE)
-    GLASS.mkdir(exist_ok=True)
-    out = GLASS / f"{name}.webp"
-    soft.save(out, "WEBP", quality=80, method=6)
-    print(f"{out.relative_to(REPO).as_posix()}  {soft.width}x{soft.height}  {out.stat().st_size / 1024:.0f} KB")
+    glass = seasons / "glass"
+    glass.mkdir(exist_ok=True)
+    out = glass / f"{name}.webp"
+    # temp file then swap, so a failed encode never leaves a half-written copy
+    tmp = out.with_name(out.name + ".tmp")
+    try:
+        soft.save(tmp, "WEBP", quality=80, method=6)
+        os.replace(tmp, out)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    print(f"glass/{out.name}  {soft.width}x{soft.height}  {out.stat().st_size / 1024:.0f} KB")
+    return out
 
 
 def main(argv):
     names = argv[1:] or sorted(p.stem for p in SEASONS.glob("*.webp"))
+    bad = [n for n in names if not LOOK_ID.match(n) or not (SEASONS / f"{n}.webp").is_file()]
+    if bad:                                   # check every name before writing any
+        print(f"error: no seasons/<name>.webp for {', '.join(bad)}", file=sys.stderr)
+        return 2
     for name in names:
-        if not LOOK_ID.match(name) or not (SEASONS / f"{name}.webp").is_file():
-            print(f"error: no seasons/{name}.webp", file=sys.stderr)
-            return 2
         make(name)
     return 0
 

@@ -17,6 +17,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   the cards paint instead, lined up with the photo around them. The bats,
   geese and leaves behind the cards keep flying, and the wall's graphics
   chip does far less work. Phones keep the live blur.
+- The little bats on the Halloween tiles in Settings hold still, so nothing
+  moves under the tiles' small frosted card.
 
 ## [1.10.3] — 2026-10-14
 
