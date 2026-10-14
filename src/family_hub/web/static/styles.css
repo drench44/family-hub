@@ -3057,8 +3057,11 @@ body.integ-off-todos .todo-slot { display: none; }
 @keyframes sn-goose-flap { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-91.6667%, 0, 0); } }
 /* the skein crosses in the first third of its cycle, rising a little, then
    waits off-screen: geese pass over now and then, they are not a fixture */
+/* it starts its own width (plus a margin) left of the screen, whatever size
+   the phone or the far layer draws it: a fixed -18vw left a phone's
+   half-size V starting inside the screen, birds popping into view */
 @keyframes sn-flock-cross {
-  0% { transform: translate3d(-18vw, 3vh, 0); }
+  0% { transform: translate3d(calc(-110% - 2vw), 3vh, 0); }
   36%, 100% { transform: translate3d(112vw, var(--rise, -6vh), 0); }
 }
 /* the V, leader at the front (right, the way they fly), two trailing arms */
