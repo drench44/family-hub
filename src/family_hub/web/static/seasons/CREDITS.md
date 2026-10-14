@@ -45,6 +45,7 @@ dropped, its outline kept), so the look paints them like every other shape.
 
 | File | Source | Licence |
 | --- | --- | --- |
+| `bird-flap.png` | Eadweard Muybridge, *Animal Locomotion* plate 765, "Vulture flying" (1887), [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Vulture_flying_(rbm-QP301M8-1887-765).jpg). Changed: plate frames 13 to 24 cut out, the bird separated from the gridded paper as a silhouette (alpha only), aligned on the head, scaled into twelve 181x150 cells | Public domain |
 | `bat-flap.png` | [Noto Animated Emoji](https://googlefonts.github.io/noto-emoji-animation/) "bat" (1f987), 15 of its 30 wingbeat frames | [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/), © Google |
 | `spider-walk.png` | The spider sprite from [Bug.js](https://github.com/Auz/Bug), Graham McNicoll (after Screen Bug by kernc), walk row only, 7 frames | MIT-style (Bug.js); the original Screen Bug is WTFPL |
 
