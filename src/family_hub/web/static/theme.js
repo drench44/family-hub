@@ -246,6 +246,13 @@
     // `credit` is shown on the Settings tile (full attribution lives in
     // static/seasons/CREDITS.md). Ids are storage keys and image file names:
     // renaming a look is free, changing its id resets that choice everywhere.
+    { id: "thanksgiving", name: "Thanksgiving", from: [11, 1], to: [11, 30], looks: [
+      { id: "thanksgiving-pumpkin-patch", name: "Pumpkin Patch", blurb: "Pumpkins in warm late sun by the corn", credit: "Photo by Bonnie Kittle", default: true },
+      { id: "thanksgiving-golden-hour", name: "Golden Hour", blurb: "Hay bales as the sun goes down", credit: "Photo by Annie Spratt" },
+      { id: "thanksgiving-cranberry-bog", name: "Cranberry Bog", blurb: "A flooded bog full of floating cranberries", credit: "Photo by Jeff the quiet" },
+      { id: "thanksgiving-corn-shocks", name: "Corn Shocks", blurb: "Corn shocks by a white farmhouse", credit: "Photo by Jeff the quiet" },
+      { id: "thanksgiving-hudson-autumn", name: "Hudson Autumn", blurb: "Red and gold trees over the Hudson, 1860", credit: "Painting by Jasper Cropsey" },
+    ] },
     { id: "halloween", name: "Halloween", from: [10, 1], to: [10, 31], looks: [
       { id: "halloween-two-lanterns", name: "Lantern Night", blurb: "Two carved pumpkins glowing in the dark", credit: "Photo by Beth Teutschmann", default: true },
       { id: "halloween-purple-sky", name: "Witching Hour", blurb: "The Milky Way over a violet horizon", credit: "Photo by Vincentiu Solomon" },

@@ -2729,6 +2729,78 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#CC4F16; --accent-ink:#FFFFFF; --accent-soft:rgba(204,79,22,.12);
 }
 
+/* ---- Thanksgiving: shared by every thanksgiving-* look ----
+   Harvest light: a warm amber glow from the top corners over the photo and
+   the theme's wash. Leaves fall in the look's own colours (the fall leaf
+   rules, shown for thanksgiving-* too), and now and then a skein of geese
+   crosses the sky on its way south. */
+:root[data-look^="thanksgiving-"],
+.look-swatch[data-look^="thanksgiving-"] {
+  --sn-goose:#2A1E14; --sn-goose-glow:rgba(255,214,150,.30);
+  --sn-haze:radial-gradient(55% 60% at 0% 0%, rgba(255,170,70,.22), transparent 70%),
+    radial-gradient(45% 55% at 100% 0%, rgba(255,196,110,.16), transparent 70%);
+}
+
+/* ---- Pumpkin Patch: pumpkins in late sun (Bonnie Kittle, CC0) ---- */
+:root[data-look="thanksgiving-pumpkin-patch"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-pumpkin-patch"] {
+  --accent:#FF9A3C; --accent-ink:#2A1000; --accent-soft:rgba(255,154,60,.18);
+  --sn-scene:url("seasons/thanksgiving-pumpkin-patch.webp"); --sn-pos:center 55%;
+  --sn-leaf-1:#E8742A; --sn-leaf-2:#F2A33A; --sn-leaf-3:#B8461E; --sn-leaf-4:#F4C25A;
+}
+:root[data-look="thanksgiving-pumpkin-patch"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-pumpkin-patch"] {
+  --accent:#BF560C; --accent-ink:#FFFFFF; --accent-soft:rgba(191,86,12,.13);
+}
+
+/* ---- Golden Hour: hay bales at sundown (Annie Spratt, CC0) ---- */
+:root[data-look="thanksgiving-golden-hour"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-golden-hour"] {
+  --accent:#F6B26B; --accent-ink:#2A1500; --accent-soft:rgba(246,178,107,.18);
+  --sn-scene:url("seasons/thanksgiving-golden-hour.webp"); --sn-pos:65% 55%;
+  --sn-leaf-1:#E8963A; --sn-leaf-2:#F4BE5E; --sn-leaf-3:#C2652A; --sn-leaf-4:#F7D58A;
+}
+:root[data-look="thanksgiving-golden-hour"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-golden-hour"] {
+  --accent:#AD5F1A; --accent-ink:#FFFFFF; --accent-soft:rgba(173,95,26,.13);
+}
+
+/* ---- Cranberry Bog: floating cranberries (Jeff the quiet, CC0) ---- */
+:root[data-look="thanksgiving-cranberry-bog"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-cranberry-bog"] {
+  --accent:#FF6B7D; --accent-ink:#2A0008; --accent-soft:rgba(255,107,125,.18);
+  --sn-scene:url("seasons/thanksgiving-cranberry-bog.webp"); --sn-pos:center 70%;
+  --sn-leaf-1:#C8243C; --sn-leaf-2:#E8563E; --sn-leaf-3:#9E1A2E; --sn-leaf-4:#F2A03A;
+}
+:root[data-look="thanksgiving-cranberry-bog"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-cranberry-bog"] {
+  --accent:#B3203A; --accent-ink:#FFFFFF; --accent-soft:rgba(179,32,58,.12);
+}
+
+/* ---- Corn Shocks: a farm in November (Jeff the quiet, CC0) ---- */
+:root[data-look="thanksgiving-corn-shocks"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-corn-shocks"] {
+  --accent:#EBC27A; --accent-ink:#241700; --accent-soft:rgba(235,194,122,.18);
+  --sn-scene:url("seasons/thanksgiving-corn-shocks.webp"); --sn-pos:center 55%;
+  --sn-leaf-1:#D9A34A; --sn-leaf-2:#E8C070; --sn-leaf-3:#B5772E; --sn-leaf-4:#C9562E;
+}
+:root[data-look="thanksgiving-corn-shocks"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-corn-shocks"] {
+  --accent:#946515; --accent-ink:#FFFFFF; --accent-soft:rgba(148,101,21,.13);
+}
+
+/* ---- Hudson Autumn: Jasper Cropsey, 1860 (National Gallery of Art, public domain) ---- */
+:root[data-look="thanksgiving-hudson-autumn"][data-theme][data-accent],
+.look-swatch[data-look="thanksgiving-hudson-autumn"] {
+  --accent:#F2A04B; --accent-ink:#2A1200; --accent-soft:rgba(242,160,75,.18);
+  --sn-scene:url("seasons/thanksgiving-hudson-autumn.webp"); --sn-pos:center 50%;
+  --sn-leaf-1:#D9502A; --sn-leaf-2:#F0A04B; --sn-leaf-3:#B83A1E; --sn-leaf-4:#F4C25A;
+}
+:root[data-look="thanksgiving-hudson-autumn"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="thanksgiving-hudson-autumn"] {
+  --accent:#AD521A; --accent-ink:#FFFFFF; --accent-soft:rgba(173,82,26,.13);
+}
+
 /* ---- Halloween: shared by every halloween-* look ----
    Bats and spiders are near-black with a coloured rim (a purple glow on the
    bats, a green one on the spiders) so they read on a night photo and on
@@ -2890,7 +2962,10 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-leaves { display: none; position: absolute; inset: 0; }
 :root[data-look^="fall-"] body > .season-fx .sn-leaves,
 :root[data-look^="fall-"] body > .season .sn-leaves,
-.look-swatch[data-look^="fall-"] .sn-leaves { display: block; }
+.look-swatch[data-look^="fall-"] .sn-leaves,
+:root[data-look^="thanksgiving-"] body > .season-fx .sn-leaves,
+:root[data-look^="thanksgiving-"] body > .season .sn-leaves,
+.look-swatch[data-look^="thanksgiving-"] .sn-leaves { display: block; }
 .sn-leaf { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); perspective: 260px; }
 .sn-leaf b {
   display: block; width: 100%; height: 100%;
@@ -3083,6 +3158,8 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch[data-look="fall-misty-road"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 [data-look="fall-maple-sky"] .season-mark,
 .look-swatch[data-look="fall-maple-sky"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
+[data-look^="thanksgiving-"] .season-mark,
+.look-swatch[data-look^="thanksgiving-"] .look-mark { --mark: url("seasons/grains.svg"); }
 [data-look^="halloween-"] .season-mark,
 .look-swatch[data-look^="halloween-"] .look-mark { --mark: url("seasons/bat.svg"); }
 
