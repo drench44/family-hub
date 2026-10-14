@@ -10,6 +10,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Seasonal looks are no longer locked to their dates. Tap any look in
+  Settings and it shows every day until you change it ("Pick one");
+  "Calendar" goes back to changing the look with the dates.
+
 ### Fixed
 - The Wyze bridge's health check now also probes the bridge's own internal
   go2rtc. That relay can exit alone right after the container starts, and

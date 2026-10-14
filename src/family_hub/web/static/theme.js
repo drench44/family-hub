@@ -12,8 +12,9 @@
      data-idle-return  on | off             (per-device idle auto-return; hub.js
                                               reads it — behavioral, not visual)
      data-season       on | off             (seasonal looks follow the calendar)
-     data-look         none | <look id>     (DERIVED from data-season + today's
-                                              date; see SEASONS below)
+     data-look         none | <look id>     (DERIVED from data-season, a pinned
+                                              look (fh.lookPin) and today's date;
+                                              see SEASONS below)
 
    data-layout is the ONLY layout attribute. In "auto" the phone/wall split
    is decided by a pure-CSS width media query (max-width:1000px) — no JS
@@ -303,6 +304,25 @@
     return season.looks[0].id;
   }
 
+  // A pinned look paints every day, whatever the date: the owner asked that
+  // looks not be locked to their season. fh.lookPin holds the look id; no key
+  // (or an id no longer in SEASONS) means "follow the calendar". lookPinMem
+  // mirrors it for this session (undefined: not touched yet, read storage;
+  // "": cleared), for the same kiosk-storage reason as lookPicks.
+  var PIN_KEY = "fh.lookPin";
+  var lookPinMem;
+  function pinnedLook() {
+    var id = lookPinMem !== undefined ? lookPinMem : readStored(PIN_KEY);
+    return id && seasonOfLook(id) ? id : null;
+  }
+  function removeStored(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch (e) {
+      try { console.warn("family-hub: could not clear " + key + " (storage unavailable)"); } catch (e2) { /* no console */ }
+    }
+  }
+
   function stampSeason(v) {
     root.setAttribute("data-season", v);
   }
@@ -311,8 +331,10 @@
   // midnight with no reload. `date` is optional (tests pass a fixed one).
   function refreshLook(date) {
     var d = isDate(date) ? date : new Date();
-    var season = root.getAttribute("data-season") === "on" ? seasonFor(d) : null;
-    var look = season ? lookFor(season) : "none";
+    var on = root.getAttribute("data-season") === "on";
+    var pin = on ? pinnedLook() : null;
+    var season = on && !pin ? seasonFor(d) : null;
+    var look = pin || (season ? lookFor(season) : "none");
     if (root.getAttribute("data-look") !== look) root.setAttribute("data-look", look);
     return look;
   }
@@ -334,17 +356,29 @@
     stampSeason(v);
     refreshLook();
   }
-  // Remember a look as this device's favourite for ITS season. Choosing a look
-  // is also a clear "I want seasonal looks", so it turns the season pref on AND
-  // saves that as this device's own choice (even when a house default already
-  // stamped "on": otherwise a later house change to "off" would undo the pick).
-  // Out-of-season picks are kept and paint once their season comes round.
+  // Tapping a look shows it now and keeps it, any day of the year (a pin).
+  // It also becomes that season's favourite, so going back to the calendar
+  // paints it whenever its season comes round. Choosing a look is a clear "I
+  // want seasonal looks", so it turns the season pref on AND saves that as
+  // this device's own choice (even when a house default already stamped "on":
+  // otherwise a later house change to "off" would undo the pick).
   function setSeasonLook(lookId) {
     var season = seasonOfLook(lookId);
     if (!season) return;
     lookPicks[season.id] = lookId;
+    lookPinMem = lookId;
     seasonChosen = true;
     writeStored("fh.look." + season.id, lookId);
+    writeStored(PIN_KEY, lookId);
+    writeStored("fh.season", "on");
+    stampSeason("on");
+    refreshLook();
+  }
+  // Back to the calendar: drop the pin and turn seasonal looks on.
+  function followCalendar() {
+    lookPinMem = "";
+    seasonChosen = true;
+    removeStored(PIN_KEY);
     writeStored("fh.season", "on");
     stampSeason("on");
     refreshLook();
@@ -364,6 +398,8 @@
   window.setSeason = setSeason;
   window.stampSeason = stampSeasonIf;
   window.setSeasonLook = setSeasonLook;
+  window.followCalendar = followCalendar;
+  window.pinnedLook = pinnedLook;
   window.seasonChoiceMade = seasonChoiceMade;
   // The season whose window opens soonest after `date` (or null with no
   // seasons): lets the UI say "Fall starts Sep 1" when nothing is in season.
