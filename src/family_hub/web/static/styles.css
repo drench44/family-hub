@@ -3078,6 +3078,11 @@ body.integ-off-todos .todo-slot { display: none; }
    journey too, leaving the far skein hanging mid-screen. */
 .sn-flock.back { --y: 30%; --d: 120s; --dl: -70s; --rise: -3vh; --flock-k: .5; }
 .sn-flock.back .sn-goose { filter: none; opacity: .8; --flap: .7s; }
+/* behind the glass: the mask steps in place, no sliding strip (see the far
+   bats: a strip under a frosted card flashed as a black bar) */
+.sn-flock.back .sn-goose b::before { width: 100%;
+  -webkit-mask-size: 1200% 100%; mask-size: 1200% 100%; animation-name: sn-goose-flap-mask; }
+@keyframes sn-goose-flap-mask { from { -webkit-mask-position: 0% 0; mask-position: 0% 0; } to { -webkit-mask-position: 100% 0; mask-position: 100% 0; } }
 
 /* ---- Halloween's creatures (every halloween-* look) ----
    The same two layers as the leaves. Over the cards (.season-fx): a pair of
@@ -3135,6 +3140,16 @@ body.integ-off-todos .todo-slot { display: none; }
 .sn-haunt.front .sn-bat:nth-child(3) { --y: 46%; --s: 72px; --d: 37s; --dl: -24s; --rise: -18vh; --bob: 2.8s; animation-name: sn-bat-rtl; }
 .sn-haunt.front .sn-bat:nth-child(4) { --y: 33%; --s: 40px; --d: 31s; --dl: -13s; --rise: 4vh; --bob: 3.2s; --flap: .56s; }
 .sn-haunt.back .sn-bat { filter: none; opacity: .85; }
+/* Behind the glass a bat flaps by stepping its MASK through the frames in a
+   bat-sized box, never by sliding the 15-frame strip: a frosted card above
+   re-blurs whatever moves under it, and on the wall (Firefox) and a laptop
+   it sometimes blurred the whole strip, unclipped. That painted the strip
+   as a solid near-black bar across the card ("black flickering on the whole
+   row", owner's photo 2026-10-14). Stepping the mask repaints only these
+   few small far shapes; the bats over the cards keep the cheaper strip. */
+.sn-haunt.back .sn-bat b::before { width: 100%;
+  -webkit-mask-size: 1500% 100%; mask-size: 1500% 100%; animation-name: sn-bat-flap-mask; }
+@keyframes sn-bat-flap-mask { from { -webkit-mask-position: 0% 0; mask-position: 0% 0; } to { -webkit-mask-position: 100% 0; mask-position: 100% 0; } }
 .sn-haunt.back .sn-bat:nth-child(3) { --y: 30%; --s: 30px; --d: 46s; --dl: -12s; --rise: -6vh; --flap: .28s; }
 .sn-haunt.back .sn-bat:nth-child(4) { --y: 58%; --s: 24px; --d: 52s; --dl: -33s; --rise: -12vh; --flap: .3s; animation-name: sn-bat-rtl; }
 .sn-haunt.back .sn-bat:nth-child(5) { --y: 12%; --s: 26px; --d: 58s; --dl: -47s; --rise: 6vh; --flap: .26s; }
@@ -3161,15 +3176,19 @@ body.integ-off-todos .todo-slot { display: none; }
   transform: translate3d(-80px, -80px, 0); }
 .sn-crawl b, .sn-dangle b { display: block; width: 100%; height: 100%; overflow: hidden;
   filter: drop-shadow(0 0 4px var(--sn-spider-glow)); }
+/* The spiders step their mask through the seven walking poses in a
+   spider-sized box rather than sliding a 7-frame strip: both can pass under
+   the frosted top bar, and a strip under frosted glass flashed as a black
+   bar (see the far bats). Two small boxes, so the repaint is cheap. */
 .sn-crawl b::before, .sn-dangle b::before {
-  content: ""; display: block; width: 700%; height: 100%; background: var(--sn-spider);
-  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 100% 100% no-repeat;
+  content: ""; display: block; width: 100%; height: 100%; background: var(--sn-spider);
+  -webkit-mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat; mask: url("seasons/spider-walk.png") 0 0 / 700% 100% no-repeat;
 }
 /* a spider on silk hangs head-down from the tip of its abdomen, where the
    thread leaves it (the drawing faces up, so it turns over) */
 .sn-dangle b { transform: rotate(180deg); }
-.sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: sn-walk var(--walk-ms, 520ms) steps(7) infinite; }
-@keyframes sn-walk { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-100%, 0, 0); } }
+.sn-crawl.walking b::before, .sn-dangle.walking b::before { animation: sn-walk var(--walk-ms, 520ms) steps(7, jump-none) infinite; }
+@keyframes sn-walk { from { -webkit-mask-position: 0% 0; mask-position: 0% 0; } to { -webkit-mask-position: 100% 0; mask-position: 100% 0; } }
 @media (max-width: 1000px) {
   /* a phone screen is a fifth of the wall’s width: at wall size one web
      covered the whole first card */

@@ -230,6 +230,24 @@ A second look at both seasons, after they shipped, found these:
   tip. The rock is on `rotate`, not `transform`, so it stacks with the
   sway instead of replacing it.
 
+### Lessons from the Thanksgiving build (2026-10-14)
+
+- **A sliding strip under frosted glass flashes black.** The far bats beat
+  their wings by sliding a 15-frame strip behind a one-frame window. A
+  frosted card re-blurs whatever moves under it, and on the wall (Firefox)
+  and a laptop it sometimes blurred the whole strip unclipped: a solid
+  near-black bar the height of one bat across a whole row of the To-Do card
+  ("black flickering on the whole row"). Recording the screen with GNOME's
+  screencast never caught it; the owner's phone photo did. Anything under
+  glass (the far bats and geese, and the spiders, which pass under the
+  frosted top bar) now steps its MASK through the frames in a frame-sized
+  box. Only creatures over the cards slide a strip. A guard pins both.
+- **Ask before taking motion away.** The first fix removed everything
+  behind the glass; the owner: "I like them flying in the background
+  though". Fix the cause, keep the look.
+- **Never size a moving layer with `scale`.** It applies after the
+  animation's translate, so a half-size flock only got halfway across.
+
 ## 3. What other products do
 
 Surveyed before settling on this design (2026-09):
