@@ -2306,3 +2306,10 @@ def test_the_flock_is_never_sized_with_scale():
         if any(".sn-flock" in sel or ".sn-goose" in sel for sel in sels):
             assert not re.search(r"(?<![\w-])scale\s*:", body), f"{sels} sizes the flock with scale"
     assert "--flock-k: .5" in CSS, "the far skein is half size through --flock-k"
+
+
+def test_the_skein_starts_fully_off_screen_at_any_size():
+    """A fixed -18vw start put a phone's half-size V inside the screen, so
+    birds popped into view. The start is the flock's own width off the left."""
+    cross = re.search(r"@keyframes sn-flock-cross \{\s*0% \{ transform: translate3d\(([^,]+),", CSS)
+    assert cross and "-110%" in cross.group(1), "start the crossing a flock-width off screen"
