@@ -1585,10 +1585,14 @@ _LOOK_TOKENS = ["--accent", "--accent-ink", "--accent-soft", "--sn-scene", "--sn
 # Each season's moving things are coloured once for the whole season, on its
 # own block: fall's leaves are per-look (they were picked out of each photo),
 # Halloween's bats, spiders and webs are one palette for all five looks.
+# Thanksgiving does both: leaves per look, the geese and the harvest haze
+# once for the season. Each entry is (set by every look, set by the season).
+_LEAF_TOKENS = ["--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
 _SEASON_SHAPE_TOKENS = {
-    "fall-": ["--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"],
-    "halloween-": ["--sn-bat", "--sn-bat-glow", "--sn-spider", "--sn-spider-glow",
-                   "--sn-web", "--sn-haze"],
+    "fall-": (_LEAF_TOKENS, []),
+    "thanksgiving-": (_LEAF_TOKENS, ["--sn-goose", "--sn-goose-glow", "--sn-haze"]),
+    "halloween-": ([], ["--sn-bat", "--sn-bat-glow", "--sn-spider", "--sn-spider-glow",
+                        "--sn-web", "--sn-haze"]),
 }
 _THEME_OWNED = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                 "--ink", "--dim", "--faint", "--shadow", "--glass", "--glass-edge", "--sn-wash"]
@@ -1612,13 +1616,12 @@ def test_every_look_sets_its_photo_and_accent_and_leaves_the_theme_alone(look):
     for tok in _LOOK_TOKENS:
         assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
     prefix = next(pre for pre in _SEASON_SHAPE_TOKENS if look.startswith(pre))
-    shapes = _SEASON_SHAPE_TOKENS[prefix]
-    if prefix == "fall-":
-        for tok in shapes:
-            assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
-    else:
+    per_look, per_season = _SEASON_SHAPE_TOKENS[prefix]
+    for tok in per_look:
+        assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
+    if per_season:
         block = _block_after(f':root[data-look^="{prefix}"]')
-        for tok in shapes:
+        for tok in per_season:
             assert re.search(rf"{re.escape(tok)}\s*:", block), \
                 f'the [data-look^="{prefix}"] block never sets {tok}'
     assert f'--sn-scene:url("seasons/{look}.webp")' in body, f"{eve} must paint seasons/{look}.webp"
@@ -2069,9 +2072,7 @@ def test_every_creature_token_a_season_declares_is_actually_used():
     """A token declared and never referenced paints nothing: a typo in the
     reference (var(--sn-bat-nope)) leaves the bats invisible and every other
     guard still green."""
-    for prefix, tokens in _SEASON_SHAPE_TOKENS.items():
-        if prefix == "fall-":
-            continue
+    for prefix, (_, tokens) in _SEASON_SHAPE_TOKENS.items():
         for tok in tokens:
             assert re.search(rf"var\({re.escape(tok)}[,)]", CSS), \
                 f"{tok} is declared for {prefix} but nothing paints with it"
@@ -2109,7 +2110,7 @@ def test_the_preview_tile_paints_halloween_and_holds_still():
     may reach inside it (the phone's web offsets did, and pushed both webs
     off the tile)."""
     swatch = _block_after('.look-swatch[data-look^="halloween-"]')
-    for tok in _SEASON_SHAPE_TOKENS["halloween-"]:
+    for tok in _SEASON_SHAPE_TOKENS["halloween-"][1]:
         assert re.search(rf"{re.escape(tok)}\s*:", swatch), f"a preview tile never sets {tok}"
     still = re.search(r"\.look-swatch \.sn-bat \{([^}]*)\}", CSS)
     assert still and "animation: none" in still.group(1), "preview bats must hold still in the tile"
