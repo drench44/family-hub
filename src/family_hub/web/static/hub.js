@@ -5099,8 +5099,9 @@ document.addEventListener('click', (e) => {
   // which picks that season's look and turns seasons on.
   const ss = e.target.closest('.theme-ctl [data-season-set]');
   if (ss) { if (typeof setSeason === 'function') setSeason(ss.dataset.seasonSet); reflectThemeControls(); return; }
-  // Settings mode: Calendar drops any pin; Pick one keeps what shows now (or
-  // the season in force's look, or the next season's) until changed.
+  // Settings mode: Calendar drops any pin; Pick one keeps the look already
+  // pinned (Off hides a pin without forgetting it), else what shows now, else
+  // the season in force's look, else the next season's, until changed.
   const sm = e.target.closest('.theme-ctl [data-season-mode]');
   if (sm) {
     if (sm.dataset.seasonMode === 'calendar') {
@@ -5109,7 +5110,9 @@ document.addEventListener('click', (e) => {
       const shown = document.documentElement.getAttribute('data-look');
       const now = typeof activeSeason === 'function' ? activeSeason() : null;
       const next = typeof nextSeason === 'function' ? nextSeason() : null;
-      const look = (shown && shown !== 'none' && shown)
+      const pinned = typeof pinnedLook === 'function' ? pinnedLook() : null;
+      const look = pinned
+        || (shown && shown !== 'none' && shown)
         || (now && pickedLook(now))
         || (next && pickedLook(next.id));
       if (look) setSeasonLook(look);

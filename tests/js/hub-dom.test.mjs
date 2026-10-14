@@ -7793,6 +7793,15 @@ test('Pick one with nothing on screen pins the season in force, else the next se
   sandbox.seasonLook = (id) => (id === 'fall' ? 'fall-maple' : null);
   tapPick();
   assert.deepEqual(calls.at(-1), ['setSeasonLook', 'fall-maple'], 'out of season: the coming season\'s favourite');
+  // Off hides a pin without forgetting it: Pick one brings THAT look back,
+  // not the season in force's favourite
+  sandbox.pinnedLook = () => 'fall-harvest';
+  sandbox.activeSeason = () => 'fall';
+  sandbox.seasonLook = () => 'fall-maple';
+  tapPick();
+  assert.deepEqual(calls.at(-1), ['setSeasonLook', 'fall-harvest'], 'the saved pin wins');
+  sandbox.pinnedLook = () => null;
+  sandbox.activeSeason = () => null;
   const before = calls.length;
   sandbox.FH_SEASONS = [];
   sandbox.nextSeason = () => null;
