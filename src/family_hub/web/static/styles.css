@@ -3212,7 +3212,9 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch { --sn-k: 1; }
 .look-swatch .sn-bat { animation: none; transform: translate3d(var(--tx), 0, 0); }
 .look-swatch .sn-flock { animation: none; transform: translate3d(70px, 0, 0); --y: 8%; --flock-k: .32; }
-.look-swatch .sn-goose b::before { animation: none; transform: translate3d(-33.3333%, 0, 0); }
+/* the tile's birds step their mask like the far ones: hold frame 5 of 12
+   (k / (N - 1) = 4 / 11), wings mid-beat */
+.look-swatch .sn-goose b::before { animation: none; transform: none; -webkit-mask-position: 36.3636% 0; mask-position: 36.3636% 0; }
 .look-swatch .sn-bat i, .look-swatch .sn-bat b { animation: none; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(4) { --tx: 128px; --y: 36%; --s: 11px; }

@@ -2309,6 +2309,9 @@ def test_the_preview_tile_shows_the_skein_holding_still():
     assert tile and "animation: none" in tile.group(1)
     wings = re.search(r"(?m)^\.look-swatch \.sn-goose b::before \{([^}]*)\}", CSS)
     assert wings and "animation: none" in wings.group(1)
+    # the tile's birds are frame-sized boxes (.sn-flock.back): a pose is a
+    # mask position; a leftover strip translate shifted and clipped the bird
+    assert "transform: none" in wings.group(1) and "mask-position: 36.3636% 0" in wings.group(1)
     placed = set(re.findall(r"(?m)^\.sn-goose:nth-child\((\d+)\)", CSS))
     assert placed == {str(i) for i in range(1, 8)}, f"birds 1 to 7 each have a place in the V, not {sorted(placed)}"
 
