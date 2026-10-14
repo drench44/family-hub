@@ -35,6 +35,7 @@ function makeStorage(seed = {}) {
   return {
     getItem(k) { return map.has(k) ? map.get(k) : null; },
     setItem(k, v) { map.set(k, String(v)); },
+    removeItem(k) { map.delete(k); },
     _map: map,
   };
 }
@@ -619,4 +620,56 @@ test('storage that throws never breaks first paint or rememberHouseTheme', () =>
   vm.runInContext(themeSrc, sandbox);
   assert.equal(root.getAttribute('data-theme'), 'grey');
   assert.doesNotThrow(() => win.rememberHouseTheme({ mode: 'dark' }));
+});
+
+// ---- looks are not locked to their dates (a tapped look is pinned) ----
+
+test('a tapped look paints every day of the year, out of its season too', () => {
+  const { root, localStorage, win } = loadTheme();
+  win.setSeasonLook('halloween-moonrise');
+  assert.equal(localStorage.getItem('fh.lookPin'), 'halloween-moonrise');
+  assert.equal(localStorage.getItem('fh.look.halloween'), 'halloween-moonrise', 'it is also the season favourite');
+  for (const d of [day(1, 15), day(7, 4), day(9, 15), day(10, 15), day(12, 25)]) {
+    assert.equal(win.refreshLook(d), 'halloween-moonrise');
+  }
+  assert.equal(root.getAttribute('data-look'), 'halloween-moonrise');
+  assert.equal(win.pinnedLook(), 'halloween-moonrise');
+});
+
+test('a pin survives a reload, and Off still takes it down without forgetting it', () => {
+  const { win } = loadTheme({ storage: { 'fh.season': 'on', 'fh.lookPin': 'fall-misty-road' } });
+  assert.equal(win.refreshLook(day(3, 3)), 'fall-misty-road');
+  win.setSeason('off');
+  assert.equal(win.refreshLook(day(3, 3)), 'none');
+  win.setSeason('on');
+  assert.equal(win.refreshLook(day(3, 3)), 'fall-misty-road', 'On brings the pinned look back');
+});
+
+test('followCalendar drops the pin and goes back to the dates', () => {
+  const { root, localStorage, win } = loadTheme({ storage: { 'fh.season': 'off', 'fh.lookPin': 'halloween-moonrise' } });
+  win.followCalendar();
+  assert.equal(localStorage.getItem('fh.lookPin'), null);
+  assert.equal(localStorage.getItem('fh.season'), 'on');
+  assert.equal(root.getAttribute('data-season'), 'on');
+  assert.equal(win.pinnedLook(), null);
+  assert.equal(win.refreshLook(day(7, 4)), 'none', 'nothing is in season in July');
+  assert.equal(win.refreshLook(day(9, 15)), 'fall-aspen-grove');
+  assert.equal(win.seasonChoiceMade(), true, 'a house default must not undo it');
+});
+
+test('an unknown pinned look is ignored and the calendar takes over', () => {
+  const { win } = loadTheme({ storage: { 'fh.season': 'on', 'fh.lookPin': 'winter-gone' } });
+  assert.equal(win.pinnedLook(), null);
+  assert.equal(win.refreshLook(day(9, 15)), 'fall-aspen-grove');
+});
+
+test('on a kiosk that refuses storage a pin and a return to the calendar still apply now', () => {
+  const { root, win } = loadTheme();
+  win.localStorage.setItem = () => { throw new Error('denied'); };
+  win.localStorage.removeItem = () => { throw new Error('denied'); };
+  win.setSeasonLook('halloween-branches');
+  assert.equal(win.refreshLook(day(2, 2)), 'halloween-branches');
+  win.followCalendar();
+  assert.equal(win.refreshLook(day(2, 2)), 'none');
+  assert.equal(root.getAttribute('data-season'), 'on');
 });
