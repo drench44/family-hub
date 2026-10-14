@@ -250,7 +250,9 @@
       { id: "thanksgiving-pumpkin-patch", name: "Pumpkin Patch", blurb: "Pumpkins in warm late sun by the corn", credit: "Photo by Bonnie Kittle", default: true },
       { id: "thanksgiving-golden-hour", name: "Golden Hour", blurb: "Hay bales as the sun goes down", credit: "Photo by Annie Spratt" },
       { id: "thanksgiving-cranberry-bog", name: "Cranberry Bog", blurb: "A flooded bog full of floating cranberries", credit: "Photo by Jeff the quiet" },
+      { id: "thanksgiving-cranberry-harvest", name: "Cranberry Harvest", blurb: "A bog carpeted in floating cranberries, from above", credit: "Photo by Lance Cheung, USDA" },
       { id: "thanksgiving-corn-shocks", name: "Corn Shocks", blurb: "Corn shocks by a white farmhouse", credit: "Photo by Jeff the quiet" },
+      { id: "thanksgiving-vine-rows", name: "Vine Rows", blurb: "Red and orange rows on an autumn hillside", credit: "Photo by Lukas Budimaier" },
       { id: "thanksgiving-hudson-autumn", name: "Hudson Autumn", blurb: "Red and gold trees over the Hudson, 1860", credit: "Painting by Jasper Cropsey" },
     ] },
     { id: "halloween", name: "Halloween", from: [10, 1], to: [10, 31], looks: [
