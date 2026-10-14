@@ -11,14 +11,20 @@ This document is the standard every look is held to. It exists because the
 first three attempts at fall missed, for reasons worth not repeating. Read it
 before adding Halloween, Christmas, winter, spring, or anything else.
 
-**Shipped so far:** fall (Sep 1 to Nov 30, three looks) and Halloween (Oct 1
-to Oct 31, five looks). **What's next, in the owner's order:** Thanksgiving,
-then Christmas. Thanksgiving sits inside fall's Sep 1 to Nov 30 window, so
-list it in `SEASONS` before fall, since the first matching window wins.
+**Shipped so far:** fall (Sep 1 to Nov 30, three looks), Halloween (Oct 1
+to Oct 31, five looks) and Thanksgiving (Nov 1 to Nov 30, five looks).
+**What's next, in the owner's order:** Christmas. A holiday that sits inside
+a broad season (Halloween and Thanksgiving inside fall) is listed in
+`SEASONS` before it, since the first matching window wins.
+**Looks are not locked to their dates** (the owner: "themes shouldn't be
+locked by date"). Settings has Off / Calendar / Pick one: tapping any tile
+pins that look every day of the year (`fh.lookPin`), and Calendar goes
+back to following the windows.
 Windows are month/day and inclusive; a window ending [2, 28] leaves out
 Feb 29, so a winter look should end on [2, 29].
 Each gets its own photos, its own moving things (leaves for fall, bats and
-spiders for Halloween, snow for Christmas, never cartoon props) and a
+spiders for Halloween, leaves and a skein of geese for Thanksgiving, snow
+for Christmas, never cartoon props) and a
 matching accent.
 
 ---
@@ -437,8 +443,9 @@ CC0), Shenandoah NPS rolling hills.
 
 ## 7. How it works (reference)
 
-- `theme.js` owns the registry, the prefs (`fh.season`, `fh.look.<season>`)
-  and the derived `data-look` attribute on `<html>`. It stamps them before
+- `theme.js` owns the registry, the prefs (`fh.season`, `fh.look.<season>`,
+  `fh.lookPin`) and the derived `data-look` attribute on `<html>`. A pinned
+  look wins over the date; with no pin the calendar decides. It stamps them before
   first paint, and `tickClock` in hub.js re-derives them when the date turns.
 - `hub.js` mounts two layers: `.season` (the photo, the far leaves, the webs
   and the far bats) as the first child of `<body>`, and `.season-fx` (the
