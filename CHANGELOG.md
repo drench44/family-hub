@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-10-14
+
 ### Added
 - Seasonal looks are no longer locked to their dates. Tap any look in
   Settings and it shows every day until you change it ("Pick one");
