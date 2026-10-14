@@ -11,14 +11,20 @@ This document is the standard every look is held to. It exists because the
 first three attempts at fall missed, for reasons worth not repeating. Read it
 before adding Halloween, Christmas, winter, spring, or anything else.
 
-**Shipped so far:** fall (Sep 1 to Nov 30, three looks) and Halloween (Oct 1
-to Oct 31, five looks). **What's next, in the owner's order:** Thanksgiving,
-then Christmas. Thanksgiving sits inside fall's Sep 1 to Nov 30 window, so
-list it in `SEASONS` before fall, since the first matching window wins.
+**Shipped so far:** fall (Sep 1 to Nov 30, nine looks), Halloween (Oct 1
+to Oct 31, five looks) and Thanksgiving (Nov 1 to Nov 30, seven looks).
+**What's next, in the owner's order:** Christmas. A holiday that sits inside
+a broad season (Halloween and Thanksgiving inside fall) is listed in
+`SEASONS` before it, since the first matching window wins.
+**Looks are not locked to their dates** (the owner: "themes shouldn't be
+locked by date"). Settings has Off / Calendar / Pick one: tapping any tile
+pins that look every day of the year (`fh.lookPin`), and Calendar goes
+back to following the windows.
 Windows are month/day and inclusive; a window ending [2, 28] leaves out
 Feb 29, so a winter look should end on [2, 29].
 Each gets its own photos, its own moving things (leaves for fall, bats and
-spiders for Halloween, snow for Christmas, never cartoon props) and a
+spiders for Halloween, leaves and a skein of geese for Thanksgiving, snow
+for Christmas, never cartoon props) and a
 matching accent.
 
 ---
@@ -223,6 +229,65 @@ A second look at both seasons, after they shipped, found these:
 - **Leaves on a straight lane read as a conveyor.** Real leaves drift and
   tip. The rock is on `rotate`, not `transform`, so it stacks with the
   sway instead of replacing it.
+
+### Lessons from the Thanksgiving build (2026-10-14)
+
+- **A sliding strip under frosted glass flashes black.** The far bats beat
+  their wings by sliding a 15-frame strip behind a one-frame window. A
+  frosted card re-blurs whatever moves under it, and on the wall (Firefox)
+  and a laptop it sometimes blurred the whole strip unclipped: a solid
+  near-black bar the height of one bat across a whole row of the To-Do card
+  ("black flickering on the whole row"). Recording the screen with GNOME's
+  screencast never caught it; the owner's phone photo did. Anything under
+  glass (the far bats and geese, and the spiders, which pass under the
+  frosted top bar) now steps its MASK through the frames in a frame-sized
+  box. Only creatures over the cards slide a strip. A guard pins both.
+- **Ask before taking motion away.** The first fix removed everything
+  behind the glass; the owner: "I like them flying in the background
+  though". Fix the cause, keep the look.
+- **Never size a moving layer with `scale`.** It applies after the
+  animation's translate, so a half-size flock only got halfway across.
+
+- **The owner would rather have every good photo than a strict five.**
+  Offered a swap ("replace Corn Shocks with Vine Rows?"), the answer was
+  "why not just have all backgrounds". Add strong candidates as extra looks
+  instead of replacing; the picker scales.
+- **Show choices where the owner can see them.** Side-by-side pictures
+  ("now" on the left, "option" on the right) and a short GIF of any motion,
+  opened on the Mac with `open` and saved to `~/Downloads/<season>-picks/`.
+  A file card in the chat alone was missed ("where do I see this").
+- **Recording the wall's screen does not catch every glitch.** Nine
+  minutes of GNOME screencast showed nothing while the owner watched the
+  bar flicker. A phone photo or slow-motion video from the owner is the
+  real evidence; ask for one early, plus where on screen and what colour.
+
+### Before Christmas (next, December)
+
+Read everything above first. Then, in order:
+
+1. **Window:** Dec 1 to Dec 31 (Thanksgiving ends Nov 30). If a winter
+   season follows, list Christmas before it and end winter on [2, 29].
+2. **Photos:** 10 to 15 vetted candidates on one contact sheet (section 5
+   rules; NPS and USFWS winter shots, Commons CC0, museum CC0 winter
+   paintings such as Hiroshige snow prints and Monet's *The Magpie*), then
+   side-by-side wall screenshots. Expect to ship most of the good ones.
+   Happy and warm: lit trees, snowy pines at blue hour, a cabin glow. No
+   Santa, no clip-art ornaments, no cartoon props.
+3. **Motion:** snow. Real flakes are not leaves: they fall slowly and
+   nearly straight, drift a little, never spin like a coin, and vary in
+   size with distance. Two depths like the leaves (a far set behind the
+   glass is fine: a plain masked shape with no sprite strip is safe there).
+   Anything with drawn frames that sits under frosted glass steps its mask,
+   never a sliding strip (see the flicker lesson above).
+4. **Accent and mark:** pick the accent from each photo; a snowflake or
+   pine mark from Phosphor (MIT) or a CC0 drawing, credited.
+5. **Tests:** add a `"christmas-"` entry to `_SEASON_SHAPE_TOKENS` in
+   `test_static.py` (per-look tokens, season tokens), its prefix to the
+   phone `--sn-k` block if it has creatures, and its dates to
+   `theme.test.mjs` (Nov 30 is Thanksgiving, Dec 1 is Christmas).
+6. **Every combination at full size** (section 6, step 6), then the three
+   Claude review agents and an Astra review, then the owner's eye on the
+   wall before calling it done.
 
 ## 3. What other products do
 
@@ -437,8 +502,9 @@ CC0), Shenandoah NPS rolling hills.
 
 ## 7. How it works (reference)
 
-- `theme.js` owns the registry, the prefs (`fh.season`, `fh.look.<season>`)
-  and the derived `data-look` attribute on `<html>`. It stamps them before
+- `theme.js` owns the registry, the prefs (`fh.season`, `fh.look.<season>`,
+  `fh.lookPin`) and the derived `data-look` attribute on `<html>`. A pinned
+  look wins over the date; with no pin the calendar decides. It stamps them before
   first paint, and `tickClock` in hub.js re-derives them when the date turns.
 - `hub.js` mounts two layers: `.season` (the photo, the far leaves, the webs
   and the far bats) as the first child of `<body>`, and `.season-fx` (the

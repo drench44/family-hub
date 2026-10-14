@@ -1585,10 +1585,14 @@ _LOOK_TOKENS = ["--accent", "--accent-ink", "--accent-soft", "--sn-scene", "--sn
 # Each season's moving things are coloured once for the whole season, on its
 # own block: fall's leaves are per-look (they were picked out of each photo),
 # Halloween's bats, spiders and webs are one palette for all five looks.
+# Thanksgiving does both: leaves per look, the geese and the harvest haze
+# once for the season. Each entry is (set by every look, set by the season).
+_LEAF_TOKENS = ["--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"]
 _SEASON_SHAPE_TOKENS = {
-    "fall-": ["--sn-leaf-1", "--sn-leaf-2", "--sn-leaf-3", "--sn-leaf-4"],
-    "halloween-": ["--sn-bat", "--sn-bat-glow", "--sn-spider", "--sn-spider-glow",
-                   "--sn-web", "--sn-haze"],
+    "fall-": (_LEAF_TOKENS, []),
+    "thanksgiving-": (_LEAF_TOKENS, ["--sn-goose", "--sn-goose-glow", "--sn-haze"]),
+    "halloween-": ([], ["--sn-bat", "--sn-bat-glow", "--sn-spider", "--sn-spider-glow",
+                        "--sn-web", "--sn-haze"]),
 }
 _THEME_OWNED = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                 "--ink", "--dim", "--faint", "--shadow", "--glass", "--glass-edge", "--sn-wash"]
@@ -1612,13 +1616,12 @@ def test_every_look_sets_its_photo_and_accent_and_leaves_the_theme_alone(look):
     for tok in _LOOK_TOKENS:
         assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
     prefix = next(pre for pre in _SEASON_SHAPE_TOKENS if look.startswith(pre))
-    shapes = _SEASON_SHAPE_TOKENS[prefix]
-    if prefix == "fall-":
-        for tok in shapes:
-            assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
-    else:
+    per_look, per_season = _SEASON_SHAPE_TOKENS[prefix]
+    for tok in per_look:
+        assert re.search(rf"{re.escape(tok)}\s*:", body), f"{eve} never sets {tok}"
+    if per_season:
         block = _block_after(f':root[data-look^="{prefix}"]')
-        for tok in shapes:
+        for tok in per_season:
             assert re.search(rf"{re.escape(tok)}\s*:", block), \
                 f'the [data-look^="{prefix}"] block never sets {tok}'
     assert f'--sn-scene:url("seasons/{look}.webp")' in body, f"{eve} must paint seasons/{look}.webp"
@@ -1955,27 +1958,42 @@ def test_halloween_sprite_sheets_match_the_frames_the_css_steps_through():
     cells actually in the file — and the cell's shape must match the window
     it slides behind, or every frame is stretched.
 
-    The strip is moved with transform, never with the mask's own position:
-    mask-position is not a compositable property, so animating it repaints
-    seven shadowed bats on the main thread every frame, all day, on a wall
-    driven by an i3's integrated graphics."""
-    for sheet, window in (("bat-flap.png", (1.0, 0.83)), ("spider-walk.png", (58.0, 76.0))):
-        strip = re.search(rf'::before \{{[^}}]*width: (\d+)%;[^}}]*mask: url\("seasons/{sheet}"\) 0 0 / 100% 100%', CSS)
-        assert strip, f"seasons/{sheet} must be painted on a ::before strip, stepped by transform"
-        frames = int(strip.group(1)) // 100
-        haunt = CSS[CSS.index("Halloween's creatures"):]
-        steps = {int(m) for m in re.findall(r"steps\((\d+)[,)]", haunt)}
-        assert frames in steps, f"{sheet}: the strip holds {frames} frames, but no steps({frames}) drives it"
+    Two ways to step the frames, and where each belongs:
+    - Over the cards (the near bats, the near geese) the strip slides behind
+      the window with transform, so the compositor draws it: seven shadowed
+      bats repainting every step all day is real work for the wall's i3.
+    - Under frosted glass (the far bats and geese behind the cards, and the
+      spiders, which pass under the frosted top bar) the MASK steps in a
+      frame-sized box instead. A frosted layer re-blurs whatever moves under
+      it, and on the wall and a laptop it sometimes blurred a sliding strip
+      unclipped: the whole strip painted as a solid black bar across a card
+      ("black flickering on the whole row", 2026-10-14)."""
+    for sheet, window, frames in (("bat-flap.png", (1.0, 0.83), 15), ("spider-walk.png", (58.0, 76.0), 7)):
         w, h = _png_size(STATIC / "seasons" / sheet)
         assert w % frames == 0, f"{sheet} is {w}px wide, not a whole number of {frames} frames"
         cell = (w / frames) / h
         assert abs(cell - window[0] / window[1]) < 0.12, \
             f"{sheet}'s frames are {cell:.2f} wide per tall; its window is {window[0] / window[1]:.2f}, so frames stretch"
-    for name in ("sn-bat-flap", "sn-walk"):
-        kf = re.search(rf"@keyframes {name} \{{([^}}]*)\}}", CSS)
-        assert kf, f"no @keyframes {name}"
-        assert "transform: translate3d(" in kf.group(1) and "mask-position" not in kf.group(1), \
-            f"{name} must step the strip with transform (mask-position repaints every frame)"
+    # over the cards: a 15-frame strip slid by transform, steps agree
+    bat = re.search(r"(?m)^\.sn-bat b::before \{([^}]*)\}", CSS).group(1)
+    assert "width: 1500%" in bat and "steps(15, jump-none)" in bat
+    assert "transform: translate3d(-93.3333%" in re.search(r"@keyframes sn-bat-flap \{[^\n]*\}", CSS).group(0)
+    # under glass: no strip wider than its box, the mask steps instead
+    for sel, size, kf, n in (
+        (r"\.sn-haunt\.back \.sn-bat b::before", "1500% 100%", "sn-bat-flap-mask", 15),
+        (r"\.sn-flock\.back \.sn-goose b::before", "1200% 100%", "sn-goose-flap-mask", 12),
+        (r"\.sn-crawl b::before, \.sn-dangle b::before", "700% 100%", "sn-walk", 7),
+    ):
+        body = re.search(rf"(?m)^{sel} \{{([^}}]*)\}}", CSS)
+        assert body, f"no rule for {sel}"
+        assert "width: 100%" in body.group(1), f"{sel}: under glass the box is one frame wide, never a strip"
+        assert size in body.group(1), f"{sel}: the mask holds all {n} frames ({size})"
+        keys = re.search(rf"@keyframes {kf} \{{([^\n]*)\}}", CSS)
+        assert keys and "mask-position: 100% 0" in keys.group(1) and "transform" not in keys.group(1), \
+            f"{kf} must step the mask, not slide a strip"
+    assert "animation-name: sn-bat-flap-mask" in CSS and "animation-name: sn-goose-flap-mask" in CSS
+    walk = re.search(r"\.sn-crawl\.walking b::before, \.sn-dangle\.walking b::before \{([^}]*)\}", CSS).group(1)
+    assert "steps(7, jump-none)" in walk, "seven poses, first to last, each held equally"
 
 
 def test_halloween_creatures_are_sized_off_one_scale_so_a_phone_can_shrink_them():
@@ -2069,9 +2087,7 @@ def test_every_creature_token_a_season_declares_is_actually_used():
     """A token declared and never referenced paints nothing: a typo in the
     reference (var(--sn-bat-nope)) leaves the bats invisible and every other
     guard still green."""
-    for prefix, tokens in _SEASON_SHAPE_TOKENS.items():
-        if prefix == "fall-":
-            continue
+    for prefix, (_, tokens) in _SEASON_SHAPE_TOKENS.items():
         for tok in tokens:
             assert re.search(rf"var\({re.escape(tok)}[,)]", CSS), \
                 f"{tok} is declared for {prefix} but nothing paints with it"
@@ -2109,7 +2125,7 @@ def test_the_preview_tile_paints_halloween_and_holds_still():
     may reach inside it (the phone's web offsets did, and pushed both webs
     off the tile)."""
     swatch = _block_after('.look-swatch[data-look^="halloween-"]')
-    for tok in _SEASON_SHAPE_TOKENS["halloween-"]:
+    for tok in _SEASON_SHAPE_TOKENS["halloween-"][1]:
         assert re.search(rf"{re.escape(tok)}\s*:", swatch), f"a preview tile never sets {tok}"
     still = re.search(r"\.look-swatch \.sn-bat \{([^}]*)\}", CSS)
     assert still and "animation: none" in still.group(1), "preview bats must hold still in the tile"
@@ -2255,3 +2271,63 @@ def test_every_css_custom_property_is_read_somewhere():
 def test_no_dead_micro_class():
     """.micro was styled but no markup used it."""
     assert not re.search(r"(?m)^\.micro\s*\{", CSS)
+
+
+def test_thanksgiving_geese_beat_real_wings_and_go_when_they_should():
+    """The skein's wingbeat is twelve drawn frames (Muybridge, 1887), so the
+    three numbers that must agree do: steps(12), a 1200% strip, and a slide
+    that stops on the last cell. The V shows only for thanksgiving-* looks,
+    is sized through --sn-k, goes at night (behind the glass) and holds
+    still for reduced motion."""
+    import struct
+    head = (STATIC / "seasons" / "bird-flap.png").read_bytes()[:24]
+    assert head[:8] == b"\x89PNG\r\n\x1a\n"
+    assert struct.unpack(">II", head[16:24]) == (12 * 181, 150), "twelve 181x150 cells, the bat's cell shape"
+    strip = re.search(r"\.sn-goose b::before \{([^}]*)\}", CSS).group(1)
+    assert "width: 1200%" in strip and "steps(12, jump-none)" in strip
+    assert 'url("seasons/bird-flap.png")' in strip and "var(--sn-goose)" in strip
+    assert "translate3d(-91.6667%, 0, 0)" in re.search(r"@keyframes sn-goose-flap \{[^\n]*\}", CSS).group(0)
+    for sel in (r"(?m)^\.sn-flock \{", r"(?m)^\.sn-goose \{"):
+        m = re.search(sel + r"([^}]*)\}", CSS)
+        assert m and "var(--sn-k, 1)" in m.group(1), f"{sel} must size itself through --sn-k"
+    assert ':root[data-look^="thanksgiving-"] body > .season-fx .sn-flock' in CSS
+    assert re.search(r'(?m)^\.sn-flock \{ display: none;', CSS), "hidden unless a Thanksgiving look shows it"
+    assert re.search(r'(?m)^:root\[data-look\]:not\(\[data-look="none"\]\) body\.is-night > \.season \.sn-flock \{ display: none; \}', CSS)
+    _, _, hidden = _last_reduced_motion_selectors()
+    assert ':root[data-look]:not([data-look="none"]) body > .season .sn-flock' in hidden
+    assert '  :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] { --sn-k: .5; }' in CSS, \
+        "the phone block shrinks the geese like the bats"
+    assert "seasonFlockHtml(depth)" in HUB, "both layers carry the skein"
+
+
+def test_the_preview_tile_shows_the_skein_holding_still():
+    """A Settings tile previews the Thanksgiving skein, still: the crossing
+    and the wingbeat both stop inside a tile, and the V keeps its seven
+    placed birds."""
+    assert '.look-swatch[data-look^="thanksgiving-"] .sn-flock' in CSS
+    tile = re.search(r"(?m)^\.look-swatch \.sn-flock \{([^}]*)\}", CSS)
+    assert tile and "animation: none" in tile.group(1)
+    wings = re.search(r"(?m)^\.look-swatch \.sn-goose b::before \{([^}]*)\}", CSS)
+    assert wings and "animation: none" in wings.group(1)
+    # the tile's birds are frame-sized boxes (.sn-flock.back): a pose is a
+    # mask position; a leftover strip translate shifted and clipped the bird
+    assert "transform: none" in wings.group(1) and "mask-position: 36.3636% 0" in wings.group(1)
+    placed = set(re.findall(r"(?m)^\.sn-goose:nth-child\((\d+)\)", CSS))
+    assert placed == {str(i) for i in range(1, 8)}, f"birds 1 to 7 each have a place in the V, not {sorted(placed)}"
+
+
+def test_the_flock_is_never_sized_with_scale():
+    """`scale` applies after the crossing's translate, so a far skein drawn at
+    scale .5 only got halfway across and hung there for the rest of its cycle.
+    Every flock size goes through --flock-k (and the phone's --sn-k)."""
+    for sels, body, _ in _rules():
+        if any(".sn-flock" in sel or ".sn-goose" in sel for sel in sels):
+            assert not re.search(r"(?<![\w-])scale\s*:", body), f"{sels} sizes the flock with scale"
+    assert "--flock-k: .5" in CSS, "the far skein is half size through --flock-k"
+
+
+def test_the_skein_starts_fully_off_screen_at_any_size():
+    """A fixed -18vw start put a phone's half-size V inside the screen, so
+    birds popped into view. The start is the flock's own width off the left."""
+    cross = re.search(r"@keyframes sn-flock-cross \{\s*0% \{ transform: translate3d\(([^,]+),", CSS)
+    assert cross and "-110%" in cross.group(1), "start the crossing a flock-width off screen"

@@ -10,6 +10,41 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.10.3] — 2026-10-14
+
+### Added
+- Fall gains six looks, for nine in all: Golden Light, Aspen Sky and Autumn
+  Road (photos), and paintings by Jasper Cropsey (White Mountains), George
+  Inness (Sunny Autumn Day) and Claude Monet (Wheat Stacks).
+
+## [1.10.2] — 2026-10-14
+
+### Added
+- Thanksgiving gains two more looks, Cranberry Harvest (a bog of floating
+  cranberries seen from above) and Vine Rows (red and orange rows on an
+  autumn hillside), for seven in all.
+
+## [1.10.1] — 2026-10-14
+
+### Fixed
+- Halloween: a black bar flickered across a row of a card now and then
+  (seen on the wall and on a laptop). The far bats behind the frosted
+  cards, and the spiders, now flap and walk without the sliding strip of
+  frames that the frosted glass sometimes drew as a solid bar.
+
+## [1.10.0] — 2026-10-14
+
+### Added
+- Seasonal looks are no longer locked to their dates. Tap any look in
+  Settings and it shows every day until you change it ("Pick one");
+  "Calendar" goes back to changing the look with the dates.
+- Thanksgiving: five harvest looks for November (a pumpkin patch, hay
+  bales at sundown, a cranberry bog, corn shocks by a farmhouse and
+  Jasper Cropsey's 1860 Hudson autumn), with falling leaves in each
+  photo's colours, a grain mark, and a skein of birds now and then
+  crossing the sky, flapping with real frames from Muybridge's 1887
+  flight photographs.
+
 ### Fixed
 - The Wyze bridge's health check now also probes the bridge's own internal
   go2rtc. That relay can exit alone right after the container starts, and

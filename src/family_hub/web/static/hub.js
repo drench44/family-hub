@@ -4277,22 +4277,31 @@ function reflectThemeControls() {
   const idle = el.getAttribute('data-idle-return') === 'off' ? 'off' : 'on';
   // default OFF: an unstamped season reflects as 'off', like theme.js's default
   const season = el.getAttribute('data-season') === 'on' ? 'on' : 'off';
-  // each season's chosen look (what it paints on this device when in season)
-  const picked = new Set(seasonList().map((s) => pickedLook(s.id)));
-  // Season on but nothing in season: say when the next one starts, or the
+  // A pinned look paints every day; otherwise each season's chosen look paints
+  // while its season is on the calendar. The tiles mark whichever applies.
+  const pin = typeof pinnedLook === 'function' ? pinnedLook() : null;
+  const picked = new Set(pin ? [pin] : seasonList().map((s) => pickedLook(s.id)));
+  // The Settings mode switch: Off, Calendar (follow the dates) or Pick one.
+  const mode3 = season !== 'on' ? 'off' : (pin ? 'pick' : 'calendar');
+  // Calendar on but nothing in season: say when the next one starts, or the
   // switch looks broken (On, and nothing changes).
-  const upcoming = season === 'on' && typeof activeSeason === 'function' && !activeSeason()
+  const upcoming = mode3 === 'calendar' && typeof activeSeason === 'function' && !activeSeason()
     && typeof nextSeason === 'function' ? nextSeason() : null;
+  const pinName = pin ? lookName(pin) : '';
   document.querySelectorAll('.season-idle-note').forEach((n) => {
-    n.hidden = !upcoming;
-    n.textContent = upcoming ? `Nothing is in season today. ${upcoming.name} starts ${seasonWindowText(upcoming).split(' to ')[0]}.` : '';
+    const text = upcoming
+      ? `Nothing is in season today. ${upcoming.name} starts ${seasonWindowText(upcoming).split(' to ')[0]}.`
+      : (mode3 === 'pick' && pinName ? `Showing ${pinName} every day.` : '');
+    n.hidden = !text;
+    n.textContent = text;
   });
   document.querySelectorAll('.theme-ctl').forEach((ctl) => {
     ctl.querySelectorAll('[data-season-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.seasonSet === season));
-    // .on marks each season's favourite either way (the CSS softens it while
+    ctl.querySelectorAll('[data-season-mode]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.seasonMode === mode3));
+    // .on marks the look(s) that would paint (the CSS softens it while
     // seasons are off); aria-pressed only claims "pressed" while seasons are on
-    // (the favourite then paints whenever its season is on the calendar)
     ctl.querySelectorAll('[data-look-pick]').forEach((b) => {
       const on = picked.has(b.dataset.lookPick);
       b.classList.toggle('on', on);
@@ -4321,6 +4330,11 @@ function reflectThemeControls() {
    shows no seasonal look. */
 function seasonList() {
   return typeof FH_SEASONS !== 'undefined' && Array.isArray(FH_SEASONS) ? FH_SEASONS : [];
+}
+// A look's display name from the registry ('' if it is not there).
+function lookName(lookId) {
+  for (const s of seasonList()) for (const l of s.looks) if (l.id === lookId) return l.name;
+  return '';
 }
 function pickedLook(seasonId) {
   return typeof seasonLook === 'function' ? seasonLook(seasonId) : null;
@@ -4363,16 +4377,28 @@ function seasonHauntHtml(depth = 'front') {
     + '</span>';
 }
 
+// Thanksgiving's skein of geese heading south, bare like the rest: the V,
+// the crossing and the wingbeat all live in styles.css, which shows it only
+// for thanksgiving-* looks. Front (over the cards): seven birds. Back (behind
+// the glass): a smaller, farther five. Each bird is two boxes: the span holds
+// its place in the V, <b> beats its wings (drawn frames, bird-flap.png).
+function seasonFlockHtml(depth = 'front') {
+  const n = depth === 'back' ? 5 : 7;
+  return `<span class="sn-flock ${depth}">`
+    + '<span class="sn-goose"><b></b></span>'.repeat(n)
+    + '</span>';
+}
+
 // Everything that moves in a season layer, for every season: CSS shows only
 // the set that belongs to the look being painted.
 function seasonFxHtml(depth = 'front') {
-  return seasonLeavesHtml(depth) + seasonHauntHtml(depth);
+  return seasonLeavesHtml(depth) + seasonHauntHtml(depth) + seasonFlockHtml(depth);
 }
 
 // A Settings preview: the look's photo (the .season background, the look's
 // --sn-scene) with its leaves (or webs and bats) resting on it.
 function seasonSceneHtml() {
-  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}</span>`;
+  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}${seasonFlockHtml('back')}</span>`;
 }
 
 // Mount the wall's scene once, in two layers (CSS shows both only while
@@ -4634,7 +4660,8 @@ function seasonWindowText(s) {
 
 // The Settings "Seasonal looks" card body: the Off/On switch, then each
 // season's looks as live preview tiles (the real scene in miniature, painted by
-// the look's own tokens). A tile sets that season's look and turns seasons on.
+// the look's own tokens). A tile shows that look now and keeps it any day of
+// the year ("Pick one"); "Calendar" goes back to following the dates.
 function seasonalCardHtml() {
   const now = typeof activeSeason === 'function' ? activeSeason() : null;
   const tile = (look) => `<button class="look-tile" type="button" data-look-pick="${escapeHtml(look.id)}" aria-pressed="false">`
@@ -4660,9 +4687,10 @@ function seasonalCardHtml() {
   return '<div class="settings-row">'
     + '<div class="seg" role="group" aria-label="Seasonal looks">'
     + '<button type="button" data-season-set="off">Off</button>'
-    + '<button type="button" data-season-set="on">On</button>'
+    + '<button type="button" data-season-mode="calendar">Calendar</button>'
+    + '<button type="button" data-season-mode="pick">Pick one</button>'
     + '</div>'
-    + '<div class="settings-sub">On follows the calendar. Pick the photo you like for each season. Light and Soft show it bright; the darker themes show it at dusk.</div>'
+    + '<div class="settings-sub">Calendar changes the look with the dates, using the photo you like for each season. Tap any look to keep it, any time of year. Light and Soft show it bright; the darker themes show it at dusk.</div>'
     + '<div class="season-idle-note" hidden></div>'
     + '</div>'
     + `<div class="look-picker">${groups}</div>`;
@@ -5071,6 +5099,28 @@ document.addEventListener('click', (e) => {
   // which picks that season's look and turns seasons on.
   const ss = e.target.closest('.theme-ctl [data-season-set]');
   if (ss) { if (typeof setSeason === 'function') setSeason(ss.dataset.seasonSet); reflectThemeControls(); return; }
+  // Settings mode: Calendar drops any pin; Pick one keeps the look already
+  // pinned (Off hides a pin without forgetting it), else what shows now, else
+  // the season in force's look, else the next season's, until changed.
+  const sm = e.target.closest('.theme-ctl [data-season-mode]');
+  if (sm) {
+    if (sm.dataset.seasonMode === 'calendar') {
+      if (typeof followCalendar === 'function') followCalendar();
+    } else if (typeof setSeasonLook === 'function') {
+      const shown = document.documentElement.getAttribute('data-look');
+      const now = typeof activeSeason === 'function' ? activeSeason() : null;
+      const next = typeof nextSeason === 'function' ? nextSeason() : null;
+      const pinned = typeof pinnedLook === 'function' ? pinnedLook() : null;
+      const look = pinned
+        || (shown && shown !== 'none' && shown)
+        || (now && pickedLook(now))
+        || (next && pickedLook(next.id));
+      if (look) setSeasonLook(look);
+      else console.warn('season: Pick one found no look to keep');
+    }
+    reflectThemeControls();
+    return;
+  }
   const lp = e.target.closest('.theme-ctl [data-look-pick]');
   if (lp) { if (typeof setSeasonLook === 'function') setSeasonLook(lp.dataset.lookPick); reflectThemeControls(); return; }
   // Integrations switch list: also unscoped now that it only ever renders
