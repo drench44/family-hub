@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.10.3] — 2026-10-14
+
 ### Added
 - Fall gains six looks, for nine in all: Golden Light, Aspen Sky and Autumn
   Road (photos), and paintings by Jasper Cropsey (White Mountains), George
