@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.10.4] — 2026-10-14
+
 ### Fixed
 - A dark band still blinked across a row of a card now and then with a look
   on (seen on the wall and on a laptop). On wide screens the cards no longer
