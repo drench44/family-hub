@@ -1958,27 +1958,42 @@ def test_halloween_sprite_sheets_match_the_frames_the_css_steps_through():
     cells actually in the file — and the cell's shape must match the window
     it slides behind, or every frame is stretched.
 
-    The strip is moved with transform, never with the mask's own position:
-    mask-position is not a compositable property, so animating it repaints
-    seven shadowed bats on the main thread every frame, all day, on a wall
-    driven by an i3's integrated graphics."""
-    for sheet, window in (("bat-flap.png", (1.0, 0.83)), ("spider-walk.png", (58.0, 76.0))):
-        strip = re.search(rf'::before \{{[^}}]*width: (\d+)%;[^}}]*mask: url\("seasons/{sheet}"\) 0 0 / 100% 100%', CSS)
-        assert strip, f"seasons/{sheet} must be painted on a ::before strip, stepped by transform"
-        frames = int(strip.group(1)) // 100
-        haunt = CSS[CSS.index("Halloween's creatures"):]
-        steps = {int(m) for m in re.findall(r"steps\((\d+)[,)]", haunt)}
-        assert frames in steps, f"{sheet}: the strip holds {frames} frames, but no steps({frames}) drives it"
+    Two ways to step the frames, and where each belongs:
+    - Over the cards (the near bats, the near geese) the strip slides behind
+      the window with transform, so the compositor draws it: seven shadowed
+      bats repainting every step all day is real work for the wall's i3.
+    - Under frosted glass (the far bats and geese behind the cards, and the
+      spiders, which pass under the frosted top bar) the MASK steps in a
+      frame-sized box instead. A frosted layer re-blurs whatever moves under
+      it, and on the wall and a laptop it sometimes blurred a sliding strip
+      unclipped: the whole strip painted as a solid black bar across a card
+      ("black flickering on the whole row", 2026-10-14)."""
+    for sheet, window, frames in (("bat-flap.png", (1.0, 0.83), 15), ("spider-walk.png", (58.0, 76.0), 7)):
         w, h = _png_size(STATIC / "seasons" / sheet)
         assert w % frames == 0, f"{sheet} is {w}px wide, not a whole number of {frames} frames"
         cell = (w / frames) / h
         assert abs(cell - window[0] / window[1]) < 0.12, \
             f"{sheet}'s frames are {cell:.2f} wide per tall; its window is {window[0] / window[1]:.2f}, so frames stretch"
-    for name in ("sn-bat-flap", "sn-walk"):
-        kf = re.search(rf"@keyframes {name} \{{([^}}]*)\}}", CSS)
-        assert kf, f"no @keyframes {name}"
-        assert "transform: translate3d(" in kf.group(1) and "mask-position" not in kf.group(1), \
-            f"{name} must step the strip with transform (mask-position repaints every frame)"
+    # over the cards: a 15-frame strip slid by transform, steps agree
+    bat = re.search(r"(?m)^\.sn-bat b::before \{([^}]*)\}", CSS).group(1)
+    assert "width: 1500%" in bat and "steps(15, jump-none)" in bat
+    assert "transform: translate3d(-93.3333%" in re.search(r"@keyframes sn-bat-flap \{[^\n]*\}", CSS).group(0)
+    # under glass: no strip wider than its box, the mask steps instead
+    for sel, size, kf, n in (
+        (r"\.sn-haunt\.back \.sn-bat b::before", "1500% 100%", "sn-bat-flap-mask", 15),
+        (r"\.sn-flock\.back \.sn-goose b::before", "1200% 100%", "sn-goose-flap-mask", 12),
+        (r"\.sn-crawl b::before, \.sn-dangle b::before", "700% 100%", "sn-walk", 7),
+    ):
+        body = re.search(rf"(?m)^{sel} \{{([^}}]*)\}}", CSS)
+        assert body, f"no rule for {sel}"
+        assert "width: 100%" in body.group(1), f"{sel}: under glass the box is one frame wide, never a strip"
+        assert size in body.group(1), f"{sel}: the mask holds all {n} frames ({size})"
+        keys = re.search(rf"@keyframes {kf} \{{([^\n]*)\}}", CSS)
+        assert keys and "mask-position: 100% 0" in keys.group(1) and "transform" not in keys.group(1), \
+            f"{kf} must step the mask, not slide a strip"
+    assert "animation-name: sn-bat-flap-mask" in CSS and "animation-name: sn-goose-flap-mask" in CSS
+    walk = re.search(r"\.sn-crawl\.walking b::before, \.sn-dangle\.walking b::before \{([^}]*)\}", CSS).group(1)
+    assert "steps(7, jump-none)" in walk, "seven poses, first to last, each held equally"
 
 
 def test_halloween_creatures_are_sized_off_one_scale_so_a_phone_can_shrink_them():

@@ -10,6 +10,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- Halloween: a black bar flickered across a row of a card now and then
+  (seen on the wall and on a laptop). The far bats behind the frosted
+  cards, and the spiders, now flap and walk without the sliding strip of
+  frames that the frosted glass sometimes drew as a solid bar.
+
 ## [1.10.0] — 2026-10-14
 
 ### Added
