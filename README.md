@@ -42,15 +42,19 @@ at one URL.
   Sky**, and **Halloween** takes October with **Lantern Night** (the
   default), **Witching Hour**, **Haunted Pines**, **Moonrise** and **Bare
   Branches** — bats cross the sky, a spider lets itself down on its thread,
-  another lives on the glass, and webs hang in the corners. Each look is
-  picked per device under **All settings → Seasonal looks** from
-  live preview tiles. Each of the five themes keeps its own glass: Light and
+  another lives on the glass, and webs hang in the corners. **Thanksgiving**
+  takes November with **Pumpkin Patch** (the default), **Golden Hour**,
+  **Cranberry Bog**, **Corn Shocks** and **Hudson Autumn**: leaves fall in
+  each photo's colours and a skein of birds crosses the sky now and then.
+  Each look is picked per device under **All settings → Seasonal looks**
+  from live preview tiles, and none is locked to its dates: **Calendar**
+  follows them, while tapping any look (**Pick one**) keeps it all year. Each of the five themes keeps its own glass: Light and
   Soft show the photo bright and airy, Blue, Grey and Black at dusk. Nothing
   moves at night or for reduced motion, and the art (public domain, CC0,
   CC-BY and MIT) ships inside the app.
   Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
 
-  ![Seasonal looks: fall and Halloween](docs/seasons.jpg)
+  ![Seasonal looks: Halloween, fall and Thanksgiving](docs/seasons.jpg)
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
   hub in **Safari** and use Share → **Add to Home Screen** for a full-screen
