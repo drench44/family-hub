@@ -1751,6 +1751,13 @@ def test_season_art_files_exist_and_are_credited():
     for f in seasons.iterdir():
         if f.name == "CREDITS.md":
             continue
+        if f.name == "glass" and f.is_dir():
+            # blurred copies of the credited photos (scripts/make-glass.py):
+            # each must be a copy of a photo that ships, and the folder has a row
+            assert "`glass/`" in credits, "seasons/glass/ is not in CREDITS.md"
+            for g in f.iterdir():
+                assert (seasons / g.name).is_file(), f"seasons/glass/{g.name} has no photo in seasons/"
+            continue
         assert f"`{f.name}`" in credits, f"seasons/{f.name} is not in CREDITS.md"
 
 def test_season_scene_sits_behind_and_never_takes_a_tap():
@@ -2331,3 +2338,82 @@ def test_the_skein_starts_fully_off_screen_at_any_size():
     birds popped into view. The start is the flock's own width off the left."""
     cross = re.search(r"@keyframes sn-flock-cross \{\s*0% \{ transform: translate3d\(([^,]+),", CSS)
     assert cross and "-110%" in cross.group(1), "start the crossing a flock-width off screen"
+
+
+def _vp8_size(data):
+    """Width and height of a lossy WebP, read from its VP8 key frame header."""
+    frame = data[data.index(b"VP8 ") + 8:]
+    assert frame[3:6] == b"\x9d\x01\x2a", "unexpected VP8 header"
+    return int.from_bytes(frame[6:8], "little") & 0x3FFF, int.from_bytes(frame[8:10], "little") & 0x3FFF
+
+
+@pytest.mark.parametrize("look", _look_ids())
+def test_every_look_ships_a_still_glass_copy(look):
+    """On wide screens the glass paints a ready-blurred copy of the look's
+    photo instead of blurring live (see the next test). Each look names its
+    copy, and the copy ships: small (640px), metadata-free like the photo,
+    and the same shape as the photo so cover sizing lines it up with the
+    photo layer around the cards. scripts/make-glass.py writes it."""
+    body = _block_after(f':root[data-look="{look}"][data-theme][data-accent]')
+    assert f'--sn-glass:url("seasons/glass/{look}.webp")' in body, f"{look} never sets --sn-glass"
+    glass = STATIC / "seasons" / "glass" / f"{look}.webp"
+    assert glass.is_file(), f"missing seasons/glass/{look}.webp; run scripts/make-glass.py {look}"
+    data = glass.read_bytes()
+    assert len(data) < 200 * 1024, f"{glass.name} is {len(data) // 1024} KB; the copy is meant to be tiny"
+    assert not {b"EXIF", b"XMP "} & set(_webp_chunks(data)), f"glass/{glass.name} carries metadata"
+    gw, gh = _vp8_size(data)
+    pw, ph = _vp8_size((STATIC / "seasons" / f"{look}.webp").read_bytes())
+    assert gw == 640, f"glass/{glass.name} is {gw}px wide; make-glass.py writes 640"
+    assert abs(gh / gw - ph / pw) < 0.005, f"glass/{glass.name} is not the photo's shape, so it would not line up"
+
+
+def test_wide_screens_use_still_glass_not_a_live_blur():
+    """The live blur (backdrop-filter) re-blurred every frame a far bat moved
+    under a card, and on the wall's Firefox and a laptop that sometimes drew
+    a row of a card as a blinking dark band ("still glitching", 2026-10-14).
+    On wide screens (and a phone forced to Desktop) every glass surface turns
+    the live blur off and paints the still copy fixed to the viewport, at the
+    photo layer's focal point and cover size, under the haze, wash and tint.
+    Not on iOS (fixed backgrounds are ignored there) and not at night (the
+    dim filter can unpin a fixed background; night glass is solid)."""
+    sup = CSS.index("@supports not (-webkit-touch-callout: none) {")
+    block = CSS[sup:CSS.index("\n}\n", sup)]
+    assert "@media (min-width: 1001px) {" in block
+    paint = (r"\{\s*-webkit-backdrop-filter: none; backdrop-filter: none;\s*"
+             r"background: linear-gradient\(var\(--glass\), var\(--glass\)\), var\(--sn-haze[^;]*"
+             r"var\(--sn-wash\), var\(--sn-glass\) var\(--sn-pos\) / cover no-repeat, var\(--ground\);\s*"
+             r"background-attachment: fixed;\s*\}")
+    rules = re.findall(r"([^{}]+)" + paint, block)
+    assert len(rules) == 2, "one rule for wide screens, one for the forced Desktop layout"
+    for sel in rules:
+        for target in (".card", ".expand", ".shead h2", ".topbar"):
+            assert target in sel, f"{target} still blurs live on wide screens"
+    assert 'data-layout="desktop"' in rules[1]
+    night = re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\) \.is-night \.wrap\) '
+                      r':is\(\.card, \.expand, \.shead h2\),\s*:where\(:root\[data-look\]:not\(\[data-look="none"\]\) '
+                      r'\.is-night\) \.topbar \{\s*background: linear-gradient\(var\(--glass\), var\(--glass\)\), '
+                      r'var\(--ground\);\s*\}', CSS)
+    assert night and night.start() > sup, "at night the glass must drop the fixed copy, after the wide rules"
+    assert ".look-swatch" not in block, "the Settings tiles paint their own photo; keep them out of still glass"
+    # the tiles keep a small live blur, so nothing under it may animate
+    assert re.search(r"\.look-swatch \.sn-bat b::before \{ animation: none; \}", CSS)
+
+
+def test_phones_and_ios_keep_the_live_blur():
+    """Outside the wide-screen block the glass still blurs live: phones and
+    iOS/iPadOS have no still copy to fall back on (iOS ignores fixed
+    backgrounds), so losing the blur there would leave bare see-through
+    cards. And the blur is switched off nowhere else."""
+    sup = CSS.index("@supports not (-webkit-touch-callout: none) {")
+    outside = CSS[:sup] + CSS[CSS.index("\n}\n", sup):]
+    for target in (".card", ".expand", ".shead h2", ".topbar"):
+        assert re.search(r"\) " + re.escape(target) + r"[^{]*\{[^}]*backdrop-filter:\s*blur\(", outside), \
+            f"{target} lost its live blur outside the wide-screen block"
+    assert "backdrop-filter: none" not in outside
+
+
+def test_every_glass_copy_belongs_to_a_look():
+    """A retired look must not leave its glass copy behind."""
+    looks = set(_look_ids())
+    for g in (STATIC / "seasons" / "glass").iterdir():
+        assert g.suffix == ".webp" and g.stem in looks, f"seasons/glass/{g.name} belongs to no look"

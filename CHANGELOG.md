@@ -10,6 +10,18 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.10.4] — 2026-10-14
+
+### Fixed
+- A dark band still blinked across a row of a card now and then with a look
+  on (seen on the wall and on a laptop). On wide screens the cards no longer
+  blur the photo live: each look ships a ready-blurred copy of its photo that
+  the cards paint instead, lined up with the photo around them. The bats,
+  geese and leaves behind the cards keep flying, and the wall's graphics
+  chip does far less work. Phones keep the live blur.
+- The little bats on the Halloween tiles in Settings hold still, so nothing
+  moves under the tiles' small frosted card.
+
 ## [1.10.3] — 2026-10-14
 
 ### Added
