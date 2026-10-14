@@ -4377,16 +4377,28 @@ function seasonHauntHtml(depth = 'front') {
     + '</span>';
 }
 
+// Thanksgiving's skein of geese heading south, bare like the rest: the V,
+// the crossing and the wingbeat all live in styles.css, which shows it only
+// for thanksgiving-* looks. Front (over the cards): seven birds. Back (behind
+// the glass): a smaller, farther five. Each bird is two boxes: the span holds
+// its place in the V, <b> beats its wings (drawn frames, bird-flap.png).
+function seasonFlockHtml(depth = 'front') {
+  const n = depth === 'back' ? 5 : 7;
+  return `<span class="sn-flock ${depth}">`
+    + '<span class="sn-goose"><b></b></span>'.repeat(n)
+    + '</span>';
+}
+
 // Everything that moves in a season layer, for every season: CSS shows only
 // the set that belongs to the look being painted.
 function seasonFxHtml(depth = 'front') {
-  return seasonLeavesHtml(depth) + seasonHauntHtml(depth);
+  return seasonLeavesHtml(depth) + seasonHauntHtml(depth) + seasonFlockHtml(depth);
 }
 
 // A Settings preview: the look's photo (the .season background, the look's
 // --sn-scene) with its leaves (or webs and bats) resting on it.
 function seasonSceneHtml() {
-  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}</span>`;
+  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}${seasonFlockHtml('back')}</span>`;
 }
 
 // Mount the wall's scene once, in two layers (CSS shows both only while
