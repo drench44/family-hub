@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.11.1] — 2026-10-14
+
 ### Changed
 - Cabin Window: snow now clearly falls outside the window: its own
   heavier snowfall with bigger flakes, kept to the window glass, with a
