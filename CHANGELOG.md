@@ -10,6 +10,15 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Christmas, Dec 1 to Dec 31: warm, snowy photo looks (a cabin glowing at
+  dusk, a cabin window onto snowy woods, a fireside, fairy lights, a lit
+  tree, woodsmoke and more). Snow falls in two depths, behind the cards and
+  drifting over them, and the photo's own lights glow where they are: lit
+  windows breathe, a fire flickers, string lights shimmer. Indoor looks keep
+  the snow outside, falling only past the window glass. Like every look,
+  any of them can be picked in Settings any time of year.
+
 ## [1.10.4] — 2026-10-14
 
 ### Fixed

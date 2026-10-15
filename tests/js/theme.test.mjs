@@ -331,13 +331,15 @@ test('outside every season window the look is none even with seasons on', () => 
   assert.equal(root.getAttribute('data-look'), 'none');
 });
 
-test('windows are inclusive at both ends: Sep 1 and Nov 30 in, Aug 31 and Dec 1 out', () => {
+test('windows are inclusive at both ends: Sep 1 to Dec 31 in, Aug 31 and Jan 1 out', () => {
   const { win } = loadTheme({ storage: { 'fh.season': 'on' } });
   assert.equal(win.refreshLook(day(8, 31)), 'none');
   assert.equal(win.refreshLook(day(9, 1)), 'fall-aspen-grove');
   assert.equal(win.refreshLook(day(11, 1)), 'thanksgiving-pumpkin-patch');
   assert.equal(win.refreshLook(day(11, 30)), 'thanksgiving-pumpkin-patch');
-  assert.equal(win.refreshLook(day(12, 1)), 'none');
+  assert.equal(win.refreshLook(day(12, 1)), 'christmas-glowing-cabin', 'Thanksgiving hands over to Christmas');
+  assert.equal(win.refreshLook(day(12, 31)), 'christmas-glowing-cabin');
+  assert.equal(win.refreshLook(new Date(2027, 0, 1, 12, 0, 0)), 'none');
 });
 
 test('setSeason(off) takes the look down immediately', () => {
@@ -403,7 +405,8 @@ test('a window may wrap the new year, and the FIRST matching season wins', () =>
     looks: [{ id: 'winter-snow', name: 'Snow' }] });
   win.FH_SEASONS.unshift({ id: 'harvest', name: 'Harvest', from: [9, 20], to: [9, 27],
     looks: [{ id: 'harvest-table', name: 'Table' }] });
-  assert.equal(win.refreshLook(day(12, 25)), 'winter-snow');
+  assert.equal(win.refreshLook(day(12, 25)), 'christmas-glowing-cabin',
+    'Christmas is listed before a later winter, so it keeps December');
   assert.equal(win.refreshLook(day(1, 10)), 'winter-snow');
   assert.equal(win.refreshLook(day(3, 1)), 'none');
   assert.equal(win.refreshLook(day(9, 25)), 'harvest-table');
@@ -508,7 +511,7 @@ test('nextSeason names the season that opens soonest, wrapping the year', () => 
   assert.equal(win.nextSeason(day(1, 15)).id, 'fall');
   assert.equal(win.nextSeason(day(12, 20)).id, 'fall', 'after fall ends, next fall');
   win.FH_SEASONS.push({ id: 'winter', name: 'Winter', from: [12, 1], to: [2, 28], looks: [{ id: 'winter-snow', name: 'Snow' }] });
-  assert.equal(win.nextSeason(day(11, 30)).id, 'winter');
+  assert.equal(win.nextSeason(day(11, 30)).id, 'christmas', 'on a tie the season listed first opens');
   assert.equal(win.nextSeason(day(3, 1)).id, 'fall');
 });
 

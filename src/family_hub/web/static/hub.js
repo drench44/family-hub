@@ -4389,16 +4389,171 @@ function seasonFlockHtml(depth = 'front') {
     + '</span>';
 }
 
+// Christmas snow. Real snow is not leaves: flakes fall slowly and nearly
+// straight, drift a little, never spin, and the far ones are smaller and
+// slower. Each flake is two boxes, like a leaf: the outer span falls at a
+// constant speed, the inner <b> drifts side to side. Far: 64 small flakes in
+// the photo layer, behind the glass, showing in the gaps between cards.
+// Front: 28 larger ones drifting over the cards. The scatter is seeded, so
+// every load (and every test) gets the same snowfall, and the negative
+// delays mean it is already snowing when the wall loads. Placement goes in
+// inline custom properties: 48 nth-child rules would say the same thing
+// at far greater length.
+function seasonSnowHtml(depth = 'front') {
+  const far = depth === 'back';
+  let seed = far ? 7 : 3;
+  const rnd = (a, b) => {
+    seed = (seed * 16807) % 2147483647;
+    return a + (seed / 2147483647) * (b - a);
+  };
+  const n = far ? 64 : 28;
+  let out = `<span class="sn-snow ${far ? 'back' : 'front'}">`;
+  for (let i = 0; i < n; i++) {
+    const size = far ? rnd(2, 4.5) : rnd(5, 9);
+    // px per second down a 1080px screen, as a duration for 108vh of fall
+    const dur = 1166 / (far ? rnd(18, 32) : rnd(40, 65));
+    const vars = [
+      `--x:${rnd(0, 100).toFixed(1)}%`, `--s:${size.toFixed(1)}px`,
+      `--d:${dur.toFixed(1)}s`, `--dl:-${rnd(0, dur).toFixed(1)}s`,
+      `--amp:${(far ? rnd(3, 8) : rnd(8, 18)).toFixed(0)}px`,
+      `--sw:${(far ? rnd(6, 11) : rnd(5, 9)).toFixed(1)}s`,
+      `--drift:${rnd(-30, 30).toFixed(0)}px`,
+      `--o:${(far ? rnd(0.45, 0.8) : rnd(0.55, 0.9)).toFixed(2)}`,
+    ];
+    out += `<span class="sn-flake" style="${vars.join(';')}"><b></b></span>`;
+  }
+  return out + '</span>';
+}
+
+// Christmas light that belongs to the photo: an empty box in the layer over
+// the cards, filled by placeSeasonLights() for the look being painted.
+function seasonLightsHtml(depth = 'front') {
+  return depth === 'front' ? '<span class="sn-lights"></span>' : '';
+}
+
 // Everything that moves in a season layer, for every season: CSS shows only
 // the set that belongs to the look being painted.
 function seasonFxHtml(depth = 'front') {
-  return seasonLeavesHtml(depth) + seasonHauntHtml(depth) + seasonFlockHtml(depth);
+  return seasonLeavesHtml(depth) + seasonHauntHtml(depth) + seasonFlockHtml(depth)
+    + seasonSnowHtml(depth) + seasonLightsHtml(depth);
+}
+
+/* ---- Christmas: the photo's own lights glow ----
+   A look's `light` (theme.js) says where its lit windows, fire and string
+   lights are, as fractions of the photo. The photo layer paints the photo at
+   cover size anchored at --sn-pos, so a point maps through that same crop:
+   scale s = max(W / iw, H / ih), then x = (W - iw*s) * px + u * iw*s (and
+   the same for y). Each glow is a soft warm spot placed there, its opacity
+   animated in CSS, so the fire breathes and the bulbs shimmer where they
+   actually are. The glows sit OVER the cards (.season-fx), wide and faint:
+   on the wall the cards cover most of the photo, and a glow behind them
+   never showed. Over a card it reads as a light seen through frosted glass;
+   in a gap, as the light's bloom. Over the cards nothing re-blurs (the
+   blinking-band lesson in docs/seasonal-looks.md is about motion UNDER live
+   glass). Points the crop cuts off are dropped. Re-placed when the look or
+   the screen size changes. */
+const SN_POS_WORDS = { left: 0, top: 0, center: 0.5, right: 1, bottom: 1 };
+// "center 55%" -> [0.5, 0.55]; one value means centered on the other axis
+function snParsePos(v) {
+  const parts = String(v || '').trim().split(/\s+/).filter(Boolean);
+  const one = (t) => (t in SN_POS_WORDS ? SN_POS_WORDS[t]
+    : /%$/.test(t) && Number.isFinite(parseFloat(t)) ? parseFloat(t) / 100 : 0.5);
+  if (!parts.length) return [0.5, 0.5];
+  if (parts[0] === 'top' || parts[0] === 'bottom') parts.reverse();
+  return [one(parts[0]), parts.length > 1 ? one(parts[1]) : 0.5];
+}
+function snCoverMap(W, H, iw, ih, px, py) {
+  const s = Math.max(W / iw, H / ih);
+  const dw = iw * s, dh = ih * s;
+  return { dw, dh, ox: (W - dw) * px, oy: (H - dh) * py };
+}
+function snLookEntry(lookId) {
+  for (const s of seasonList()) for (const l of s.looks) if (l.id === lookId) return l;
+  return null;
+}
+const snPhotoSizes = new Map();
+function snPhotoSize(url) {
+  if (!snPhotoSizes.has(url)) {
+    snPhotoSizes.set(url, new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => (img.naturalWidth ? resolve([img.naturalWidth, img.naturalHeight]) : reject(new Error('empty image')));
+      img.onerror = () => reject(new Error(`could not load ${url}`));
+      img.src = url;
+    }));
+    // a failed load is not remembered: the next look change tries again
+    snPhotoSizes.get(url).catch(() => snPhotoSizes.delete(url));
+  }
+  return snPhotoSizes.get(url);
+}
+let snLightsGen = 0;
+async function placeSeasonLights() {
+  const gen = ++snLightsGen;
+  const layer = document.querySelector('body > .season-fx .sn-lights');
+  if (!layer) return;
+  const snows = document.querySelectorAll('body > .season .sn-snow, body > .season-fx .sn-snow');
+  layer.replaceChildren();
+  const look = document.documentElement.getAttribute('data-look');
+  const light = (snLookEntry(look) || {}).light || null;
+  // where the snow may fall: everywhere, only on the window glass, or nowhere
+  const where = !light || !light.indoor ? '' : light.panes ? 'panes' : 'none';
+  snows.forEach((el) => {
+    if (where) el.dataset.where = where; else delete el.dataset.where;
+    el.style.clipPath = '';
+  });
+  if (!light) return;
+  const cs = getComputedStyle(document.documentElement);
+  const m = /url\(\s*["']?([^"')]+)["']?\s*\)/.exec(cs.getPropertyValue('--sn-scene'));
+  if (!m) { console.warn(`season: ${look} has light points but no photo to place them on`); return; }
+  let size;
+  try { size = await snPhotoSize(m[1]); } catch (e) {
+    console.warn('season: the photo did not load, so its lights stay unlit', e);
+    return;
+  }
+  if (gen !== snLightsGen) return;   // the look or the screen changed meanwhile
+  const W = layer.clientWidth, H = layer.clientHeight;
+  if (!W || !H) return;
+  const [px, py] = snParsePos(cs.getPropertyValue('--sn-pos'));
+  const map = snCoverMap(W, H, size[0], size[1], px, py);
+  const at = (u, v) => [map.ox + u * map.dw, map.oy + v * map.dh];
+  const frag = document.createDocumentFragment();
+  let i = 0;
+  const add = (kind, u, v, d) => {
+    const [x, y] = at(u, v);
+    if (x < -d / 2 || y < -d / 2 || x > W + d / 2 || y > H + d / 2) return;
+    const el = document.createElement('span');
+    el.className = `sn-glow ${kind}`;
+    el.style.cssText = `left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;--g:${d.toFixed(1)}px;--i:${i % 7}`;
+    i++;
+    frag.appendChild(el);
+  };
+  // wide, so a glow over a card reads as light through frosted glass
+  for (const [u, v, f] of light.lamps || []) add('lamp', u, v, f * map.dw * 2.5);
+  for (const [u, v, f] of light.fire || []) { add('fire', u, v, f * map.dw); add('fire spill', u, v, f * map.dw * 2.4); }
+  const tw = Math.max(24, (light.size || 0.012) * map.dw * 3);
+  for (const [u, v] of light.twinkle || []) add('twinkle', u, v, tw);
+  layer.appendChild(frag);
+  if (where === 'panes') {
+    const path = light.panes.map(([u0, v0, u1, v1]) => {
+      const [x0, y0] = at(u0, v0), [x1, y1] = at(u1, v1);
+      return `M${x0.toFixed(1)} ${y0.toFixed(1)}H${x1.toFixed(1)}V${y1.toFixed(1)}H${x0.toFixed(1)}Z`;
+    }).join('');
+    snows.forEach((el) => { if (el.closest('.season')) el.style.clipPath = `path("${path}")`; });
+  }
+}
+let snLightsTimer = 0;
+function watchSeasonLights() {
+  const again = () => { clearTimeout(snLightsTimer); snLightsTimer = setTimeout(placeSeasonLights, 150); };
+  if (typeof MutationObserver === 'function') {
+    new MutationObserver(again).observe(document.documentElement, { attributes: true, attributeFilter: ['data-look', 'data-layout'] });
+  }
+  window.addEventListener('resize', again);
+  placeSeasonLights();
 }
 
 // A Settings preview: the look's photo (the .season background, the look's
 // --sn-scene) with its leaves (or webs and bats) resting on it.
 function seasonSceneHtml() {
-  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}${seasonFlockHtml('back')}</span>`;
+  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}${seasonFlockHtml('back')}${seasonSnowHtml('back')}</span>`;
 }
 
 // Mount the wall's scene once, in two layers (CSS shows both only while
@@ -5442,6 +5597,7 @@ function paintViewportDiag() {
 }
 
 mountSeasonScene();
+watchSeasonLights();
 // once only: two loops on one element would fight over its transform
 if (!window.__fhSpiders) {
   window.__fhSpiders = true;
