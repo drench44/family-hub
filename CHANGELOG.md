@@ -10,6 +10,31 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-14
+
+### Added
+- Christmas, Dec 1 to Dec 31: eight warm, snowy looks (a cabin glowing at
+  dusk, a cabin window onto snowy woods, a fireside, fairy lights, a lit
+  tree, woodsmoke and more). Snow falls in two depths, behind the cards and
+  drifting over them, and the photo's own lights glow where they are: lit
+  windows breathe, a fire flickers, string lights shimmer. Indoor looks keep
+  the snow outside, falling only past the window glass. Like every look,
+  any of them can be picked in Settings any time of year.
+- Seasons now decorate the wall itself. Christmas hangs a strand of bright
+  red, green, gold and white bulbs under the top bar, their glow gently
+  breathing, lays frost from a real photo of ice on glass into the card
+  corners, and rests a soft drift of snow along the top of each card.
+  Halloween strings neon orange, purple and green lights and spins cobwebs
+  into some card corners.
+- Fall and Thanksgiving leave real leaves resting on the card tops and
+  caught in a corner, and now and then one lifts and blows away.
+  Thanksgiving also lays two tied bundles of wheat across the top bar.
+- Christmas glows land on the photo's lights on phones too, come back
+  after a night, and an indoor look never snows in the room while its
+  window is still being placed, and opening a menu no longer resets them.
+- A colorful Christmas look too: Sleigh Ride, Boris Kustodiev's 1916
+  painting of sleighs racing through a frosted pink and gold town.
+
 ## [1.10.4] — 2026-10-14
 
 ### Fixed

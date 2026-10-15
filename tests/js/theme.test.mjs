@@ -331,13 +331,15 @@ test('outside every season window the look is none even with seasons on', () => 
   assert.equal(root.getAttribute('data-look'), 'none');
 });
 
-test('windows are inclusive at both ends: Sep 1 and Nov 30 in, Aug 31 and Dec 1 out', () => {
+test('windows are inclusive at both ends: Sep 1 to Dec 31 in, Aug 31 and Jan 1 out', () => {
   const { win } = loadTheme({ storage: { 'fh.season': 'on' } });
   assert.equal(win.refreshLook(day(8, 31)), 'none');
   assert.equal(win.refreshLook(day(9, 1)), 'fall-aspen-grove');
   assert.equal(win.refreshLook(day(11, 1)), 'thanksgiving-pumpkin-patch');
   assert.equal(win.refreshLook(day(11, 30)), 'thanksgiving-pumpkin-patch');
-  assert.equal(win.refreshLook(day(12, 1)), 'none');
+  assert.equal(win.refreshLook(day(12, 1)), 'christmas-glowing-cabin', 'Thanksgiving hands over to Christmas');
+  assert.equal(win.refreshLook(day(12, 31)), 'christmas-glowing-cabin');
+  assert.equal(win.refreshLook(new Date(2027, 0, 1, 12, 0, 0)), 'none');
 });
 
 test('setSeason(off) takes the look down immediately', () => {
@@ -403,7 +405,8 @@ test('a window may wrap the new year, and the FIRST matching season wins', () =>
     looks: [{ id: 'winter-snow', name: 'Snow' }] });
   win.FH_SEASONS.unshift({ id: 'harvest', name: 'Harvest', from: [9, 20], to: [9, 27],
     looks: [{ id: 'harvest-table', name: 'Table' }] });
-  assert.equal(win.refreshLook(day(12, 25)), 'winter-snow');
+  assert.equal(win.refreshLook(day(12, 25)), 'christmas-glowing-cabin',
+    'Christmas is listed before a later winter, so it keeps December');
   assert.equal(win.refreshLook(day(1, 10)), 'winter-snow');
   assert.equal(win.refreshLook(day(3, 1)), 'none');
   assert.equal(win.refreshLook(day(9, 25)), 'harvest-table');
@@ -508,7 +511,7 @@ test('nextSeason names the season that opens soonest, wrapping the year', () => 
   assert.equal(win.nextSeason(day(1, 15)).id, 'fall');
   assert.equal(win.nextSeason(day(12, 20)).id, 'fall', 'after fall ends, next fall');
   win.FH_SEASONS.push({ id: 'winter', name: 'Winter', from: [12, 1], to: [2, 28], looks: [{ id: 'winter-snow', name: 'Snow' }] });
-  assert.equal(win.nextSeason(day(11, 30)).id, 'winter');
+  assert.equal(win.nextSeason(day(11, 30)).id, 'christmas', 'on a tie the season listed first opens');
   assert.equal(win.nextSeason(day(3, 1)).id, 'fall');
 });
 
@@ -686,4 +689,29 @@ test('a house default never clears a pin', () => {
   assert.equal(win.pinnedLook(), 'halloween-moonrise', 'Off from the house hides it but keeps the pick');
   win.stampSeason('on');
   assert.equal(win.refreshLook(day(7, 4)), 'halloween-moonrise');
+});
+
+test('Christmas light points are fractions of the photo, and window panes are real boxes', () => {
+  const { win } = loadTheme();
+  const xmas = win.FH_SEASONS.find((s) => s.id === 'christmas');
+  assert.ok(xmas, 'Christmas is registered');
+  assert.equal(JSON.stringify([xmas.from, xmas.to]), "[[12,1],[12,31]]");
+  assert.equal(xmas.looks.filter((l) => l.default).length, 1, 'one default look');
+  const frac = (v) => typeof v === 'number' && v >= 0 && v <= 1;
+  for (const look of xmas.looks) {
+    const light = look.light;
+    if (!light) continue;
+    for (const key of ['lamps', 'fire']) {
+      for (const p of light[key] || []) {
+        assert.equal(p.length, 3, `${look.id} ${key}: x, y and a size`);
+        assert.ok(p.every(frac) && p[2] > 0, `${look.id} ${key} ${p}`);
+      }
+    }
+    for (const p of light.twinkle || []) assert.ok(p.length === 2 && p.every(frac), `${look.id} twinkle ${p}`);
+    if (light.size !== undefined) assert.ok(frac(light.size) && light.size > 0);
+    for (const b of light.panes || []) {
+      assert.ok(b.length === 4 && b.every(frac) && b[0] < b[2] && b[1] < b[3], `${look.id} pane ${b}`);
+    }
+    if (light.panes) assert.ok(light.indoor, `${look.id}: panes only mean something indoors`);
+  }
 });
