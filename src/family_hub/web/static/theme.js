@@ -342,11 +342,33 @@
     if (typeof l.pos !== "string" || !HOUSE_POS.test(l.pos)) return "pos must be like 'center 55%'";
     if (!Array.isArray(l.accent) || l.accent.length !== 3) return "accent must be [dark, dark ink, light]";
     for (var m = 0; m < 3; m++) if (!HOUSE_HEX.test(l.accent[m])) return "accent colors must be #RRGGBB";
+    // the light-theme accent carries white text: too pale and buttons can't be read
+    var c = l.accent[2], lum = 0.2126 * parseInt(c.slice(1, 3), 16) + 0.7152 * parseInt(c.slice(3, 5), 16) + 0.0722 * parseInt(c.slice(5, 7), 16);
+    if (lum > 150 && typeof console !== "undefined") console.warn("house look " + l.id + ": the light accent " + c + " is pale for white text");
     return "";
   }
+  // `light` reaches hub.js's placement maths: fractions of the photo only
+  function houseLightOk(g) {
+    var frac = function (v) { return typeof v === "number" && v >= 0 && v <= 1; };
+    var pts = function (a, len) {
+      if (a === undefined) return true;
+      if (!Array.isArray(a)) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!Array.isArray(a[i]) || a[i].length !== len) return false;
+        for (var j = 0; j < len; j++) if (!frac(a[i][j])) return false;
+      }
+      return true;
+    };
+    return !!g && typeof g === "object" && pts(g.lamps, 3) && pts(g.fire, 3) && pts(g.twinkle, 2) && pts(g.panes, 4)
+      && (g.size === undefined || frac(g.size)) && (g.indoor === undefined || typeof g.indoor === "boolean");
+  }
   function mergeHouseLooks(list) {
-    if (!Array.isArray(list)) return 0;
-    var css = [], placed = {}, n = 0;
+    if (list === undefined) return 0;
+    if (!Array.isArray(list)) {
+      if (typeof console !== "undefined") console.warn("FH_HOUSE_LOOKS is not a list; no house looks");
+      return 0;
+    }
+    var css = [], placed = {}, n = 0, houseDefault = {};
     for (var i = 0; i < list.length; i++) {
       var l = list[i], why = houseLookProblem(l);
       if (why) {
@@ -355,13 +377,22 @@
       }
       var season = null;
       for (var s = 0; s < SEASONS.length; s++) if (SEASONS[s].id === l.season) season = SEASONS[s];
-      var look = { id: l.id, name: l.name, house: true };
+      var look = { id: l.id, name: l.name };
       if (typeof l.blurb === "string") look.blurb = l.blurb;
       if (typeof l.credit === "string") look.credit = l.credit;
-      if (l.light && typeof l.light === "object") look.light = l.light;
+      if (l.light !== undefined) {
+        if (houseLightOk(l.light)) look.light = l.light;
+        else if (typeof console !== "undefined") console.warn("house look " + l.id + ": its light points are not fractions of the photo; it shows without glows");
+      }
       if (l.default === true) {
+        if (houseDefault[season.id] && typeof console !== "undefined") {
+          console.warn("house looks " + houseDefault[season.id] + " and " + l.id + " are both marked default; " + l.id + " wins");
+        }
         for (var d = 0; d < season.looks.length; d++) delete season.looks[d].default;
         look.default = true;
+        houseDefault[season.id] = l.id;
+      } else if (l.default !== undefined && typeof console !== "undefined") {
+        console.warn("house look " + l.id + ": default must be true or left out");
       }
       // first in their season, in the order the house listed them
       placed[season.id] = placed[season.id] || 0;
@@ -378,7 +409,11 @@
     }
     return n;
   }
-  mergeHouseLooks(window.FH_HOUSE_LOOKS);
+  // guarded: this file must finish (it stamps the theme before first paint)
+  // whatever a house list holds
+  try { mergeHouseLooks(window.FH_HOUSE_LOOKS); } catch (e) {
+    try { console.warn("house looks failed to load; showing the built-in looks", e); } catch (e2) { /* no console */ }
+  }
   window.houseLooksCss = function () { return houseLooksCss; };
 
   var SEASON_PREFS = ["on", "off"];
