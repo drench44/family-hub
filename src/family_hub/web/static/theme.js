@@ -246,6 +246,29 @@
     // `credit` is shown on the Settings tile (full attribution lives in
     // static/seasons/CREDITS.md). Ids are storage keys and image file names:
     // renaming a look is free, changing its id resets that choice everywhere.
+    // Christmas looks may carry `light`: where the photo's own lights are,
+    // as fractions of the photo (x, y from its top left), so hub.js can make
+    // them glow in place through the cover crop. `lamps` breathe softly (lit
+    // windows, a lantern), `fire` flickers, `twinkle` shimmers (string
+    // lights, a tree), `size` is a glow's width as a fraction of the photo.
+    // `indoor` looks keep the snow outside: it falls only in `panes` (window
+    // glass), or not at all when there is no window.
+    { id: "christmas", name: "Christmas", from: [12, 1], to: [12, 31], looks: [
+      { id: "christmas-glowing-cabin", name: "Glowing Cabin", blurb: "Lit windows in a snowy wood at dusk", credit: "Photo by the US Fish and Wildlife Service", default: true,
+        light: { lamps: [[0.447, 0.585, 0.06], [0.538, 0.565, 0.05], [0.33, 0.455, 0.03], [0.49, 0.43, 0.025], [0.655, 0.56, 0.025]] } },
+      { id: "christmas-cabin-window", name: "Cabin Window", blurb: "Snowy woods through a log cabin window", credit: "Photo by the US Fish and Wildlife Service",
+        light: { indoor: true, panes: [[0.300, 0.225, 0.495, 0.860], [0.530, 0.245, 0.710, 0.845]] } },
+      { id: "christmas-fireside", name: "Fireside", blurb: "A lit fire under a garland, a tree glowing either side", credit: "Photo by Erin Scott, The White House",
+        light: { indoor: true, size: 0.012, fire: [[0.502, 0.722, 0.09]], lamps: [[0.38, 0.465, 0.03], [0.615, 0.465, 0.03]],
+          twinkle: [[0.791, 0.211], [0.167, 0.864], [0.756, 0.571], [0.259, 0.481], [0.900, 0.818], [0.743, 0.749], [0.357, 0.438], [0.218, 0.886], [0.853, 0.669], [0.216, 0.686], [0.168, 0.382], [0.781, 0.389], [0.094, 0.810], [0.791, 0.436], [0.709, 0.826], [0.237, 0.788], [0.863, 0.828], [0.236, 0.646], [0.231, 0.271], [0.851, 0.570], [0.227, 0.533], [0.155, 0.712]] } },
+      { id: "christmas-fairy-lights", name: "Fairy Lights", blurb: "A tree strung with warm little lights", credit: "Photo by Joanna Kosinska",
+        light: { size: 0.014, twinkle: [[0.683, 0.289], [0.283, 0.316], [0.541, 0.615], [0.355, 0.378], [0.571, 0.582], [0.505, 0.631], [0.132, 0.656], [0.197, 0.697], [0.102, 0.486], [0.789, 0.526], [0.401, 0.541], [0.334, 0.685], [0.924, 0.712], [0.777, 0.260], [0.512, 0.767], [0.838, 0.821]] } },
+      { id: "christmas-tree", name: "Christmas Tree", blurb: "A decorated tree aglow with lights", credit: "Photo by Evelyn (Unsplash)",
+        light: { indoor: true, size: 0.016, twinkle: [[0.537, 0.171], [0.641, 0.719], [0.595, 0.132], [0.392, 0.131], [0.523, 0.706], [0.266, 0.491], [0.281, 0.259], [0.728, 0.530], [0.591, 0.549], [0.260, 0.358], [0.344, 0.556], [0.452, 0.306], [0.759, 0.369], [0.300, 0.535], [0.696, 0.352], [0.402, 0.300], [0.702, 0.609], [0.438, 0.598], [0.327, 0.739], [0.531, 0.492]] } },
+      { id: "christmas-woodsmoke", name: "Woodsmoke", blurb: "An old cabin in falling snow, smoke from the chimney", credit: "Photo by Ryan Graybill" },
+      { id: "christmas-sleigh-ride", name: "Sleigh Ride", blurb: "Sleighs through a frosted pink town, 1916", credit: "Painting by Boris Kustodiev" },
+      { id: "christmas-pink-dawn", name: "Pink Dawn", blurb: "A snowy patrol cabin under a pink sunrise", credit: "Photo by the National Park Service" },
+    ] },
     { id: "thanksgiving", name: "Thanksgiving", from: [11, 1], to: [11, 30], looks: [
       { id: "thanksgiving-pumpkin-patch", name: "Pumpkin Patch", blurb: "Pumpkins in warm late sun by the corn", credit: "Photo by Bonnie Kittle", default: true },
       { id: "thanksgiving-golden-hour", name: "Golden Hour", blurb: "Hay bales as the sun goes down", credit: "Photo by Annie Spratt" },
