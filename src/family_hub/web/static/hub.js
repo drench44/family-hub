@@ -4573,8 +4573,17 @@ function watchSeasonLights() {
   if (typeof MutationObserver === 'function') {
     // the look's photo tokens need data-theme and data-accent as well
     new MutationObserver(again).observe(document.documentElement, { attributes: true, attributeFilter: ['data-look', 'data-layout', 'data-theme', 'data-accent'] });
-    // and night (body.is-night) hides and brings back the layer over the cards
-    if (document.body) new MutationObserver(again).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    // and night (body.is-night) hides and brings back the layer over the
+    // cards; other body classes (an overlay opening) leave the lights be
+    const body = document.body;
+    if (body) {
+      const night = () => !!(body.classList && body.classList.contains('is-night'));
+      let wasNight = night();
+      new MutationObserver(() => {
+        const now = night();
+        if (now !== wasNight) { wasNight = now; again(); }
+      }).observe(body, { attributes: true, attributeFilter: ['class'] });
+    }
   } else {
     console.warn('season: no MutationObserver, so the lights are placed once and do not follow a look change');
   }
