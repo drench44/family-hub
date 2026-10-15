@@ -263,6 +263,7 @@
       { id: "christmas-tree", name: "Christmas Tree", blurb: "A decorated tree aglow with lights", credit: "Photo by Evelyn (Unsplash)",
         light: { indoor: true, size: 0.016, twinkle: [[0.537, 0.171], [0.641, 0.719], [0.595, 0.132], [0.392, 0.131], [0.523, 0.706], [0.266, 0.491], [0.281, 0.259], [0.728, 0.530], [0.591, 0.549], [0.260, 0.358], [0.344, 0.556], [0.452, 0.306], [0.759, 0.369], [0.300, 0.535], [0.696, 0.352], [0.402, 0.300], [0.702, 0.609], [0.438, 0.598], [0.327, 0.739], [0.531, 0.492]] } },
       { id: "christmas-woodsmoke", name: "Woodsmoke", blurb: "An old cabin in falling snow, smoke from the chimney", credit: "Photo by Ryan Graybill" },
+      { id: "christmas-sleigh-ride", name: "Sleigh Ride", blurb: "Sleighs through a frosted pink town, 1916", credit: "Painting by Boris Kustodiev" },
       { id: "christmas-pink-dawn", name: "Pink Dawn", blurb: "A snowy patrol cabin under a pink sunrise", credit: "Photo by the National Park Service" },
     ] },
     { id: "thanksgiving", name: "Thanksgiving", from: [11, 1], to: [11, 30], looks: [

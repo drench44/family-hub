@@ -18,6 +18,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   windows breathe, a fire flickers, string lights shimmer. Indoor looks keep
   the snow outside, falling only past the window glass. Like every look,
   any of them can be picked in Settings any time of year.
+- A colorful Christmas look too: Sleigh Ride, Boris Kustodiev's 1916
+  painting of sleighs racing through a frosted pink and gold town.
 
 ## [1.10.4] — 2026-10-14
 

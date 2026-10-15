@@ -2870,6 +2870,17 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
 }
 
+/* ---- Sleigh Ride: Boris Kustodiev, Shrovetide, 1916 (Russian Museum, public domain) ---- */
+:root[data-look="christmas-sleigh-ride"][data-theme][data-accent],
+.look-swatch[data-look="christmas-sleigh-ride"] {
+  --accent:#F4A6C8; --accent-ink:#2A0A1A; --accent-soft:rgba(244,166,200,.18);
+  --sn-scene:url("seasons/christmas-sleigh-ride.webp"); --sn-glass:url("seasons/glass/christmas-sleigh-ride.webp"); --sn-pos:35% center;
+}
+:root[data-look="christmas-sleigh-ride"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-sleigh-ride"] {
+  --accent:#A8386E; --accent-ink:#FFFFFF; --accent-soft:rgba(168,56,110,.13);
+}
+
 /* ---- Pink Dawn: a snowy patrol cabin at sunrise (Yellowstone NPS, public domain) ---- */
 :root[data-look="christmas-pink-dawn"][data-theme][data-accent],
 .look-swatch[data-look="christmas-pink-dawn"] {
@@ -3509,6 +3520,8 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    card blurs live), on a fall the tile's own height */
 .look-swatch .sn-flake { animation-name: sn-snowfall-tile; animation-play-state: paused; }
 .look-swatch .sn-flake b { animation-play-state: paused; }
+/* an indoor look's tile keeps the snow outside too: none in the room */
+.look-swatch:is([data-look="christmas-cabin-window"], [data-look="christmas-tree"]) .sn-snow { display: none; }
 @keyframes sn-snowfall-tile { from { transform: translate3d(0, -6px, 0); } to { transform: translate3d(0, 134px, 0); } }
 .look-swatch .sn-web:nth-child(1) { --s: 92px; left: -34px; top: -38px; }
 .look-swatch .sn-web:nth-child(2) { --s: 78px; right: -30px; bottom: -30px; }
