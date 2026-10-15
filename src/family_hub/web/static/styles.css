@@ -3356,7 +3356,8 @@ body.integ-off-todos .todo-slot { display: none; }
 @keyframes sn-strand { from { opacity: .45; } to { opacity: 1; } }
 /* room for the bulbs to hang clear of the section titles below */
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar { margin-bottom: 22px; }
-/* a dark kitchen at night: the bulbs hold still */
+/* a dark kitchen at night: the bulbs hold still, and no leaf blows away */
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .is-night .wrap) .card.todo::before { animation: none; }
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .is-night .topbar::before { animation: none; opacity: .5; }
 
 /* ---- Halloween on the interface: cobwebs in the card corners ----
@@ -3378,6 +3379,68 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 :root[data-look^="halloween-"] { --sn-card-web: rgba(232,222,255,.42); }
 :root[data-look^="halloween-"]:is([data-theme="light"], [data-theme="soft"]) { --sn-card-web: rgba(90,70,130,.34); }
+
+/* ---- Fall and Thanksgiving on the interface: leaves settled on the cards ----
+   Real leaves (photos and scans cut out, CREDITS.md) resting on some card
+   tops and caught in a lower corner, each tipped its own way, with a small
+   contact shadow, so the wind that carries the falling leaves seems to have
+   left a few on the wall. Every few cards, not all, and never the same leaf
+   twice in a row. One leaf, on the To-Do card, lifts and blows away now and
+   then, and a new one settles. Thanksgiving adds a tied bundle of wheat at
+   each end of the top bar. All still except that one leaf. */
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card { position: relative; }
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) :is(.card:nth-child(3n+1), .card.todo)::before,
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card:nth-child(4n+2)::after {
+  content: ""; position: absolute; pointer-events: none;
+  width: calc(var(--lf, 44px) * var(--sn-k, 1)); height: calc(var(--lf, 44px) * var(--sn-k, 1));
+  background: var(--leaf) center / contain no-repeat; rotate: var(--tip, 0deg);
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.32));
+}
+/* on a card's top edge, toward the right (the left has the title) */
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card:nth-child(3n+1)::before {
+  top: -14px; right: 22%; --leaf: url("seasons/leaf-red.webp"); --tip: -28deg;
+}
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card:nth-child(6n+4)::before {
+  --leaf: url("seasons/leaf-gold.webp"); --tip: 14deg; --lf: 50px; right: 12%;
+}
+:where(:root[data-look^="thanksgiving-"] .wrap) .card:nth-child(3n+1)::before { --leaf: url("seasons/leaf-oak.webp"); }
+:where(:root[data-look^="thanksgiving-"] .wrap) .card:nth-child(6n+4)::before { --leaf: url("seasons/leaf-amber.webp"); }
+/* caught in a lower left corner */
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card:nth-child(4n+2)::after {
+  left: -10px; bottom: -12px; --leaf: url("seasons/leaf-amber.webp"); --tip: 38deg; --lf: 40px;
+}
+:where(:root[data-look^="thanksgiving-"] .wrap) .card:nth-child(4n+2)::after { --leaf: url("seasons/leaf-red.webp"); }
+/* the one that blows away: rests most of a minute, tips, lifts and is gone
+   on the wind, then a fresh leaf drifts down into its place */
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card.todo::before {
+  top: -16px; right: 18%; --leaf: url("seasons/leaf-oak.webp"); --tip: -12deg; --lf: 46px;
+  animation: sn-leaf-lift 48s ease-in-out infinite;
+}
+@keyframes sn-leaf-lift {
+  0%, 74% { transform: none; opacity: 1; }
+  77% { transform: translate3d(2px, -4px, 0) rotate(-10deg); }
+  80% { transform: translate3d(-6px, -2px, 0) rotate(8deg); }
+  90% { transform: translate3d(-220px, -140px, 0) rotate(-220deg); opacity: 1; }
+  91% { transform: translate3d(-240px, -150px, 0) rotate(-240deg); opacity: 0; }
+  92% { transform: translate3d(0, -60px, 0) rotate(30deg); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+/* Thanksgiving's wheat: two tied bundles laid in the empty middle of the
+   top bar, heads outward, like a harvest swag on a mantel; clear of the
+   wordmark, the clock and the gear. The phone's bar has no room: none there. */
+:where(:root[data-look^="thanksgiving-"]) .topbar::before,
+:where(:root[data-look^="thanksgiving-"]) .topbar::after {
+  content: ""; position: absolute; pointer-events: none; top: 50%; left: 50%;
+  width: 210px; height: 52px; margin-top: -26px;
+  background: url("seasons/wheat-bundle.webp") center / contain no-repeat;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.3));
+}
+:where(:root[data-look^="thanksgiving-"]) .topbar::before { transform: translateX(-100%) scaleX(-1); }
+:where(:root[data-look^="thanksgiving-"]) .topbar::after { transform: translateX(-4px); }
+@media (max-width: 1000px) {
+  :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] .topbar::before,
+  :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] .topbar::after { display: none; }
+}
 
 /* ---- Christmas light: the photo's own lights glow ----
    Spots placed by hub.js (placeSeasonLights) over the photo's lit windows,
@@ -3572,6 +3635,7 @@ body.integ-off-todos .todo-slot { display: none; }
      covered the whole first card */
   :root:not([data-layout="desktop"])[data-look^="halloween-"] { --sn-k: .5; }
   :root:not([data-layout="desktop"])[data-look^="thanksgiving-"] { --sn-k: .5; }
+  :root:not([data-layout="desktop"])[data-look^="fall-"] { --sn-k: .6; }
   :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(1) { left: -110px; top: -120px; }
   :root:not([data-layout="desktop"]) body > .season .sn-web:nth-child(2) { right: -96px; bottom: -92px; }
 }
@@ -3715,6 +3779,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
   .sn-flock, .sn-goose b::before { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-flock { display: none; }
   :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::before { animation: none; }
+  :where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card.todo::before { animation: none; }
   .sn-flake, .sn-flake b, .sn-glow.lamp, .sn-glow.fire, .sn-glow.fire.spill, .sn-glow.twinkle { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-snow { display: none; }
   :root[data-look]:not([data-look="none"]) body > .season-fx { display: none; }
