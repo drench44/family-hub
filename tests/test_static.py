@@ -2441,3 +2441,37 @@ def test_christmas_snow_and_lights_stand_down_at_night_and_with_reduced_motion()
     start, stopped, hidden = _last_reduced_motion_selectors()
     for sel in (".sn-flake", ".sn-flake b", ".sn-glow.lamp", ".sn-glow.fire", ".sn-glow.twinkle"):
         assert sel in stopped, f"reduced motion does not stop {sel}"
+
+
+def test_wall_decorations_only_paint_while_their_season_does():
+    """The strands, frost, snow drifts, webs, leaves and wheat live on the
+    cards' and the top bar's ::before/::after. Each such rule must be scoped
+    to a season prefix, so a family with seasons off (or another season)
+    never gets them: seasons-off has to match main pixel for pixel."""
+    found = 0
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS):
+        sel = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+        if not re.search(r"\.(card|topbar)[^,{]*::(before|after)", sel):
+            continue
+        if "content:" not in m.group(2):
+            continue
+        found += 1
+        assert 'data-look^="' in sel, f"a decoration paints outside any season: {sel.strip()[:120]}"
+    assert found >= 6, "expected the season decorations on cards and the top bar"
+
+
+def test_wall_decorations_never_take_a_tap():
+    """Every decoration pseudo-element is pointer-events: none: a leaf on the
+    To-Do card or a bulb over a section title must never eat a tap."""
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS):
+        sel, body = m.group(1), m.group(2)
+        if re.search(r"\.(card|topbar)[^,{]*::(before|after)", sel) and "content:" in body and 'data-look^="' in sel:
+            assert "pointer-events: none" in body, f"decoration can take a tap: {sel.strip()[:120]}"
+
+
+def test_the_strand_and_the_blowing_leaf_hold_still_at_night_and_with_reduced_motion():
+    rm = CSS[[m.start() for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\) \{", CSS)][-1]:]
+    for sel in ('.topbar::before { animation: none; }', '.card.todo::before { animation: none; }'):
+        assert sel in rm, f"reduced motion does not stop {sel}"
+    assert '.is-night .topbar::before { animation: none;' in CSS
+    assert '.is-night .wrap) .card.todo::before { animation: none; }' in CSS
