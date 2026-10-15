@@ -315,7 +315,12 @@ A second look at both seasons, after they shipped, found these:
 - **Indoor looks keep the snow outside.** A tree in a living room with snow
   falling on it reads wrong. `indoor: true` hides the snow, or, with
   `panes`, clips the far snow to the window glass (a `clip-path: path()`
-  built from the panes).
+  built from the panes). The cards hide most of a window on the wall, and
+  the owner asked whether the snow outside was "really visible": it was
+  not (a few 2px white dots on a white snowy view). A window look also
+  gets its own heavier fall (`.sn-snow.pane`, 90 flakes of 4 to 8px) fitted
+  to the panes' box so every flake falls past the glass, with a soft grey
+  edge, because white flakes vanish against bright snow.
 - **Snow is soft dots, not snowflake symbols.** Six-armed flakes read as
   confetti at wall distance. 64 far and 28 near flakes, seeded, so every
   load gets the same snowfall; the phone shows about a third.

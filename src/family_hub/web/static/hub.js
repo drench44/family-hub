@@ -4400,28 +4400,36 @@ function seasonFlockHtml(depth = 'front') {
 // inline custom properties: 48 nth-child rules would say the same thing
 // at far greater length.
 function seasonSnowHtml(depth = 'front') {
-  // 'tile': a still dusting for a Settings preview, fewer flakes (class "still")
-  const tile = depth === 'tile';
-  const far = depth === 'back' || tile;
-  let seed = far ? 7 : 3;
-  const rnd = (a, b) => {
+  // Four sets. 'back': the far snow in the photo layer. 'front': the near
+  // snow over the cards. 'pane': a heavier fall seen through a window, in
+  // the photo layer, shown only on a look with window panes and fitted to
+  // them (placeSeasonLights), so the strip of window the cards leave open
+  // clearly shows snow coming down outside. 'tile': a still dusting for a
+  // Settings preview (class "still").
+  const P = {
+    back: { seed: 7, n: 64, cls: 'back', size: [2, 4.5], speed: [18, 32], amp: [3, 8], sway: [6, 11], o: [0.45, 0.8] },
+    front: { seed: 3, n: 28, cls: 'front', size: [5, 9], speed: [40, 65], amp: [8, 18], sway: [5, 9], o: [0.55, 0.9] },
+    pane: { seed: 13, n: 90, cls: 'pane', size: [4, 8.5], speed: [34, 60], amp: [4, 12], sway: [4, 8], o: [0.75, 1] },
+    tile: { seed: 7, n: 24, cls: 'still', size: [2, 4.5], speed: [18, 32], amp: [3, 8], sway: [6, 11], o: [0.45, 0.8] },
+  }[depth] || null;
+  if (!P) return '';
+  let seed = P.seed;
+  const rnd = ([a, b]) => {
     seed = (seed * 16807) % 2147483647;
     return a + (seed / 2147483647) * (b - a);
   };
-  const n = tile ? 24 : far ? 64 : 28;
-  const layer = tile ? 'still' : (far ? 'back' : 'front');
-  let out = `<span class="sn-snow ${layer}">`;
-  for (let i = 0; i < n; i++) {
-    const size = far ? rnd(2, 4.5) : rnd(5, 9);
+  let out = `<span class="sn-snow ${P.cls}">`;
+  for (let i = 0; i < P.n; i++) {
+    const size = rnd(P.size);
     // px per second down a 1080px screen, as a duration for 108vh of fall
-    const dur = 1166 / (far ? rnd(18, 32) : rnd(40, 65));
+    const dur = 1166 / rnd(P.speed);
     const vars = [
-      `--x:${rnd(0, 100).toFixed(1)}%`, `--s:${size.toFixed(1)}px`,
-      `--d:${dur.toFixed(1)}s`, `--dl:-${rnd(0, dur).toFixed(1)}s`,
-      `--amp:${(far ? rnd(3, 8) : rnd(8, 18)).toFixed(0)}px`,
-      `--sw:${(far ? rnd(6, 11) : rnd(5, 9)).toFixed(1)}s`,
-      `--drift:${rnd(-30, 30).toFixed(0)}px`,
-      `--o:${(far ? rnd(0.45, 0.8) : rnd(0.55, 0.9)).toFixed(2)}`,
+      `--x:${rnd([0, 100]).toFixed(1)}%`, `--s:${size.toFixed(1)}px`,
+      `--d:${dur.toFixed(1)}s`, `--dl:-${rnd([0, dur]).toFixed(1)}s`,
+      `--amp:${rnd(P.amp).toFixed(0)}px`,
+      `--sw:${rnd(P.sway).toFixed(1)}s`,
+      `--drift:${rnd([-30, 30]).toFixed(0)}px`,
+      `--o:${rnd(P.o).toFixed(2)}`,
     ];
     out += `<span class="sn-flake" style="${vars.join(';')}"><b></b></span>`;
   }
@@ -4438,7 +4446,7 @@ function seasonLightsHtml(depth = 'front') {
 // the set that belongs to the look being painted.
 function seasonFxHtml(depth = 'front') {
   return seasonLeavesHtml(depth) + seasonHauntHtml(depth) + seasonFlockHtml(depth)
-    + seasonSnowHtml(depth) + seasonLightsHtml(depth);
+    + seasonSnowHtml(depth) + (depth === 'back' ? seasonSnowHtml('pane') : '') + seasonLightsHtml(depth);
 }
 
 /* ---- Christmas: the photo's own lights glow ----
@@ -4509,6 +4517,7 @@ function snResetLights() {
   snows.forEach((el) => {
     if (light && light.indoor) el.dataset.where = 'none'; else delete el.dataset.where;
     el.style.clipPath = '';
+    el.style.left = ''; el.style.width = '';
   });
   return { layer, light, snows, look };
 }
@@ -4553,13 +4562,29 @@ async function placeSeasonLights() {
   for (const [u, v] of light.twinkle || []) add('twinkle', u, v, tw);
   layer.appendChild(frag);
   if (light.indoor && light.panes && light.panes.length) {
-    const path = light.panes.map(([u0, v0, u1, v1]) => {
-      const [x0, y0] = at(u0, v0), [x1, y1] = at(u1, v1);
-      return `M${x0.toFixed(1)} ${y0.toFixed(1)}H${x1.toFixed(1)}V${y1.toFixed(1)}H${x0.toFixed(1)}Z`;
-    }).join('');
+    // the window's glass as a path; dx shifts it into a box that starts at dx
+    const boxes = light.panes.map(([u0, v0, u1, v1]) => [...at(u0, v0), ...at(u1, v1)]);
+    const pathFrom = (dx) => boxes.map(([x0, y0, x1, y1]) =>
+      `M${(x0 - dx).toFixed(1)} ${y0.toFixed(1)}H${(x1 - dx).toFixed(1)}V${y1.toFixed(1)}H${(x0 - dx).toFixed(1)}Z`).join('');
+    const left = Math.min(...boxes.map((b) => b[0]));
+    const right = Math.max(...boxes.map((b) => b[2]));
+    if (!(Number.isFinite(left) && Number.isFinite(right) && right - left > 1)) {
+      // a typo in the panes: keep the room dry (data-where stays "none") and say so
+      console.warn(`season: ${look} has window panes that make no box; its snow stays hidden`, light.panes);
+      return;
+    }
     snows.forEach((el) => {
       el.dataset.where = 'panes';
-      if (el.closest('.season')) el.style.clipPath = `path("${path}")`;
+      if (!el.closest('.season')) return;
+      if ((' ' + el.className + ' ').includes(' pane ')) {
+        // the window's own snowfall spans just the window, so every flake
+        // falls past the glass instead of most landing on the walls
+        el.style.left = `${left.toFixed(1)}px`;
+        el.style.width = `${(right - left).toFixed(1)}px`;
+        el.style.clipPath = `path("${pathFrom(left)}")`;
+      } else {
+        el.style.clipPath = `path("${pathFrom(0)}")`;
+      }
     });
   }
 }

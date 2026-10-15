@@ -2437,7 +2437,8 @@ def test_the_phone_shows_about_a_third_of_the_snow():
     """The phone hides flakes past a count, by nth-child. Pin the counts it
     keeps against the counts hub.js makes, so a retune of either is seen."""
     hub = (STATIC / "hub.js").read_text()
-    far, near = map(int, re.search(r"const n = tile \? \d+ : far \? (\d+) : (\d+);", hub).groups())
+    far = int(re.search(r"back: \{ seed: \d+, n: (\d+),", hub).group(1))
+    near = int(re.search(r"front: \{ seed: \d+, n: (\d+),", hub).group(1))
     keep_far = int(re.search(r"\.sn-snow\.back \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
     keep_near = int(re.search(r"\.sn-snow\.front \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
     assert 0 < keep_far < far and 0 < keep_near < near
@@ -2486,3 +2487,21 @@ def test_the_strand_and_the_blowing_leaf_hold_still_at_night_and_with_reduced_mo
         assert sel in rm, f"reduced motion does not stop {sel}"
     assert '.is-night .topbar::before { animation: none;' in CSS
     assert '.is-night .wrap) .card.todo::before { animation: none; }' in CSS
+
+
+def test_the_window_snow_shows_only_once_fitted_and_holds_still_with_the_rest():
+    """The heavier window snowfall (.sn-snow.pane) is hidden until
+    placeSeasonLights fits it to the panes, goes at night with the far snow,
+    and the phone keeps a fraction of it."""
+    assert ':root[data-look^="christmas-"] body > .season .sn-snow.pane:not([data-where="panes"]) { display: none; }' in CSS
+    assert ':root[data-look]:not([data-look="none"]) body.is-night > .season .sn-snow { display: none; }' in CSS
+    hub = (STATIC / "hub.js").read_text()
+    n = int(re.search(r"pane: \{ seed: \d+, n: (\d+),", hub).group(1))
+    keep = int(re.search(r"\.sn-snow\.pane \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
+    assert 0.25 <= keep / n <= 0.45, (keep, n)
+    # the hide rule comes after the rule that shows every .sn-snow
+    show = CSS.index(':root[data-look^="christmas-"] body > .season .sn-snow,')
+    hide = CSS.index('.sn-snow.pane:not([data-where="panes"]) { display: none; }')
+    assert hide > show
+    assert "filter:" not in re.search(r"\.sn-snow\.pane \.sn-flake[^{]*\{([^}]*)\}", CSS).group(1), \
+        "no filter on 90 moving flakes: the edge is drawn into the gradient"

@@ -9421,11 +9421,14 @@ function lightsStage(sandbox, document, opts = {}) {
   farSnow.closest = (sel) => (sel === '.season' ? {} : null);
   const nearSnow = mk('sn-snow front');
   nearSnow.closest = () => null;
+  const paneSnow = mk('sn-snow pane');
+  paneSnow.closest = (sel) => (sel === '.season' ? {} : null);
+  paneSnow.style.left = ''; paneSnow.style.width = '';
   lights.children = [{ stale: true }];
   const photo = { clientWidth: opts.w || 1880, clientHeight: opts.h || 1000 };
   document.querySelector = (sel) => (sel === 'body > .season-fx .sn-lights' ? (opts.noLayer ? null : lights)
     : sel === 'body > .season' ? photo : null);
-  document.querySelectorAll = (sel) => (sel.includes('.sn-snow') ? [farSnow, nearSnow] : []);
+  document.querySelectorAll = (sel) => (sel.includes('.sn-snow') ? [farSnow, nearSnow, paneSnow] : []);
   document.createElement = (tag) => { const el = mk(''); made.push(el); return el; };
   document.createDocumentFragment = () => { const f = mk('frag'); f.frag = true; return f; };
   document.documentElement.setAttribute('data-look', opts.look);
@@ -9443,7 +9446,7 @@ function lightsStage(sandbox, document, opts = {}) {
     }
   };
   vm.runInContext('snPhotoSizes.clear();', sandbox);
-  return { lights, farSnow, nearSnow, made };
+  return { lights, farSnow, nearSnow, paneSnow, made };
 }
 
 test('placeSeasonLights: each light lands where the photo shows it, cropped ones are dropped', async () => {
@@ -9613,4 +9616,47 @@ test('placeSeasonLights: a look change during the debounce makes an older placem
   sandbox.snResetLights();   // what a look change does at once, before its own placement runs
   await inFlight;
   assert.equal(st.lights.children.length, 0, 'the old photo\'s glows never land on the new look');
+});
+
+test('the window gets its own heavier snowfall, fitted to the panes', async () => {
+  const { document, sandbox } = newHub();
+  const pane = sandbox.seasonSnowHtml('pane');
+  assert.match(pane, /^<span class="sn-snow pane">/);
+  assert.equal((pane.match(/class="sn-flake"/g) || []).length, 90);
+  const sizes = [...pane.matchAll(/--s:([\d.]+)px/g)].map((m) => +m[1]);
+  assert.ok(Math.min(...sizes) >= 4, 'big enough to read against a bright snowy view');
+  assert.match(sandbox.seasonFxHtml('back'), /<span class="sn-snow pane">/, 'it rides in the photo layer');
+  assert.doesNotMatch(sandbox.seasonFxHtml('front'), /sn-snow pane/, 'never over the cards');
+  (sandbox.FH_SEASONS = []).unshift({ id: 'xmas-test', looks: [
+    { id: 'xmas-test-window', light: { indoor: true, panes: [[0.25, 0.25, 0.4, 0.75], [0.45, 0.25, 0.6, 0.75]] } },
+    { id: 'xmas-test-out', light: { lamps: [[0.5, 0.5, 0.1]] } },
+  ] });
+  // 1880x1175 photo on 1880x1000, centered: x = u * 1880
+  const st = lightsStage(sandbox, document, { look: 'xmas-test-window', ih: 1600 });
+  await sandbox.placeSeasonLights();
+  assert.equal(st.paneSnow.dataset.where, 'panes');
+  assert.equal(st.paneSnow.style.left, '470.0px', 'the window snow starts at the left pane');
+  assert.equal(st.paneSnow.style.width, `${(0.6 * 1880 - 470).toFixed(1)}px`, 'and ends at the right one');
+  assert.match(st.paneSnow.style.clipPath, /^path\("M0\.0 [\d.]+H282\.0V[\d.]+H0\.0ZM376\.0 /, 'its clip is shifted into its own box');
+  assert.match(st.farSnow.style.clipPath, /^path\("M470\.0 /, 'the far snow keeps screen coordinates');
+  const out = lightsStage(sandbox, document, { look: 'xmas-test-out' });
+  out.paneSnow.style.left = '470.0px'; out.paneSnow.style.width = '658.0px'; out.paneSnow.style.clipPath = 'path("M0 0H9V9H0Z")';
+  await sandbox.placeSeasonLights();
+  assert.equal(out.paneSnow.style.left, '', 'an outdoor look drops the window box');
+  assert.equal(out.paneSnow.style.width, '');
+  assert.equal(out.paneSnow.style.clipPath, '');
+  assert.equal(out.paneSnow.dataset.where, undefined, 'and CSS hides the window snow without data-where="panes"');
+});
+
+test('placeSeasonLights: window panes that make no box keep the room dry and say so', async () => {
+  const { document, sandbox } = newHub();
+  (sandbox.FH_SEASONS = []).unshift({ id: 'xmas-test', looks: [{ id: 'xmas-test-bad', light: { indoor: true, panes: [[NaN, 0.2, 0.4, 0.6]] } }] });
+  const warned = [];
+  sandbox.console = { ...console, warn: (...a) => warned.push(a.join(' ')) };
+  const st = lightsStage(sandbox, document, { look: 'xmas-test-bad' });
+  await sandbox.placeSeasonLights();
+  assert.equal(st.paneSnow.dataset.where, 'none');
+  assert.equal(st.farSnow.dataset.where, 'none');
+  assert.equal(st.paneSnow.style.width, '');
+  assert.ok(warned.some((w) => /make no box/.test(w)));
 });
