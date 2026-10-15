@@ -18,6 +18,12 @@ rolls that section to a dated version via `python scripts/release.py`.
   windows breathe, a fire flickers, string lights shimmer. Indoor looks keep
   the snow outside, falling only past the window glass. Like every look,
   any of them can be picked in Settings any time of year.
+- The season now decorates the wall itself. Christmas hangs a strand of
+  red, green, gold and white bulbs under the top bar, their glow gently
+  breathing, lays frost from a real photo of ice on glass into the card
+  corners, and rests a soft drift of snow along the top of each card.
+  Halloween strings neon orange, purple and green lights and spins cobwebs
+  into some card corners.
 - A colorful Christmas look too: Sleigh Ride, Boris Kustodiev's 1916
   painting of sleighs racing through a frosted pink and gold town.
 
