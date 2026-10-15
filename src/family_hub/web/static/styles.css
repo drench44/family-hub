@@ -2841,6 +2841,17 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#246444; --accent-ink:#FFFFFF; --accent-soft:rgba(36,100,68,.13);
 }
 
+/* ---- Fireside: a lit hearth between two trees (Erin Scott, The White House, public domain) ---- */
+:root[data-look="christmas-fireside"][data-theme][data-accent],
+.look-swatch[data-look="christmas-fireside"] {
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
+  --sn-scene:url("seasons/christmas-fireside.webp"); --sn-glass:url("seasons/glass/christmas-fireside.webp"); --sn-pos:center 60%;
+}
+:root[data-look="christmas-fireside"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-fireside"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
 /* ---- Fairy Lights: a tree strung with warm lights (Joanna Kosinska, CC0) ---- */
 :root[data-look="christmas-fairy-lights"][data-theme][data-accent],
 .look-swatch[data-look="christmas-fairy-lights"] {
@@ -3595,7 +3606,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch .sn-flake { animation-name: sn-snowfall-tile; animation-play-state: paused; }
 .look-swatch .sn-flake b { animation-play-state: paused; }
 /* an indoor look's tile keeps the snow outside too: none in the room */
-.look-swatch:is([data-look="christmas-cabin-window"], [data-look="christmas-tree"]) .sn-snow { display: none; }
+.look-swatch:is([data-look="christmas-cabin-window"], [data-look="christmas-tree"], [data-look="christmas-fireside"]) .sn-snow { display: none; }
 @keyframes sn-snowfall-tile { from { transform: translate3d(0, -6px, 0); } to { transform: translate3d(0, 134px, 0); } }
 .look-swatch .sn-web:nth-child(1) { --s: 92px; left: -34px; top: -38px; }
 .look-swatch .sn-web:nth-child(2) { --s: 78px; right: -30px; bottom: -30px; }
