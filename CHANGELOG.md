@@ -27,9 +27,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Fall and Thanksgiving leave real leaves resting on the card tops and
   caught in a corner, and now and then one lifts and blows away.
   Thanksgiving also lays two tied bundles of wheat across the top bar.
-- The Christmas glows land on the photo's lights on phones too, come back
+- Christmas glows land on the photo's lights on phones too, come back
   after a night, and an indoor look never snows in the room while its
-  window is still being placed.
+  window is still being placed, and opening a menu no longer resets them.
 - A colorful Christmas look too: Sleigh Ride, Boris Kustodiev's 1916
   painting of sleighs racing through a frosted pink and gold town.
 
