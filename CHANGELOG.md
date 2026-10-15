@@ -24,6 +24,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   corners, and rests a soft drift of snow along the top of each card.
   Halloween strings neon orange, purple and green lights and spins cobwebs
   into some card corners.
+- Fall and Thanksgiving leave real leaves resting on the card tops and
+  caught in a corner, and now and then one lifts and blows away.
+  Thanksgiving also lays two tied bundles of wheat across the top bar.
 - A colorful Christmas look too: Sleigh Ride, Boris Kustodiev's 1916
   painting of sleighs racing through a frosted pink and gold town.
 
