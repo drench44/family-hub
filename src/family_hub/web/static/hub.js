@@ -4400,14 +4400,17 @@ function seasonFlockHtml(depth = 'front') {
 // inline custom properties: 48 nth-child rules would say the same thing
 // at far greater length.
 function seasonSnowHtml(depth = 'front') {
-  const far = depth === 'back';
+  // 'tile': a still dusting for a Settings preview, fewer flakes (class "still")
+  const tile = depth === 'tile';
+  const far = depth === 'back' || tile;
   let seed = far ? 7 : 3;
   const rnd = (a, b) => {
     seed = (seed * 16807) % 2147483647;
     return a + (seed / 2147483647) * (b - a);
   };
-  const n = far ? 64 : 28;
-  let out = `<span class="sn-snow ${far ? 'back' : 'front'}">`;
+  const n = tile ? 24 : far ? 64 : 28;
+  const layer = tile ? 'still' : (far ? 'back' : 'front');
+  let out = `<span class="sn-snow ${layer}">`;
   for (let i = 0; i < n; i++) {
     const size = far ? rnd(2, 4.5) : rnd(5, 9);
     // px per second down a 1080px screen, as a duration for 108vh of fall
@@ -4456,9 +4459,15 @@ const SN_POS_WORDS = { left: 0, top: 0, center: 0.5, right: 1, bottom: 1 };
 // "center 55%" -> [0.5, 0.55]; one value means centered on the other axis
 function snParsePos(v) {
   const parts = String(v || '').trim().split(/\s+/).filter(Boolean);
-  const one = (t) => (t in SN_POS_WORDS ? SN_POS_WORDS[t]
-    : /%$/.test(t) && Number.isFinite(parseFloat(t)) ? parseFloat(t) / 100 : 0.5);
+  const one = (t) => {
+    if (t in SN_POS_WORDS) return SN_POS_WORDS[t];
+    if (/%$/.test(t) && Number.isFinite(parseFloat(t))) return parseFloat(t) / 100;
+    console.warn(`season: cannot read "${t}" in --sn-pos; the lights assume the middle`);
+    return 0.5;
+  };
   if (!parts.length) return [0.5, 0.5];
+  // a lone vertical keyword is the y; one first in a pair is swapped
+  if (parts.length === 1 && (parts[0] === 'top' || parts[0] === 'bottom')) return [0.5, one(parts[0])];
   if (parts[0] === 'top' || parts[0] === 'bottom') parts.reverse();
   return [one(parts[0]), parts.length > 1 ? one(parts[1]) : 0.5];
 }
@@ -4486,21 +4495,27 @@ function snPhotoSize(url) {
   return snPhotoSizes.get(url);
 }
 let snLightsGen = 0;
-async function placeSeasonLights() {
-  const gen = ++snLightsGen;
+// Clear the last look's glows and snow rules at once, before any wait, so
+// they never sit on the next photo. An indoor look's snow is held back
+// (data-where="none") until its window is clipped: a failure anywhere after
+// this leaves the room dry, never snowing indoors.
+function snResetLights() {
+  snLightsGen++;   // and any placement still waiting on a photo is now stale
   const layer = document.querySelector('body > .season-fx .sn-lights');
-  if (!layer) return;
-  const snows = document.querySelectorAll('body > .season .sn-snow, body > .season-fx .sn-snow');
-  layer.replaceChildren();
+  if (layer) layer.replaceChildren();
   const look = document.documentElement.getAttribute('data-look');
   const light = (snLookEntry(look) || {}).light || null;
-  // where the snow may fall: everywhere, only on the window glass, or nowhere
-  const where = !light || !light.indoor ? '' : light.panes ? 'panes' : 'none';
+  const snows = document.querySelectorAll('body > .season .sn-snow, body > .season-fx .sn-snow');
   snows.forEach((el) => {
-    if (where) el.dataset.where = where; else delete el.dataset.where;
+    if (light && light.indoor) el.dataset.where = 'none'; else delete el.dataset.where;
     el.style.clipPath = '';
   });
-  if (!light) return;
+  return { layer, light, snows, look };
+}
+async function placeSeasonLights() {
+  const { layer, light, snows, look } = snResetLights();
+  const gen = snLightsGen;
+  if (!layer || !light) return;
   const cs = getComputedStyle(document.documentElement);
   const m = /url\(\s*["']?([^"')]+)["']?\s*\)/.exec(cs.getPropertyValue('--sn-scene'));
   if (!m) { console.warn(`season: ${look} has light points but no photo to place them on`); return; }
@@ -4510,8 +4525,13 @@ async function placeSeasonLights() {
     return;
   }
   if (gen !== snLightsGen) return;   // the look or the screen changed meanwhile
-  const W = layer.clientWidth, H = layer.clientHeight;
-  if (!W || !H) return;
+  // Measure the photo layer, not the lights' own: .season is the full
+  // screen the photo is cropped to, and it is shown at night and with
+  // reduced motion too, when the layer over the cards is hidden and
+  // measures 0 (and on a phone that layer stops above the tab bar).
+  const photo = document.querySelector('body > .season');
+  const W = photo ? photo.clientWidth : 0, H = photo ? photo.clientHeight : 0;
+  if (!W || !H) { console.warn('season: the photo layer has no size yet; lights wait for the next change'); return; }
   const [px, py] = snParsePos(cs.getPropertyValue('--sn-pos'));
   const map = snCoverMap(W, H, size[0], size[1], px, py);
   const at = (u, v) => [map.ox + u * map.dw, map.oy + v * map.dh];
@@ -4532,19 +4552,31 @@ async function placeSeasonLights() {
   const tw = Math.max(24, (light.size || 0.012) * map.dw * 3);
   for (const [u, v] of light.twinkle || []) add('twinkle', u, v, tw);
   layer.appendChild(frag);
-  if (where === 'panes') {
+  if (light.indoor && light.panes && light.panes.length) {
     const path = light.panes.map(([u0, v0, u1, v1]) => {
       const [x0, y0] = at(u0, v0), [x1, y1] = at(u1, v1);
       return `M${x0.toFixed(1)} ${y0.toFixed(1)}H${x1.toFixed(1)}V${y1.toFixed(1)}H${x0.toFixed(1)}Z`;
     }).join('');
-    snows.forEach((el) => { if (el.closest('.season')) el.style.clipPath = `path("${path}")`; });
+    snows.forEach((el) => {
+      el.dataset.where = 'panes';
+      if (el.closest('.season')) el.style.clipPath = `path("${path}")`;
+    });
   }
 }
 let snLightsTimer = 0;
 function watchSeasonLights() {
-  const again = () => { clearTimeout(snLightsTimer); snLightsTimer = setTimeout(placeSeasonLights, 150); };
+  const again = () => {
+    snResetLights();
+    clearTimeout(snLightsTimer);
+    snLightsTimer = setTimeout(placeSeasonLights, 150);
+  };
   if (typeof MutationObserver === 'function') {
-    new MutationObserver(again).observe(document.documentElement, { attributes: true, attributeFilter: ['data-look', 'data-layout'] });
+    // the look's photo tokens need data-theme and data-accent as well
+    new MutationObserver(again).observe(document.documentElement, { attributes: true, attributeFilter: ['data-look', 'data-layout', 'data-theme', 'data-accent'] });
+    // and night (body.is-night) hides and brings back the layer over the cards
+    if (document.body) new MutationObserver(again).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  } else {
+    console.warn('season: no MutationObserver, so the lights are placed once and do not follow a look change');
   }
   window.addEventListener('resize', again);
   placeSeasonLights();
@@ -4552,8 +4584,9 @@ function watchSeasonLights() {
 
 // A Settings preview: the look's photo (the .season background, the look's
 // --sn-scene) with its leaves (or webs and bats) resting on it.
-function seasonSceneHtml() {
-  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}${seasonFlockHtml('back')}${seasonSnowHtml('back')}</span>`;
+function seasonSceneHtml(lookId = '') {
+  const snow = String(lookId).startsWith('christmas-') ? seasonSnowHtml('tile') : '';
+  return `<span class="season" aria-hidden="true">${seasonLeavesHtml()}${seasonHauntHtml('back')}${seasonFlockHtml('back')}${snow}</span>`;
 }
 
 // Mount the wall's scene once, in two layers (CSS shows both only while
@@ -4821,7 +4854,7 @@ function seasonalCardHtml() {
   const now = typeof activeSeason === 'function' ? activeSeason() : null;
   const tile = (look) => `<button class="look-tile" type="button" data-look-pick="${escapeHtml(look.id)}" aria-pressed="false">`
     + `<span class="look-swatch" data-look="${escapeHtml(look.id)}" aria-hidden="true">`
-    + seasonSceneHtml()
+    + seasonSceneHtml(look.id)
     + '<span class="look-card"><span class="look-mark"></span>'
     + '<span class="look-card-line short"></span><span class="look-card-line"></span></span>'
     + '</span>'
