@@ -1138,9 +1138,17 @@ def test_night_dim_never_makes_the_body_a_fixed_containing_block():
 @pytest.mark.parametrize("html_path", HTML_FILES, ids=lambda p: p.name)
 def test_theme_js_is_first_script(html_path):
     """theme.js stamps data-theme/data-accent/data-cols on <html> before first
-    paint, so it must be the first <script> referenced in every page."""
+    paint, so it must be the first <script> referenced in every page. The one
+    exception is the house looks list, which is data only (it sets
+    window.FH_HOUSE_LOOKS) and must run BEFORE theme.js, which reads it."""
     scripts = [s.split("?")[0] for s in
                re.findall(r'<script src="([^"]+)"', html_path.read_text())]
+    if scripts[:1] == ["seasons/house/looks.js"]:
+        scripts = scripts[1:]
+        house = (STATIC / "seasons" / "house" / "looks.js").read_text()
+        code = "\n".join(l for l in house.splitlines() if not l.strip().startswith("//"))
+        assert code.strip() == "window.FH_HOUSE_LOOKS = window.FH_HOUSE_LOOKS || [];", \
+            "the engine's house looks.js must stay an empty data-only list"
     assert scripts and scripts[0] == "theme.js", \
         f"{html_path.name}: theme.js must be the first script (got {scripts[:1]})"
 
@@ -1751,6 +1759,17 @@ def test_season_art_files_exist_and_are_credited():
     credits = (seasons / "CREDITS.md").read_text()
     for f in seasons.iterdir():
         if f.name == "CREDITS.md":
+            continue
+        if f.name == "house" and f.is_dir():
+            # a house's own looks (a private deploy overlay adds them): the
+            # engine ships only an empty looks.js; when photos are there, the
+            # folder carries its own CREDITS.md naming each one
+            photos = [g for g in f.iterdir() if g.suffix == ".webp"]
+            if photos:
+                house_credits = (f / "CREDITS.md").read_text()
+                for g in photos:
+                    assert f"`{g.name}`" in house_credits, f"seasons/house/{g.name} is not in house/CREDITS.md"
+                    assert (f / "glass" / g.name).is_file(), f"seasons/house/{g.name} has no glass copy"
             continue
         if f.name == "glass" and f.is_dir():
             # blurred copies of the credited photos (scripts/make-glass.py):
