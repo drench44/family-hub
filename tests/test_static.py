@@ -1593,6 +1593,7 @@ _SEASON_SHAPE_TOKENS = {
     "thanksgiving-": (_LEAF_TOKENS, ["--sn-goose", "--sn-goose-glow", "--sn-haze"]),
     "halloween-": ([], ["--sn-bat", "--sn-bat-glow", "--sn-spider", "--sn-spider-glow",
                         "--sn-web", "--sn-haze"]),
+    "christmas-": ([], ["--sn-snow", "--sn-snow-shade", "--sn-haze"]),
 }
 _THEME_OWNED = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                 "--ink", "--dim", "--faint", "--shadow", "--glass", "--glass-edge", "--sn-wash"]

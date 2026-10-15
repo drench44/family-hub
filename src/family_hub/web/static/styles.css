@@ -2803,6 +2803,84 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#B05A3A; --accent-ink:#FFFFFF; --accent-soft:rgba(176,90,58,.12);
 }
 
+/* ---- Christmas: shared by every christmas-* look ----
+   Warm shelter in a snowy world: a low candle-gold glow rising from the
+   bottom of the screen over the photo and the theme's wash, snow falling in
+   two depths, and on some looks the photo's own lights glowing in place
+   (windows, fire, string lights; see placeSeasonLights in hub.js). */
+:root[data-look^="christmas-"],
+.look-swatch[data-look^="christmas-"] {
+  --sn-snow:#FFFFFF; --sn-snow-shade:rgba(30,45,70,.35);
+  --sn-haze:radial-gradient(70% 45% at 50% 100%, rgba(255,176,90,.16), transparent 72%),
+    radial-gradient(40% 40% at 0% 0%, rgba(255,214,150,.08), transparent 70%);
+}
+
+/* ---- Glowing Cabin: lit windows in a snowy wood at dusk (USFWS, public domain) ---- */
+:root[data-look="christmas-glowing-cabin"][data-theme][data-accent],
+.look-swatch[data-look="christmas-glowing-cabin"] {
+  --accent:#F2C46B; --accent-ink:#2A1C00; --accent-soft:rgba(242,196,107,.18);
+  --sn-scene:url("seasons/christmas-glowing-cabin.webp"); --sn-glass:url("seasons/glass/christmas-glowing-cabin.webp"); --sn-pos:center 55%;
+}
+:root[data-look="christmas-glowing-cabin"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-glowing-cabin"] {
+  --accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba(134,96,19,.13);
+}
+
+/* ---- Cabin Window: snowy woods through a log cabin window (USFWS, public domain) ---- */
+:root[data-look="christmas-cabin-window"][data-theme][data-accent],
+.look-swatch[data-look="christmas-cabin-window"] {
+  --accent:#8CCCA6; --accent-ink:#0B2A18; --accent-soft:rgba(140,204,166,.18);
+  --sn-scene:url("seasons/christmas-cabin-window.webp"); --sn-glass:url("seasons/glass/christmas-cabin-window.webp"); --sn-pos:center 50%;
+}
+:root[data-look="christmas-cabin-window"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-cabin-window"] {
+  --accent:#246444; --accent-ink:#FFFFFF; --accent-soft:rgba(36,100,68,.13);
+}
+
+/* ---- Fairy Lights: a tree strung with warm lights (Joanna Kosinska, CC0) ---- */
+:root[data-look="christmas-fairy-lights"][data-theme][data-accent],
+.look-swatch[data-look="christmas-fairy-lights"] {
+  --accent:#EBC77B; --accent-ink:#241A00; --accent-soft:rgba(235,199,123,.18);
+  --sn-scene:url("seasons/christmas-fairy-lights.webp"); --sn-glass:url("seasons/glass/christmas-fairy-lights.webp"); --sn-pos:center 50%;
+}
+:root[data-look="christmas-fairy-lights"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-fairy-lights"] {
+  --accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba(134,96,19,.13);
+}
+
+/* ---- Christmas Tree: a decorated tree aglow (Evelyn, CC0) ---- */
+:root[data-look="christmas-tree"][data-theme][data-accent],
+.look-swatch[data-look="christmas-tree"] {
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
+  --sn-scene:url("seasons/christmas-tree.webp"); --sn-glass:url("seasons/glass/christmas-tree.webp"); --sn-pos:center 40%;
+}
+:root[data-look="christmas-tree"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-tree"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
+/* ---- Woodsmoke: an old cabin in falling snow (Ryan Graybill, CC0) ---- */
+:root[data-look="christmas-woodsmoke"][data-theme][data-accent],
+.look-swatch[data-look="christmas-woodsmoke"] {
+  --accent:#F0939A; --accent-ink:#2A0A0E; --accent-soft:rgba(240,147,154,.18);
+  --sn-scene:url("seasons/christmas-woodsmoke.webp"); --sn-glass:url("seasons/glass/christmas-woodsmoke.webp"); --sn-pos:center 45%;
+}
+:root[data-look="christmas-woodsmoke"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-woodsmoke"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
+/* ---- Pink Dawn: a snowy patrol cabin at sunrise (Yellowstone NPS, public domain) ---- */
+:root[data-look="christmas-pink-dawn"][data-theme][data-accent],
+.look-swatch[data-look="christmas-pink-dawn"] {
+  --accent:#F4A6B8; --accent-ink:#2A0A14; --accent-soft:rgba(244,166,184,.18);
+  --sn-scene:url("seasons/christmas-pink-dawn.webp"); --sn-glass:url("seasons/glass/christmas-pink-dawn.webp"); --sn-pos:center 60%;
+}
+:root[data-look="christmas-pink-dawn"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-pink-dawn"] {
+  --accent:#A8385A; --accent-ink:#FFFFFF; --accent-soft:rgba(168,56,90,.13);
+}
+
 /* ---- Thanksgiving: shared by every thanksgiving-* look ----
    Harvest light: a warm amber glow from the top corners over the photo and
    the theme's wash. Leaves fall in the look's own colours (the fall leaf
@@ -3171,6 +3249,66 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look]:not([data-look="none"]) body.is-night > .season .sn-bat { display: none; }
 /* the far geese too: paused, a skein would hang mid-sky */
 :root[data-look]:not([data-look="none"]) body.is-night > .season .sn-flock { display: none; }
+/* the far snow too (the lights go with the near layer) */
+:root[data-look]:not([data-look="none"]) body.is-night > .season .sn-snow { display: none; }
+
+/* ---- Christmas snow (every christmas-* look) ----
+   Two depths, like the leaves: small slow flakes in the photo layer behind
+   the glass, showing in the gaps between cards, and a few larger ones
+   drifting over the cards. A flake is a soft round dot: at wall distance a
+   drawn six-armed snowflake reads as confetti. The outer span falls on
+   transform at a constant speed; the inner <b> drifts side to side, eased.
+   No rotation, no blur, no sprite strip: each flake is a tiny layer the
+   compositor moves for free. Placement and speed are inline (hub.js,
+   seasonSnowHtml). Indoor looks keep the snow outside (data-where, set by
+   placeSeasonLights): only on the window glass, or not at all. */
+.sn-snow { display: none; position: absolute; inset: 0; }
+:root[data-look^="christmas-"] body > .season-fx .sn-snow,
+:root[data-look^="christmas-"] body > .season .sn-snow,
+.look-swatch[data-look^="christmas-"] .sn-snow { display: block; }
+:root[data-look^="christmas-"] body > .season-fx .sn-snow[data-where],
+:root[data-look^="christmas-"] body > .season .sn-snow[data-where="none"] { display: none; }
+.sn-flake { position: absolute; left: var(--x); top: 0; width: var(--s); height: var(--s);
+  animation: sn-snowfall var(--d) linear var(--dl) infinite; }
+.sn-flake b { display: block; width: 100%; height: 100%; border-radius: 50%;
+  background: radial-gradient(circle, var(--sn-snow) 0 38%, transparent 72%); opacity: var(--o, .5);
+  animation: sn-drift var(--sw, 7s) ease-in-out var(--dl) infinite alternate; }
+/* over the cards a white dot vanishes on light glass: a faint cool edge keeps it */
+.sn-snow.front .sn-flake { filter: drop-shadow(0 0 1px var(--sn-snow-shade)); }
+@keyframes sn-snowfall { from { transform: translate3d(0, -4vh, 0); } to { transform: translate3d(var(--drift, 0px), 104vh, 0); } }
+@keyframes sn-drift { from { transform: translate3d(calc(var(--amp, 6px) * -1), 0, 0); } to { transform: translate3d(var(--amp, 6px), 0, 0); } }
+/* a phone is a fifth of the wall: about a third of the flakes */
+@media (max-width: 1000px) {
+  :root:not([data-layout="desktop"]) .sn-snow.back .sn-flake:nth-child(n+23),
+  :root:not([data-layout="desktop"]) .sn-snow.front .sn-flake:nth-child(n+11) { display: none; }
+}
+
+/* ---- Christmas light: the photo's own lights glow ----
+   Spots placed by hub.js (placeSeasonLights) over the photo's lit windows,
+   fire and bulbs, in the layer over the cards: wide and faint, like a light
+   behind frosted glass, so text over one stays easy to read. Opacity only, on
+   uneven loops, so nothing blinks, chases or syncs: a lamp breathes, a fire
+   flickers, a bulb shimmers. --i staggers neighbours. */
+.sn-lights { display: none; position: absolute; inset: 0; }
+:root[data-look^="christmas-"] body > .season-fx .sn-lights { display: block; }
+.sn-glow { position: absolute; width: var(--g); height: var(--g); margin: calc(var(--g) / -2) 0 0 calc(var(--g) / -2);
+  border-radius: 50%; pointer-events: none; }
+.sn-glow.lamp { background: radial-gradient(circle, rgba(255,204,128,.34), rgba(255,170,80,.12) 45%, transparent 70%);
+  animation: sn-lamp calc(6.5s + var(--i) * .9s) ease-in-out calc(var(--i) * -1.3s) infinite alternate; }
+.sn-glow.fire { background: radial-gradient(circle, rgba(255,186,96,.42), rgba(255,130,40,.16) 45%, transparent 70%);
+  animation: sn-fire 7.3s linear calc(var(--i) * -1.1s) infinite; }
+.sn-glow.fire.spill { background: radial-gradient(circle, rgba(255,160,70,.16), transparent 70%);
+  animation: sn-fire 11.9s linear calc(var(--i) * -2.3s) infinite; }
+.sn-glow.twinkle { background: radial-gradient(circle, rgba(255,240,200,.5) 0 8%, rgba(255,212,140,.2) 32%, transparent 68%);
+  animation: sn-twinkle calc(4s + var(--i) * .8s) ease-in-out calc(var(--i) * -1.7s) infinite; }
+@keyframes sn-lamp { from { opacity: .55; } to { opacity: 1; } }
+/* firelight: never steady, never a strobe; uneven shoulders a beat apart */
+@keyframes sn-fire {
+  0% { opacity: .55; } 6% { opacity: .85; } 13% { opacity: .65; } 22% { opacity: 1; } 30% { opacity: .7; }
+  41% { opacity: .9; } 47% { opacity: .6; } 58% { opacity: .95; } 66% { opacity: .72; } 74% { opacity: .88; }
+  83% { opacity: .58; } 91% { opacity: .8; } 100% { opacity: .55; }
+}
+@keyframes sn-twinkle { 0%, 100% { opacity: .15; } 45% { opacity: .9; } 60% { opacity: .55; } }
 
 /* ---- Thanksgiving's geese (every thanksgiving-* look) ----
    A skein heading south: a V of birds crosses the sky now and then, high
@@ -3366,6 +3504,12 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch .sn-haunt.back .sn-bat:nth-child(3) { --tx: 96px; --y: 16%; --s: 15px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(4) { --tx: 128px; --y: 36%; --s: 11px; }
 .look-swatch .sn-haunt.back .sn-bat:nth-child(5) { --tx: 74px; --y: 62%; --s: 9px; }
+/* the tile's snow hangs still where each flake's own delay puts it, a
+   dusting over the preview: paused, never running (the tile's mini glass
+   card blurs live), on a fall the tile's own height */
+.look-swatch .sn-flake { animation-name: sn-snowfall-tile; animation-play-state: paused; }
+.look-swatch .sn-flake b { animation-play-state: paused; }
+@keyframes sn-snowfall-tile { from { transform: translate3d(0, -6px, 0); } to { transform: translate3d(0, 134px, 0); } }
 .look-swatch .sn-web:nth-child(1) { --s: 92px; left: -34px; top: -38px; }
 .look-swatch .sn-web:nth-child(2) { --s: 78px; right: -30px; bottom: -30px; }
 
@@ -3396,6 +3540,8 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch[data-look="fall-wheat-stacks"] .look-mark { --mark: url("seasons/leaf-maple.svg"); }
 [data-look^="thanksgiving-"] .season-mark,
 .look-swatch[data-look^="thanksgiving-"] .look-mark { --mark: url("seasons/grains.svg"); }
+[data-look^="christmas-"] .season-mark,
+.look-swatch[data-look^="christmas-"] .look-mark { --mark: url("seasons/snowflake.svg"); }
 [data-look^="halloween-"] .season-mark,
 .look-swatch[data-look^="halloween-"] .look-mark { --mark: url("seasons/bat.svg"); }
 
@@ -3470,5 +3616,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
   :root[data-look]:not([data-look="none"]) body > .season .sn-bat { display: none; }
   .sn-flock, .sn-goose b::before { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-flock { display: none; }
+  .sn-flake, .sn-flake b, .sn-glow.lamp, .sn-glow.fire, .sn-glow.fire.spill, .sn-glow.twinkle { animation: none; }
+  :root[data-look]:not([data-look="none"]) body > .season .sn-snow { display: none; }
   :root[data-look]:not([data-look="none"]) body > .season-fx { display: none; }
 }
