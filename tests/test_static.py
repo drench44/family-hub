@@ -2498,4 +2498,10 @@ def test_the_window_snow_shows_only_once_fitted_and_holds_still_with_the_rest():
     hub = (STATIC / "hub.js").read_text()
     n = int(re.search(r"pane: \{ seed: \d+, n: (\d+),", hub).group(1))
     keep = int(re.search(r"\.sn-snow\.pane \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
-    assert 0 < keep < n
+    assert 0.25 <= keep / n <= 0.45, (keep, n)
+    # the hide rule comes after the rule that shows every .sn-snow
+    show = CSS.index(':root[data-look^="christmas-"] body > .season .sn-snow,')
+    hide = CSS.index('.sn-snow.pane:not([data-where="panes"]) { display: none; }')
+    assert hide > show
+    assert "filter:" not in re.search(r"\.sn-snow\.pane \.sn-flake[^{]*\{([^}]*)\}", CSS).group(1), \
+        "no filter on 90 moving flakes: the edge is drawn into the gradient"
