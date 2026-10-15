@@ -9586,6 +9586,9 @@ test('watchSeasonLights: follows the look, theme, layout, night and the window s
   const before = timers.length;
   // the wall has other resize listeners; ours is the one just registered
   const ours = winListeners.resize[winListeners.resize.length - 1];
+  body.fn();
+  assert.equal(timers.slice(before).length, 0, 'a body class that is not night (an overlay) leaves the lights be');
+  document.body.classList.add('is-night');
   root.fn(); body.fn(); ours();
   const live = timers.slice(before).filter((t) => !t.done);
   assert.equal(live.length, 1, 'three quick changes leave one pending placement, not three');
