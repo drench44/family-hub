@@ -11,7 +11,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 ## [Unreleased]
 
 ### Added
-- Christmas, Dec 1 to Dec 31: warm, snowy photo looks (a cabin glowing at
+- Christmas, Dec 1 to Dec 31: eight warm, snowy looks (a cabin glowing at
   dusk, a cabin window onto snowy woods, a fireside, fairy lights, a lit
   tree, woodsmoke and more). Snow falls in two depths, behind the cards and
   drifting over them, and the photo's own lights glow where they are: lit
