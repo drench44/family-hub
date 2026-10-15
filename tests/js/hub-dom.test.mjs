@@ -9383,6 +9383,8 @@ test('snParsePos reads keywords and percentages in either order', () => {
   assert.deepEqual(p('35% center'), [0.35, 0.5]);
   assert.deepEqual(p('top left'), [0, 0], 'a vertical keyword first is swapped');
   assert.deepEqual(p('right'), [1, 0.5], 'one value centers the other axis');
+  assert.deepEqual(p('top'), [0.5, 0], 'a lone vertical keyword is the y');
+  assert.deepEqual(p('bottom'), [0.5, 1]);
   assert.deepEqual(p(''), [0.5, 0.5]);
   assert.deepEqual(p(' center  40% '), [0.5, 0.4]);
 });
@@ -9411,15 +9413,18 @@ function lightsStage(sandbox, document, opts = {}) {
     el.replaceChildren = () => { el.children = []; };
     return el;
   };
+  // the lights box itself measures 0 (hidden at night): placement must use the photo layer
   const lights = mk('sn-lights');
-  lights.clientWidth = opts.w || 1880;
-  lights.clientHeight = opts.h || 1000;
+  lights.clientWidth = 0;
+  lights.clientHeight = 0;
   const farSnow = mk('sn-snow back');
   farSnow.closest = (sel) => (sel === '.season' ? {} : null);
   const nearSnow = mk('sn-snow front');
   nearSnow.closest = () => null;
   lights.children = [{ stale: true }];
-  document.querySelector = (sel) => (sel === 'body > .season-fx .sn-lights' ? (opts.noLayer ? null : lights) : null);
+  const photo = { clientWidth: opts.w || 1880, clientHeight: opts.h || 1000 };
+  document.querySelector = (sel) => (sel === 'body > .season-fx .sn-lights' ? (opts.noLayer ? null : lights)
+    : sel === 'body > .season' ? photo : null);
   document.querySelectorAll = (sel) => (sel.includes('.sn-snow') ? [farSnow, nearSnow] : []);
   document.createElement = (tag) => { const el = mk(''); made.push(el); return el; };
   document.createDocumentFragment = () => { const f = mk('frag'); f.frag = true; return f; };
@@ -9515,4 +9520,94 @@ test('placeSeasonLights: a look change mid-load wins over the older one', async 
   const second = sandbox.placeSeasonLights();
   await Promise.all([first, second]);
   assert.equal(st.lights.children.length, 2, 'only the newest look\'s lights, never both');
+});
+
+test('placeSeasonLights: an outdoor look after a window look lifts the clip and the indoor rule', async () => {
+  const { document, sandbox } = newHub();
+  (sandbox.FH_SEASONS = []).unshift({ id: 'xmas-test', looks: [{ id: 'xmas-test-out', light: { lamps: [[0.5, 0.5, 0.1]] } }] });
+  const st = lightsStage(sandbox, document, { look: 'xmas-test-out' });
+  st.farSnow.style.clipPath = 'path("M0 0H9V9H0Z")';
+  st.farSnow.dataset.where = 'panes';
+  st.nearSnow.dataset.where = 'panes';
+  await sandbox.placeSeasonLights();
+  assert.equal(st.farSnow.style.clipPath, '', 'the last window no longer clips the snow');
+  assert.equal(st.farSnow.dataset.where, undefined);
+  assert.equal(st.nearSnow.dataset.where, undefined);
+  assert.equal(st.lights.children.length, 1);
+});
+
+test('placeSeasonLights: a photo that failed to load is tried again on the next change, and an indoor look stays dry meanwhile', async () => {
+  const { document, sandbox } = newHub();
+  (sandbox.FH_SEASONS = []).unshift({ id: 'xmas-test', looks: [{ id: 'xmas-test-win', light: { indoor: true, panes: [[0.2, 0.2, 0.4, 0.6]], lamps: [[0.5, 0.5, 0.1]] } }] });
+  sandbox.console = { ...console, warn: () => {} };
+  const bad = lightsStage(sandbox, document, { look: 'xmas-test-win', fail: true });
+  await sandbox.placeSeasonLights();
+  assert.equal(bad.farSnow.dataset.where, 'none', 'no window clip, so no snow in the room');
+  // the stage clears the size cache; a fresh stage with a working photo
+  const good = lightsStage(sandbox, document, { look: 'xmas-test-win' });
+  await sandbox.placeSeasonLights();
+  assert.equal(good.lights.children.length, 1, 'the retry lights it');
+  assert.equal(good.farSnow.dataset.where, 'panes');
+});
+
+test('snPhotoSize forgets a failed load, so the next call fetches again', async () => {
+  const { sandbox } = newHub();
+  let fail = true, made = 0;
+  sandbox.Image = class { set src(v) { made++; setTimeout(() => (fail ? this.onerror && this.onerror() : (this.naturalWidth = 10, this.naturalHeight = 5, this.onload && this.onload())), 0); } };
+  vm.runInContext('snPhotoSizes.clear();', sandbox);
+  await assert.rejects(sandbox.snPhotoSize('x.webp'));
+  await settle();
+  fail = false;
+  const size = await sandbox.snPhotoSize('x.webp');
+  assert.equal(JSON.stringify(size), '[10,5]');
+  assert.equal(made, 2, 'a second Image was made after the failure');
+  await sandbox.snPhotoSize('x.webp');
+  assert.equal(made, 2, 'a good size is remembered');
+});
+
+test('watchSeasonLights: follows the look, theme, layout, night and the window size, debounced', () => {
+  const { document, sandbox, timers, runTimers, winListeners } = newHub();
+  const observed = [];
+  sandbox.MutationObserver = class { constructor(fn) { this.fn = fn; } observe(target, o) { observed.push({ target, o, fn: this.fn }); } };
+  vm.runInContext('placeSeasonLights = () => { globalThis.__runs = (globalThis.__runs || 0) + 1; return Promise.resolve(); };', sandbox);
+  document.querySelector = () => null;
+  document.querySelectorAll = () => [];
+  sandbox.watchSeasonLights();
+  const runs = () => vm.runInContext('globalThis.__runs || 0', sandbox);
+  assert.equal(runs(), 1, 'placed once at start');
+  const root = observed.find((x) => x.target === document.documentElement);
+  assert.ok(root, 'the root element is watched');
+  for (const a of ['data-look', 'data-layout', 'data-theme', 'data-accent']) {
+    assert.ok(root.o.attributeFilter.includes(a), `a change to ${a} re-places the lights`);
+  }
+  const body = observed.find((x) => x.target === document.body);
+  assert.ok(body && body.o.attributeFilter.includes('class'), 'night (body.is-night) re-places them too');
+  assert.ok((winListeners.resize || []).length, 'and so does a resize');
+  const before = timers.length;
+  // the wall has other resize listeners; ours is the one just registered
+  const ours = winListeners.resize[winListeners.resize.length - 1];
+  root.fn(); body.fn(); ours();
+  const live = timers.slice(before).filter((t) => !t.done);
+  assert.equal(live.length, 1, 'three quick changes leave one pending placement, not three');
+  live[0].done = true; live[0].fn();
+  assert.equal(runs(), 2);
+});
+
+test('Settings tiles carry a still dusting of snow only on Christmas looks', () => {
+  const { sandbox } = newHub();
+  const xmas = sandbox.seasonSceneHtml('christmas-glowing-cabin');
+  assert.equal((xmas.match(/class="sn-flake"/g) || []).length, 24);
+  assert.match(xmas, /<span class="sn-snow still">/);
+  assert.doesNotMatch(sandbox.seasonSceneHtml('fall-aspen-grove'), /sn-snow/, 'no hidden flakes in other tiles');
+  assert.doesNotMatch(sandbox.seasonSceneHtml(), /sn-snow/);
+});
+
+test('placeSeasonLights: a look change during the debounce makes an older placement stale', async () => {
+  const { document, sandbox } = newHub();
+  (sandbox.FH_SEASONS = []).unshift({ id: 'xmas-test', looks: [{ id: 'xmas-test-a', light: { lamps: [[0.5, 0.5, 0.1]] } }] });
+  const st = lightsStage(sandbox, document, { look: 'xmas-test-a' });
+  const inFlight = sandbox.placeSeasonLights();
+  sandbox.snResetLights();   // what a look change does at once, before its own placement runs
+  await inFlight;
+  assert.equal(st.lights.children.length, 0, 'the old photo\'s glows never land on the new look');
 });

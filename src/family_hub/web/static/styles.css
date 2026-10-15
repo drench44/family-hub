@@ -49,6 +49,7 @@
   --sn-glass: none;
   /* decorations on the wall itself (Christmas frost and drifts, Halloween
      webs, a season's strand of lights): nothing until a season sets them */
+  --sn-snow: transparent; --sn-snow-shade: transparent; --sn-drift: none;
   --sn-frost: transparent; --sn-drift-shade: transparent; --sn-card-web: transparent;
   --sn-strand: none; --sn-strand-glow: none;
   /* Light's glass and wash (other themes set their own near the end) */
@@ -3136,6 +3137,8 @@ body.integ-off-todos .todo-slot { display: none; }
      wordmark may give way before the page ever scrolls sideways. */
   :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .season-mark { display: none; }
   :root:not([data-layout="desktop"])[data-look]:not([data-look="none"]) .wordmark { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* a strand of lights needs room to hang on the phone too */
+  :root:not([data-layout="desktop"])[data-look]:is([data-look^="christmas-"], [data-look^="halloween-"]) .topbar { margin-bottom: 22px; }
 }
 
 /* ---- still glass on wide screens ----
@@ -3356,15 +3359,14 @@ body.integ-off-todos .todo-slot { display: none; }
 @keyframes sn-strand { from { opacity: .45; } to { opacity: 1; } }
 /* room for the bulbs to hang clear of the section titles below */
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar { margin-bottom: 22px; }
-/* a dark kitchen at night: the bulbs hold still, and no leaf blows away */
-:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .is-night .wrap) .card.todo::before { animation: none; }
+/* a dark kitchen at night: the bulbs hold still */
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .is-night .topbar::before { animation: none; opacity: .5; }
 
 /* ---- Halloween on the interface: cobwebs in the card corners ----
-   The corner web (spider-web.svg, its centre on the corner, so a quarter of
-   it fans out) on some cards and not others, top left or bottom right, in
-   two sizes, so no two neighbours match. Hairline silk in --sn-web over the
-   card, static. The neon strand hangs under the top bar (above). */
+   The corner web (spider-web.svg, its center on the corner, so a quarter of
+   it fans out) on some cards and not others, bottom right or top right, in
+   two sizes, so no two neighbors match. Hairline silk in --sn-card-web
+   over the card, static. The neon strand hangs under the top bar (above). */
 :where(:root[data-look^="halloween-"] .wrap) .card { position: relative; }
 :where(:root[data-look^="halloween-"] .wrap) .card:nth-child(3n+1)::after,
 :where(:root[data-look^="halloween-"] .wrap) .card:nth-child(3n+2)::after {
@@ -3386,8 +3388,8 @@ body.integ-off-todos .todo-slot { display: none; }
    contact shadow, so the wind that carries the falling leaves seems to have
    left a few on the wall. Every few cards, not all, and never the same leaf
    twice in a row. One leaf, on the To-Do card, lifts and blows away now and
-   then, and a new one settles. Thanksgiving adds a tied bundle of wheat at
-   each end of the top bar. All still except that one leaf. */
+   then, and a new one settles. Thanksgiving adds two tied bundles of wheat
+   in the middle of the top bar. All still except that one leaf. */
 :where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card { position: relative; }
 :where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) :is(.card:nth-child(3n+1), .card.todo)::before,
 :where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .wrap) .card:nth-child(4n+2)::after {
@@ -3425,6 +3427,11 @@ body.integ-off-todos .todo-slot { display: none; }
   92% { transform: translate3d(0, -60px, 0) rotate(30deg); opacity: 0; }
   100% { transform: none; opacity: 1; }
 }
+/* ...and at night no leaf blows away (after the rule it stops: same weight) */
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"]) .is-night .wrap) .card.todo::before { animation: none; }
+/* the weather card clips its corners (overflow: hidden): a leaf or a drift
+   poking above it would be cut in half, so it carries none */
+:where(:root:is([data-look^="fall-"], [data-look^="thanksgiving-"], [data-look^="christmas-"]) .wrap) .card.wx::before { display: none; }
 /* Thanksgiving's wheat: two tied bundles laid in the empty middle of the
    top bar, heads outward, like a harvest swag on a mantel; clear of the
    wordmark, the clock and the gear. The phone's bar has no room: none there. */
@@ -3667,8 +3674,8 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 /* the tile's snow hangs still where each flake's own delay puts it, a
    dusting over the preview: paused, never running (the tile's mini glass
    card blurs live), on a fall the tile's own height */
-.look-swatch .sn-flake { animation-name: sn-snowfall-tile; animation-play-state: paused; }
-.look-swatch .sn-flake b { animation-play-state: paused; }
+.look-swatch .sn-snow.still .sn-flake { animation-name: sn-snowfall-tile; animation-play-state: paused; }
+.look-swatch .sn-snow.still .sn-flake b { animation-play-state: paused; }
 /* an indoor look's tile keeps the snow outside too: none in the room */
 .look-swatch:is([data-look="christmas-cabin-window"], [data-look="christmas-tree"], [data-look="christmas-fireside"]) .sn-snow { display: none; }
 @keyframes sn-snowfall-tile { from { transform: translate3d(0, -6px, 0); } to { transform: translate3d(0, 134px, 0); } }

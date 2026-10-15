@@ -2429,8 +2429,19 @@ def test_christmas_indoor_tiles_keep_the_snow_outside():
     assert indoor, "found no indoor Christmas looks to check"
     rule = re.search(r"\.look-swatch:is\(([^)]*)\) \.sn-snow \{ display: none; \}", CSS)
     assert rule, "no tile rule hides the snow on indoor looks"
-    for look in indoor:
-        assert f'[data-look="{look}"]' in rule.group(1), f"{look}'s tile shows snow in the room"
+    in_rule = set(re.findall(r'\[data-look="(christmas-[a-z0-9-]+)"\]', rule.group(1)))
+    assert in_rule == set(indoor), f"the tile rule must name exactly the indoor looks: {sorted(in_rule ^ set(indoor))}"
+
+
+def test_the_phone_shows_about_a_third_of_the_snow():
+    """The phone hides flakes past a count, by nth-child. Pin the counts it
+    keeps against the counts hub.js makes, so a retune of either is seen."""
+    hub = (STATIC / "hub.js").read_text()
+    far, near = map(int, re.search(r"const n = tile \? \d+ : far \? (\d+) : (\d+);", hub).groups())
+    keep_far = int(re.search(r"\.sn-snow\.back \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
+    keep_near = int(re.search(r"\.sn-snow\.front \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
+    assert 0 < keep_far < far and 0 < keep_near < near
+    assert 0.25 <= keep_far / far <= 0.45 and 0.25 <= keep_near / near <= 0.45, (keep_far, far, keep_near, near)
 
 
 def test_christmas_snow_and_lights_stand_down_at_night_and_with_reduced_motion():
