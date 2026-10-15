@@ -10,6 +10,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- Cabin Window: snow now clearly falls outside the window. It gets its own
+  heavier snowfall with bigger flakes, kept to the window glass, with a
+  soft gray edge so the flakes show against the bright snowy view.
+
 ## [1.11.0] — 2026-10-14
 
 ### Added

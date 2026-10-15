@@ -3297,6 +3297,12 @@ body.integ-off-todos .todo-slot { display: none; }
 .look-swatch[data-look^="christmas-"] .sn-snow { display: block; }
 :root[data-look^="christmas-"] body > .season-fx .sn-snow[data-where],
 :root[data-look^="christmas-"] body > .season .sn-snow[data-where="none"] { display: none; }
+/* the window's own heavier snowfall: only once it is fitted to the panes */
+.sn-snow.pane { right: auto; }
+/* against the bright snowy view a white flake vanishes; real snow falling
+   past a window reads as soft grey-edged specks, so these carry an edge */
+.sn-snow.pane .sn-flake { filter: drop-shadow(0 0 1.5px rgba(36,50,74,.6)) drop-shadow(0 1px 1px rgba(36,50,74,.35)); }
+:root[data-look^="christmas-"] body > .season .sn-snow.pane:not([data-where="panes"]) { display: none; }
 .sn-flake { position: absolute; left: var(--x); top: 0; width: var(--s); height: var(--s);
   animation: sn-snowfall var(--d) linear var(--dl) infinite; }
 .sn-flake b { display: block; width: 100%; height: 100%; border-radius: 50%;
@@ -3309,7 +3315,8 @@ body.integ-off-todos .todo-slot { display: none; }
 /* a phone is a fifth of the wall: about a third of the flakes */
 @media (max-width: 1000px) {
   :root:not([data-layout="desktop"]) .sn-snow.back .sn-flake:nth-child(n+23),
-  :root:not([data-layout="desktop"]) .sn-snow.front .sn-flake:nth-child(n+11) { display: none; }
+  :root:not([data-layout="desktop"]) .sn-snow.front .sn-flake:nth-child(n+11),
+  :root:not([data-layout="desktop"]) .sn-snow.pane .sn-flake:nth-child(n+41) { display: none; }
 }
 
 /* ---- Christmas on the interface: lights, frost and snow on the wall itself ----
