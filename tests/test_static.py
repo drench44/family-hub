@@ -1593,6 +1593,7 @@ _SEASON_SHAPE_TOKENS = {
     "thanksgiving-": (_LEAF_TOKENS, ["--sn-goose", "--sn-goose-glow", "--sn-haze"]),
     "halloween-": ([], ["--sn-bat", "--sn-bat-glow", "--sn-spider", "--sn-spider-glow",
                         "--sn-web", "--sn-haze"]),
+    "christmas-": ([], ["--sn-snow", "--sn-snow-shade", "--sn-haze"]),
 }
 _THEME_OWNED = ["--ground", "--surface", "--surface-2", "--edge", "--edge-soft",
                 "--ink", "--dim", "--faint", "--shadow", "--glass", "--glass-edge", "--sn-wash"]
@@ -2417,3 +2418,71 @@ def test_every_glass_copy_belongs_to_a_look():
     looks = set(_look_ids())
     for g in (STATIC / "seasons" / "glass").iterdir():
         assert g.suffix == ".webp" and g.stem in looks, f"seasons/glass/{g.name} belongs to no look"
+
+
+def test_christmas_indoor_tiles_keep_the_snow_outside():
+    """An indoor look (theme.js `indoor: true`) shows no snow in the room on the
+    wall (placeSeasonLights). Its Settings tile must match, or the preview
+    promises snow falling indoors."""
+    js = (STATIC / "theme.js").read_text()
+    indoor = re.findall(r'id: "(christmas-[a-z0-9-]+)"[^\n]*\n\s*light: \{ indoor: true', js)
+    assert indoor, "found no indoor Christmas looks to check"
+    rule = re.search(r"\.look-swatch:is\(([^)]*)\) \.sn-snow \{ display: none; \}", CSS)
+    assert rule, "no tile rule hides the snow on indoor looks"
+    in_rule = set(re.findall(r'\[data-look="(christmas-[a-z0-9-]+)"\]', rule.group(1)))
+    assert in_rule == set(indoor), f"the tile rule must name exactly the indoor looks: {sorted(in_rule ^ set(indoor))}"
+
+
+def test_the_phone_shows_about_a_third_of_the_snow():
+    """The phone hides flakes past a count, by nth-child. Pin the counts it
+    keeps against the counts hub.js makes, so a retune of either is seen."""
+    hub = (STATIC / "hub.js").read_text()
+    far, near = map(int, re.search(r"const n = tile \? \d+ : far \? (\d+) : (\d+);", hub).groups())
+    keep_far = int(re.search(r"\.sn-snow\.back \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
+    keep_near = int(re.search(r"\.sn-snow\.front \.sn-flake:nth-child\(n\+(\d+)\)", CSS).group(1)) - 1
+    assert 0 < keep_far < far and 0 < keep_near < near
+    assert 0.25 <= keep_far / far <= 0.45 and 0.25 <= keep_near / near <= 0.45, (keep_far, far, keep_near, near)
+
+
+def test_christmas_snow_and_lights_stand_down_at_night_and_with_reduced_motion():
+    """The far snow goes at night (paused it would hang in the air), the
+    near layer (snow and lights) goes with .season-fx, and reduced motion
+    stops every flake and glow by name."""
+    assert ':root[data-look]:not([data-look="none"]) body.is-night > .season .sn-snow { display: none; }' in CSS
+    start, stopped, hidden = _last_reduced_motion_selectors()
+    for sel in (".sn-flake", ".sn-flake b", ".sn-glow.lamp", ".sn-glow.fire", ".sn-glow.twinkle"):
+        assert sel in stopped, f"reduced motion does not stop {sel}"
+
+
+def test_wall_decorations_only_paint_while_their_season_does():
+    """The strands, frost, snow drifts, webs, leaves and wheat live on the
+    cards' and the top bar's ::before/::after. Each such rule must be scoped
+    to a season prefix, so a family with seasons off (or another season)
+    never gets them: seasons-off has to match main pixel for pixel."""
+    found = 0
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS):
+        sel = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+        if not re.search(r"\.(card|topbar)[^,{]*::(before|after)", sel):
+            continue
+        if "content:" not in m.group(2):
+            continue
+        found += 1
+        assert 'data-look^="' in sel, f"a decoration paints outside any season: {sel.strip()[:120]}"
+    assert found >= 6, "expected the season decorations on cards and the top bar"
+
+
+def test_wall_decorations_never_take_a_tap():
+    """Every decoration pseudo-element is pointer-events: none: a leaf on the
+    To-Do card or a bulb over a section title must never eat a tap."""
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS):
+        sel, body = m.group(1), m.group(2)
+        if re.search(r"\.(card|topbar)[^,{]*::(before|after)", sel) and "content:" in body and 'data-look^="' in sel:
+            assert "pointer-events: none" in body, f"decoration can take a tap: {sel.strip()[:120]}"
+
+
+def test_the_strand_and_the_blowing_leaf_hold_still_at_night_and_with_reduced_motion():
+    rm = CSS[[m.start() for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\) \{", CSS)][-1]:]
+    for sel in ('.topbar::before { animation: none; }', '.card.todo::before { animation: none; }'):
+        assert sel in rm, f"reduced motion does not stop {sel}"
+    assert '.is-night .topbar::before { animation: none;' in CSS
+    assert '.is-night .wrap) .card.todo::before { animation: none; }' in CSS

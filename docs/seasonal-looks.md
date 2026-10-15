@@ -12,8 +12,10 @@ first three attempts at fall missed, for reasons worth not repeating. Read it
 before adding Halloween, Christmas, winter, spring, or anything else.
 
 **Shipped so far:** fall (Sep 1 to Nov 30, nine looks), Halloween (Oct 1
-to Oct 31, five looks) and Thanksgiving (Nov 1 to Nov 30, seven looks).
-**What's next, in the owner's order:** Christmas. A holiday that sits inside
+to Oct 31, five looks), Thanksgiving (Nov 1 to Nov 30, seven looks) and
+Christmas (Dec 1 to Dec 31, eight looks).
+**What's next:** nothing is scheduled; a winter or spring season would
+follow the checklist at the end of section 2. A holiday that sits inside
 a broad season (Halloween and Thanksgiving inside fall) is listed in
 `SEASONS` before it, since the first matching window wins.
 **Looks are not locked to their dates** (the owner: "themes shouldn't be
@@ -24,8 +26,8 @@ Windows are month/day and inclusive; a window ending [2, 28] leaves out
 Feb 29, so a winter look should end on [2, 29].
 Each gets its own photos, its own moving things (leaves for fall, bats and
 spiders for Halloween, leaves and a skein of geese for Thanksgiving, snow
-for Christmas, never cartoon props) and a
-matching accent.
+and glowing lights for Christmas, never cartoon props), a matching accent,
+and decorations on the wall itself (section 2, the Christmas lessons).
 
 ---
 
@@ -278,34 +280,73 @@ A second look at both seasons, after they shipped, found these:
   bar flicker. A phone photo or slow-motion video from the owner is the
   real evidence; ask for one early, plus where on screen and what colour.
 
-### Before Christmas (next, December)
+### Lessons from the Christmas build (2026-10-14)
+
+- **The owner wants the season ON the wall, not just behind it.** "Drape
+  christmas lights around things, put frost on things", "I really want you
+  to feel immersed in the holiday/season", "for all of the themes quite
+  frankly". A photo behind glass is the backbone; decorations that touch
+  the interface are what make it feel lived in: things hang from the top
+  bar, settle on the card tops and creep into the card corners. They live in
+  `.topbar::before/::after` and `.card::before/::after` (cards become
+  `position: relative` only while such a season paints; every absolutely
+  placed child inside a card already has a closer containing box, checked).
+  Each is `pointer-events: none` and painted by tokens with a neutral
+  default on `:root`. Christmas: a strand of bulbs under the top bar (the
+  bloom on `::before` breathes, opacity only), frost from a public-domain
+  photo of ice on glass turned into an alpha mask in two opposite card
+  corners, and a drift of snow along each card's top edge. Halloween: a
+  neon strand and quarter cobwebs (spider-web.svg centred on the corner) in
+  the corners words rarely reach, bottom right and top right.
+- **Season colours, said plainly by the owner:** Christmas red, green,
+  white and gold; Halloween neon orange, neon green, purple and black; fall
+  reds, ambers and golds. The strands use exactly those.
+- **"A bit dull" means bigger and hotter.** The first bulbs were 8px with a
+  faint halo on every other one. They now have white-hot centres, a glow
+  on every bulb and a wider bloom that breathes. The top bar gained 16px of
+  margin so the bulbs hang clear of the section titles.
+- **On the wall the cards cover most of the photo.** At 1880px only the
+  strip under the chores and a little under the cameras is open photo. A
+  glow placed behind the cards never showed, so the photo's own lights
+  (lit windows, a fire, string lights; `light` in the registry, in photo
+  fractions) glow OVER the cards, wide and faint, like a lamp seen through
+  frosted glass. hub.js maps each point through the same cover crop as the
+  photo layer (`snCoverMap`), so it lands on its light at any screen size.
+- **Indoor looks keep the snow outside.** A tree in a living room with snow
+  falling on it reads wrong. `indoor: true` hides the snow, or, with
+  `panes`, clips the far snow to the window glass (a `clip-path: path()`
+  built from the panes).
+- **Snow is soft dots, not snowflake symbols.** Six-armed flakes read as
+  confetti at wall distance. 64 far and 28 near flakes, seeded, so every
+  load gets the same snowfall; the phone shows about a third.
+- **Sources that worked:** USFWS Alaska and Yellowstone NPS cabins (public
+  domain), pre-2017 Unsplash files on Commons, a White House holiday photo
+  for the fireside (public domain), and a 1916 Kustodiev painting for the
+  colourful look the owner asked for ("some colorful options that aren't
+  super real life looking"). A fire that fills the frame was rejected
+  ("washed out and like the whole screen is on fire"): a fireplace needs
+  its room.
+
+### Before the next season
 
 Read everything above first. Then, in order:
 
-1. **Window:** Dec 1 to Dec 31 (Thanksgiving ends Nov 30). If a winter
-   season follows, list Christmas before it and end winter on [2, 29].
+1. **Window:** month/day, inclusive. List a short holiday before the broad
+   season it sits in. A winter season after Christmas ends on [2, 29].
 2. **Photos:** 10 to 15 vetted candidates on one contact sheet (section 5
-   rules; NPS and USFWS winter shots, Commons CC0, museum CC0 winter
-   paintings such as Hiroshige snow prints and Monet's *The Magpie*), then
-   side-by-side wall screenshots. Expect to ship most of the good ones.
-   Happy and warm: lit trees, snowy pines at blue hour, a cabin glow. No
-   Santa, no clip-art ornaments, no cartoon props.
-3. **Motion:** snow. Real flakes are not leaves: they fall slowly and
-   nearly straight, drift a little, never spin like a coin, and vary in
-   size with distance. Two depths like the leaves (a far set behind the
-   glass is fine: a plain masked shape with no sprite strip is safe there).
-   Anything with drawn frames that sits under frosted glass steps its mask,
-   never a sliding strip (see the flicker lesson above). On wide screens
-   the glass is still (no live blur), so far snow passes behind the cards;
-   every new photo needs its `seasons/glass/` copy (prep-season-photo.py
-   writes it). Watch the wall for the blinking band on the first day.
-4. **Accent and mark:** pick the accent from each photo; a snowflake or
-   pine mark from Phosphor (MIT) or a CC0 drawing, credited.
-5. **Tests:** add a `"christmas-"` entry to `_SEASON_SHAPE_TOKENS` in
-   `test_static.py` (per-look tokens, season tokens), its prefix to the
-   phone `--sn-k` block if it has creatures, and its dates to
-   `theme.test.mjs` (Nov 30 is Thanksgiving, Dec 1 is Christmas).
-6. **Every combination at full size** (section 6, step 6), then the three
+   rules), then side-by-side wall screenshots at 1880px in Firefox. Ship
+   most of the good ones; the owner picks fast from pictures and "your top
+   8, run with them" is a fine answer.
+3. **Motion:** real motion that suits the season (section 4). Nothing with
+   drawn frames slides a strip under frosted glass. Every photo needs its
+   `seasons/glass/` copy (prep-season-photo.py writes it).
+4. **Decorations on the wall:** the season's own touch on the top bar and
+   the cards (see the Christmas lessons), in the season's colours.
+5. **Accent and mark:** from the photo; a Phosphor (MIT) or CC0 mark,
+   credited.
+6. **Tests:** its prefix in `_SEASON_SHAPE_TOKENS` (`test_static.py`), its
+   dates in `theme.test.mjs`, every new token defaulted on `:root`.
+7. **Every combination at full size** (section 6, step 6), then the three
    Claude review agents and an Astra review, then the owner's eye on the
    wall before calling it done.
 
@@ -534,7 +575,11 @@ CC0), Shenandoah NPS rolling hills.
   near leaves, the near bats and the two spiders) as the last. It builds the
   Settings tiles from the same markup. `spiderWalk` and `spiderDrop` walk
   the two spiders through `snMotion`, which also decides when they stand
-  down (no look, night, reduced motion, a background tab).
+  down (no look, night, reduced motion, a background tab). Christmas adds
+  the snow (`seasonSnowHtml`, both layers) and `placeSeasonLights`, which
+  fills `.season-fx .sn-lights` with glows over the photo's own lights and
+  keeps an indoor look's snow outside; it re-runs when the look, the layout
+  or the window size changes.
 - `styles.css` sets the tokens. The theme owns `--glass`, `--glass-edge`,
   `--sn-wash` and the palette; each look owns the rest:
 
@@ -545,6 +590,10 @@ CC0), Shenandoah NPS rolling hills.
   | `--sn-leaf-1`…`4` | the leaf colours (fall) | look |
   | `--sn-bat`, `--sn-spider`, `--sn-web`, their glows | the creature colours (Halloween) | season block |
   | `--sn-haze` | coloured light over the photo, under the wash | look or season block |
+  | `--sn-snow`, `--sn-snow-shade` | the snowflakes and their faint edge (Christmas) | season block |
+  | `--sn-frost`, `--sn-drift`, `--sn-drift-shade` | frost in the card corners, snow on the card tops (Christmas) | season block, per light/dark theme |
+  | `--sn-card-web` | the cobwebs in card corners (Halloween) | season block, per light/dark theme |
+  | `--sn-strand`, `--sn-strand-glow` | the strand of lights under the top bar and its bloom | season block |
   | `--sn-k` | one scale for every creature (the phone halves it) | theme-wide, per breakpoint |
   | `--accent`, `--accent-ink`, `--accent-soft` | the accent, matched to the photo | look (light- and dark-theme tones) |
   | `--sn-wash` | the gradient over the photo | theme |
