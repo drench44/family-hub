@@ -47,6 +47,10 @@
   --sn-scene: none; --sn-pos: center;
   /* none, not unset: an unset var() would void the whole glass background */
   --sn-glass: none;
+  /* decorations on the wall itself (Christmas frost and drifts, Halloween
+     webs, a season's strand of lights): nothing until a season sets them */
+  --sn-frost: transparent; --sn-drift-shade: transparent; --sn-card-web: transparent;
+  --sn-strand: none; --sn-strand-glow: none;
   /* Light's glass and wash (other themes set their own near the end) */
   --sn-wash: linear-gradient(180deg, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 36%, rgba(255,255,255,.06) 100%);
   --glass: rgba(255,255,255,.66); --glass-edge: rgba(255,255,255,.50);
@@ -2873,23 +2877,23 @@ body.integ-off-todos .todo-slot { display: none; }
 /* ---- Sleigh Ride: Boris Kustodiev, Shrovetide, 1916 (Russian Museum, public domain) ---- */
 :root[data-look="christmas-sleigh-ride"][data-theme][data-accent],
 .look-swatch[data-look="christmas-sleigh-ride"] {
-  --accent:#F4A6C8; --accent-ink:#2A0A1A; --accent-soft:rgba(244,166,200,.18);
+  --accent:#EBC77B; --accent-ink:#241A00; --accent-soft:rgba(235,199,123,.18);
   --sn-scene:url("seasons/christmas-sleigh-ride.webp"); --sn-glass:url("seasons/glass/christmas-sleigh-ride.webp"); --sn-pos:35% center;
 }
 :root[data-look="christmas-sleigh-ride"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
 :root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-sleigh-ride"] {
-  --accent:#A8386E; --accent-ink:#FFFFFF; --accent-soft:rgba(168,56,110,.13);
+  --accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba(134,96,19,.13);
 }
 
 /* ---- Pink Dawn: a snowy patrol cabin at sunrise (Yellowstone NPS, public domain) ---- */
 :root[data-look="christmas-pink-dawn"][data-theme][data-accent],
 .look-swatch[data-look="christmas-pink-dawn"] {
-  --accent:#F4A6B8; --accent-ink:#2A0A14; --accent-soft:rgba(244,166,184,.18);
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
   --sn-scene:url("seasons/christmas-pink-dawn.webp"); --sn-glass:url("seasons/glass/christmas-pink-dawn.webp"); --sn-pos:center 60%;
 }
 :root[data-look="christmas-pink-dawn"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
 :root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-pink-dawn"] {
-  --accent:#A8385A; --accent-ink:#FFFFFF; --accent-soft:rgba(168,56,90,.13);
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
 }
 
 /* ---- Thanksgiving: shared by every thanksgiving-* look ----
@@ -3294,6 +3298,74 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) .sn-snow.front .sn-flake:nth-child(n+11) { display: none; }
 }
 
+/* ---- Christmas on the interface: lights, frost and snow on the wall itself ----
+   The owner asked for the season ON the wall, not just behind it: "drape
+   christmas lights around things, put frost on things". A strand of warm
+   bulbs hangs in swags under the top bar, every other bulb's glow slowly
+   breathing (::before, opacity only); frost from a real photo of ice on a
+   window (frost-corner*.webp, an alpha mask) creeps in from two corners of
+   each card; and a soft drift of snow rests along each card's top edge,
+   like snow on a sill. Frost and snow are still. All of it is decoration:
+   pointer-events none, painted by tokens so each theme keeps it readable.
+   Cards are position: relative only while a Christmas look paints (every
+   absolutely placed child already has a closer containing box). */
+:root[data-look^="christmas-"] {
+  --sn-frost: rgba(232,242,255,.5); --sn-drift: linear-gradient(#FFFFFF 40%, #DCE6F2);
+  --sn-drift-shade: rgba(16,26,44,.35);
+}
+:root[data-look^="christmas-"]:is([data-theme="light"], [data-theme="soft"]) {
+  --sn-frost: rgba(120,150,186,.42); --sn-drift-shade: rgba(60,80,110,.38);
+}
+:where(:root[data-look^="christmas-"] .wrap) .card { position: relative; }
+:where(:root[data-look^="christmas-"] .wrap) .card::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: var(--sn-frost);
+  -webkit-mask: url("seasons/frost-corner.webp") top left / 190px auto no-repeat, url("seasons/frost-corner-br.webp") bottom right / 150px auto no-repeat;
+  mask: url("seasons/frost-corner.webp") top left / 190px auto no-repeat, url("seasons/frost-corner-br.webp") bottom right / 150px auto no-repeat;
+}
+:where(:root[data-look^="christmas-"] .wrap) .card::before {
+  content: ""; position: absolute; left: 6px; right: 6px; top: -6px; height: 12px; pointer-events: none;
+  background: var(--sn-drift);
+  -webkit-mask: url("seasons/snow-drift.svg") 0 0 / 100% 100% no-repeat; mask: url("seasons/snow-drift.svg") 0 0 / 100% 100% no-repeat;
+  filter: drop-shadow(0 1px 1px var(--sn-drift-shade));
+}
+/* the strand: any season that sets --sn-strand hangs one (Christmas in red,
+   green, gold and white; Halloween in neon orange, purple and green) */
+:root[data-look^="christmas-"] { --sn-strand: url("seasons/lights-strand.svg"); --sn-strand-glow: url("seasons/lights-glow.svg"); }
+:root[data-look^="halloween-"] { --sn-strand: url("seasons/lights-halloween-strand.svg"); --sn-strand-glow: url("seasons/lights-halloween-glow.svg"); }
+:where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::before,
+:where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::after {
+  content: ""; position: absolute; left: 16px; right: 16px; top: calc(100% - 4px); height: 34px; pointer-events: none;
+  background: var(--sn-strand) 0 0 / auto 34px round no-repeat;
+}
+:where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::before {
+  background-image: var(--sn-strand-glow);
+  animation: sn-strand 3.8s ease-in-out infinite alternate;
+}
+@keyframes sn-strand { from { opacity: .2; } to { opacity: 1; } }
+/* a dark kitchen at night: the bulbs hold still */
+:where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .is-night .topbar::before { animation: none; opacity: .5; }
+
+/* ---- Halloween on the interface: cobwebs in the card corners ----
+   The corner web (spider-web.svg, its centre on the corner, so a quarter of
+   it fans out) on some cards and not others, top left or bottom right, in
+   two sizes, so no two neighbours match. Hairline silk in --sn-web over the
+   card, static. The neon strand hangs under the top bar (above). */
+:where(:root[data-look^="halloween-"] .wrap) .card { position: relative; }
+:where(:root[data-look^="halloween-"] .wrap) .card:nth-child(3n+1)::after,
+:where(:root[data-look^="halloween-"] .wrap) .card:nth-child(3n+2)::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: var(--sn-card-web);
+}
+/* the corners words rarely reach: bottom right (bigger) and top right (smaller) */
+:where(:root[data-look^="halloween-"] .wrap) .card:nth-child(3n+1)::after {
+  -webkit-mask: url("seasons/spider-web.svg") right -64px bottom -64px / 128px 128px no-repeat; mask: url("seasons/spider-web.svg") right -64px bottom -64px / 128px 128px no-repeat;
+}
+:where(:root[data-look^="halloween-"] .wrap) .card:nth-child(3n+2)::after {
+  -webkit-mask: url("seasons/spider-web.svg") right -46px top -46px / 92px 92px no-repeat; mask: url("seasons/spider-web.svg") right -46px top -46px / 92px 92px no-repeat;
+}
+:root[data-look^="halloween-"] { --sn-card-web: rgba(232,222,255,.42); }
+:root[data-look^="halloween-"]:is([data-theme="light"], [data-theme="soft"]) { --sn-card-web: rgba(90,70,130,.34); }
+
 /* ---- Christmas light: the photo's own lights glow ----
    Spots placed by hub.js (placeSeasonLights) over the photo's lit windows,
    fire and bulbs, in the layer over the cards: wide and faint, like a light
@@ -3629,6 +3701,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
   :root[data-look]:not([data-look="none"]) body > .season .sn-bat { display: none; }
   .sn-flock, .sn-goose b::before { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-flock { display: none; }
+  :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::before { animation: none; }
   .sn-flake, .sn-flake b, .sn-glow.lamp, .sn-glow.fire, .sn-glow.fire.spill, .sn-glow.twinkle { animation: none; }
   :root[data-look]:not([data-look="none"]) body > .season .sn-snow { display: none; }
   :root[data-look]:not([data-look="none"]) body > .season-fx { display: none; }
