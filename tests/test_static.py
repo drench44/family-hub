@@ -1145,10 +1145,13 @@ def test_theme_js_is_first_script(html_path):
                re.findall(r'<script src="([^"]+)"', html_path.read_text())]
     if scripts[:1] == ["seasons/house/looks.js"]:
         scripts = scripts[1:]
+        # data only: it may hold a house's list (a deploy overlay replaces
+        # it), but never code that touches the page before theme.js runs
         house = (STATIC / "seasons" / "house" / "looks.js").read_text()
-        code = "\n".join(l for l in house.splitlines() if not l.strip().startswith("//"))
-        assert code.strip() == "window.FH_HOUSE_LOOKS = window.FH_HOUSE_LOOKS || [];", \
-            "the engine's house looks.js must stay an empty data-only list"
+        code = "\n".join(l for l in house.splitlines() if not l.strip().startswith("//")).strip()
+        assert code.startswith("window.FH_HOUSE_LOOKS ="), "house looks.js must only set window.FH_HOUSE_LOOKS"
+        for word in ("function", "=>", "document", "fetch", "eval", "import", "XMLHttpRequest", "<"):
+            assert word not in code, f"house looks.js must be data only (found {word!r})"
     assert scripts and scripts[0] == "theme.js", \
         f"{html_path.name}: theme.js must be the first script (got {scripts[:1]})"
 
@@ -1761,15 +1764,8 @@ def test_season_art_files_exist_and_are_credited():
         if f.name == "CREDITS.md":
             continue
         if f.name == "house" and f.is_dir():
-            # a house's own looks (a private deploy overlay adds them): the
-            # engine ships only an empty looks.js; when photos are there, the
-            # folder carries its own CREDITS.md naming each one
-            photos = [g for g in f.iterdir() if g.suffix == ".webp"]
-            if photos:
-                house_credits = (f / "CREDITS.md").read_text()
-                for g in photos:
-                    assert f"`{g.name}`" in house_credits, f"seasons/house/{g.name} is not in house/CREDITS.md"
-                    assert (f / "glass" / g.name).is_file(), f"seasons/house/{g.name} has no glass copy"
+            # a house's own looks (a private deploy overlay adds them)
+            _check_house_folder(f)
             continue
         if f.name == "glass" and f.is_dir():
             # blurred copies of the credited photos (scripts/make-glass.py):
@@ -2524,3 +2520,66 @@ def test_the_window_snow_shows_only_once_fitted_and_holds_still_with_the_rest():
     assert hide > show
     assert "filter:" not in re.search(r"\.sn-snow\.pane \.sn-flake[^{]*\{([^}]*)\}", CSS).group(1), \
         "no filter on 90 moving flakes: the edge is drawn into the gradient"
+
+
+def test_the_engine_ships_an_empty_house_list():
+    """The public repo carries no house's looks: its seasons/house/ holds only
+    the empty looks.js (a private deploy overlay replaces it). Checked on the
+    git-tracked copy, so a merged deploy tree with a real list still passes."""
+    import subprocess
+    root = STATIC.parents[3]
+    try:
+        tracked = subprocess.run(["git", "-C", str(root), "show", "HEAD:src/family_hub/web/static/seasons/house/looks.js"],
+                                 capture_output=True, text=True, check=True).stdout
+        files = subprocess.run(["git", "-C", str(root), "ls-files", "src/family_hub/web/static/seasons/house"],
+                               capture_output=True, text=True, check=True).stdout.split()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("not a git checkout of the engine (a staged deploy tree)")
+    code = "\n".join(l for l in tracked.splitlines() if not l.strip().startswith("//")).strip()
+    assert code == "window.FH_HOUSE_LOOKS = window.FH_HOUSE_LOOKS || [];"
+    assert files == ["src/family_hub/web/static/seasons/house/looks.js"], files
+
+
+def _check_house_folder(f):
+    """seasons/house/: the engine ships only an empty looks.js; a deploy's
+    private overlay adds photos. Every photo looks.js names must ship with its
+    glass copy (a missing one paints a bare background with no warning), and
+    every file there must be credited in the folder's own CREDITS.md."""
+    code = "\n".join(l for l in (f / "looks.js").read_text().splitlines() if not l.strip().startswith("//"))
+    for name in re.findall(r'\bfile:\s*"([^"]+)"', code):
+        assert (f / name).is_file(), f"house looks.js names seasons/house/{name}, which is missing"
+        assert (f / "glass" / name).is_file(), f"seasons/house/{name} has no glass copy"
+    art = [g for g in f.iterdir() if g.is_file() and g.name not in ("looks.js", "CREDITS.md")]
+    if art:
+        assert (f / "CREDITS.md").is_file(), "seasons/house/ has photos but no CREDITS.md"
+        credits = (f / "CREDITS.md").read_text()
+        for g in art:
+            assert f"`{g.name}`" in credits, f"seasons/house/{g.name} is not in house/CREDITS.md"
+            assert g.suffix == ".webp" and (f / "glass" / g.name).is_file(), f"seasons/house/{g.name} has no glass copy"
+    for g in (f / "glass").iterdir() if (f / "glass").is_dir() else []:
+        assert (f / g.name).is_file(), f"seasons/house/glass/{g.name} has no photo"
+
+
+@pytest.mark.parametrize("case", ["ok", "no-credits", "uncredited", "no-glass", "stray", "listed-missing"])
+def test_house_folder_check(tmp_path, case):
+    h = tmp_path / "house"
+    (h / "glass").mkdir(parents=True)
+    (h / "looks.js").write_text('window.FH_HOUSE_LOOKS = [{ file: "christmas-house-a.webp" }];\n')
+    (h / "christmas-house-a.webp").write_bytes(b"x")
+    (h / "glass" / "christmas-house-a.webp").write_bytes(b"x")
+    (h / "CREDITS.md").write_text("| `christmas-house-a.webp` | Pixabay |\n")
+    if case == "no-credits":
+        (h / "CREDITS.md").unlink()
+    elif case == "uncredited":
+        (h / "CREDITS.md").write_text("nothing\n")
+    elif case == "no-glass":
+        (h / "glass" / "christmas-house-a.webp").unlink()
+    elif case == "stray":
+        (h / "x.png").write_bytes(b"x")
+    elif case == "listed-missing":
+        (h / "looks.js").write_text('window.FH_HOUSE_LOOKS = [{ file: "christmas-house-a.webp" }, { file: "christmas-house-b.webp" }];\n')
+    if case == "ok":
+        _check_house_folder(h)
+    else:
+        with pytest.raises(AssertionError):
+            _check_house_folder(h)

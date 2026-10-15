@@ -597,7 +597,9 @@ theme.js merges the list before first paint (`mergeHouseLooks`): house
 looks come first in their season, `default: true` makes one the season's
 default, and each look's CSS tokens are written into one `<style>` element.
 A malformed entry is skipped with a console warning, and every value that
-reaches CSS (file name, focal point, colors) must match a strict pattern.
+reaches CSS (file name, focal point, colors) must match a strict pattern;
+`light` must be fractions of the photo or it is dropped. The light-theme
+accent carries white text, so pick one dark enough (a pale one warns).
 
 ## 7. How it works (reference)
 
