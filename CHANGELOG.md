@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-14
+
 ### Added
 - Christmas, Dec 1 to Dec 31: eight warm, snowy looks (a cabin glowing at
   dusk, a cabin window onto snowy woods, a fireside, fairy lights, a lit
