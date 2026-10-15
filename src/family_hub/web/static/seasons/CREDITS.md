@@ -32,6 +32,12 @@ Each photo was resized to 2560px wide, converted to sRGB and re-encoded by
 | `thanksgiving-cranberry-harvest.webp` | "Harvest" (a flooded cranberry bog, South Carver, Massachusetts, 2019), Lance Cheung, US Department of Agriculture | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Harvest_(20191023-NRCS-LSC-2277).jpg) | Public domain (work of the US federal government) |
 | `thanksgiving-vine-rows.webp` | "Autumn orchard", Lukas Budimaier | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Autumn_orchard_(Unsplash).jpg) (from Unsplash, 2016) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (published under Unsplash's CC0 terms, before its 2017 licence change) |
 | `thanksgiving-hudson-autumn.webp` | *Autumn, On the Hudson River* (1860), Jasper Francis Cropsey, National Gallery of Art | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Autumn--On_the_Hudson_River-1860-Jasper_Francis_Cropsey.jpg) | Public domain (the painter died in 1900) |
+| `christmas-glowing-cabin.webp` | "Cozy cabin at night", US Fish and Wildlife Service Alaska | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Cozy_cabin_at_night_(51080375076).jpg) | Public domain (work of the US federal government) |
+| `christmas-cabin-window.webp` | "Snowy view from inside a public use cabin", US Fish and Wildlife Service Alaska | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Snowy_view_from_inside_a_public_use_cabin_(51079660303).jpg) | Public domain (work of the US federal government) |
+| `christmas-fairy-lights.webp` | "Xmas4", Joanna Kosinska | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Xmas4_(Unsplash).jpg) (from Unsplash) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (published under Unsplash's CC0 terms, before its 2017 licence change) |
+| `christmas-tree.webp` | "Evelyn 2015", Evelyn (evelynnnnn) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Evelyn_2015_(Unsplash).jpg) (from Unsplash) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (published under Unsplash's CC0 terms, before its 2017 licence change) |
+| `christmas-woodsmoke.webp` | "Classic winter cabin", Ryan Graybill | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Classic_winter_cabin_(Unsplash).jpg) (from Unsplash) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (published under Unsplash's CC0 terms, before its 2017 licence change) |
+| `christmas-pink-dawn.webp` | "Crevice Mountain Patrol Cabin, fall sunrise after a snow storm", Yellowstone National Park | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Crevice_Mountain_Patrol_Cabin-_fall_sunrise_after_a_snow_storm_(53375702524).jpg) | Public domain (work of the US federal government) |
 
 `glass/` holds a small, blurred, saturated copy of each photo above, same
 file name, made by `scripts/make-glass.py`. Each copy is a derivative of its
@@ -45,6 +51,7 @@ paint it instead of blurring the photo live.
 | `leaf-maple.svg` | [Twemoji](https://github.com/jdecked/twemoji) 1f341 "maple leaf". Changed: fill colour removed, path numbers given explicit separators (same shape) | [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/), © Twitter, Inc and other contributors |
 | `leaf-slender.svg` | [Phosphor Icons](https://github.com/phosphor-icons/core) "leaf" (fill), unchanged | MIT, notice below |
 | `grains.svg` | [Phosphor Icons](https://github.com/phosphor-icons/core) "grains" (fill), unchanged | MIT, notice below |
+| `snowflake.svg` | [Phosphor Icons](https://github.com/phosphor-icons/core) "snowflake" (bold), unchanged | MIT, notice below |
 | `bat.svg` | "Bat shadow black", Rugby471, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Bat_shadow_black.svg). Changed: optimised, fill colour removed (same shape) | Public domain (released by its author) |
 | `spider-web.svg` | "Spiders web", tom, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Spiders_web.svg). Changed: optimised; the strands keep one hairline width at any size | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 
