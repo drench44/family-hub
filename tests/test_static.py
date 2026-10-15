@@ -2418,3 +2418,26 @@ def test_every_glass_copy_belongs_to_a_look():
     looks = set(_look_ids())
     for g in (STATIC / "seasons" / "glass").iterdir():
         assert g.suffix == ".webp" and g.stem in looks, f"seasons/glass/{g.name} belongs to no look"
+
+
+def test_christmas_indoor_tiles_keep_the_snow_outside():
+    """An indoor look (theme.js `indoor: true`) shows no snow in the room on the
+    wall (placeSeasonLights). Its Settings tile must match, or the preview
+    promises snow falling indoors."""
+    js = (STATIC / "theme.js").read_text()
+    indoor = re.findall(r'id: "(christmas-[a-z0-9-]+)"[^\n]*\n\s*light: \{ indoor: true', js)
+    assert indoor, "found no indoor Christmas looks to check"
+    rule = re.search(r"\.look-swatch:is\(([^)]*)\) \.sn-snow \{ display: none; \}", CSS)
+    assert rule, "no tile rule hides the snow on indoor looks"
+    for look in indoor:
+        assert f'[data-look="{look}"]' in rule.group(1), f"{look}'s tile shows snow in the room"
+
+
+def test_christmas_snow_and_lights_stand_down_at_night_and_with_reduced_motion():
+    """The far snow goes at night (paused it would hang in the air), the
+    near layer (snow and lights) goes with .season-fx, and reduced motion
+    stops every flake and glow by name."""
+    assert ':root[data-look]:not([data-look="none"]) body.is-night > .season .sn-snow { display: none; }' in CSS
+    start, stopped, hidden = _last_reduced_motion_selectors()
+    for sel in (".sn-flake", ".sn-flake b", ".sn-glow.lamp", ".sn-glow.fire", ".sn-glow.twinkle"):
+        assert sel in stopped, f"reduced motion does not stop {sel}"

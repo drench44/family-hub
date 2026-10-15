@@ -690,3 +690,28 @@ test('a house default never clears a pin', () => {
   win.stampSeason('on');
   assert.equal(win.refreshLook(day(7, 4)), 'halloween-moonrise');
 });
+
+test('Christmas light points are fractions of the photo, and window panes are real boxes', () => {
+  const { win } = loadTheme();
+  const xmas = win.FH_SEASONS.find((s) => s.id === 'christmas');
+  assert.ok(xmas, 'Christmas is registered');
+  assert.equal(JSON.stringify([xmas.from, xmas.to]), "[[12,1],[12,31]]");
+  assert.equal(xmas.looks.filter((l) => l.default).length, 1, 'one default look');
+  const frac = (v) => typeof v === 'number' && v >= 0 && v <= 1;
+  for (const look of xmas.looks) {
+    const light = look.light;
+    if (!light) continue;
+    for (const key of ['lamps', 'fire']) {
+      for (const p of light[key] || []) {
+        assert.equal(p.length, 3, `${look.id} ${key}: x, y and a size`);
+        assert.ok(p.every(frac) && p[2] > 0, `${look.id} ${key} ${p}`);
+      }
+    }
+    for (const p of light.twinkle || []) assert.ok(p.length === 2 && p.every(frac), `${look.id} twinkle ${p}`);
+    if (light.size !== undefined) assert.ok(frac(light.size) && light.size > 0);
+    for (const b of light.panes || []) {
+      assert.ok(b.length === 4 && b.every(frac) && b[0] < b[2] && b[1] < b[3], `${look.id} pane ${b}`);
+    }
+    if (light.panes) assert.ok(light.indoor, `${look.id}: panes only mean something indoors`);
+  }
+});
