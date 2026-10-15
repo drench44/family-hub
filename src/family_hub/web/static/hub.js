@@ -4568,10 +4568,15 @@ async function placeSeasonLights() {
       `M${(x0 - dx).toFixed(1)} ${y0.toFixed(1)}H${(x1 - dx).toFixed(1)}V${y1.toFixed(1)}H${(x0 - dx).toFixed(1)}Z`).join('');
     const left = Math.min(...boxes.map((b) => b[0]));
     const right = Math.max(...boxes.map((b) => b[2]));
+    if (!(Number.isFinite(left) && Number.isFinite(right) && right - left > 1)) {
+      // a typo in the panes: keep the room dry (data-where stays "none") and say so
+      console.warn(`season: ${look} has window panes that make no box; its snow stays hidden`, light.panes);
+      return;
+    }
     snows.forEach((el) => {
       el.dataset.where = 'panes';
       if (!el.closest('.season')) return;
-      if (/\bpane\b/.test(el.className)) {
+      if ((' ' + el.className + ' ').includes(' pane ')) {
         // the window's own snowfall spans just the window, so every flake
         // falls past the glass instead of most landing on the walls
         el.style.left = `${left.toFixed(1)}px`;

@@ -3282,7 +3282,7 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look]:not([data-look="none"]) body.is-night > .season .sn-snow { display: none; }
 
 /* ---- Christmas snow (every christmas-* look) ----
-   Two depths, like the leaves: small slow flakes in the photo layer behind
+   Two depths, like the leaves (plus a heavier fall fitted to a window, below): small slow flakes in the photo layer behind
    the glass, showing in the gaps between cards, and a few larger ones
    drifting over the cards. A flake is a soft round dot: at wall distance a
    drawn six-armed snowflake reads as confetti. The outer span falls on
@@ -3300,8 +3300,9 @@ body.integ-off-todos .todo-slot { display: none; }
 /* the window's own heavier snowfall: only once it is fitted to the panes */
 .sn-snow.pane { right: auto; }
 /* against the bright snowy view a white flake vanishes; real snow falling
-   past a window reads as soft grey-edged specks, so these carry an edge */
-.sn-snow.pane .sn-flake { filter: drop-shadow(0 0 1.5px rgba(36,50,74,.6)) drop-shadow(0 1px 1px rgba(36,50,74,.35)); }
+   past a window reads as soft grey-edged specks, so these carry an edge,
+   drawn into the flake itself (a filter on 90 moving flakes costs the wall) */
+.sn-snow.pane .sn-flake b { background: radial-gradient(circle, var(--sn-snow) 0 34%, rgba(36,50,74,.55) 50%, transparent 74%); }
 :root[data-look^="christmas-"] body > .season .sn-snow.pane:not([data-where="panes"]) { display: none; }
 .sn-flake { position: absolute; left: var(--x); top: 0; width: var(--s); height: var(--s);
   animation: sn-snowfall var(--d) linear var(--dl) infinite; }
@@ -3316,7 +3317,7 @@ body.integ-off-todos .todo-slot { display: none; }
 @media (max-width: 1000px) {
   :root:not([data-layout="desktop"]) .sn-snow.back .sn-flake:nth-child(n+23),
   :root:not([data-layout="desktop"]) .sn-snow.front .sn-flake:nth-child(n+11),
-  :root:not([data-layout="desktop"]) .sn-snow.pane .sn-flake:nth-child(n+41) { display: none; }
+  :root:not([data-layout="desktop"]) .sn-snow.pane .sn-flake:nth-child(n+31) { display: none; }
 }
 
 /* ---- Christmas on the interface: lights, frost and snow on the wall itself ----

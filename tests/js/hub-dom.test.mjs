@@ -9640,8 +9640,23 @@ test('the window gets its own heavier snowfall, fitted to the panes', async () =
   assert.match(st.paneSnow.style.clipPath, /^path\("M0\.0 [\d.]+H282\.0V[\d.]+H0\.0ZM376\.0 /, 'its clip is shifted into its own box');
   assert.match(st.farSnow.style.clipPath, /^path\("M470\.0 /, 'the far snow keeps screen coordinates');
   const out = lightsStage(sandbox, document, { look: 'xmas-test-out' });
-  out.paneSnow.style.left = '470.0px'; out.paneSnow.style.width = '658.0px';
+  out.paneSnow.style.left = '470.0px'; out.paneSnow.style.width = '658.0px'; out.paneSnow.style.clipPath = 'path("M0 0H9V9H0Z")';
   await sandbox.placeSeasonLights();
   assert.equal(out.paneSnow.style.left, '', 'an outdoor look drops the window box');
+  assert.equal(out.paneSnow.style.width, '');
+  assert.equal(out.paneSnow.style.clipPath, '');
   assert.equal(out.paneSnow.dataset.where, undefined, 'and CSS hides the window snow without data-where="panes"');
+});
+
+test('placeSeasonLights: window panes that make no box keep the room dry and say so', async () => {
+  const { document, sandbox } = newHub();
+  (sandbox.FH_SEASONS = []).unshift({ id: 'xmas-test', looks: [{ id: 'xmas-test-bad', light: { indoor: true, panes: [[NaN, 0.2, 0.4, 0.6]] } }] });
+  const warned = [];
+  sandbox.console = { ...console, warn: (...a) => warned.push(a.join(' ')) };
+  const st = lightsStage(sandbox, document, { look: 'xmas-test-bad' });
+  await sandbox.placeSeasonLights();
+  assert.equal(st.paneSnow.dataset.where, 'none');
+  assert.equal(st.farSnow.dataset.where, 'none');
+  assert.equal(st.paneSnow.style.width, '');
+  assert.ok(warned.some((w) => /make no box/.test(w)));
 });
