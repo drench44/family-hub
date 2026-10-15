@@ -2546,7 +2546,8 @@ def _check_house_folder(f):
     glass copy (a missing one paints a bare background with no warning), and
     every file there must be credited in the folder's own CREDITS.md."""
     code = "\n".join(l for l in (f / "looks.js").read_text().splitlines() if not l.strip().startswith("//"))
-    for name in re.findall(r'\bfile:\s*"([^"]+)"', code):
+    # the list may be written as JS (file: "...") or as JSON ("file": "...")
+    for name in re.findall(r'(?:\bfile|"file")\s*:\s*"([^"]+)"', code):
         assert (f / name).is_file(), f"house looks.js names seasons/house/{name}, which is missing"
         assert (f / "glass" / name).is_file(), f"seasons/house/{name} has no glass copy"
     art = [g for g in f.iterdir() if g.is_file() and g.name not in ("looks.js", "CREDITS.md")]
@@ -2577,7 +2578,7 @@ def test_house_folder_check(tmp_path, case):
     elif case == "stray":
         (h / "x.png").write_bytes(b"x")
     elif case == "listed-missing":
-        (h / "looks.js").write_text('window.FH_HOUSE_LOOKS = [{ file: "christmas-house-a.webp" }, { file: "christmas-house-b.webp" }];\n')
+        (h / "looks.js").write_text('window.FH_HOUSE_LOOKS = [{ "file": "christmas-house-a.webp" }, { "file": "christmas-house-b.webp" }];\n')
     if case == "ok":
         _check_house_folder(h)
     else:
