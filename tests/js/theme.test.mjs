@@ -44,12 +44,18 @@ function makeStorage(seed = {}) {
 // and optional window.FH_THEME config default.
 // `now` pins "today" for theme.js's own new Date() calls (the seasonal look is
 // date-derived), so no assertion depends on the day the suite runs.
-function loadTheme({ storage = {}, fhTheme, now } = {}) {
+function loadTheme({ storage = {}, fhTheme, now, houseLooks, head } = {}) {
   const root = makeRoot();
   const localStorage = makeStorage(storage);
   const win = { localStorage };
   if (fhTheme !== undefined) win.FH_THEME = fhTheme;
-  const sandbox = { window: win, document: { documentElement: root } };
+  if (houseLooks !== undefined) win.FH_HOUSE_LOOKS = houseLooks;
+  const document = { documentElement: root };
+  if (head) {
+    document.head = head;
+    document.createElement = (tag) => ({ tag, id: '', textContent: '' });
+  }
+  const sandbox = { window: win, document, console: { ...console, warn: (...a) => (win.warned = (win.warned || []).concat(a.join(' '))) } };
   if (now) {
     sandbox.Date = class extends Date {
       constructor(...a) { if (a.length) super(...a); else super(now.getTime()); }
@@ -714,4 +720,122 @@ test('Christmas light points are fractions of the photo, and window panes are re
     }
     if (light.panes) assert.ok(light.indoor, `${look.id}: panes only mean something indoors`);
   }
+});
+
+// ---- house looks (a private overlay's own photos) ----
+const HOUSE = (over = {}) => ({ id: 'christmas-house-cabin', season: 'christmas', name: 'Cabin Night',
+  blurb: 'A lit cabin under the moon', credit: 'Photo from Pixabay', file: 'christmas-house-cabin.webp',
+  pos: 'center 55%', accent: ['#F2C46B', '#2A1C00', '#866013'], ...over });
+
+test('house looks join their season first, and one can be the default', () => {
+  const head = { children: [], appendChild(el) { this.children.push(el); } };
+  const { win } = loadTheme({ storage: { 'fh.season': 'on' }, head,
+    houseLooks: [HOUSE({ default: true }), HOUSE({ id: 'christmas-house-room', name: 'Cozy Room', file: 'christmas-house-room.webp' })] });
+  const xmas = win.FH_SEASONS.find((s) => s.id === 'christmas');
+  assert.equal(xmas.looks[0].id, 'christmas-house-cabin');
+  assert.equal(xmas.looks[1].id, 'christmas-house-room', 'in the order the house listed them');
+  assert.equal(xmas.looks.filter((l) => l.default).length, 1, 'still exactly one default');
+  assert.equal(xmas.looks[0].default, true);
+  assert.equal(win.refreshLook(new Date(2026, 11, 10, 12)), 'christmas-house-cabin', 'December paints the house default');
+  const css = win.houseLooksCss();
+  assert.match(css, /:root\[data-look="christmas-house-cabin"\]\[data-theme\]\[data-accent\],\n\.look-swatch\[data-look="christmas-house-cabin"\]/);
+  assert.match(css, /--sn-scene:url\("seasons\/house\/christmas-house-cabin\.webp"\); --sn-glass:url\("seasons\/house\/glass\/christmas-house-cabin\.webp"\); --sn-pos:center 55%;/);
+  assert.match(css, /--accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba\(134,96,19,\.13\)/, 'the light-theme accent');
+  assert.equal(head.children.length, 1, 'one style element for all of them');
+  assert.equal(head.children[0].id, 'fh-house-looks');
+  assert.equal(head.children[0].textContent, css);
+});
+
+test('a malformed house look is skipped with a warning, and nothing it carries reaches CSS', () => {
+  const bad = [
+    HOUSE({ id: 'fall-house-x' }),                                   // wrong prefix for its season
+    HOUSE({ id: 'christmas-glowing-cabin' }),                        // id already used
+    HOUSE({ id: 'christmas-house-a', season: 'easter' }),            // no such season
+    HOUSE({ id: 'christmas-house-b', file: 'x.webp"); background:red; ("' }),
+    HOUSE({ id: 'christmas-house-c', pos: 'center; color:red' }),
+    HOUSE({ id: 'christmas-house-d', accent: ['red', '#000000', '#FFFFFF'] }),
+    HOUSE({ id: 'christmas-house-e', file: 'photo.jpg' }),
+    HOUSE({ id: 'christmas-house-f', name: '' }),
+    null,
+  ];
+  const { win } = loadTheme({ houseLooks: bad });
+  const ids = win.FH_SEASONS.flatMap((s) => s.looks.map((l) => l.id));
+  for (const id of ['fall-house-x', 'christmas-house-a', 'christmas-house-b', 'christmas-house-c', 'christmas-house-d', 'christmas-house-e', 'christmas-house-f']) {
+    assert.ok(!ids.includes(id), `${id} must be skipped`);
+  }
+  assert.equal(ids.filter((id) => id === 'christmas-glowing-cabin').length, 1, 'a duplicate id never doubles a look');
+  assert.equal(win.houseLooksCss(), '', 'no CSS from any of them');
+  assert.equal((win.warned || []).length, bad.length, 'each one says why it was skipped');
+});
+
+test('no house looks (the engine default) changes nothing', () => {
+  const plain = loadTheme().win.FH_SEASONS.map((s) => s.looks.map((l) => l.id).join()).join('|');
+  const empty = loadTheme({ houseLooks: [] }).win.FH_SEASONS.map((s) => s.looks.map((l) => l.id).join()).join('|');
+  const junk = loadTheme({ houseLooks: 'not a list' }).win.FH_SEASONS.map((s) => s.looks.map((l) => l.id).join()).join('|');
+  assert.equal(empty, plain);
+  assert.equal(junk, plain);
+});
+
+test('house looks: bad light points are dropped, a second default warns, a non-list warns', () => {
+  const { win } = loadTheme({ houseLooks: [
+    HOUSE({ id: 'christmas-house-a', default: true, light: { lamps: [[0.5, 1.5, 0.1]] } }),
+    HOUSE({ id: 'christmas-house-b', file: 'christmas-house-b.webp', default: true, light: { indoor: true, panes: [[0.2, 0.2, 0.4, 0.6]] } }),
+    HOUSE({ id: 'christmas-house-c', file: 'christmas-house-c.webp', default: 'true' }),
+  ] });
+  const xmas = win.FH_SEASONS.find((s) => s.id === 'christmas');
+  const a = xmas.looks.find((l) => l.id === 'christmas-house-a');
+  const b = xmas.looks.find((l) => l.id === 'christmas-house-b');
+  assert.equal(a.light, undefined, 'a lamp off the photo is not passed on');
+  assert.equal(b.light.indoor, true, 'good light data is kept');
+  assert.equal(xmas.looks.filter((l) => l.default).map((l) => l.id).join(), 'christmas-house-b', 'the last default wins');
+  const w = (win.warned || []).join('\n');
+  assert.match(w, /not fractions of the photo/);
+  assert.match(w, /both marked default/);
+  assert.match(w, /default must be true or left out/);
+  const junk = loadTheme({ houseLooks: { id: 'x' } });
+  assert.match((junk.win.warned || []).join(), /not a list/);
+});
+
+test('house looks: hostile ids, files, positions and every accent slot are refused', () => {
+  const good = HOUSE({ id: 'christmas-house-ok', file: 'christmas-house-ok.webp' });
+  const bad = [
+    HOUSE({ id: 'christmas-x"]{color:red}' }),
+    HOUSE({ id: 'christmas-house-p1', file: '../x.webp' }),
+    HOUSE({ id: 'christmas-house-p2', file: 'a/b.webp' }),
+    HOUSE({ id: 'christmas-house-p3', file: 'Photo.webp' }),
+    HOUSE({ id: 'christmas-house-p4', file: 'x.webp.webp"' }),
+    HOUSE({ id: 'christmas-house-p5', pos: '1000% 10%' }),
+    HOUSE({ id: 'christmas-house-p6', pos: 'url(x)' }),
+    HOUSE({ id: 'christmas-house-p7', accent: ['#000000', 'red', '#000000'] }),
+    HOUSE({ id: 'christmas-house-p8', accent: ['#000000', '#000000', '#0000'] }),
+    HOUSE({ id: 'christmas-house-p9', accent: ['#000000', '#000000'] }),
+    HOUSE({ id: 'christmas-house-ok' }),   // the same id twice in the house list
+  ];
+  const head = { children: [], appendChild(el) { this.children.push(el); } };
+  const { win } = loadTheme({ houseLooks: [good, ...bad], head });
+  const ids = win.FH_SEASONS.flatMap((s) => s.looks.map((l) => l.id));
+  assert.equal(ids.filter((id) => id.startsWith('christmas-house')).join(), 'christmas-house-ok', 'only the good one joins');
+  const css = win.houseLooksCss();
+  assert.doesNotMatch(css, /color:red|\.\.\/|url\(x\)/);
+  assert.match(css, /^[\s\S]*$/);
+  assert.ok(/^[-a-z0-9:#,.;%()"=\[\]{}\s_/^*]+$/i.test(css), 'only the characters a token block needs');
+});
+
+test('house looks: none valid means no style element, and no head is fine', () => {
+  const head = { children: [], appendChild(el) { this.children.push(el); } };
+  loadTheme({ houseLooks: [HOUSE({ id: 'nope' })], head });
+  assert.equal(head.children.length, 0);
+  assert.doesNotThrow(() => loadTheme({ houseLooks: [HOUSE()] }));
+});
+
+test('house looks: a house look without default leaves the built-in default', () => {
+  const { win } = loadTheme({ houseLooks: [HOUSE()] });
+  const xmas = win.FH_SEASONS.find((s) => s.id === 'christmas');
+  assert.equal(xmas.looks.filter((l) => l.default).map((l) => l.id).join(), 'christmas-glowing-cabin');
+  assert.equal(xmas.looks[0].id, 'christmas-house-cabin', 'still listed first');
+});
+
+test('house looks: a pale light accent warns', () => {
+  const { win } = loadTheme({ houseLooks: [HOUSE({ accent: ['#F2C46B', '#2A1C00', '#F2E6C0'] })] });
+  assert.match((win.warned || []).join(), /pale for white text/);
 });

@@ -569,6 +569,38 @@ CC0), Shenandoah NPS rolling hills.
    suite again **after committing**, because the privacy scan only reads
    tracked files.
 
+## 6b. House looks (a family's own photos, outside this repo)
+
+This repo is public, so it ships only art anyone may redistribute (section
+5). A house may also want photos whose licences allow use on its own wall
+but not redistribution, such as Pixabay, Unsplash or Pexels pictures; the
+owner asked for exactly that style ("still need better christmas images,
+more like these": lush storybook cabins, cozy lit rooms, sleighs of gifts).
+Those live in the deploy's **private overlay**, never here:
+
+1. Prepare each photo into the overlay's
+   `src/family_hub/web/static/seasons/house/` folder:
+   `python scripts/prep-season-photo.py original.jpg christmas-house-<name> --out-dir <that folder>`
+   (writes the photo and its `glass/` copy there).
+2. List them in the overlay's `seasons/house/looks.js`, replacing the
+   engine's empty one: `window.FH_HOUSE_LOOKS = [ { id, season, name,
+   blurb, credit, file, pos, accent: [dark, darkInk, light], light,
+   default } ]`. The id must start with the season's prefix
+   (`christmas-`), so every rule of that season (snow, lights, frost)
+   applies. `light` works as in the registry (lit windows, fire, string
+   lights, `indoor`, `panes`).
+3. Credit each file in the overlay's `seasons/house/CREDITS.md` (source page
+   and licence). The engine's tests, run on the merged tree at deploy, fail
+   on a photo without a credit row or a glass copy.
+
+theme.js merges the list before first paint (`mergeHouseLooks`): house
+looks come first in their season, `default: true` makes one the season's
+default, and each look's CSS tokens are written into one `<style>` element.
+A malformed entry is skipped with a console warning, and every value that
+reaches CSS (file name, focal point, colors) must match a strict pattern;
+`light` must be fractions of the photo or it is dropped. The light-theme
+accent carries white text, so pick one dark enough (a pale one warns).
+
 ## 7. How it works (reference)
 
 - `theme.js` owns the registry, the prefs (`fh.season`, `fh.look.<season>`,
