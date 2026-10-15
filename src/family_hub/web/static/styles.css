@@ -3301,8 +3301,8 @@ body.integ-off-todos .todo-slot { display: none; }
 /* ---- Christmas on the interface: lights, frost and snow on the wall itself ----
    The owner asked for the season ON the wall, not just behind it: "drape
    christmas lights around things, put frost on things". A strand of warm
-   bulbs hangs in swags under the top bar, every other bulb's glow slowly
-   breathing (::before, opacity only); frost from a real photo of ice on a
+   bulbs hangs in swags under the top bar, each with its own glow and a
+   wider bloom that slowly breathes (::before, opacity only); frost from a real photo of ice on a
    window (frost-corner*.webp, an alpha mask) creeps in from two corners of
    each card; and a soft drift of snow rests along each card's top edge,
    like snow on a sill. Frost and snow are still. All of it is decoration:
@@ -3335,14 +3335,16 @@ body.integ-off-todos .todo-slot { display: none; }
 :root[data-look^="halloween-"] { --sn-strand: url("seasons/lights-halloween-strand.svg"); --sn-strand-glow: url("seasons/lights-halloween-glow.svg"); }
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::before,
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::after {
-  content: ""; position: absolute; left: 16px; right: 16px; top: calc(100% - 4px); height: 34px; pointer-events: none;
-  background: var(--sn-strand) 0 0 / auto 34px round no-repeat;
+  content: ""; position: absolute; left: 16px; right: 16px; top: calc(100% - 5px); height: 42px; pointer-events: none;
+  background: var(--sn-strand) 0 0 / auto 42px round no-repeat;
 }
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar::before {
   background-image: var(--sn-strand-glow);
   animation: sn-strand 3.8s ease-in-out infinite alternate;
 }
-@keyframes sn-strand { from { opacity: .2; } to { opacity: 1; } }
+@keyframes sn-strand { from { opacity: .45; } to { opacity: 1; } }
+/* room for the bulbs to hang clear of the section titles below */
+:where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .topbar { margin-bottom: 22px; }
 /* a dark kitchen at night: the bulbs hold still */
 :where(:root:is([data-look^="christmas-"], [data-look^="halloween-"])) .is-night .topbar::before { animation: none; opacity: .5; }
 
