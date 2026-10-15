@@ -10,6 +10,15 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-10-14
+
+### Added
+- House looks: a private deploy can add its own seasonal photos (those whose
+  licences allow use on its own wall but not in this public repo) through
+  `seasons/house/looks.js`. They join their season first, can be its
+  default, and get the season's snow, lights and decorations. The engine
+  ships an empty list. See docs/seasonal-looks.md, "House looks".
+
 ## [1.11.1] — 2026-10-14
 
 ### Changed
