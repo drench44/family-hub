@@ -16,6 +16,15 @@ rolls that section to a dated version via `python scripts/release.py`.
   `?kiosk=1` does this; phones and laptops keep their pointer. (Idea from
   dapperdodger's fork, PR #10, which hid it for good; ours keeps the mouse
   usable.)
+- The wall's ↻ button now pulls the calendars (Google, ICS and iCloud)
+  before it reloads, so the page that comes back is current instead of up to
+  five minutes behind. It waits at most 10 seconds, reloads whatever
+  happens, turns its arrow while it works, ignores extra taps, and comes back
+  if the reload goes nowhere. Taps within 15 seconds of the last sync just
+  reload. Behind it, `POST /api/calendar/sync` answers with what happened
+  (synced, or not and why: demo, cooldown, busy, or an error that says when
+  the Google sign-in has expired), and no two Google syncs ever run at once.
+  (From dapperdodger's fork, PR #6, without its Mealie parts.)
 
 ## [1.13.1] — 2026-10-19
 
