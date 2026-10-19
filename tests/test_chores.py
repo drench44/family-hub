@@ -711,3 +711,16 @@ def test_turn_rotation_default_is_unchanged():
     days = [dt.date(2026, 1, 1) + dt.timedelta(days=k) for k in range(6)]
     assert [_who(legacy, people, d) for d in days] == [1, 2, 1, 2, 1, 2]
     assert [_who(explicit, people, d) for d in days] == [1, 2, 1, 2, 1, 2]
+
+
+def test_weekly_rotation_rows_say_so_for_the_card():
+    """plan_rows freezes rot=2 for a weekly rotation (1 for per-turn, 0 for
+    one person), and day_plan hands the card rot_week so it can say whose
+    week it is."""
+    people = [P(1), P(2)]
+    rows = ch.plan_rows([_weekly_rot(5, [1, 2]), _rot(6, [1, 2]), _fixed(7, 1)],
+                        people, dt.date(2026, 8, 6))
+    assert {r["chore_id"]: r["rot"] for r in rows} == {5: 2, 6: 1, 7: 0}
+    plan = ch.day_plan(rows, people, set())
+    flags = {c["id"]: (c["rot"], c["rot_week"]) for p in plan for c in p["chores"]}
+    assert flags == {5: (True, True), 6: (True, False), 7: (False, False)}

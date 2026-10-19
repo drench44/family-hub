@@ -1986,7 +1986,7 @@ test('chores overlay: default (view) mode shows check-off rows, no Edit affordan
   assert.match(html, /data-chore="10"/);
   assert.ok(!html.includes('data-edit-chore'), 'no edit-chore rows in view mode');
   assert.ok(!html.includes('data-add-chore'), 'no add rows in view mode');
-  assert.match(html, /data-chedit="1"[^>]*>Edit</);
+  assert.match(html, /data-chedit="1"[^>]*>Edit chores</);
 });
 
 test('chores overlay: tapping Edit enters edit mode (state, add rows, edit-chore rows)', () => {
@@ -2041,7 +2041,7 @@ test('chores overlay: tapping Done returns to check-off (data-chore, no add rows
   assert.match(html, /data-chore="10"/, 'check-off rows are back');
   assert.ok(!html.includes('data-edit-chore'), 'edit-chore rows gone');
   assert.ok(!html.includes('data-add-chore'), 'add rows gone');
-  assert.match(html, />Edit</, 'toggle reads Edit again');
+  assert.match(html, />Edit chores</, 'toggle reads Edit chores again');
 });
 
 test('chores overlay edit mode: "+ Add chore" opens the shared form with that person preselected', async () => {
@@ -9688,7 +9688,7 @@ test('buildChoreForm: "Take turns" + "Every week" saves rotate_every week', () =
   tapDelegated(host, '.f-rotadd', '[data-add="2"]');
   tapDelegated(host, '.f-rotevery', '[data-rotevery="week"]');
   assert.ok(host.querySelector('[data-rotevery="week"]').classList.contains('active'));
-  assert.match(host.querySelector('.f-summary').textContent, /Sam and Alex take turns, switching every Monday/);
+  assert.match(host.querySelector('.f-summary').textContent, /Sam and Alex take turns, a new person each week/);
   host.querySelector('[data-submit]').onclick();
   assert.equal(captured.assign_kind, 'rotation');
   assert.deepEqual([...captured.rotation_order], [1, 2]);
@@ -9772,4 +9772,12 @@ test('buildChoreForm: the Coming up strip shows the server\'s preview, and only 
   await new Promise((r) => setTimeout(r, 250));
   assert.equal(asked.length, 2, 'nothing asked for an empty turn list');
   assert.ok(host.querySelector('.f-preview').classList.contains('hidden'));
+});
+
+test('choreRowHtml: a weekly turn says whose week it is', () => {
+  const { sandbox } = newHub();
+  assert.match(sandbox.choreRowHtml({ id: 1, title: 'Dishes', rot: true, rot_week: true }, 'Ruby'),
+    /<span class="chore-rot">↻ Ruby’s week<\/span>/);
+  assert.match(sandbox.choreRowHtml({ id: 1, title: 'Dishes', rot: true, rot_week: false }, 'Ruby'),
+    /<span class="chore-rot">↻ Ruby<\/span>/);
 });
