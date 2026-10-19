@@ -133,7 +133,7 @@ class El {
   dispatchEvent() { return true; }
 }
 
-function loadOsk() {
+function loadOsk(kiosk = true) {
   const docListeners = {};
   const document = {
     addEventListener: (t, fn) => { (docListeners[t] || (docListeners[t] = [])).push(fn); },
@@ -143,7 +143,7 @@ function loadOsk() {
   document.activeElement = document.body;
   document.querySelectorAll = (sel) => document.body.querySelectorAll(sel);
   const observers = [];
-  const store = new Map([['oskKiosk', '1']]);
+  const store = new Map(kiosk ? [['oskKiosk', '1']] : []);
   const sandbox = {
     document,
     navigator: {},
@@ -164,7 +164,7 @@ function loadOsk() {
   vm.runInContext(commonSrc, sandbox);
   vm.runInContext(oskSrc, sandbox);
   const osk = document.body.children.find((c) => c.classList.contains('osk'));
-  assert.ok(osk, 'kiosk mode built the keyboard');
+  if (kiosk) assert.ok(osk, 'kiosk mode built the keyboard');
   const fire = (type, ev) => (docListeners[type] || []).forEach((fn) => fn(ev));
   // What the browser does after DOM changes: run every observer's callback.
   const mutated = (records) => observers.forEach((o) => o.cb(records));
@@ -175,7 +175,7 @@ function loadOsk() {
     parent.appendChild(inp);
     return inp;
   };
-  return { document, osk, fire, mutated, field, sandbox };
+  return { document, osk, fire, mutated, field, sandbox, docListeners };
 }
 
 test('osk: focusing a wall text field shows the keyboard', () => {
@@ -283,4 +283,62 @@ test('osk: Done pressed again while a save is still out sends nothing new', () =
   fire('focusin', { target: inp });
   pressDone(osk);
   assert.equal(saves, 1, 'one write, not two');
+});
+
+// Pointer hiding on the wall: a tap hides the mouse pointer, a real mouse move
+// brings it back. Only a browser that latched ?kiosk=1 ever does this.
+const HIDDEN = 'kiosk-cursor-hidden';
+const tap = (fire, type, x = 500, y = 400) => {
+  fire('pointerdown', { pointerType: type, clientX: x, clientY: y, buttons: 1 });
+  fire('pointerup', { pointerType: type, clientX: x, clientY: y, buttons: 0 });
+};
+
+test('kiosk pointer: starts visible, a touch hides it, a real mouse move shows it again', () => {
+  const { document, fire } = loadOsk();
+  assert.ok(!document.body.classList.contains(HIDDEN), 'visible on load (last input unknown)');
+  tap(fire, 'touch');
+  assert.ok(document.body.classList.contains(HIDDEN), 'hidden after a tap');
+  fire('pointermove', { pointerType: 'mouse', clientX: 540, clientY: 420, buttons: 0 });
+  assert.ok(!document.body.classList.contains(HIDDEN), 'back after the mouse moved');
+});
+
+test('kiosk pointer: a tap the browser reports as a mouse still hides it', () => {
+  // The wall's touchscreen can reach Firefox as a mouse (docs/on-screen-keyboard.md).
+  const { document, fire } = loadOsk();
+  tap(fire, 'mouse');
+  assert.ok(document.body.classList.contains(HIDDEN));
+});
+
+test('kiosk pointer: moves that are not a real mouse move keep it hidden', () => {
+  const { document, fire } = loadOsk();
+  tap(fire, 'touch', 500, 400);
+  // a finger dragging (scrolling) the page
+  fire('pointermove', { pointerType: 'touch', clientX: 500, clientY: 300, buttons: 1 });
+  // the small motion some systems send right after a tap, at the tap spot
+  fire('pointermove', { pointerType: 'mouse', clientX: 501, clientY: 401, buttons: 0 });
+  // Firefox's mouse event made from a touch
+  fire('pointermove', { pointerType: 'mouse', mozInputSource: 5, clientX: 900, clientY: 900, buttons: 0 });
+  // a mouse drag with the button held
+  fire('pointermove', { pointerType: 'mouse', clientX: 900, clientY: 900, buttons: 1 });
+  assert.ok(document.body.classList.contains(HIDDEN), 'still hidden');
+  fire('pointermove', { pointerType: 'mouse', clientX: 900, clientY: 900, buttons: 0 });
+  assert.ok(!document.body.classList.contains(HIDDEN), 'a real move shows it');
+});
+
+test('kiosk pointer: hides again on the next tap after the mouse brought it back', () => {
+  const { document, fire } = loadOsk();
+  tap(fire, 'touch');
+  fire('pointermove', { pointerType: 'mouse', clientX: 10, clientY: 10, buttons: 0 });
+  tap(fire, 'touch', 20, 20);
+  assert.ok(document.body.classList.contains(HIDDEN));
+});
+
+test('kiosk pointer: a phone or laptop (no kiosk flag) never changes, and gets no listeners', () => {
+  const { document, fire, osk, docListeners } = loadOsk(false);
+  assert.equal(osk, undefined, 'no keyboard outside kiosk mode');
+  for (const t of ['pointerdown', 'pointerup', 'pointermove']) {
+    assert.equal(docListeners[t], undefined, `no ${t} listener off the wall`);
+  }
+  tap(fire, 'touch');
+  assert.ok(!document.body.classList.contains(HIDDEN));
 });
