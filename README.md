@@ -540,6 +540,10 @@ Docker `node:20-alpine` fallback). If neither is present it **skips** — a skip
 means the JS layer went unchecked, not that it passed, so install Node or Docker
 to exercise it.
 
+## Support
+
+If Family Hub is useful to you, you can sponsor it on GitHub: https://github.com/sponsors/drench44
+
 ## License
 
 MIT.
