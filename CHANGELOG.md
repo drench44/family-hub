@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.2] — 2026-10-19
+
 ### Changed
 - The wall hides the mouse pointer while people tap it, and shows it again
   as soon as someone really moves a mouse. Only a browser opened once with
