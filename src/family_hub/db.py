@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS chores(
   assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
   fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
   rotation_epoch TEXT NOT NULL,
-  sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+  sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+  rotate_every TEXT NOT NULL DEFAULT 'turn');   -- rotation: 'turn' | 'week'
 CREATE TABLE IF NOT EXISTS completions(
   chore_id INTEGER NOT NULL,
   date TEXT NOT NULL,
@@ -71,7 +72,8 @@ CREATE TABLE IF NOT EXISTS todos(
   bucket TEXT NOT NULL CHECK(bucket IN ('now','soon','later')),
   created_at TEXT NOT NULL,
   done_at TEXT,
-  done_date TEXT);
+  done_date TEXT,
+  sort INTEGER);   -- place in its list after a drag; NULL = never moved (oldest first)
 -- Integrations registry: the runtime on/off state for each togglable data
 -- source / tile ("extension"). The set of AVAILABLE integrations is computed
 -- from config/env (integrations.available_integrations); this table only holds
@@ -161,6 +163,7 @@ _CHORE_COLUMNS = {
     "title", "icon", "schedule_kind", "days_mask", "week_interval",
     "interval_days", "due_times", "assign_kind",
     "fixed_person_id", "rotation_order", "rotation_epoch", "sort", "active",
+    "rotate_every",
 }
 _TODO_FIELDS = {"title", "bucket"}
 
@@ -288,6 +291,23 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if "sync_refusals" not in cal_cols:
         conn.execute("ALTER TABLE cal_objects ADD COLUMN sync_refusals "
                      "INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    # 2026-10-19: chores gained rotate_every, when a rotation passes the turn
+    # on: 'turn' (every time the chore comes up, the old and default
+    # behavior) or 'week' (one person all week, the next person next week).
+    # Additive ALTER with the old behavior as the default, so every existing
+    # rotation keeps its exact schedule.
+    chore_cols = {r["name"] for r in conn.execute("PRAGMA table_info(chores)")}
+    if "rotate_every" not in chore_cols:
+        conn.execute("ALTER TABLE chores ADD COLUMN rotate_every TEXT NOT NULL "
+                     "DEFAULT 'turn'")
+        conn.commit()
+    # 2026-10-19: todos gained sort, an item's place in its list once someone
+    # drags it there. NULL (every existing row) keeps the old oldest-first
+    # order, after any item that was placed by hand.
+    todo_cols = {r["name"] for r in conn.execute("PRAGMA table_info(todos)")}
+    if "sort" not in todo_cols:
+        conn.execute("ALTER TABLE todos ADD COLUMN sort INTEGER")
         conn.commit()
     # Seed the local_rev counter once, above any revision already stored.
     conn.execute("INSERT OR IGNORE INTO cal_rev(id, n) "
@@ -669,16 +689,18 @@ def away_map(conn, from_date: str, to_date: str) -> dict[int, dict]:
 
 def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,
               fixed_person_id, rotation_order, rotation_epoch,
-              week_interval=1, interval_days=None, due_times=None) -> int:
+              week_interval=1, interval_days=None, due_times=None,
+              rotate_every="turn") -> int:
     with conn:
         cur = conn.execute(
             """INSERT INTO chores(title, icon, schedule_kind, days_mask, week_interval,
                                   interval_days, due_times, assign_kind,
-                                  fixed_person_id, rotation_order, rotation_epoch)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  fixed_person_id, rotation_order, rotation_epoch,
+                                  rotate_every)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, icon, schedule_kind, days_mask, week_interval, interval_days,
              json.dumps(due_times or []), assign_kind, fixed_person_id,
-             json.dumps(rotation_order), rotation_epoch))
+             json.dumps(rotation_order), rotation_epoch, rotate_every))
     return int(cur.lastrowid)
 
 
@@ -835,6 +857,43 @@ def update_todo(conn, tid: int, **fields) -> None:
     with conn:
         conn.execute(f"UPDATE todos SET {assignments} WHERE id = ?",
                      (*cols.values(), tid))
+
+
+def _bucket_order(conn, bucket: str) -> list[int]:
+    """The open items of one list in the order the wall shows them: placed
+    items by their sort, then never-moved items oldest first (the same key as
+    todos.group)."""
+    rows = conn.execute(
+        "SELECT id FROM todos WHERE bucket = ? AND done_at IS NULL "
+        "ORDER BY sort IS NULL, sort, created_at, id", (bucket,))
+    return [r["id"] for r in rows]
+
+
+def move_todo(conn, tid: int, bucket: str, title: str | None = None) -> None:
+    """Move one item to the END of another list (a "Move to Soon" tap),
+    renaming it too when `title` is given, in one transaction. The target
+    list's open items are numbered first, in the order they show, so the
+    moved item lands last instead of slotting in by its creation date."""
+    with conn:
+        if title is not None:
+            conn.execute("UPDATE todos SET title = ? WHERE id = ?", (title, tid))
+        order = [i for i in _bucket_order(conn, bucket) if i != tid] + [tid]
+        for n, i in enumerate(order):
+            conn.execute("UPDATE todos SET bucket = ?, sort = ? WHERE id = ?",
+                         (bucket, n, i))
+
+
+def place_todos(conn, bucket: str, ids: list[int]) -> None:
+    """Put the given items into `bucket` in exactly this order (a drag and
+    drop), then number the list's other open items after them in the order
+    they showed, so an item the dragging device never saw (added elsewhere
+    meanwhile) can't tie with a new place. One transaction: a half-applied
+    reorder would shuffle the list."""
+    with conn:
+        rest = [i for i in _bucket_order(conn, bucket) if i not in set(ids)]
+        for n, i in enumerate(list(ids) + rest):
+            conn.execute("UPDATE todos SET bucket = ?, sort = ? WHERE id = ?",
+                         (bucket, n, i))
 
 
 def get_todo(conn, tid: int) -> dict | None:

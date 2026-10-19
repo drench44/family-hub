@@ -259,7 +259,7 @@ test('buildChorePayload: daily fixed chore trims and shapes correctly', () => {
   assert.deepEqual(p, {
     title: 'Dishes', icon: '🍽️', schedule_kind: 'daily', days_mask: 0,
     week_interval: 1, interval_days: null, due_times: [],
-    assign_kind: 'fixed', fixed_person_id: 3, rotation_order: [], date: null,
+    assign_kind: 'fixed', fixed_person_id: 3, rotation_order: [], rotate_every: 'turn', date: null,
   });
 });
 
@@ -274,7 +274,7 @@ test('buildChorePayload: one-time chore carries its date and forces fixed', () =
     days_mask: 0,                       // a one-time chore never carries a weekly mask
     week_interval: 1, interval_days: null, due_times: [],
     assign_kind: 'fixed',              // rotation is coerced away
-    fixed_person_id: 4, rotation_order: [], date: '2026-08-20',
+    fixed_person_id: 4, rotation_order: [], rotate_every: 'turn', date: '2026-08-20',
   });
 });
 
@@ -1271,4 +1271,123 @@ test('choreToggleMessage: a locked chore says it stays done, never "tap again"',
     'That one was already finished, so it stays done.');
   assert.equal(sandbox.choreToggleMessage('', true), 'That day has ended, so it can’t be changed now.');
   assert.match(sandbox.choreToggleMessage('boom', false), /tap again/);
+});
+
+
+// --- the plain-words chore form (2026-10-19) --------------------------------
+
+test('buildChorePayload: a weekly rotation carries rotate_every week; one person never does', () => {
+  const rot = JSON.parse(JSON.stringify(sandbox.buildChorePayload({
+    title: 'Dishes', repeat: 'daily', days: new Set(), assign: 'rotation', rot: [1, 2], rotateEvery: 'week',
+  })));
+  assert.equal(rot.rotate_every, 'week');
+  assert.deepEqual(rot.rotation_order, [1, 2]);
+  const one = JSON.parse(JSON.stringify(sandbox.buildChorePayload({
+    title: 'Dishes', repeat: 'daily', days: new Set(), assign: 'fixed', person: 1, rotateEvery: 'week',
+  })));
+  assert.equal(one.rotate_every, 'turn');
+  const once = JSON.parse(JSON.stringify(sandbox.buildChorePayload({
+    title: 'x', repeat: 'once', assign: 'rotation', rot: [1, 2], rotateEvery: 'week', person: 1, date: '2026-10-20',
+  })));
+  assert.equal(once.rotate_every, 'turn', 'a one-time chore is one person, so it never rotates');
+});
+
+test('choreToModel: rotate_every round-trips; anything else reads as each time', () => {
+  const base = { title: 'D', icon: '', schedule_kind: 'daily', days_mask: 0, assign_kind: 'rotation',
+    fixed_person_id: null, rotation_order: [1, 2], rotation_epoch: '2026-08-01' };
+  assert.equal(sandbox.choreToModel({ ...base, rotate_every: 'week' }).rotateEvery, 'week');
+  assert.equal(sandbox.choreToModel({ ...base, rotate_every: 'turn' }).rotateEvery, 'turn');
+  assert.equal(sandbox.choreToModel(base).rotateEvery, 'turn');
+});
+
+const FAM = [{ id: 1, name: 'Ava', active: 1 }, { id: 2, name: 'Ruby', active: 1 }, { id: 3, name: 'Milo', active: 1 }];
+
+test('choreSummary: says when and who in plain words', () => {
+  const S = (m) => sandbox.choreSummary({ days: new Set(), rot: [], each: [], ...m }, FAM);
+  assert.equal(S({ repeat: 'daily', assign: 'fixed', fixed_person_id: 1 }), 'Every day. Ava does it.');
+  assert.equal(S({ repeat: 'weekly', days: new Set([0, 3]), weekInterval: 1, assign: 'fixed', fixed_person_id: 2 }),
+    'Every Monday and Thursday. Ruby does it.');
+  assert.equal(S({ repeat: 'weekly', days: new Set([1]), weekInterval: 2, assign: 'fixed', fixed_person_id: 2 }),
+    'Every other Tuesday. Ruby does it.');
+  assert.equal(S({ repeat: 'weekly', days: new Set([0, 1, 2, 3, 4]), weekInterval: 1, assign: 'fixed', fixed_person_id: 1 }),
+    'Every weekday. Ava does it.');
+  assert.equal(S({ repeat: 'interval', intervalDays: '3', assign: 'fixed', fixed_person_id: 1 }), 'Every 3 days. Ava does it.');
+  assert.equal(S({ repeat: 'daily', assign: 'rotation', rot: [1, 2], rotateEvery: 'week' }),
+    'Every day. Ava and Ruby take turns, a new person each week.');
+  assert.equal(S({ repeat: 'daily', assign: 'rotation', rot: [1, 2, 1], rotateEvery: 'turn' }),
+    'Every day. Ava and Ruby take turns, a new person each time.');
+  assert.equal(S({ repeat: 'daily', assign: 'each', each: [1, 2, 3] }), 'Every day. Ava, Ruby and Milo each do their own.');
+  assert.equal(S({ repeat: 'daily', assign: 'fixed', fixed_person_id: null }), 'Every day. Pick who does it.');
+  // a one-time chore is one person whatever the turn setting says
+  assert.match(S({ repeat: 'once', date: '2026-10-21', assign: 'rotation', rot: [1, 2], fixed_person_id: 3 }),
+    /^Once, on Wed Oct 21\. Milo does it\.$/);
+});
+
+test('choreSummary: escapes nothing itself (callers put it in textContent or escapeHtml)', () => {
+  const s = sandbox.choreSummary({ repeat: 'daily', assign: 'fixed', fixed_person_id: 9, days: new Set(), rot: [], each: [] },
+    [{ id: 9, name: '<b>x</b>', active: 1 }]);
+  assert.equal(s, 'Every day. <b>x</b> does it.');
+  assert.match(sandbox.allChoresHtml([{ id: 1, title: 'T', icon: '', active: 1, schedule_kind: 'daily', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 9, rotation_order: [], rotation_epoch: '2026-01-01' }],
+  [{ id: 9, name: '<b>x</b>', active: 1 }]), /&lt;b&gt;x&lt;\/b&gt; does it/);
+});
+
+test('rotateOrderToStart: keeps the cycle, moves its start', () => {
+  const R = (o, slot, idx) => JSON.parse(JSON.stringify(sandbox.rotateOrderToStart(o, slot, idx)));
+  // slot 0 is up next; make Ruby (index 1) go first
+  assert.deepEqual(R([1, 2, 3], 0, 1), [2, 3, 1]);
+  // slot 1 is up next (Ruby); make Ava (index 0) the one at slot 1
+  assert.deepEqual(R([1, 2, 3], 1, 0), [3, 1, 2]);
+  assert.deepEqual(R([1, 2], 1, 1), [1, 2], 'already up: unchanged');
+  assert.deepEqual(R([1], 0, 0), [1]);
+  assert.deepEqual(R([1, 2], null, 1), [1, 2], 'no preview slot: unchanged');
+});
+
+test('chorePreviewCells: by week for a weekly rotation, by day otherwise', () => {
+  const up = [];
+  for (let i = 0; i < 20; i++) {
+    const d = new Date(2026, 9, 19 + i);   // Mon Oct 19 onward
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    up.push({ date: iso, person_id: Math.floor(i / 7) % 2 ? 2 : 1 });
+  }
+  const weeks = JSON.parse(JSON.stringify(sandbox.chorePreviewCells(up, true, '2026-10-19')));
+  assert.deepEqual(weeks, [
+    { label: 'This week', person_id: 1 }, { label: 'Next week', person_id: 2 }, { label: 'Week of Nov 2', person_id: 1 }]);
+  const days = JSON.parse(JSON.stringify(sandbox.chorePreviewCells(up.slice(1), false, '2026-10-19')));
+  assert.equal(days.length, 6);
+  assert.deepEqual(days.slice(0, 2), [{ label: 'Tomorrow', person_id: 1 }, { label: 'Wed Oct 21', person_id: 1 }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.chorePreviewCells(up, false, 'nope'))), []);
+});
+
+test('todoDropOrder: puts the item at the slot, never twice', () => {
+  const D = (ids, id, i) => JSON.parse(JSON.stringify(sandbox.todoDropOrder(ids, id, i)));
+  assert.deepEqual(D([1, 2, 3], 3, 0), [3, 1, 2]);
+  assert.deepEqual(D([1, 2, 3], 1, 2), [2, 3, 1]);
+  assert.deepEqual(D([1, 2], 9, 1), [1, 9, 2], 'from another list');
+  assert.deepEqual(D([1, 2], 9, 99), [1, 2, 9], 'past the end lands last');
+  assert.deepEqual(D([], 9, 0), [9]);
+});
+
+test('todoKeyMove: arrows move one place, or to the end of the next list, and stop at the ends', () => {
+  const B = { now: [{ id: 1 }, { id: 2 }, { id: 9, done_at: 'x' }], soon: [{ id: 3 }], later: [] };
+  const K = (id, key) => JSON.parse(JSON.stringify(sandbox.todoKeyMove(B, id, key)));
+  assert.deepEqual(K(1, 'ArrowDown'), { bucket: 'now', order: [2, 1] });
+  assert.deepEqual(K(2, 'ArrowUp'), { bucket: 'now', order: [2, 1] });
+  assert.deepEqual(K(1, 'ArrowUp'), { edge: 'top', bucket: 'now' });
+  assert.deepEqual(K(2, 'ArrowDown'), { edge: 'bottom', bucket: 'now' }, 'a checked item does not count');
+  assert.deepEqual(K(1, 'ArrowRight'), { bucket: 'soon', order: [3, 1] });
+  assert.deepEqual(K(3, 'ArrowRight'), { bucket: 'later', order: [3] });
+  assert.deepEqual(K(1, 'ArrowLeft'), { edge: 'first', bucket: 'now' });
+  assert.equal(sandbox.todoKeyMove(B, 9, 'ArrowDown'), null, 'a checked item has no grip to move');
+  assert.equal(sandbox.todoKeyMove(B, 1, 'Enter'), null);
+});
+
+test('todoFailMessage: a name the server refuses says so instead of "tap again"', () => {
+  assert.match(sandbox.todoFailMessage('title must be 1-120 characters'), /120 characters/);
+  assert.match(sandbox.todoFailMessage('unknown todo'), /another device/);
+  assert.match(sandbox.todoFailMessage('Failed to fetch'), /check the hub/);
+});
+
+test('todoFailMessage: an item checked off elsewhere mid-move says so', () => {
+  assert.match(sandbox.todoFailMessage("a checked-off item can't be moved"), /checked that item off/);
 });
