@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.1] — 2026-10-19
+
 ### Fixed
 - Editing a chore that takes turns no longer quietly changes whose turn it
   is. Changing how often it repeats (say every other Monday to every
