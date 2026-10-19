@@ -2335,6 +2335,7 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
         kept = _keep_turn(row, {**row, **fields}, _today(), active_ids)
         if kept is not None:
             fields["rotation_order"] = kept
+            log.info("chore %s: edit kept the next turn (order %s)", cid, kept)
     fdb.update_chore(c, cid, **fields)
     return _chore_row(c, cid)
 
@@ -2373,27 +2374,47 @@ def _upcoming(chore: dict, today: dt.date, active_ids: set) -> tuple[list, int]:
     return out, horizon
 
 
+def _turn_holder(old: dict, new: dict, today: dt.date,
+                 active_ids: set) -> tuple[str, int] | None:
+    """(date, person) for the edited chore's first upcoming day, where the
+    person is whose turn that SAME date was under the chore as saved, or None
+    when there is no such day or turn.
+
+    The same date on both sides on purpose: "Fridays only" turned into "every
+    day" has a different first day, and comparing the old first Friday with
+    the new first Monday would keep (or name) the wrong person."""
+    if not old.get("active", 1) or old["schedule_kind"] == "once":
+        return None
+    now = _upcoming(new, today, active_ids)[0]
+    if not now:
+        return None
+    d = dt.date.fromisoformat(now[0]["date"])
+    pid = chlogic.assignee_id(old, d, active_ids)
+    return (now[0]["date"], pid) if pid is not None else None
+
+
 def _keep_turn(old: dict, new: dict, today: dt.date, active_ids: set) -> list | None:
-    """The turn order that keeps whoever is up next on ``old`` up next on
-    ``new``, or None when there is nothing to keep.
+    """The turn order that keeps the person whose turn the edited chore's
+    first upcoming day was before the edit, or None when there is nothing to
+    keep (or it is already theirs).
 
     Changing how often a rotation repeats (or when it switches people) also
     changes how many turns have gone by, so without this an edit like "every
     other Monday" to "every Monday" quietly hands this week to someone else.
     Only where the cycle starts moves: the same people, in the same order."""
-    if new["assign_kind"] != "rotation" or not old.get("active", 1):
+    if new["assign_kind"] != "rotation":
         return None
     order = list(new["rotation_order"])
     if len(order) < 2 or not all(i in active_ids for i in order):
         return None   # with someone inactive the wall turns a shorter list
-    was = _upcoming(old, today, active_ids)[0]
-    now = _upcoming(new, today, active_ids)[0]
-    if not was or not now or was[0]["person_id"] not in order:
+    held = _turn_holder(old, new, today, active_ids)
+    if held is None or held[1] not in order:
         return None
-    pid = was[0]["person_id"]
-    if now[0]["person_id"] == pid:
+    day, pid = held
+    d = dt.date.fromisoformat(day)
+    if chlogic.assignee_id(new, d, active_ids) == pid:
         return None
-    slot = chlogic.turn_slot(new, dt.date.fromisoformat(now[0]["date"])) % len(order)
+    slot = chlogic.turn_slot(new, d) % len(order)
     shift = (order.index(pid) - slot) % len(order)
     return order[shift:] + order[:shift]
 
@@ -2421,9 +2442,9 @@ def admin_preview_chore(ch: ChorePreviewIn):
     rotation_order whose turn the FIRST upcoming day is (the form uses it for
     "start with ..."), or null for a one-person chore. With `keep_turn` an
     edit previews the PATCH's keep_turn: `rotation_order` is the restarted
-    order the save would store. Editing (`chore_id`), `before` is who was up
-    next on the chore as saved (null for a new chore), so the form can say
-    when an edit hands a turn to someone else."""
+    order the save would store. Editing (`chore_id`), `before` is whose turn
+    the first upcoming day was on the chore as saved (null for a new chore),
+    so the form can say when an edit hands that turn to someone else."""
     c = _db()
     merged = ch.model_dump()
     merged["title"] = merged["title"].strip() or "preview"
@@ -2451,8 +2472,8 @@ def admin_preview_chore(ch: ChorePreviewIn):
     active_ids = {p["id"] for p in fdb.list_people(c)}
     before = None
     if merged["chore_id"] is not None:
-        was = _upcoming(row, today, active_ids)[0] if row.get("active", 1) else []
-        before = was[0]["person_id"] if was else None
+        held = _turn_holder(row, chore, today, active_ids)
+        before = held[1] if held else None
         if merged["keep_turn"]:
             kept = _keep_turn(row, chore, today, active_ids)
             if kept is not None:
@@ -2468,7 +2489,7 @@ def admin_preview_chore(ch: ChorePreviewIn):
         first = dt.date.fromisoformat(out[0]["date"])
         slot = chlogic.turn_slot(chore, first) % len(order)
     # rotation_order: the order the save would store (keep_turn may have
-    # restarted it); before: who was up next on the chore as saved.
+    # restarted it); before: whose turn that first day was before the edit.
     return {"upcoming": out, "slot": slot, "days": horizon,
             "rotation_order": order, "before": before}
 
