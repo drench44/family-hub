@@ -10,6 +10,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- Shared CI workflows now come from drench44/ci-shared, and comments and docs no
+  longer name private repositories. The optional operator push scanner is now
+  named by the `PRIVACY_SCANNER` environment variable, with no default path.
+
 ## [1.13.3] — 2026-10-19
 
 ### Fixed
