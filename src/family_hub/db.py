@@ -869,11 +869,14 @@ def _bucket_order(conn, bucket: str) -> list[int]:
     return [r["id"] for r in rows]
 
 
-def move_todo(conn, tid: int, bucket: str) -> None:
-    """Move one item to the END of another list (a "Move to Soon" tap). The
-    target list's open items are numbered first, in the order they show, so
-    the moved item lands last instead of slotting in by its creation date."""
+def move_todo(conn, tid: int, bucket: str, title: str | None = None) -> None:
+    """Move one item to the END of another list (a "Move to Soon" tap),
+    renaming it too when `title` is given, in one transaction. The target
+    list's open items are numbered first, in the order they show, so the
+    moved item lands last instead of slotting in by its creation date."""
     with conn:
+        if title is not None:
+            conn.execute("UPDATE todos SET title = ? WHERE id = ?", (title, tid))
         order = [i for i in _bucket_order(conn, bucket) if i != tid] + [tid]
         for n, i in enumerate(order):
             conn.execute("UPDATE todos SET bucket = ?, sort = ? WHERE id = ?",
@@ -882,9 +885,13 @@ def move_todo(conn, tid: int, bucket: str) -> None:
 
 def place_todos(conn, bucket: str, ids: list[int]) -> None:
     """Put the given items into `bucket` in exactly this order (a drag and
-    drop). One transaction: a half-applied reorder would shuffle the list."""
+    drop), then number the list's other open items after them in the order
+    they showed, so an item the dragging device never saw (added elsewhere
+    meanwhile) can't tie with a new place. One transaction: a half-applied
+    reorder would shuffle the list."""
     with conn:
-        for n, i in enumerate(ids):
+        rest = [i for i in _bucket_order(conn, bucket) if i not in set(ids)]
+        for n, i in enumerate(list(ids) + rest):
             conn.execute("UPDATE todos SET bucket = ?, sort = ? WHERE id = ?",
                          (bucket, n, i))
 

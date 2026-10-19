@@ -1151,8 +1151,10 @@ function todosFullHtml() {
 /* Paint into the overlay host when it exists, else the phone tab section,
    clearing the other so #todo-add-input never exists twice in the DOM. */
 function renderTodosPaint() {
-  // never rebuild the board out from under a drag: paint once it drops
-  if (todoDrag.active) { todoDrag.repaint = true; return; }
+  // never rebuild the board under a press on a grip (a drag, or a press that
+  // may become one): its rows and grip must stay the ones it started on.
+  // It paints once the press ends.
+  if (todoDrag.id != null) { todoDrag.repaint = true; return; }
   const overlayHost = document.getElementById('todos-full');
   const pageHost = document.getElementById('todos-page');
   const host = overlayHost || pageHost;
@@ -1310,12 +1312,6 @@ const todoDrag = { id: null, pointerId: null, startX: 0, startY: 0, active: fals
   ghost: null, line: null, target: null, index: 0, scroller: null, lastX: 0, lastY: 0, raf: 0 };
 const TODO_DRAG_SLOP = 6;   // px a press may wander before it counts as a drag
 
-/* The open items' ids of one list, in the order shown. Pure on the cache. */
-function todoOpenIds(bucket) {
-  const d = todoState.data;
-  return ((d && d.buckets && d.buckets[bucket]) || []).filter((t) => !t.done_at).map((t) => t.id);
-}
-
 function scrollParentOf(el) {
   for (let n = el && el.parentElement; n; n = n.parentElement) {
     const oy = getComputedStyle(n).overflowY;
@@ -1325,9 +1321,12 @@ function scrollParentOf(el) {
 }
 
 /* Apply a move to the cached list (so the board shows it at once) and write
-   it. `order` is the target list's full open order. */
+   it. `order` is the target list's full open order. If the write fails the
+   cached list goes back to how it was and repaints at once: the refresh
+   after it can't be relied on to undo the move when the hub is down. */
 async function placeTodo(id, bucket, order) {
   const d = todoState.data;
+  const before = d && d.buckets ? JSON.parse(JSON.stringify(d.buckets)) : null;
   if (d && d.buckets) {
     let item = null;
     Object.keys(d.buckets).forEach((b) => {
@@ -1344,7 +1343,10 @@ async function placeTodo(id, bucket, order) {
   todoState.openId = null;
   renderTodosPaint();
   const r = await attemptTodo('/api/todo-order', 'POST', { bucket, ids: order });
-  if (!r.ok) showToast(todoFailMessage(r.error));
+  if (!r.ok) {
+    if (before && todoState.data === d) { d.buckets = before; renderTodosPaint(); }
+    showToast(todoFailMessage(r.error));
+  }
   await refreshTodos();
 }
 
@@ -1354,10 +1356,10 @@ function todoDragCleanup() {
   document.querySelectorAll('.todo-section.drop-target').forEach((el) => el.classList.remove('drop-target'));
   document.querySelectorAll('.todo-row-full.drag-src').forEach((el) => el.classList.remove('drag-src'));
   document.body.classList.remove('todo-dragging');
-  cancelAnimationFrame(todoDrag.raf);
+  if (todoDrag.raf) cancelAnimationFrame(todoDrag.raf);   // only a real drag started the loop
   const repaint = todoDrag.repaint;
   Object.assign(todoDrag, { id: null, pointerId: null, active: false, ghost: null, line: null,
-    target: null, scroller: null, raf: 0, grip: null, repaint: false });
+    target: null, targetEl: null, scroller: null, raf: 0, grip: null, repaint: false });
   if (repaint) renderTodosPaint();   // a refresh that landed mid-drag
 }
 
@@ -1377,6 +1379,7 @@ function todoDragTrack(x, y) {
     if (y < rc.top + rc.height / 2) { index = i; break; }
   }
   todoDrag.target = sec.dataset.bucket;
+  todoDrag.targetEl = sec;
   todoDrag.index = index;
   if (!todoDrag.line) {
     todoDrag.line = document.createElement('div');
@@ -1423,8 +1426,6 @@ function todoDragStart(grip) {
   ghost.style.width = `${rc.width}px`;
   ghost.style.left = `${rc.left}px`;
   ghost.style.top = `${rc.top}px`;
-  todoDrag.offX = todoDrag.startX - rc.left;
-  todoDrag.offY = todoDrag.startY - rc.top;
   document.body.appendChild(ghost);
   todoDrag.ghost = ghost;
   todoDrag.scroller = scrollParentOf(row);
@@ -1436,6 +1437,9 @@ function todoDragStart(grip) {
 function onTodoGripDown(e) {
   const grip = e.target && e.target.closest && e.target.closest('[data-todo-grip]');
   if (!grip || (e.button != null && e.button !== 0)) return;
+  // one press at a time: a second finger on another grip (the wall is a
+  // touch screen) would orphan the first drag's ghost and lose its drop
+  if (todoDrag.id != null) return;
   e.preventDefault();   // no text selection, no focus jump while dragging
   todoDrag.id = Number(grip.dataset.todoGrip);
   todoDrag.pointerId = e.pointerId;
@@ -1458,46 +1462,45 @@ function onTodoGripMove(e) {
 
 function onTodoGripUp(e) {
   if (todoDrag.id == null || e.pointerId !== todoDrag.pointerId) return;
-  const { id, active, target, index } = todoDrag;
+  const { id, active, target, targetEl, index } = todoDrag;
+  // The drop slot was counted on the rows ON SCREEN; read the list from
+  // them too. A poll that landed mid-drag changed the cache, not the
+  // (deferred) screen, so the cache could put the item one place off.
+  const onScreen = targetEl
+    ? Array.from(targetEl.querySelectorAll('.todo-row-full:not(.done)')).map((r) => Number(r.dataset.row))
+    : [];
   todoDragCleanup();
+  // the browser took the press (a scroll, a palm, a system gesture): that is
+  // neither a tap nor a drop, so nothing happens
+  if (e.type === 'pointercancel') { renderTodosPaint(); return; }
   if (!active) {
     // a tap on the grip: open the item's controls, same as tapping its name
     todoState.openId = todoState.openId === id ? null : id;
     renderTodosPaint();
     return;
   }
-  if (e.type === 'pointercancel' || !target) { renderTodosPaint(); return; }
-  const order = todoDropOrder(todoOpenIds(target), id, index);
-  const from = Object.keys((todoState.data && todoState.data.buckets) || {})
-    .find((b) => todoOpenIds(b).includes(id));
-  if (from === target && order.join() === todoOpenIds(target).join()) { renderTodosPaint(); return; }
+  if (!target) { renderTodosPaint(); return; }
+  const order = todoDropOrder(onScreen.filter((x) => x !== id), id, index);
+  if (order.join() === onScreen.join()) { renderTodosPaint(); return; }   // dropped where it was
   placeTodo(id, target, order);
 }
+
+const TODO_EDGE_SAYS = {
+  top: 'It’s already first in this list.', bottom: 'It’s already last in this list.',
+  first: 'Now is the first list.', last: 'Later is the last list.',
+};
 
 function onTodoGripKey(e) {
   const grip = e.target && e.target.closest && e.target.closest('[data-todo-grip]');
   if (!grip || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
   e.preventDefault();
   const id = Number(grip.dataset.todoGrip);
-  const keys = TODO_BUCKETS.map(([b]) => b);
-  const from = keys.find((b) => todoOpenIds(b).includes(id));
-  if (!from) return;
-  const ids = todoOpenIds(from);
-  const at = ids.indexOf(id);
-  let target = from;
-  let index = at;
-  if (e.key === 'ArrowUp') index = at - 1;
-  else if (e.key === 'ArrowDown') index = at + 1;
-  else {
-    const k = keys.indexOf(from) + (e.key === 'ArrowLeft' ? -1 : 1);
-    if (k < 0 || k >= keys.length) return;
-    target = keys[k];
-    index = todoOpenIds(target).length;
-  }
-  if (target === from && (index < 0 || index >= ids.length)) return;
-  placeTodo(id, target, todoDropOrder(todoOpenIds(target), id, index)).then(() => {
+  const move = todoKeyMove(todoState.data && todoState.data.buckets, id, e.key);
+  if (!move) return;
+  if (move.edge) { showToast(TODO_EDGE_SAYS[move.edge]); return; }
+  placeTodo(id, move.bucket, move.order).then(() => {
     const again = document.querySelector(`[data-todo-grip="${id}"]`);
-    if (again) again.focus();
+    if (again && again.focus) again.focus();
   });
 }
 
@@ -4006,9 +4009,9 @@ async function refreshChoresAfterEdit() {
    fails part way, the ones already saved are said out loud and the editor
    closes on a refreshed list rather than inviting a re-save that would
    duplicate them. */
-async function submitChore(url, method, body) {
+async function submitChore(url, method, body, form, people) {
   const bodies = Array.isArray(body) ? body : [body];
-  let saved = 0;
+  const savedFor = [];
   try {
     for (const b of bodies) {
       await j(url, {
@@ -4016,12 +4019,23 @@ async function submitChore(url, method, body) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(b),
       });
-      saved += 1;
+      savedFor.push(b.fixed_person_id);
     }
   } catch (e) {
     const why = e.message || 'Couldn’t save the chore. Check the hub and try again.';
-    if (saved === 0) { showToast(why); return; }
-    showToast(`Saved ${saved} of ${bodies.length}. ${why}`);
+    if (!savedFor.length) { showToast(why); return; }
+    // Some saved, some not: say who is missing, keep the editor open on just
+    // them (a second Save can't duplicate the saved ones), and refresh the
+    // chores page behind it so the saved ones show.
+    const nameOf = (id) => ((people || []).find((p) => p.id === id) || {}).name || 'someone';
+    const missing = bodies.map((b) => b.fixed_person_id).filter((id) => !savedFor.includes(id));
+    showToast(`Saved for ${listPhrase(savedFor.map(nameOf))}. Not saved for ${listPhrase(missing.map(nameOf))}: ${why}`);
+    if (form && form.keepOnlyEach) form.keepOnlyEach(missing);
+    choreAdminPeople = null;
+    choreAdminChores = null;
+    await poll();
+    if (openView === 'chores') renderChoresFull(hubData ? hubData.people : null);
+    return;
   }
   await refreshChoresAfterEdit();
 }
@@ -4067,9 +4081,13 @@ async function openChoreEditor(seed) {
     // "+ New chore" button carries no person, so nobody is picked yet
     model = { ...freshChoreModel(), fixed_person_id: seed.personId == null ? null : seed.personId };
     label = 'Add chore';
-    onsubmit = (body) => submitChore('/api/admin/chores', 'POST', body);
+    onsubmit = (body, form) => submitChore('/api/admin/chores', 'POST', body, form, state.people);
   }
-  buildChoreForm(host, model, label, onsubmit, state.people, {
+  // `form` is the built form's handle, set just below; submit only runs on a
+  // tap, long after it is assigned
+  let form = null;
+  const send = onsubmit;
+  form = buildChoreForm(host, model, label, (body) => send(body, form), state.people, {
     preview: previewChore,
     choreId: seed.mode === 'edit' ? seed.choreId : null,
     allowEach: seed.mode !== 'edit',
@@ -5989,7 +6007,7 @@ function ensureGlassPanes(root) {
   if (root.querySelectorAll) root.querySelectorAll(GLASS_SURFACES).forEach((el) => list.push(el));
   list.forEach((el) => {
     const first = el.firstElementChild;
-    if (first && first.classList.contains('glass-pane')) return;
+    if (first && first.className === 'glass-pane') return;   // has its pane already
     const pane = document.createElement('i');
     pane.className = 'glass-pane';
     pane.setAttribute('aria-hidden', 'true');
@@ -5998,6 +6016,8 @@ function ensureGlassPanes(root) {
 }
 
 function watchGlassPanes() {
+  // No observer, no panes: the surfaces keep the live blur (the still-glass
+  // rules only apply under .glass-panes), never bare text on the photo.
   if (typeof MutationObserver !== 'function' || !document.body) return;
   ensureGlassPanes(document.body);
   new MutationObserver((records) => {
@@ -6007,6 +6027,7 @@ function watchGlassPanes() {
       r.addedNodes.forEach((n) => ensureGlassPanes(n));
     });
   }).observe(document.body, { childList: true, subtree: true });
+  document.documentElement.classList.add('glass-panes');
 }
 
 watchGlassPanes();
