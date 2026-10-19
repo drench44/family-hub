@@ -2766,6 +2766,11 @@ body.integ-off-todos .todo-slot { display: none; }
 .preview-who { display: flex; align-items: center; gap: 6px; font-size: 15px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .preview-first { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .first-label { font-size: 14px; color: var(--dim); margin-right: 2px; }
+.turn-note { margin: 12px 0 0; font-size: 14px; color: var(--dim); }
+.turn-note.moved {
+  color: var(--ink); padding: 8px 10px; border-radius: 8px;
+  background: var(--surface); border-left: 3px solid var(--warn);
+}
 .remind > summary {
   cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px;
   font-size: 14px; color: var(--dim);

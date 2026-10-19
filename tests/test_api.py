@@ -6315,9 +6315,10 @@ def test_preview_with_keep_turn_shows_the_order_the_save_stores(client, app_mod)
     saved = client.patch(f"/api/admin/chores/{cid}", json={
         k: v for k, v in {**weekly, "keep_turn": True}.items() if k != "chore_id"}).json()
     assert saved["rotation_order"] == got["rotation_order"]
-    # without keep_turn the preview says who loses the turn: no `before`
+    # without keep_turn the order is left alone, and `before` still says who
+    # had it, so the form can name the turn changing hands
     plain = client.post("/api/admin/chores/preview", json=weekly).json()
-    assert plain["before"] is None and plain["rotation_order"] == [b, a]
+    assert plain["before"] == had and plain["rotation_order"] == [b, a]
     assert plain["upcoming"][0]["person_id"] != had
 
 

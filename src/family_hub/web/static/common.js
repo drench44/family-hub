@@ -910,6 +910,21 @@ function rotateOrderToStart(order, slot, idx) {
   return o.map((_, i) => o[(i + s) % n]);
 }
 
+/* What the form says when an edit touches who is up next. `kind` 'kept':
+   the edit changed the schedule and the server restarted the turns so the
+   same person keeps the next turn; 'moved': the next turn goes to someone
+   else. `when` is the first preview cell's label ('This week', 'Next week',
+   'Week of Oct 26', 'Today', 'Wed Oct 21'); `byWeek` says the turns go by
+   the week. Pure. */
+function turnNote(kind, from, to, when, byWeek) {
+  const w = String(when || '');
+  const span = !byWeek ? 'the next turn'
+    : /^Week of /.test(w) ? `the week of ${w.slice(8)}`
+      : w ? w[0].toLowerCase() + w.slice(1) : 'this week';
+  if (kind === 'kept') return `${from} keeps ${span}, same as before.`;
+  return `This moves ${span} from ${from} to ${to}.`;
+}
+
 /* The preview strip's cells from the server's upcoming days. A weekly
    rotation reads by WEEK ("This week · Ava", "Next week · Ruby"); anything
    else by day ("Today", "Tomorrow", "Wed Oct 21"). Pure; `today` is
@@ -1008,6 +1023,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       <div class="preview-head">Coming up</div>
       <div class="preview-cells f-cells"></div>
       <div class="preview-first f-first"></div>
+      <p class="turn-note f-turnnote hidden"></p>
     </div>
     <details class="remind f-remind"><summary>Phone reminders <span class="remind-count f-remindcount"></span></summary>
       <div class="time-add">
@@ -1032,6 +1048,11 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
   const personOf = (id) => people.find((x) => x.id === Number(id));
   if (model.times.length) $('.f-remind').open = true;   // already has times: show them
   let lastPreview = null;   // the server's {upcoming, slot} for the current draft
+  // Editing: whoever is up next keeps the turn through a schedule change
+  // (the server's keep_turn), until the person editing changes the turns
+  // themselves: adds, removes or moves someone, or picks who goes first.
+  let keepTurn = opts.choreId != null;
+  let turnKept = false;     // keep_turn has restarted the order in this edit
 
   const chip = (p, attr, on) => `<button class="person-chip${on ? ' selected' : ''}" type="button" ${attr}="${p.id}"`
     + ` aria-pressed="${on ? 'true' : 'false'}" style="--pc:${safeColor(p.color)}">`
@@ -1147,6 +1168,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       $('.f-cells').innerHTML = `<div class="hint">${escapeHtml(previewFailed)}</div>`;
       $('.f-first').innerHTML = '';
       $('.f-first').classList.add('hidden');
+      $('.f-turnnote').classList.add('hidden');
       box.classList.remove('hidden');
       return;
     }
@@ -1155,6 +1177,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       $('.f-cells').innerHTML = `<div class="hint">Not in the next ${Number(pv.days) || 120} days.</div>`;
       $('.f-first').innerHTML = '';
       $('.f-first').classList.add('hidden');
+      $('.f-turnnote').classList.add('hidden');
       box.classList.remove('hidden');
       return;
     }
@@ -1193,6 +1216,19 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       first.innerHTML = '';
       first.classList.add('hidden');
     }
+    // say it when an edit moves (or keeps) the next turn: the cells alone
+    // only show the new plan, not that it changed
+    const note = $('.f-turnnote');
+    const was = personOf(pv.before);
+    const now = personOf(cells[0] ? cells[0].person_id : null);
+    let say = '';
+    if (assign === 'rotation' && was && now && cells[0]) {
+      if (now.id !== was.id) say = turnNote('moved', was.name, now.name, cells[0].label, byWeek);
+      else if (turnKept && keepTurn) say = turnNote('kept', was.name, now.name, cells[0].label, byWeek);
+    }
+    note.textContent = say;
+    note.classList.toggle('hidden', !say);
+    note.classList.toggle('moved', !!say && now.id !== was.id);
     box.classList.remove('hidden');
   };
   const refreshPreview = () => {
@@ -1215,7 +1251,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
         || (model.repeat === 'once' && !parseISODate(f.date));
       if (incomplete) { lastPreview = null; previewFailed = false; paintPreview(); return; }
       const body = buildChorePayload({ ...f, person: model.fixed_person_id });
-      if (opts.choreId != null) body.chore_id = opts.choreId;
+      if (opts.choreId != null) { body.chore_id = opts.choreId; body.keep_turn = keepTurn; }
       let got = null;
       let failed = false;
       try { got = await opts.preview(body); } catch (e) {
@@ -1225,6 +1261,11 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
         console.warn('chore preview failed:', e && e.message);
       }
       if (seq !== previewSeq) return;   // a newer draft owns the strip
+      // keep_turn restarted the turns: show the order the save will store
+      const kept = got && keepTurn && model.assign === 'rotation' && Array.isArray(got.rotation_order)
+        && got.rotation_order.length === model.rot.length
+        && got.rotation_order.some((id, i) => id !== model.rot[i]);
+      if (kept) { model.rot = got.rotation_order.slice(); turnKept = true; paintRotation(); }
       lastPreview = got;
       previewFailed = failed;
       paintPreview();
@@ -1329,6 +1370,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     const b = e.target.closest('[data-add]');
     if (!b) return;
     model.rot.push(Number(b.dataset.add));
+    keepTurn = false;
     paintRotation();
     refreshPreview();
   };
@@ -1341,6 +1383,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       const j = b.dataset.up !== undefined ? i - 1 : i + 1;
       if (j >= 0 && j < model.rot.length) [model.rot[i], model.rot[j]] = [model.rot[j], model.rot[i]];
     }
+    keepTurn = false;
     paintRotation();
     refreshPreview();
   };
@@ -1355,6 +1398,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     const b = e.target.closest('[data-first]');
     if (!b || !lastPreview) return;
     model.rot = rotateOrderToStart(model.rot, lastPreview.slot, Number(b.dataset.first));
+    keepTurn = false;
     paintRotation();
     refreshPreview();
   };
@@ -1378,7 +1422,11 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       // one chore per person: each keeps their own check-off and streak
       return onsubmit(model.each.map((pid) => buildChorePayload({ ...f, assign: 'fixed', person: pid })), err);
     }
-    return onsubmit(buildChorePayload({ ...f, person: model.fixed_person_id }), err);
+    const body = buildChorePayload({ ...f, person: model.fixed_person_id });
+    // a save before the preview answered still keeps the turn: the server
+    // restarts the order itself
+    if (opts.choreId != null) body.keep_turn = keepTurn;
+    return onsubmit(body, err);
   });
   return {
     // "Each of them" saved for some people and not others: keep the form
