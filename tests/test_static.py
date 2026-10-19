@@ -47,7 +47,7 @@ UNSTYLED_OK = {"f-title", "f-icon", "f-repeat", "f-days", "f-assign",
                # .sub-field, .preset-row, .person-chips, .chore-preview,
                # .preview-cells, .preview-first, .remind, .chore-summary
                "f-emoji", "f-weekly", "f-presets", "f-each", "f-turns",
-               "f-rotevery", "f-preview", "f-cells", "f-first", "f-remind",
+               "f-rotevery", "f-preview", "f-cells", "f-first", "f-turnnote", "f-remind",
                "f-remindcount", "f-summary"}
 
 
