@@ -15,6 +15,31 @@ this one there just stacks under theirs — so it does **not** activate on touch
 `?kiosk=1` at least once. The flag is latched into `localStorage` (`oskKiosk=1`)
 so it survives every later navigation on that browser; `?kiosk=0` clears it.
 
+### The mouse pointer
+
+The latched flag also **hides the mouse pointer while people tap**. A wall is
+mostly touched, but it may have a mouse too (ours has a wireless one the family
+sometimes uses), so the pointer is not hidden for good:
+
+- It starts **visible** on every load, because the page can't know whether the
+  last input was a finger or the mouse.
+- **A tap hides it** (`body.kiosk-cursor-hidden`, which sets `cursor: none`
+  on the body and everything in it). A press counts as a tap when the browser
+  says it came from a finger or pen (`pointerType` `touch` or `pen`), or when
+  Firefox turned a touch into a mouse event (`mozInputSource` 5, or
+  `sourceCapabilities.firesTouchEvents`). A plain mouse click never hides it.
+- **Using the mouse brings it back**: a `mouse` pointer move with no button
+  held, at least 3px from where the last tap landed, or a turn of the wheel. A
+  finger dragging the page, the small motion some systems send right after a
+  tap, and Firefox's touch-made mouse events don't count.
+- If this wall's Firefox ever reports a finger as a plain mouse with none of
+  those markers, the pointer simply stays visible, the same as before this
+  feature.
+- Phones and laptops never latch the flag, so their pointer never changes.
+
+It can't hide the pointer inside embedded iframes (separate documents), such as
+a full-screen panel.
+
 ### Why an explicit flag, not touch detection
 
 The wall doesn't report touch to the browser at all. It's an HP all-in-one

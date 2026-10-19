@@ -2630,3 +2630,64 @@ def test_house_folder_check(tmp_path, case):
     else:
         with pytest.raises(AssertionError):
             _check_house_folder(h)
+
+
+def test_kiosk_hides_the_mouse_pointer_after_a_tap():
+    """The wall is a touchscreen with a wireless mouse. osk.js hides the pointer
+    after a tap and shows it again on a real mouse move, only once the kiosk flag
+    is latched (phones and laptops never latch it). The CSS rule is what actually
+    hides it, on the body and everything inside it."""
+    gate = OSK.index("if (!kiosk) return;")
+    assert OSK.index("kiosk-cursor-hidden") > gate, \
+        "only a latched kiosk may hide the pointer, never a phone or laptop"
+    assert "'pointerdown'" in OSK and "'pointermove'" in OSK
+    assert re.search(
+        r"body\.kiosk-cursor-hidden,\s*body\.kiosk-cursor-hidden \*\s*\{[^}]*cursor:\s*none\s*!important",
+        CSS), "the kiosk body and everything in it must hide the pointer"
+
+
+def _media_blocks(css, query):
+    """The bodies of every `@media <query> { ... }` block, matched by braces
+    (not a regex), so a nested rule can't end the block early."""
+    out, start = [], 0
+    head = f"@media {query}"
+    while (i := css.find(head, start)) != -1:
+        j = css.index("{", i) + 1
+        depth, k = 1, j
+        while depth:
+            depth += {"{": 1, "}": -1}.get(css[k], 0)
+            k += 1
+        out.append(css[j:k - 1])
+        start = k
+    return out
+
+
+def test_wall_refresh_spin_stands_still_for_reduced_motion():
+    """The refresh button turns its arrow while the hub syncs (up to 10 s).
+    Under reduced motion that spin must stop: some reduced-motion rule whose
+    selector list names it must set animation: none."""
+    sel = ".wall-refresh.is-syncing .wall-refresh-glyph"
+    assert re.search(re.escape(sel) + r"\s*\{[^}]*animation:\s*wall-refresh-spin", CSS), \
+        "the busy spin rule is missing"
+    rules = [m for block in _media_blocks(CSS, "(prefers-reduced-motion: reduce)")
+             for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", block)]
+    assert any(sel in [x.strip() for x in m.group(1).split(",")]
+               and re.search(r"animation:\s*none", m.group(2)) for m in rules), \
+        "the busy spin must be in a reduced-motion animation: none rule"
+
+
+def test_refresh_button_timeouts_nest():
+    """The hub's lock wait must end before the wall gives up on the sync, and
+    the wall must give up before j()'s own request timeout turns it into a
+    generic failure: SYNC_NOW_LOCK_WAIT_S < WALL_SYNC_WAIT_MS < J_TIMEOUT_MS."""
+    lock_s = float(re.search(r"^SYNC_NOW_LOCK_WAIT_S = ([\d.]+)", APP_PY, re.M).group(1))
+    wall_ms = int(re.search(r"const WALL_SYNC_WAIT_MS = (\d+);", HUB).group(1))
+    j_ms = int(re.search(r"const J_TIMEOUT_MS = (\d+);", COMMON).group(1))
+    assert lock_s < wall_ms / 1000 < j_ms / 1000, (lock_s, wall_ms, j_ms)
+
+
+def test_refresh_glyph_sits_inside_the_refresh_button():
+    """The arrow is its own <span> so it can spin; a tap on it targets the span,
+    so it must sit inside button#wall-refresh for closest() to find the button."""
+    assert re.search(r'<button[^>]*id="wall-refresh"[^>]*>\s*<span class="wall-refresh-glyph"[^>]*>[^<]*</span>\s*</button>',
+                     ALL_HTML)

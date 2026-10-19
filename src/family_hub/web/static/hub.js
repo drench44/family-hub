@@ -5608,14 +5608,66 @@ function closeThemePop() {
   if (gear) gear.setAttribute('aria-expanded', 'false');
 }
 
+// The ↻ button. Asks the hub to pull fresh calendars BEFORE the reload, so the
+// page that comes back shows current data instead of whatever the 5-minute
+// background sync last fetched. The reload happens whatever the sync does (a
+// slow Google, a down hub, an error answer): the button must never be dead.
+// Taps while it works are ignored, and the button shows it is working.
+const WALL_SYNC_WAIT_MS = 10000;   // under j()'s 12 s: never leave the wall hanging
+const WALL_RELOAD_STUCK_MS = 3000; // a reload that hasn't torn the page down by now went nowhere
+let wallRefreshing = false;
+// What the hub said about a refresh-button sync that did not fully succeed, in
+// words. "error" can be a partial failure (one calendar failed, the others
+// synced), so it must not read as "nothing ran".
+function wallSyncNote(r) {
+  const why = {
+    demo: 'skipped (demo mode)',
+    cooldown: 'skipped (the last one was under 15 s ago)',
+    busy: 'skipped (another sync was already running)',
+    error: 'ran with an error (one or more calendars may not have updated)',
+  }[r.reason] || `did not succeed (reason: ${r.reason})`;
+  return `refresh: calendar sync ${why}${r.needs_auth ? '; the Google sign-in has expired' : ''}:`;
+}
+async function refreshWall(btn) {
+  if (wallRefreshing) return;
+  wallRefreshing = true;
+  if (btn) { btn.classList.add('is-syncing'); btn.setAttribute('aria-busy', 'true'); }
+  let timer = null;
+  try {
+    const opts = { method: 'POST' };
+    if (typeof AbortController !== 'undefined') {
+      const ac = new AbortController();
+      timer = setTimeout(() => ac.abort(), WALL_SYNC_WAIT_MS);
+      opts.signal = ac.signal;
+    }
+    const r = await j('/api/calendar/sync', opts);
+    // The wall shows nothing about why; leave the reason where a person
+    // debugging a stale wall (remote inspector, kiosk console) can find it.
+    if (r && r.synced === false) console.warn(wallSyncNote(r), r);
+  } catch (e) {
+    console.warn('refresh: calendar sync failed; reloading anyway', e);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+  location.reload();
+  // A reload that goes nowhere (offline kiosk, a page restored from bfcache)
+  // would leave the button busy and dead. A real reload tears all this down.
+  setTimeout(() => {
+    wallRefreshing = false;
+    if (btn) { btn.classList.remove('is-syncing'); btn.setAttribute('aria-busy', 'false'); }
+  }, WALL_RELOAD_STUCK_MS);
+}
+
 // Separate delegated listener (the big one above owns the dashboard surfaces):
 // the gear popover, the Settings overlay's Display + Integrations controls
 // (same data-* attributes, generalized below to match either surface), and
 // the iCloud CalDAV panel's actions.
 document.addEventListener('click', (e) => {
   const pop = document.getElementById('theme-pop');
-  // Refresh button: reload the wall (picks up a new deploy, unsticks a stale page).
-  if (e.target.closest('#wall-refresh')) { location.reload(); return; }
+  // Refresh button: sync the calendars, then reload the wall (also picks up a
+  // new deploy and unsticks a stale page).
+  const refreshBtn = e.target.closest('#wall-refresh');
+  if (refreshBtn) { refreshWall(refreshBtn); return; }
   const gear = e.target.closest('#wall-gear');
   if (gear && pop) {
     const open = pop.classList.toggle('open');

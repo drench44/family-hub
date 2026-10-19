@@ -64,7 +64,9 @@ at one URL.
 - **Calendar:** next-5-days home feed, full-screen month grid + week agenda +
   day drill-in, tap-any-event detail cards, your own Google sidebar colors,
   multi-day events drawn as one bar across their span (Google-style), ended
-  events struck through.
+  events struck through. The wall's **↻** button pulls the calendars right
+  away (it waits up to 10 seconds) and then reloads the page, so a change made
+  a minute ago shows without waiting for the 5-minute sync.
 - **Chores:** per-person cards in each person's color, streaks (🔥), a 7-day
   week strip, deterministic rotations (a new person each time, or one person
   for the whole week and the next person next week), every-other-week and
@@ -139,7 +141,7 @@ frontend is dependency-free vanilla JS baked into the image.
 ```
 Wall / phones ─► http://<your-server>:8138/       family-hub (FastAPI + SQLite)
                           │ server-side sync/proxies
-                          ├─► Google Calendar API   (read-only, polled every 5 min)
+                          ├─► Google Calendar API   (read-only, polled every 5 min + on ↻)
                           ├─► any ICS/webcal feeds  (iCloud, school, holidays…)
                           ├─► iCloud CalDAV         (reminders + chore mirror, two-way, optional)
                           ├─► Home Assistant        (laundry, optional)
@@ -260,7 +262,8 @@ browser.
 a built-in on-screen keyboard (letters, symbols, and emoji). It's for the wall
 only — phones and laptops keep their own keyboard — so open the hub on the wall
 once with **`?kiosk=1`** to turn it on (the setting is then remembered;
-`?kiosk=0` clears it). See
+`?kiosk=0` clears it). The same setting hides the mouse pointer after a finger tap
+and brings it back when someone uses a mouse. See
 **[docs/on-screen-keyboard.md](docs/on-screen-keyboard.md)**.
 
 ## config.json reference
@@ -536,6 +539,10 @@ The JS layer runs via `tests/test_js.py`, which shells out to `node` (or a
 Docker `node:20-alpine` fallback). If neither is present it **skips** — a skip
 means the JS layer went unchecked, not that it passed, so install Node or Docker
 to exercise it.
+
+## Support
+
+If Family Hub is useful to you, you can sponsor it on GitHub: https://github.com/sponsors/drench44
 
 ## License
 
