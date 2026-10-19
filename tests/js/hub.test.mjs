@@ -1343,6 +1343,17 @@ test('rotateOrderToStart: keeps the cycle, moves its start', () => {
   assert.deepEqual(R([1, 2], null, 1), [1, 2], 'no preview slot: unchanged');
 });
 
+test('turnNote: says in plain words when an edit keeps or moves the next turn', () => {
+  const N = sandbox.turnNote;
+  assert.equal(N('moved', 'Ava', 'Ruby', 'This week', true), 'This moves this week from Ava to Ruby.');
+  assert.equal(N('moved', 'Ava', 'Ruby', 'Next week', true), 'This moves next week from Ava to Ruby.');
+  assert.equal(N('moved', 'Ava', 'Ruby', 'Week of Oct 26', true), 'This moves the week of Oct 26 from Ava to Ruby.');
+  assert.equal(N('kept', 'Ava', 'Ava', 'This week', true), 'Ava keeps this week, same as before.');
+  // turn by turn: the cell label is a day, the turn is "the next turn"
+  assert.equal(N('moved', 'Ava', 'Ruby', 'Today', false), 'This moves the next turn from Ava to Ruby.');
+  assert.equal(N('kept', 'Ava', 'Ava', 'Wed Oct 21', false), 'Ava keeps the next turn, same as before.');
+});
+
 test('chorePreviewCells: by week for a weekly rotation, by day otherwise', () => {
   const up = [];
   for (let i = 0; i < 20; i++) {
