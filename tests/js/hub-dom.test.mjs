@@ -10153,3 +10153,149 @@ test('to-do grip: a press whose end never came stops holding the board after a w
   assert.equal(b.read('todoDrag.id'), null, 'the stale press is over');
   assert.match(b.host.innerHTML, /fresh/, 'and the board repaints again');
 });
+
+// --- the wall's ↻ button syncs the calendars before it reloads ---
+
+function seedRefresh(document) {
+  const btn = document.createElement('button'); btn._id = 'wall-refresh'; document.body.appendChild(btn);
+  return btn;
+}
+const tapRefresh = (fire, btn) =>
+  fire('click', { target: { closest: (s) => (s === '#wall-refresh' ? btn : null) } });
+
+test('refresh button: asks the hub to sync, THEN reloads the page', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: opts && opts.method, reloadsSoFar: reloadCalls.length });
+    return { ok: true, status: 200, json: async () => ({ synced: true }) };
+  };
+  tapRefresh(fire, btn);
+  await settle();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/calendar/sync');
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].reloadsSoFar, 0, 'the sync was asked for before the page reloaded');
+  assert.equal(reloadCalls.length, 1, 'then the page reloaded');
+});
+
+test('refresh button: a failed sync still reloads the page', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.fetch = async () => { throw new Error('hub unreachable'); };
+  tapRefresh(fire, btn);
+  await settle();
+  assert.equal(reloadCalls.length, 1, 'the refresh button must never be dead');
+});
+
+test('refresh button: taps while a sync is in flight do not start another', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  let release;
+  let fetches = 0;
+  sandbox.fetch = () => { fetches++; return new Promise((res) => { release = () => res({ ok: true, status: 200, json: async () => ({}) }); }); };
+  tapRefresh(fire, btn);
+  tapRefresh(fire, btn);
+  tapRefresh(fire, btn);
+  await settle();
+  assert.equal(fetches, 1);
+  assert.ok(btn.classList.contains('is-syncing'), 'the button shows it is working');
+  release();
+  await settle();
+  assert.equal(reloadCalls.length, 1);
+});
+
+test('refresh button: a hub that never answers is cut off at 10 s and the page reloads anyway', async () => {
+  const { document, sandbox, fire, reloadCalls, timers } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.AbortController = AbortController;   // the vm sandbox has none by default
+  let seenSignal = null;
+  sandbox.fetch = (url, opts) => new Promise((_, reject) => {
+    seenSignal = opts.signal;
+    opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  tapRefresh(fire, btn);
+  await settle();
+  assert.ok(seenSignal, 'the sync request carries an abort signal');
+  assert.equal(reloadCalls.length, 0, 'still waiting on the hub');
+  const cutoff = timers.find((t) => !t.done && t.ms === 10000);
+  assert.ok(cutoff, 'a 10 s cutoff is armed');
+  cutoff.done = true; cutoff.fn();
+  await settle();
+  assert.equal(seenSignal.aborted, true);
+  assert.equal(reloadCalls.length, 1, 'the page reloaded without waiting for the hub');
+});
+
+test('refresh button: the cutoff timer is cleared once the sync answers', async () => {
+  const { document, sandbox, fire, timers } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.AbortController = AbortController;
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ synced: true }) });
+  tapRefresh(fire, btn);
+  await settle();
+  const cutoff = timers.find((t) => t.ms === 10000);
+  assert.ok(cutoff && cutoff.done, 'the 10 s cutoff was cleared, not left to fire after the reload');
+});
+
+test('refresh button: an error answer from the hub still reloads the page', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.fetch = async () => ({ ok: false, status: 500, json: async () => ({ detail: 'boom' }) });
+  tapRefresh(fire, btn);
+  await settle();
+  assert.equal(reloadCalls.length, 1);
+});
+
+test('refresh button: if the reload does not navigate, the button comes back to life', async () => {
+  const { document, sandbox, fire, reloadCalls, timers, runTimers } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ synced: true }) });
+  tapRefresh(fire, btn);
+  await settle();
+  assert.equal(reloadCalls.length, 1);
+  assert.ok(btn.classList.contains('is-syncing'), 'dimmed while the reload is under way');
+  runTimers((t) => t.ms === 3000);   // the page is still here: the reload went nowhere (offline, bfcache)
+  assert.ok(!btn.classList.contains('is-syncing'), 'no longer dimmed');
+  tapRefresh(fire, btn);
+  await settle();
+  assert.equal(reloadCalls.length, 2, 'a second tap works');
+});
+
+test('refresh button: a sync that did not run leaves its reason in the console, then reloads', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  const warned = [];
+  sandbox.console = { ...console, warn: (...a) => warned.push(a) };
+  sandbox.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ synced: false, reason: 'error', needs_auth: true }) });
+  tapRefresh(fire, btn);
+  await settle();
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0][1].reason, 'error');
+  assert.equal(warned[0][1].needs_auth, true);
+  assert.equal(reloadCalls.length, 1);
+});
+
+test('refresh button: says it is busy while it works, and taps during the 10 s wait start nothing new', async () => {
+  const { document, sandbox, fire, reloadCalls, timers } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.AbortController = AbortController;
+  const busy = [];
+  btn.setAttribute = (k, v) => { if (k === 'aria-busy') busy.push(v); };
+  let fetches = 0;
+  sandbox.fetch = (url, opts) => new Promise((_, reject) => {
+    fetches++;
+    opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  tapRefresh(fire, btn);
+  await settle();
+  assert.deepEqual(busy, ['true']);
+  tapRefresh(fire, btn);   // a second tap while the hub is still syncing
+  await settle();
+  assert.equal(fetches, 1, 'the second tap was ignored');
+  const cutoff = timers.find((t) => !t.done && t.ms === 10000);
+  cutoff.done = true; cutoff.fn();
+  await settle();
+  assert.equal(reloadCalls.length, 1, 'one reload, not two');
+});

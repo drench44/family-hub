@@ -2644,3 +2644,18 @@ def test_kiosk_hides_the_mouse_pointer_after_a_tap():
     assert re.search(
         r"body\.kiosk-cursor-hidden,\s*body\.kiosk-cursor-hidden \*\s*\{[^}]*cursor:\s*none\s*!important",
         CSS), "the kiosk body and everything in it must hide the pointer"
+
+
+def test_wall_refresh_syncs_then_reloads_and_its_spin_respects_reduced_motion():
+    """The wall's refresh button asks the hub to sync before it reloads, waits
+    a bounded time, and shows it is working with a turning glyph that must
+    stand still for reduced motion."""
+    assert "refreshWall(refreshBtn)" in HUB
+    assert "'/api/calendar/sync'" in HUB
+    assert re.search(r"const WALL_SYNC_WAIT_MS = 10000;", HUB)
+    assert 'class="wall-refresh-glyph"' in ALL_HTML
+    assert re.search(r"\.wall-refresh\.is-syncing \.wall-refresh-glyph \{[^}]*animation:\s*wall-refresh-spin", CSS)
+    rm = CSS[CSS.index("/* ==================== reduced motion"):]
+    rm = rm[:rm.index("animation: none;")]
+    assert ".wall-refresh.is-syncing .wall-refresh-glyph" in rm, \
+        "the busy spin must be in the reduced-motion roster"
