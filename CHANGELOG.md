@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-10-19
+
 ### Added
 - Chores can take turns a week at a time: one person has the chore every
   day it comes up this week, the next person has all of next week, and so
