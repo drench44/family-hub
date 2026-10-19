@@ -405,7 +405,7 @@ def test_demo_laundry_tile_is_canned_and_live_shaped(demo_client):
 
 
 def test_demo_fleet_tile_is_canned_and_live_shaped(demo_client):
-    """DEMO serves a canned fleet rollup with no fleet-dashboard hit: a fully
+    """DEMO serves a canned fleet rollup with no fleet console hit: a fully
     healthy fleet plus a printer mid-print (42%%), both signature card states
     for a screenshot. The integration is also forced available so the wall
     card and settings row show even though no ``fleet`` config block exists."""

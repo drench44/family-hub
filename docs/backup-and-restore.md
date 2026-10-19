@@ -19,7 +19,7 @@ place, then promotes it into four tiers and prunes each:
 | monthly | 1×/month     | 12   | ~1 year       |
 
 Layout under `FH_OUT` (default `/srv/backup/family-hub`, already an encrypted
-gocryptfs vault on the garage box):
+gocryptfs vault on the homelab server):
 
 ```
 /srv/backup/family-hub/{hourly,daily,weekly,monthly}/hub-<stamp>.db
