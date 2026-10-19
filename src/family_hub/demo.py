@@ -127,6 +127,14 @@ def seed_demo(conn, today: dt.date) -> None:
     ruby_trash = _add_daily_fixed(conn, "Trash out", "🗑️", ruby, epoch)
     ruby_plants = _add_daily_fixed(conn, "Water plants", "🌱", ruby, epoch)
 
+    # Ava and Ruby take turns on the dishes a WEEK at a time (rotate_every
+    # 'week'): one of them has every day of this week, the other all of next
+    # week. Always finished in the history below, so it never moves a streak.
+    dishes = fdb.add_chore(conn, title="Dishes", icon="🍽️", schedule_kind="daily",
+                           days_mask=0, assign_kind="rotation", fixed_person_id=None,
+                           rotation_order=[ava, ruby], rotation_epoch=epoch,
+                           rotate_every="week")
+
     people = fdb.list_people(conn)
     chores = fdb.list_chores(conn)
 
@@ -190,7 +198,7 @@ def seed_demo(conn, today: dt.date) -> None:
             # uncompleted covering row would otherwise turn one of Ava's
             # already-scripted "fully done" streak days into "partial".
             if r["person_id"] == milo or r["chore_id"] in done \
-                    or r["covering_for"] is not None:
+                    or r["chore_id"] == dishes or r["covering_for"] is not None:
                 fdb.set_completion(conn, r["chore_id"], d.isoformat(), r["person_id"])
 
     # Today's completions: three of Ava's four, and Ruby's plants (today's

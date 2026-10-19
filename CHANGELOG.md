@@ -10,6 +10,40 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-10-19
+
+### Added
+- Chores can take turns a week at a time: one person has the chore every
+  day it comes up this week, the next person has all of next week, and so
+  on (pick "Take turns", then "Switch to the next person: Every week").
+  The chore's row says whose week it is ("↻ Ruby's week").
+- The chores page's Edit button now reads "Edit chores".
+- The chore form asks plain questions ("How often?", "Who does it?"),
+  shows people as colored name buttons, offers quick emoji and day presets
+  (Weekdays, Weekends), and shows who does the chore on the next few days
+  (or weeks) before you save, with a one-tap "who has this week". "Each of
+  them" makes the same chore for several people at once.
+- Chores edit mode lists every chore with what it is in plain words, so a
+  chore that is not on today can still be found and edited, and has a
+  "+ New chore" button at the top.
+- To-dos: drag an item by its handle to another list or another place in
+  its list (touch, mouse, or the arrow keys). Tap an item to rename it,
+  move it to Now, Soon or Later, or delete it. A moved item lands at the
+  end of its new list.
+
+### Fixed
+- Scrolling the main page with a seasonal look on was slow on the wall
+  (about 20 frames a second with Halloween on). The frosted glass on the
+  cards no longer redraws on every scroll frame; it scrolls at a smooth 60.
+- A to-do move that can't be saved puts the item straight back and says
+  so, a second finger can't break a drag on the wall, and a to-do name that
+  is too long says why instead of "tap again".
+- The chore preview reads a one-time chore's date directly, so a date far
+  in the future can't tie the hub up.
+- The chore form's "Coming up" strip says why when the hub refuses the
+  chore (a past date, say) instead of promising the save will work, and a
+  stuck press on a to-do handle can no longer freeze the list.
+
 ## [1.12.0] — 2026-10-14
 
 ### Added

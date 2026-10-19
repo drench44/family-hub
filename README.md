@@ -66,14 +66,18 @@ at one URL.
   multi-day events drawn as one bar across their span (Google-style), ended
   events struck through.
 - **Chores:** per-person cards in each person's color, streaks (🔥), a 7-day
-  week strip, deterministic rotations, one-time chores due on a single date, a
+  week strip, deterministic rotations (a new person each time, or one person
+  for the whole week and the next person next week), every-other-week and
+  every-few-days schedules, one-time chores due on a single date, a
   browsable day history, an away/pause mode so a trip never breaks a streak,
   and a one-shot confetti celebration when someone clears their day.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
   carry over until done, a checked item stays struck-through for five minutes
   (tap it again to undo) and then moves to a 30-day "recently done" list that
-  can restore it.
+  can restore it. In the full list, drag an item by its handle to another
+  list or another place in its list (touch, mouse or arrow keys), or tap it
+  to rename it, move it or delete it.
 - **Weather & climate:** a glanceable weather card (temperature, a 24h
   temperature curve, UV index, air quality, humidity, dew point, and a 5-day
   high/low strip) and a per-room indoor climate card (temp + humidity, with a
@@ -117,12 +121,15 @@ at one URL.
   Laundry on the wall and the Weather tab on the phone (no tab of its own).
   Tap **⛶ Console** to open the full dashboard full-screen, when configured.
   Fails soft like weather/climate; off entirely with no `fleet` config block.
-- **Manage:** tap **Edit** on the wall's Chores page to add/edit chores and
-  people (rename, recolor, deactivate, or delete) right on the touchscreen —
+- **Manage:** tap **Edit chores** on the wall's Chores page to add/edit chores
+  and people (rename, recolor, deactivate, or delete) right on the touchscreen,
   no phone needed. Mark someone **away** here too, with an optional backup to
   cover their chores, and tap **I'm back** when they return. The same page works
   from any browser on the LAN, so a phone or laptop manages everything too. No
-  app to install.
+  app to install. The chore form asks plain questions ("How often?", "Who
+  does it?"), shows who does the chore on the next few days before you save,
+  and can add the same chore for several people at once; the page lists
+  every chore, including the ones not on today.
 
 ## Architecture & trust model
 
@@ -170,7 +177,7 @@ docker compose up -d --build web       # just the hub; cameras come later
 curl -s http://<your-server>:8138/health   # {"status":"ok"}
 ```
 
-Open the wall at `http://<your-server>:8138/`, tap **Edit** on the Chores card,
+Open the wall at `http://<your-server>:8138/`, open **All chores**, tap **Edit chores**,
 and add your people and chores — the wall comes alive. Everything below is
 optional and independent — add the pieces you have.
 
@@ -423,6 +430,10 @@ chore due on a single date, then gone from the wall) and an assignment
 (`fixed` to one person, or a `rotation`: an ordered list of people, repeats
 allowed, assigned deterministically — `rotation_order[n mod len]` over the
 chore's occurrence count, so there is no stored "whose turn" state to drift).
+A rotation's `rotate_every` is `turn` (the default: the next person each time
+the chore comes up) or `week` (n counts Monday-started weeks instead, so one
+person has every occurrence of the week and the next person all of the next
+week; on an every-other-week schedule it counts the weeks the chore runs).
 A one-time chore is always one person on that date.
 Rotations skip deactivated people — their turns fall to the remaining members.
 Completion is one tap; past days are read-only. **History is frozen:** each
@@ -441,7 +452,7 @@ the credit). Away is a pure overlay on top of the frozen history — it never
 rewrites a recorded day, so clearing an away period restores exactly what was
 there, and you can even back-date one to repair a streak after the fact.
 People and chores are managed
-right on the wall's Chores page (tap **Edit**) — on the touchscreen or from any
+right on the wall's Chores page (tap **Edit chores**), on the touchscreen or from any
 browser on the LAN. Deleting
 a person is history-safe: their frozen past days stay recorded, and they're
 stripped from every chore's rotation or fixed assignment; **Deactivate** is the

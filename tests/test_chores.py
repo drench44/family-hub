@@ -605,3 +605,132 @@ def test_a_person_with_two_slots_covers_from_the_right_slot():
             assert (row["person_id"], row["covering_for"]) == (2, 5), d
             seen.add(2)
     assert seen == {0, 2}
+
+
+# --- rotate_every='week': one person all week, the next person next week ----
+# (owner, 2026-10-18: "person a has a chore all this week, person b has it all
+# next week, then back to a and repeat")
+
+def _weekly_rot(cid, order, **kw):
+    d = _rot(cid, order)
+    d.update(rotate_every="week", rotation_epoch="2026-08-05")   # a Wednesday
+    d.update(kw)
+    return d
+
+
+def _who(chore, people, d, overlay=None):
+    rows = ch.plan_rows([chore], people, d, overlay)
+    return rows[0]["person_id"] if rows else None
+
+
+def test_weekly_rotation_keeps_one_person_all_week():
+    people = [P(1, "A"), P(2, "B")]
+    chore = _weekly_rot(5, [1, 2])
+    # the epoch's own week (Mon 8/03 .. Sun 8/09, from the Wednesday it was made)
+    for day in range(5, 10):
+        assert _who(chore, people, dt.date(2026, 8, day)) == 1
+    # the next Monday the turn passes, and B has every day of that week
+    for day in range(10, 17):
+        assert _who(chore, people, dt.date(2026, 8, day)) == 2
+    # and back to A, and so on
+    assert _who(chore, people, dt.date(2026, 8, 17)) == 1
+    assert _who(chore, people, dt.date(2026, 8, 23)) == 1     # Sunday, same week
+    assert _who(chore, people, dt.date(2026, 8, 24)) == 2     # Monday, next week
+
+
+def test_weekly_rotation_turns_over_on_monday_not_sunday():
+    chore = _weekly_rot(5, [1, 2])
+    sun, mon = dt.date(2026, 8, 9), dt.date(2026, 8, 10)
+    assert ch.turn_slot(chore, sun) == 0
+    assert ch.turn_slot(chore, mon) == 1
+
+
+def test_weekly_rotation_three_people_and_repeats():
+    people = [P(1), P(2), P(3)]
+    chore = _weekly_rot(5, [1, 2, 3])
+    # one day in each week, from the epoch's Wednesday on
+    weeks = [dt.date(2026, 8, 5) + dt.timedelta(weeks=k) for k in range(7)]
+    assert [_who(chore, people, m) for m in weeks] == [1, 2, 3, 1, 2, 3, 1]
+    # a person listed twice gets two weeks in the cycle
+    twice = _weekly_rot(6, [1, 1, 2])
+    assert [_who(twice, people, m) for m in weeks[:4]] == [1, 1, 2, 1]
+
+
+def test_weekly_rotation_on_chosen_days_only_counts_weeks():
+    """Mon+Thu only: the person is the same on both days of a week, whatever
+    the number of occurrences, and the next week passes the turn."""
+    people = [P(1), P(2)]
+    chore = _weekly_rot(5, [1, 2], schedule_kind="days", days_mask=0b0001001)
+    assert _who(chore, people, dt.date(2026, 8, 6)) == 1      # Thu, week 0
+    assert _who(chore, people, dt.date(2026, 8, 10)) == 2     # Mon, week 1
+    assert _who(chore, people, dt.date(2026, 8, 13)) == 2     # Thu, week 1
+    assert _who(chore, people, dt.date(2026, 8, 11)) is None  # Tue: not a chore day
+
+
+def test_weekly_rotation_on_an_every_other_week_schedule_still_alternates():
+    """Every other week + switching weekly: the turn passes once per week the
+    chore actually happens, so two people alternate instead of one person
+    landing on every on-cycle week."""
+    people = [P(1), P(2)]
+    chore = _weekly_rot(5, [1, 2], schedule_kind="days", days_mask=0b0000001,
+                        week_interval=2)
+    # epoch week (Aug 3) is on-cycle but its Monday predates the Wednesday
+    # epoch; the next on-cycle Mondays are Aug 17, Aug 31, Sep 14, Sep 28
+    on_cycle = [dt.date(2026, 8, 17) + dt.timedelta(weeks=2 * k) for k in range(4)]
+    assert [_who(chore, people, m) for m in on_cycle] == [2, 1, 2, 1]
+    assert _who(chore, people, dt.date(2026, 8, 10)) is None   # off week
+
+
+def test_weekly_rotation_away_person_is_covered_only_on_their_own_days():
+    people = [P(1), P(2), P(3)]
+    chore = _weekly_rot(5, [1, 2, 3])
+    week1 = [dt.date(2026, 8, 10) + dt.timedelta(days=k) for k in range(7)]   # B's week
+    away = {"ids": {2}, "backup": {}}
+    # B is away on Tuesday only: the next person home covers that one day
+    rows = ch.plan_rows([chore], people, week1[1], away)
+    assert rows[0]["person_id"] == 3 and rows[0]["covering_for"] == 2
+    # the rest of B's week is still B's, and the week after is still C's
+    assert _who(chore, people, week1[2]) == 2
+    assert _who(chore, people, dt.date(2026, 8, 17)) == 3
+
+
+def test_weekly_rotation_skips_an_inactive_person():
+    people = [P(1), P(3)]          # person 2 has left the household
+    chore = _weekly_rot(5, [1, 2, 3])
+    # the turns fall among the people still active: week 0 -> 1, week 1 -> 3
+    assert _who(chore, people, dt.date(2026, 8, 5)) == 1
+    assert _who(chore, people, dt.date(2026, 8, 10)) == 3
+
+
+def test_turn_rotation_default_is_unchanged():
+    """No rotate_every (every row before the column existed) and 'turn' both
+    pass the turn on every occurrence, exactly as before."""
+    people = [P(1), P(2)]
+    legacy = _rot(5, [1, 2])
+    explicit = {**_rot(5, [1, 2]), "rotate_every": "turn"}
+    days = [dt.date(2026, 1, 1) + dt.timedelta(days=k) for k in range(6)]
+    assert [_who(legacy, people, d) for d in days] == [1, 2, 1, 2, 1, 2]
+    assert [_who(explicit, people, d) for d in days] == [1, 2, 1, 2, 1, 2]
+
+
+def test_weekly_rotation_rows_say_so_for_the_card():
+    """plan_rows freezes rot=2 for a weekly rotation (1 for per-turn, 0 for
+    one person), and day_plan hands the card rot_week so it can say whose
+    week it is."""
+    people = [P(1), P(2)]
+    rows = ch.plan_rows([_weekly_rot(5, [1, 2]), _rot(6, [1, 2]), _fixed(7, 1)],
+                        people, dt.date(2026, 8, 6))
+    assert {r["chore_id"]: r["rot"] for r in rows} == {5: 2, 6: 1, 7: 0}
+    plan = ch.day_plan(rows, people, set())
+    flags = {c["id"]: (c["rot"], c["rot_week"]) for p in plan for c in p["chores"]}
+    assert flags == {5: (True, True), 6: (True, False), 7: (False, False)}
+
+
+
+def test_weekly_rotation_on_an_every_few_days_chore_counts_calendar_weeks():
+    """Every 2 days, switching weekly: the turn passes on Monday whatever day
+    the chore lands on (week_interval only means something for 'days')."""
+    chore = _weekly_rot(5, [1, 2], schedule_kind="interval", interval_days=2, week_interval=2)
+    assert ch.turn_slot(chore, dt.date(2026, 8, 9)) == 0     # Sunday of the epoch's week
+    assert ch.turn_slot(chore, dt.date(2026, 8, 11)) == 1    # Tuesday, next week
+    assert ch.turn_slot(chore, dt.date(2026, 8, 17)) == 2

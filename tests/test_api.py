@@ -5974,3 +5974,276 @@ def test_hub_reads_integration_availability_once_per_request(client, app_mod,
     calls.clear()
     assert client.get("/api/hub").status_code == 200
     assert len(calls) == 1
+
+
+# --- to-dos: move to another list, drag order (2026-10-19 UX pass) ---------
+
+def test_todos_patch_bucket_moves_to_the_end_of_that_list(client):
+    a = client.post("/api/todos", json={"title": "a", "bucket": "soon"}).json()["id"]
+    b = client.post("/api/todos", json={"title": "b", "bucket": "soon"}).json()["id"]
+    x = client.post("/api/todos", json={"title": "x", "bucket": "now"}).json()["id"]
+    assert client.patch(f"/api/todos/{x}", json={"bucket": "soon"}).json()["bucket"] == "soon"
+    soon = client.get("/api/todos").json()["buckets"]["soon"]
+    assert [t["id"] for t in soon] == [a, b, x]
+    # renaming without a move keeps its place
+    client.patch(f"/api/todos/{a}", json={"title": "a2"})
+    soon = client.get("/api/todos").json()["buckets"]["soon"]
+    assert [t["title"] for t in soon] == ["a2", "b", "x"]
+
+
+def test_todo_order_drag_and_drop(client):
+    a = client.post("/api/todos", json={"title": "a"}).json()["id"]
+    b = client.post("/api/todos", json={"title": "b"}).json()["id"]
+    c = client.post("/api/todos", json={"title": "c", "bucket": "later"}).json()["id"]
+    r = client.post("/api/todo-order", json={"bucket": "now", "ids": [c, b, a]})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    data = client.get("/api/todos").json()["buckets"]
+    assert [t["id"] for t in data["now"]] == [c, b, a]
+    assert data["later"] == []
+    # the wall's card reads the same order
+    assert [t["id"] for t in client.get("/api/hub").json()["todos"]["now"]] == [c, b, a]
+
+
+def test_todo_order_rejects_bad_input_without_moving_anything(client):
+    a = client.post("/api/todos", json={"title": "a"}).json()["id"]
+    b = client.post("/api/todos", json={"title": "b"}).json()["id"]
+    assert client.post("/api/todo-order", json={"bucket": "someday", "ids": [a]}).status_code == 422
+    assert client.post("/api/todo-order", json={"bucket": "soon", "ids": []}).status_code == 422
+    assert client.post("/api/todo-order", json={"bucket": "soon", "ids": [a, a]}).status_code == 422
+    assert client.post("/api/todo-order", json={"bucket": "soon", "ids": [a, 999]}).status_code == 404
+    now = client.get("/api/todos").json()["buckets"]["now"]
+    assert [t["id"] for t in now] == [a, b]
+
+
+# --- chores: take turns weekly + the form's live preview (2026-10-19) -------
+
+def _rot_chore(client, order, **kw):
+    body = {"title": "Dishes", "schedule_kind": "daily", "assign_kind": "rotation",
+            "rotation_order": order, "rotate_every": "week"}
+    body.update(kw)
+    return client.post("/api/admin/chores", json=body)
+
+
+def test_chore_rotate_every_week_round_trip_and_validation(client, app_mod):
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    r = _rot_chore(client, [a, b])
+    assert r.status_code == 200 and r.json()["rotate_every"] == "week"
+    cid = r.json()["id"]
+    # default is the old per-turn behavior
+    r2 = _rot_chore(client, [a, b], rotate_every="turn")
+    assert r2.json()["rotate_every"] == "turn"
+    plain = client.post("/api/admin/chores", json={
+        "title": "x", "schedule_kind": "daily", "assign_kind": "rotation",
+        "rotation_order": [a, b]}).json()
+    assert plain["rotate_every"] == "turn"
+    assert _rot_chore(client, [a, b], rotate_every="month").status_code == 422
+    assert client.patch(f"/api/admin/chores/{cid}", json={"rotate_every": None}).status_code == 422
+    # switching to one person drops the weekly switching with the rotation
+    r = client.patch(f"/api/admin/chores/{cid}",
+                     json={"assign_kind": "fixed", "fixed_person_id": a})
+    assert r.json()["rotate_every"] == "turn" and r.json()["rotation_order"] == []
+    # and a one-person chore never stores 'week'
+    r = client.post("/api/admin/chores", json={
+        "title": "y", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": a, "rotate_every": "week"})
+    assert r.json()["rotate_every"] == "turn"
+
+
+def test_weekly_rotation_on_the_wall_keeps_one_person_all_week(client, app_mod):
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid = _rot_chore(client, [a, b]).json()["id"]
+    today = _today()
+    monday = today - dt.timedelta(days=today.weekday())
+
+    def owner(d):
+        people = client.get(f"/api/chores/day?date={d.isoformat()}").json()["people"]
+        return [p["person"]["id"] for p in people
+                if any(ch["id"] == cid for ch in p["chores"])]
+
+    # every remaining day of this week is Ava's, all of next week is Ben's
+    for k in range(today.weekday(), 7):
+        assert owner(monday + dt.timedelta(days=k)) == [a]
+    for k in range(7, 14):
+        assert owner(monday + dt.timedelta(days=k)) == [b]
+
+
+def test_chore_preview_matches_the_wall(client, app_mod):
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    draft = {"schedule_kind": "daily", "assign_kind": "rotation",
+             "rotation_order": [a, b], "rotate_every": "week"}
+    r = client.post("/api/admin/chores/preview", json=draft)
+    assert r.status_code == 200
+    got = r.json()
+    today = _today()
+    assert got["slot"] == 0                       # a new chore starts with the first person
+    assert got["upcoming"][0] == {"date": today.isoformat(), "person_id": a}
+    assert len(got["upcoming"]) == 31        # four weeks and change of a daily chore
+    # the preview says exactly what the saved chore then does
+    cid = client.post("/api/admin/chores", json={**draft, "title": "Dishes"}).json()["id"]
+    for row in got["upcoming"]:
+        people = client.get(f"/api/chores/day?date={row['date']}").json()["people"]
+        owners = [p["person"]["id"] for p in people
+                  if any(ch["id"] == cid for ch in p["chores"])]
+        assert owners == [row["person_id"]]
+
+
+def test_chore_preview_editing_keeps_the_chores_own_anchor(client, app_mod):
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid = _rot_chore(client, [a, b], rotate_every="turn").json()["id"]
+    c = app_mod._db()
+    old = (_today() - dt.timedelta(days=1)).isoformat()   # made yesterday: Ava had it
+    c.execute("UPDATE chores SET rotation_epoch = ? WHERE id = ?", (old, cid))
+    c.commit()
+    draft = {"schedule_kind": "daily", "assign_kind": "rotation",
+             "rotation_order": [a, b], "rotate_every": "turn"}
+    fresh = client.post("/api/admin/chores/preview", json=draft).json()
+    kept = client.post("/api/admin/chores/preview", json={**draft, "chore_id": cid}).json()
+    assert fresh["upcoming"][0]["person_id"] == a and fresh["slot"] == 0
+    assert kept["upcoming"][0]["person_id"] == b and kept["slot"] == 1
+
+
+def test_chore_preview_rejects_what_a_save_would(client, app_mod):
+    a = _mk_person(client, "Ava")
+    bad = {"schedule_kind": "days", "days_mask": 0, "assign_kind": "fixed",
+           "fixed_person_id": a}
+    assert client.post("/api/admin/chores/preview", json=bad).status_code == 422
+    one = {"schedule_kind": "once", "date": _today().isoformat(),
+           "assign_kind": "fixed", "fixed_person_id": a}
+    got = client.post("/api/admin/chores/preview", json=one).json()
+    assert got == {"upcoming": [{"date": _today().isoformat(), "person_id": a}], "slot": None,
+                   "days": 120}
+    assert client.post("/api/admin/chores/preview",
+                       json={**one, "chore_id": 999}).status_code == 404
+
+
+
+def _deactivate(client, pid):
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": 0}).status_code == 200
+
+
+def test_chore_preview_gives_no_slot_when_someone_in_the_order_is_inactive(client, app_mod):
+    """The wall turns over the ACTIVE people only; a slot into the stored
+    order would name the wrong person, so the preview gives none."""
+    a, b, c = _mk_person(client, "Ava"), _mk_person(client, "Ben"), _mk_person(client, "Cy")
+    _deactivate(client, b)
+    got = client.post("/api/admin/chores/preview", json={
+        "schedule_kind": "daily", "assign_kind": "rotation", "rotation_order": [a, b, c],
+        "rotate_every": "week"}).json()
+    assert got["slot"] is None
+    assert {u["person_id"] for u in got["upcoming"]} <= {a, c}, "the inactive person never comes up"
+
+
+def test_chore_preview_looks_far_enough_for_a_rare_chore(client, app_mod):
+    a = _mk_person(client, "Ava")
+    got = client.post("/api/admin/chores/preview", json={
+        "schedule_kind": "interval", "interval_days": 200, "assign_kind": "fixed",
+        "fixed_person_id": a}).json()
+    assert len(got["upcoming"]) == 3 and got["days"] == 401   # today, +200, +400
+    far = (_today() + dt.timedelta(days=300)).isoformat()
+    got = client.post("/api/admin/chores/preview", json={
+        "schedule_kind": "once", "date": far, "assign_kind": "fixed", "fixed_person_id": a}).json()
+    assert got["upcoming"] == [{"date": far, "person_id": a}]
+
+
+def test_chore_preview_editing_reanchors_like_the_patch_does(client, app_mod):
+    """Editing previews exactly what the PATCH would do: a recurring chore
+    keeps its own start (turn or week), and once <-> recurring starts over
+    from today (or the new date), as admin_patch_chore re-anchors."""
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid = _rot_chore(client, [a, b]).json()["id"]          # weekly rotation
+    c = app_mod._db()
+    old = (_today() - dt.timedelta(days=7)).isoformat()    # last week was Ava's
+    c.execute("UPDATE chores SET rotation_epoch = ? WHERE id = ?", (old, cid))
+    c.commit()
+    draft = {"schedule_kind": "daily", "assign_kind": "rotation",
+             "rotation_order": [a, b], "rotate_every": "week", "chore_id": cid}
+    assert client.post("/api/admin/chores/preview", json=draft).json()["upcoming"][0]["person_id"] == b
+    # a one-time chore turned recurring starts over from today
+    once = client.post("/api/admin/chores", json={
+        "title": "x", "schedule_kind": "once", "date": (_today() + dt.timedelta(days=3)).isoformat(),
+        "assign_kind": "fixed", "fixed_person_id": a}).json()["id"]
+    got = client.post("/api/admin/chores/preview", json={
+        "schedule_kind": "daily", "assign_kind": "fixed", "fixed_person_id": a, "chore_id": once}).json()
+    assert got["upcoming"][0]["date"] == _today().isoformat()
+    # and a recurring chore turned one-time lands on its new date
+    day = (_today() + dt.timedelta(days=5)).isoformat()
+    got = client.post("/api/admin/chores/preview", json={
+        "schedule_kind": "once", "date": day, "assign_kind": "fixed", "fixed_person_id": a,
+        "chore_id": cid}).json()
+    assert got["upcoming"] == [{"date": day, "person_id": a}]
+
+
+def test_chore_rotate_every_patch_matrix(client, app_mod):
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid = _rot_chore(client, [a, b], rotate_every="turn").json()["id"]
+    # rotate_every alone, both ways
+    assert client.patch(f"/api/admin/chores/{cid}", json={"rotate_every": "week"}).json()["rotate_every"] == "week"
+    assert client.patch(f"/api/admin/chores/{cid}", json={"rotate_every": "turn"}).json()["rotate_every"] == "turn"
+    assert client.patch(f"/api/admin/chores/{cid}", json={"rotate_every": ""}).status_code == 422
+    # a one-person chore can't be set to switch weekly
+    fixed = client.post("/api/admin/chores", json={
+        "title": "y", "schedule_kind": "daily", "assign_kind": "fixed", "fixed_person_id": a}).json()["id"]
+    assert client.patch(f"/api/admin/chores/{fixed}", json={"rotate_every": "week"}).json()["rotate_every"] == "turn"
+    # and an empty value never reaches the column on create
+    assert _rot_chore(client, [a, b], rotate_every="").status_code == 422
+
+
+# --- to-dos: review follow-ups ----------------------------------------------
+
+def test_todo_order_refuses_checked_items_and_writes_nothing_on_a_bad_id(client):
+    a = client.post("/api/todos", json={"title": "a"}).json()["id"]
+    b = client.post("/api/todos", json={"title": "b"}).json()["id"]
+    client.post(f"/api/todos/{b}/complete")
+    assert client.post("/api/todo-order", json={"bucket": "soon", "ids": [a, b]}).status_code == 422
+    assert client.post("/api/todo-order", json={"bucket": "soon", "ids": [a, 999]}).status_code == 404
+    now = client.get("/api/todos").json()["buckets"]["now"]
+    assert now[0]["id"] == a and now[0]["bucket"] == "now", "nothing moved"
+
+
+def test_todo_order_keeps_items_the_request_did_not_name_after_it(client):
+    """A device that hadn't seen an item added elsewhere sends a shorter
+    list; the unseen item keeps its place after the named ones instead of
+    tying with one of them."""
+    a = client.post("/api/todos", json={"title": "a"}).json()["id"]
+    b = client.post("/api/todos", json={"title": "b"}).json()["id"]
+    client.post("/api/todo-order", json={"bucket": "now", "ids": [b, a]})
+    late = client.post("/api/todos", json={"title": "added elsewhere"}).json()["id"]
+    client.post("/api/todo-order", json={"bucket": "now", "ids": [a, b]})
+    now = client.get("/api/todos").json()["buckets"]["now"]
+    assert [t["id"] for t in now] == [a, b, late]
+    assert len({t["sort"] for t in now}) == 3, "no two items share a place"
+
+
+def test_todos_patch_same_list_and_rename_with_move(client):
+    a = client.post("/api/todos", json={"title": "a"}).json()["id"]
+    b = client.post("/api/todos", json={"title": "b"}).json()["id"]
+    client.post("/api/todo-order", json={"bucket": "now", "ids": [b, a]})
+    # naming the list it is already in changes nothing
+    client.patch(f"/api/todos/{b}", json={"bucket": "now"})
+    assert [t["id"] for t in client.get("/api/todos").json()["buckets"]["now"]] == [b, a]
+    # a rename and a move together land both
+    r = client.patch(f"/api/todos/{b}", json={"title": "b2", "bucket": "later"}).json()
+    assert r["title"] == "b2" and r["bucket"] == "later"
+    # a bad rename moves nothing
+    assert client.patch(f"/api/todos/{a}", json={"title": "x" * 121, "bucket": "soon"}).status_code == 422
+    assert client.get("/api/todos").json()["buckets"]["now"][0]["id"] == a
+
+
+
+def test_chore_preview_of_a_far_off_one_time_chore_answers_at_once(client, app_mod):
+    """A one-time chore is read straight off its date: a date centuries out
+    must not walk the calendar day by day (that tied the server up)."""
+    import time as _time
+    a = _mk_person(client, "Ava")
+    t0 = _time.monotonic()
+    got = client.post("/api/admin/chores/preview", json={
+        "schedule_kind": "once", "date": "9999-12-31", "assign_kind": "fixed",
+        "fixed_person_id": a}).json()
+    assert _time.monotonic() - t0 < 5.0, "a walk to 9999 would take far longer"
+    assert got["upcoming"] == [{"date": "9999-12-31", "person_id": a}]
+
+
+def test_todo_order_refuses_an_oversized_move(client):
+    a = client.post("/api/todos", json={"title": "a"}).json()["id"]
+    ids = [a] + list(range(10_000, 11_000))
+    assert client.post("/api/todo-order", json={"bucket": "now", "ids": ids}).status_code == 422
