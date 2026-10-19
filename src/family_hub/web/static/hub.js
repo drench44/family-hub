@@ -1154,6 +1154,7 @@ function renderTodosPaint() {
   // never rebuild the board under a press on a grip (a drag, or a press that
   // may become one): its rows and grip must stay the ones it started on.
   // It paints once the press ends.
+  if (todoPressIsStale()) todoDragCleanup();
   if (todoDrag.id != null) { todoDrag.repaint = true; return; }
   const overlayHost = document.getElementById('todos-full');
   const pageHost = document.getElementById('todos-page');
@@ -1311,6 +1312,14 @@ async function renameTodo(id) {
 const todoDrag = { id: null, pointerId: null, startX: 0, startY: 0, active: false,
   ghost: null, line: null, target: null, index: 0, scroller: null, lastX: 0, lastY: 0, raf: 0 };
 const TODO_DRAG_SLOP = 6;   // px a press may wander before it counts as a drag
+// A press whose end never arrived (the browser lost the pointer with no
+// cancel) would otherwise hold off every repaint and block every grip. A
+// press this old that never became a drag is over; so is any press when the
+// page is hidden or loses focus.
+const TODO_PRESS_STALE_MS = 15000;
+function todoPressIsStale() {
+  return todoDrag.id != null && !todoDrag.active && Date.now() - (todoDrag.t0 || 0) > TODO_PRESS_STALE_MS;
+}
 
 function scrollParentOf(el) {
   for (let n = el && el.parentElement; n; n = n.parentElement) {
@@ -1321,12 +1330,21 @@ function scrollParentOf(el) {
 }
 
 /* Apply a move to the cached list (so the board shows it at once) and write
-   it. `order` is the target list's full open order. If the write fails the
-   cached list goes back to how it was and repaints at once: the refresh
-   after it can't be relied on to undo the move when the hub is down. */
+   it. `order` is the target list's full open order. Moves made in a quick
+   burst share one "before": if any write in the burst fails, the board goes
+   back to how it was before the burst and repaints at once, when the last
+   write is in (the refresh after can't undo a move while the hub is down;
+   once it is up, the refresh shows exactly what was saved). */
+const todoPlaces = { pending: 0, before: null, failed: null, data: null };
+
 async function placeTodo(id, bucket, order) {
   const d = todoState.data;
-  const before = d && d.buckets ? JSON.parse(JSON.stringify(d.buckets)) : null;
+  if (todoPlaces.pending === 0) {
+    todoPlaces.before = d && d.buckets ? JSON.parse(JSON.stringify(d.buckets)) : null;
+    todoPlaces.data = d;
+    todoPlaces.failed = null;
+  }
+  todoPlaces.pending += 1;
   if (d && d.buckets) {
     let item = null;
     Object.keys(d.buckets).forEach((b) => {
@@ -1343,9 +1361,12 @@ async function placeTodo(id, bucket, order) {
   todoState.openId = null;
   renderTodosPaint();
   const r = await attemptTodo('/api/todo-order', 'POST', { bucket, ids: order });
-  if (!r.ok) {
-    if (before && todoState.data === d) { d.buckets = before; renderTodosPaint(); }
-    showToast(todoFailMessage(r.error));
+  if (!r.ok && !todoPlaces.failed) todoPlaces.failed = r.error;
+  todoPlaces.pending -= 1;
+  if (todoPlaces.pending === 0 && todoPlaces.failed) {
+    const { before, data, failed } = todoPlaces;
+    if (before && todoState.data === data) { data.buckets = before; renderTodosPaint(); }
+    showToast(todoFailMessage(failed));
   }
   await refreshTodos();
 }
@@ -1439,9 +1460,11 @@ function onTodoGripDown(e) {
   if (!grip || (e.button != null && e.button !== 0)) return;
   // one press at a time: a second finger on another grip (the wall is a
   // touch screen) would orphan the first drag's ghost and lose its drop
+  if (todoPressIsStale()) todoDragCleanup();
   if (todoDrag.id != null) return;
   e.preventDefault();   // no text selection, no focus jump while dragging
   todoDrag.id = Number(grip.dataset.todoGrip);
+  todoDrag.t0 = Date.now();
   todoDrag.pointerId = e.pointerId;
   todoDrag.startX = e.clientX; todoDrag.startY = e.clientY;
   todoDrag.lastX = e.clientX; todoDrag.lastY = e.clientY;
@@ -1509,6 +1532,10 @@ document.addEventListener('pointermove', onTodoGripMove);
 document.addEventListener('pointerup', onTodoGripUp);
 document.addEventListener('pointercancel', onTodoGripUp);
 document.addEventListener('keydown', onTodoGripKey);
+// the page went away mid-press: that press is over, whatever happens next
+const endTodoPress = () => { if (todoDrag.id != null) { todoDragCleanup(); renderTodosPaint(); } };
+window.addEventListener('blur', endTodoPress);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') endTodoPress(); });
 
 async function deleteTodo(id) {
   const r = await attemptTodo(`/api/todos/${id}`, 'DELETE');
@@ -4006,9 +4033,9 @@ async function refreshChoresAfterEdit() {
    OPEN (input isn't lost) and the reason surfaces as a toast — same
    detect-don't-swallow contract as toggleChore. "Each of them" hands over an
    ARRAY of bodies (one chore per person), posted one after another; if one
-   fails part way, the ones already saved are said out loud and the editor
-   closes on a refreshed list rather than inviting a re-save that would
-   duplicate them. */
+   fails part way, the toast names who was saved and who wasn't, and the
+   editor stays open on just the people still to save, so Save again can't
+   duplicate the saved ones. */
 async function submitChore(url, method, body, form, people) {
   const bodies = Array.isArray(body) ? body : [body];
   const savedFor = [];

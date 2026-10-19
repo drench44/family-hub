@@ -38,6 +38,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   is too long says why instead of "tap again".
 - The chore preview reads a one-time chore's date directly, so a date far
   in the future can't tie the hub up.
+- The chore form's "Coming up" strip says why when the hub refuses the
+  chore (a past date, say) instead of promising the save will work, and a
+  stuck press on a to-do handle can no longer freeze the list.
 
 ## [1.12.0] — 2026-10-14
 
