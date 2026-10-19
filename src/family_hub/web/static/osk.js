@@ -46,6 +46,38 @@
 
   if (!kiosk) return;
 
+  // Pointer hiding (kiosk only). The wall is a touchscreen with a wireless mouse
+  // the family sometimes uses, so the pointer should vanish while people tap and
+  // come back the moment someone really moves the mouse. It starts VISIBLE: on
+  // load we can't know whether the last input was a finger or the mouse.
+  // A press hides it whatever the browser calls it: this wall's touchscreen
+  // can reach Firefox as a mouse (see docs/on-screen-keyboard.md), so waiting
+  // for pointerType 'touch' alone could leave the pointer up for good. Only a
+  // mouse move with no button held, at least KIOSK_CURSOR_MOVE_PX from where the
+  // press landed, brings it back; that skips the small motion some systems send
+  // right after a tap. Capture phase, so a handler that stops propagation (the
+  // keyboard's own keys) can't hide a tap from us.
+  const KIOSK_CURSOR_CLASS = 'kiosk-cursor-hidden';
+  const KIOSK_CURSOR_MOVE_PX = 3;
+  let pressX = null;
+  let pressY = null;
+  const touchSourced = (e) => e.pointerType === 'touch' || e.pointerType === 'pen'
+    || e.mozInputSource === 5;   // MouseEvent.MOZ_SOURCE_TOUCH: Firefox's touch-made mouse event
+  const hidePointer = (e) => {
+    pressX = Number.isFinite(e.clientX) ? e.clientX : null;
+    pressY = Number.isFinite(e.clientY) ? e.clientY : null;
+    document.body.classList.add(KIOSK_CURSOR_CLASS);
+  };
+  document.addEventListener('pointerdown', hidePointer, { capture: true, passive: true });
+  document.addEventListener('pointerup', hidePointer, { capture: true, passive: true });
+  document.addEventListener('pointermove', (e) => {
+    if (!document.body.classList.contains(KIOSK_CURSOR_CLASS)) return;
+    if (e.pointerType !== 'mouse' || touchSourced(e) || e.buttons) return;
+    if (pressX !== null && pressY !== null && Number.isFinite(e.clientX) && Number.isFinite(e.clientY)
+        && Math.hypot(e.clientX - pressX, e.clientY - pressY) < KIOSK_CURSOR_MOVE_PX) return;
+    document.body.classList.remove(KIOSK_CURSOR_CLASS);
+  }, { capture: true, passive: true });
+
   // The inputs the keyboard serves. A `.txt-input` <select> (the chore person
   // picker) also carries the class, so oskTypeable() below excludes non-text
   // controls - the keyboard must only attach to something you can type into.

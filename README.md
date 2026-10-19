@@ -260,7 +260,8 @@ browser.
 a built-in on-screen keyboard (letters, symbols, and emoji). It's for the wall
 only — phones and laptops keep their own keyboard — so open the hub on the wall
 once with **`?kiosk=1`** to turn it on (the setting is then remembered;
-`?kiosk=0` clears it). See
+`?kiosk=0` clears it). The same setting hides the mouse pointer after a tap
+and brings it back when someone moves a mouse. See
 **[docs/on-screen-keyboard.md](docs/on-screen-keyboard.md)**.
 
 ## config.json reference
