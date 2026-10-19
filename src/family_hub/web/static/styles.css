@@ -1218,6 +1218,10 @@ body {
   font-family: var(--mono); font-size: 13px; letter-spacing: 0.08em;
   text-transform: uppercase; padding: 0 18px;
 }
+.ch-new {
+  font-family: var(--mono); font-size: 13px; letter-spacing: 0.08em;
+  text-transform: uppercase; padding: 0 16px; margin-right: 8px; color: var(--accent);
+}
 .ch-edit-toggle.active {
   background: var(--accent-soft);
   border-color: var(--accent);
@@ -1392,6 +1396,58 @@ body {
   padding: 10px 12px;
 }
 .todo-add input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* ---- the to-do board (full view; 2026-10-19 UX pass) ----
+   Each list is a drop target; each open item has a grip (⋮⋮) that drags
+   it; tapping an item opens its controls (rename, move, delete) under it. */
+.todo-section .todo-sec-head {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 6px; font-size: 11px; color: var(--dim);
+}
+.todo-sec-count {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0; color: var(--ink);
+  background: var(--surface-2); border-radius: 999px; padding: 1px 8px;
+}
+.todo-section { transition: border-color 120ms ease, box-shadow 120ms ease; }
+.todo-section.drop-target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.todo-row-full { flex-wrap: wrap; }
+.todo-row-full.open { background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 10px; }
+.todo-row-full .todo-body { min-height: 44px; display: flex; align-items: center; }
+.todo-row-main { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+.todo-grip {
+  flex: 0 0 auto; width: 44px; height: 44px; margin-left: auto;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--dim);
+  background: none; border: 0; border-radius: 8px; cursor: grab;
+  touch-action: none;   /* the grip drags; everywhere else still scrolls */
+  user-select: none; -webkit-user-select: none;
+}
+.todo-grip:hover { color: var(--ink); background: var(--surface-2); }
+.todo-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+body.todo-dragging, body.todo-dragging * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+.todo-row-full.drag-src { opacity: .35; }
+/* the item under the finger: a lifted copy that follows it. Never takes a
+   tap (pointer-events: none), so the iOS fixed-element rules hold. */
+.todo-ghost {
+  position: fixed; z-index: 120; margin: 0; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--accent) !important; border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .45); padding: 4px 8px;
+}
+.todo-drop-line {
+  height: 3px; width: 100%; margin: 2px 0; border-radius: 2px;
+  background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.todo-panel { flex: 1 1 100%; display: flex; flex-direction: column; gap: 10px; padding: 6px 4px 12px 56px; }
+.todo-panel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.todo-panel-row .todo-rename { flex: 1 1 220px; }
+.todo-panel-label { font-size: 13px; color: var(--dim); margin-right: 2px; }
+.todo-act { font-size: 12px; }
+.todo-act-save { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.todo-act-here { color: var(--ink); background: var(--accent-soft); border-color: transparent; cursor: default; }
+.todo-howto { margin: 10px 0 0; font-size: 13px; color: var(--dim); }
+.grip-svg { fill: currentColor; display: block; }
+.todo-howto-grip { display: inline-block; vertical-align: -3px; color: var(--ink); margin: 0 2px; }
+.todo-empty { padding: 14px 0; }
+.todo-add-btn { color: var(--accent); }
 .todo-recent { margin-top: 24px; }
 .todo-recent summary {
   cursor: pointer;
@@ -2636,6 +2692,100 @@ body.integ-off-todos .todo-slot { display: none; }
 .hint { color: var(--faint); font-size: 12px; }
 .hidden { display: none; }
 
+/* ---- chore form, plain-words edition (2026-10-19 UX pass) ----
+   Questions instead of settings ("How often?", "Who does it?"), people as
+   coloured name buttons (no dropdown on a touch wall), a live "Coming up"
+   strip with who does it on the next days, and a one-line summary of what
+   Save will do. Every colour is a token or the person's own --pc. */
+/* the editor's own show/hide wins over every display rule below */
+#chore-editor .hidden { display: none; }
+.title-row { display: grid; grid-template-columns: 64px 1fr; gap: 8px; }
+.title-row .f-icon { text-align: center; font-size: 22px; padding: 0 6px; }
+.emoji-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.emoji-pick {
+  width: 44px; height: 44px; font-size: 22px; line-height: 1;
+  background: var(--surface-2); border: 1px solid var(--edge); border-radius: 10px; cursor: pointer;
+}
+.emoji-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sub-field { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.preset-btn {
+  min-height: 44px; padding: 0 14px; font-size: 14px; color: var(--dim);
+  background: none; border: 1px dashed var(--edge); border-radius: 10px; cursor: pointer;
+}
+.preset-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.day-chip { min-height: 44px; min-width: 52px; }
+.person-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.person-chip {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
+  font: inherit; font-size: 15px; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--edge); border-radius: 999px; cursor: pointer;
+}
+.person-chip.selected {
+  background: color-mix(in srgb, var(--pc, var(--accent)) 22%, var(--surface-2));
+  border-color: var(--pc, var(--accent));
+  box-shadow: inset 0 0 0 1px var(--pc, var(--accent));
+}
+.person-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.person-chip.add { border-style: dashed; }
+.person-chip.small { padding: 0 12px; font-size: 14px; }
+.pc-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pc, var(--faint)); flex: 0 0 auto; }
+.pc-plus { color: var(--pc, var(--accent)); font-weight: 700; font-size: 17px; line-height: 1; }
+.rot-list { gap: 6px; }
+.rot-item {
+  cursor: default; gap: 10px; padding: 4px 4px 4px 12px;
+  background: var(--surface-2); border: 1px solid var(--edge);
+  border-left: 4px solid var(--pc, var(--accent)); font-family: inherit; font-size: 15px;
+}
+.rot-num { font-family: var(--mono); font-size: 12px; color: var(--faint); width: 14px; }
+.rot-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rot-btn {
+  width: 44px; height: 44px; flex: 0 0 auto; font-size: 17px; color: var(--dim);
+  background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+}
+.rot-btn:hover:not(:disabled) { border-color: var(--edge); color: var(--ink); }
+.rot-btn:disabled { opacity: .3; cursor: default; }
+.rot-btn.rot-del:hover { color: var(--crit); }
+.rot-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.turn-when { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.turn-when-label { font-size: 14px; color: var(--dim); }
+.chore-preview {
+  background: var(--surface-2); border: 1px solid var(--edge); border-radius: 12px; padding: 12px 14px;
+}
+.preview-head {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 10px;
+}
+.preview-cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.preview-cell {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
+  background: var(--surface); border-radius: 8px; border-top: 3px solid var(--pc, var(--faint));
+}
+.preview-when { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.preview-who { display: flex; align-items: center; gap: 6px; font-size: 15px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preview-first { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.first-label { font-size: 14px; color: var(--dim); margin-right: 2px; }
+.remind > summary {
+  cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px;
+  font-size: 14px; color: var(--dim);
+}
+.remind > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.remind[open] > summary { margin-bottom: 8px; }
+.remind-count { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+.remind .time-list { margin-top: 8px; }
+.remind .hint { margin-top: 8px; }
+.chore-summary {
+  margin: 0; padding: 10px 12px; font-size: 15px; line-height: 1.4; color: var(--ink);
+  background: var(--accent-soft); border-radius: 10px;
+}
+/* chores edit mode: every chore in one list, so an off-day chore is findable */
+.allch .padmin-head { margin-bottom: 4px; }
+.allch-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--edge); }
+.allch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.allch-title { font-size: 15px; color: var(--ink); }
+.allch-when { font-size: 13px; color: var(--dim); }
+.padmin-add { color: var(--accent); }
+
 /* Transient failure toast (e.g. a chore check-off that couldn't be saved).
    Bottom-centered, auto-hides; visibility toggled by .hub-toast-visible. */
 .hub-toast {
@@ -3142,9 +3292,10 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 
 /* ---- still glass on wide screens ----
-   On the wall and on computers the glass does not blur live. Each surface
-   paints a ready-blurred, saturated copy of the look's photo
-   (seasons/glass/, made by scripts/make-glass.py) fixed to the viewport at
+   On the wall and on computers the glass does not blur live. Each surface's
+   glass pane (hub.js ensureGlassPanes, rules below) paints a ready-blurred,
+   saturated copy of the look's photo (seasons/glass/, made by
+   scripts/make-glass.py) fixed to the viewport at
    the same focal point and cover size as the photo layer, so it lines up
    with the photo around it, and lays the haze, wash and glass tint over it.
    Why: backdrop-filter re-blurs everything under a card each frame a far bat
@@ -3154,12 +3305,13 @@ body.integ-off-todos .todo-slot { display: none; }
    creatures stopped sliding their frame strips). A still copy never
    re-blurs, and the wall's small GPU stops blurring four big cards every
    frame. The far creatures now pass behind the cards and show in the gaps.
-   Phones keep the live blur: iOS ignores background-attachment: fixed (the
+   Phones keep the live blur: iOS ignores fixed photo backgrounds (the
    @supports test is true only on iOS/iPadOS Safari, where an iPad at
    desktop width would otherwise paint the whole photo inside each card),
-   and the phone layout scrolls, which would repaint a fixed copy on every
-   frame. At night the copy goes too: the dim filter on .wrap can unpin a
-   fixed background in Firefox, and the night glass is 94% solid anyway. */
+   and the phone layout scrolls inside .wrap, a layout no one has measured
+   the panes on. At night the copy goes too: the dim filter on .wrap would
+   re-anchor the fixed copy to .wrap, and the night glass is 94% solid
+   anyway. */
 @supports not (-webkit-touch-callout: none) {
   @media (min-width: 1001px) {
     :where(:root[data-look]:not([data-look="none"]) .wrap) .card,
@@ -3167,21 +3319,46 @@ body.integ-off-todos .todo-slot { display: none; }
     :where(:root[data-look]:not([data-look="none"]) .wrap) .shead h2,
     :where(:root[data-look]:not([data-look="none"])) .topbar {
       -webkit-backdrop-filter: none; backdrop-filter: none;
-      background: linear-gradient(var(--glass), var(--glass)), var(--sn-haze, linear-gradient(transparent, transparent)),
-        var(--sn-wash), var(--sn-glass) var(--sn-pos) / cover no-repeat, var(--ground);
-      background-attachment: fixed;
+      background: transparent;
+      position: relative; isolation: isolate;
     }
+    :where(:root[data-look]:not([data-look="none"]) .wrap) :is(.card, .expand, .shead h2) > .glass-pane,
+    :where(:root[data-look]:not([data-look="none"])) .topbar > .glass-pane { display: block; }
   }
   :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .card,
   :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .expand,
   :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .shead h2,
   :where(:root[data-layout="desktop"][data-look]:not([data-look="none"])) .topbar {
     -webkit-backdrop-filter: none; backdrop-filter: none;
-    background: linear-gradient(var(--glass), var(--glass)), var(--sn-haze, linear-gradient(transparent, transparent)),
-      var(--sn-wash), var(--sn-glass) var(--sn-pos) / cover no-repeat, var(--ground);
-    background-attachment: fixed;
+    background: transparent;
+    position: relative; isolation: isolate;
   }
+  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) :is(.card, .expand, .shead h2) > .glass-pane,
+  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"])) .topbar > .glass-pane { display: block; }
 }
+/* The pane (hub.js ensureGlassPanes): fills its surface, sits under the
+   surface's content, and clips its fixed ::before to the surface's rounded
+   box. The ::before is the old background stack, viewport-sized and fixed,
+   so it lines up with the photo layer exactly as a fixed background did,
+   minus the repaint on every scroll frame. NEVER give a glass
+   surface or anything above it a transform, filter or contain: that makes
+   it the fixed ::before's containing block and the glass would slide off
+   the photo (night already does, via its dim filter: panes hide at night). */
+.glass-pane {
+  display: none; position: absolute; inset: 0; z-index: -1;
+  pointer-events: none; border-radius: inherit;
+  clip-path: inset(0 round var(--pane-r, 13px));
+}
+.glass-pane::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none;
+  background: linear-gradient(var(--glass), var(--glass)), var(--sn-haze, linear-gradient(transparent, transparent)),
+    var(--sn-wash), var(--sn-glass) var(--sn-pos) / cover no-repeat, var(--ground);
+}
+/* the pane's corners follow its surface (border-box radius less the 1px edge) */
+.expand > .glass-pane { --pane-r: 8px; }
+.shead h2 > .glass-pane { --pane-r: 999px; }
+.topbar > .glass-pane { --pane-r: 15px; }
+.is-night .glass-pane { display: none !important; }
 :where(:root[data-look]:not([data-look="none"]) .is-night .wrap) :is(.card, .expand, .shead h2),
 :where(:root[data-look]:not([data-look="none"]) .is-night) .topbar {
   background: linear-gradient(var(--glass), var(--glass)), var(--ground);

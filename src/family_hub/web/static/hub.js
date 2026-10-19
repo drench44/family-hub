@@ -555,6 +555,10 @@ function choresNavHtml() {
   // The Edit/Done toggle only appears on today — history isn't editable.
   const editToggle = choreState.day === data_date
     ? `<span class="spacer"></span>`
+      // while editing, a chore for anyone (or for several people) starts here;
+      // the per-person "+ Add chore" rows stay for "one more for Ava"
+      + (choreState.editing
+        ? `<button class="cal-nav-btn ch-new" type="button" data-add-chore="">+ New chore</button>` : '')
       + `<button class="cal-nav-btn ch-edit-toggle${choreState.editing ? ' active' : ''}"`
       + ` type="button" data-chedit="1">${choreState.editing ? 'Done' : 'Edit'}</button>`
     : '';
@@ -613,6 +617,7 @@ async function renderChoresFull(prefetched) {
   if (editing) {
     if (choreAdminPeople) {
       peopleAdmin = unassignedChoresHtml(unassignedChores(choreAdminChores, choreAdminPeople))
+        + allChoresHtml(choreAdminChores, choreAdminPeople)
         + peopleAdminHtml(choreAdminPeople, choreAdminAway);
     }
     else if (choreAdminError) peopleAdmin = `<div class="cal-empty">couldn’t load people — is the hub reachable? Tap Done, then Edit to retry.</div>`;
@@ -838,21 +843,44 @@ function todoRowHtml(t, full) {
       + `<span class="todo-title">${escapeHtml(t.title)}</span></button>`;
   }
   const isOpen = todoState.openId === t.id;
+  const title = escapeHtml(t.title);
+  // Tapping an item opens its controls in plain words: rename it, move it to
+  // another list (the current one is marked), or delete it.
   const actions = isOpen
-    ? `<div class="todo-actions">`
-      + ['now', 'soon', 'later'].filter((b) => b !== t.bucket).map((b) =>
-        `<button class="todo-act" type="button" data-todo-move="${b}" data-tid="${t.id}">→ ${b}</button>`).join('')
-      + `<button class="todo-act todo-act-del" type="button" data-todo-del="${t.id}">delete</button>`
-      + `</div>`
+    ? `<div class="todo-panel">`
+      + `<div class="todo-panel-row">`
+      + `<input class="txt-input todo-rename" id="todo-rename-${t.id}" maxlength="120" autocomplete="off" value="${title}" aria-label="Rename">`
+      + `<button class="todo-act todo-act-save" type="button" data-todo-rename="${t.id}">Save</button></div>`
+      + `<div class="todo-panel-row"><span class="todo-panel-label">Move to</span>`
+      + TODO_BUCKETS.map(([b, label]) => (b === t.bucket
+        ? `<span class="todo-act todo-act-here" aria-current="true">${label}</span>`
+        : `<button class="todo-act" type="button" data-todo-move="${b}" data-tid="${t.id}">${label}</button>`)).join('')
+      + `<span class="spacer"></span>`
+      + `<button class="todo-act todo-act-del" type="button" data-todo-del="${t.id}">Delete</button>`
+      + `</div></div>`
     : '';
-  return `<div class="todo-row-full${done ? ' done' : ''}">`
-    + `<button class="todo-row-main" type="button" data-todo="${t.id}" aria-label="${checkLabel}: ${escapeHtml(t.title)}">`
+  // the grip drags the item to another place or list (open items only: a
+  // just-checked one is on its way to "recently done")
+  const grip = done ? '' : `<button class="todo-grip" type="button" data-todo-grip="${t.id}"`
+    + ` aria-label="Move ${title}: drag, or use the arrow keys" title="Drag to move">`
+    + `${GRIP_SVG}</button>`;
+  return `<div class="todo-row-full${done ? ' done' : ''}${isOpen ? ' open' : ''}" data-row="${t.id}">`
+    + `<button class="todo-row-main" type="button" data-todo="${t.id}" aria-label="${checkLabel}: ${title}">`
     + `<span class="todo-check">✓</span></button>`
-    + `<button class="todo-body" type="button" data-todo-open="${t.id}">`
-    + `<span class="todo-title">${escapeHtml(t.title)}</span></button>`
+    + `<button class="todo-body" type="button" data-todo-open="${t.id}" aria-expanded="${isOpen}">`
+    + `<span class="todo-title">${title}</span></button>`
+    + grip
     + actions
     + `</div>`;
 }
+
+const TODO_BUCKETS = [['now', 'Now'], ['soon', 'Soon'], ['later', 'Later']];
+
+/* The drag handle: six dots, drawn (a text glyph renders hair-thin and
+   differently on every font stack). */
+const GRIP_SVG = '<svg class="grip-svg" viewBox="0 0 10 16" width="10" height="16" aria-hidden="true">'
+  + [3, 8, 13].map((y) => `<circle cx="2" cy="${y}" r="1.6"/><circle cx="8" cy="${y}" r="1.6"/>`).join('')
+  + '</svg>';
 
 /* How many rows the wall card shows across all three tiers before it starts
    folding items behind "+N more". Chosen so the card stays a bounded digest,
@@ -1089,11 +1117,14 @@ function todosFullHtml() {
   }).join('');
   const section = (b, label) => {
     const items = d.buckets[b] || [];
+    const open = items.filter((t) => !t.done_at).length;
     // Boxed like every other section (Task 3 consistency pass) — .pad is the
-    // existing bare-.card padding utility, unused until now.
-    return `<div class="card pad todo-section"><div class="todo-sec-head">${label}</div>`
+    // existing bare-.card padding utility, unused until now. data-bucket makes
+    // the whole box a drop target.
+    return `<div class="card pad todo-section" data-bucket="${b}">`
+      + `<div class="todo-sec-head">${label}${open ? `<span class="todo-sec-count">${open}</span>` : ''}</div>`
       + (items.length ? items.map((t) => todoRowHtml(t, true)).join('')
-        : `<div class="cal-empty">nothing here</div>`)
+        : `<div class="cal-empty todo-empty">Nothing here. Drag an item in, or add one above.</div>`)
       + `</div>`;
   };
   const recent = (d.recent_done || []).map((t) =>
@@ -1103,8 +1134,9 @@ function todosFullHtml() {
   return `<form id="todo-add-form" class="todo-add">`
     + `<input id="todo-add-input" maxlength="120" placeholder="Add a to-do…" autocomplete="off" aria-label="Add a to-do">`
     + `<div class="segmented">${seg}</div>`
-    + `<button class="cal-nav-btn" type="submit">Add</button>`
+    + `<button class="cal-nav-btn todo-add-btn" type="submit">Add</button>`
     + `</form>`
+    + `<p class="todo-howto">Drag <span class="todo-howto-grip">${GRIP_SVG}</span> to move an item or change its place. Tap an item to rename, move or delete it.</p>`
     + `<div class="todo-cols">`
     + section('now', 'Now') + section('soon', 'Soon') + section('later', 'Later')
     + `</div>`
@@ -1116,6 +1148,8 @@ function todosFullHtml() {
 /* Paint into the overlay host when it exists, else the phone tab section,
    clearing the other so #todo-add-input never exists twice in the DOM. */
 function renderTodosPaint() {
+  // never rebuild the board out from under a drag: paint once it drops
+  if (todoDrag.active) { todoDrag.repaint = true; return; }
   const overlayHost = document.getElementById('todos-full');
   const pageHost = document.getElementById('todos-page');
   const host = overlayHost || pageHost;
@@ -1247,6 +1281,228 @@ async function moveTodo(id, bucket) {
   todoState.openId = null;
   await refreshTodos();
 }
+
+async function renameTodo(id) {
+  const inp = document.getElementById(`todo-rename-${id}`);
+  const title = ((inp && inp.value) || '').trim();
+  if (!title) { showToast('Give it a name, or use Delete to remove it.'); return; }
+  const r = await attemptTodo(`/api/todos/${id}`, 'PATCH', { title });
+  if (!r.ok) { showToast(todoFailMessage(r.error)); return; }   // keep the panel + typing
+  todoState.openId = null;
+  await refreshTodos();
+}
+
+/* ---------------------------------------------- to-do drag and drop ----
+   The grip (⋮⋮) on each open item drags it to another place in its list or
+   into another list. Pointer events, so one path serves the wall's touch
+   screen, a phone and a mouse; the grip alone starts a drag (touch-action:
+   none on it), so swiping anywhere else still scrolls and tapping still
+   checks off. A tap on the grip without moving opens the item's controls.
+   While a drag is up nothing repaints the list under it: the poll defers.
+   The drop is applied to the cached list at once (no wait for the hub), then
+   written with POST /api/todo-order; a failed write says so and reloads the
+   real order. Arrow keys on a focused grip do the same moves without a
+   pointer: up/down within the list, left/right to the list beside it. */
+const todoDrag = { id: null, pointerId: null, startX: 0, startY: 0, active: false,
+  ghost: null, line: null, target: null, index: 0, scroller: null, lastX: 0, lastY: 0, raf: 0 };
+const TODO_DRAG_SLOP = 6;   // px a press may wander before it counts as a drag
+
+/* The open items' ids of one list, in the order shown. Pure on the cache. */
+function todoOpenIds(bucket) {
+  const d = todoState.data;
+  return ((d && d.buckets && d.buckets[bucket]) || []).filter((t) => !t.done_at).map((t) => t.id);
+}
+
+function scrollParentOf(el) {
+  for (let n = el && el.parentElement; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
+/* Apply a move to the cached list (so the board shows it at once) and write
+   it. `order` is the target list's full open order. */
+async function placeTodo(id, bucket, order) {
+  const d = todoState.data;
+  if (d && d.buckets) {
+    let item = null;
+    Object.keys(d.buckets).forEach((b) => {
+      const i = d.buckets[b].findIndex((t) => t.id === id);
+      if (i >= 0) item = d.buckets[b].splice(i, 1)[0];
+    });
+    if (item) {
+      item.bucket = bucket;
+      const byId = new Map(d.buckets[bucket].map((t) => [t.id, t]).concat([[id, item]]));
+      const doneTail = d.buckets[bucket].filter((t) => t.done_at);
+      d.buckets[bucket] = order.map((x) => byId.get(x)).filter(Boolean).concat(doneTail);
+    }
+  }
+  todoState.openId = null;
+  renderTodosPaint();
+  const r = await attemptTodo('/api/todo-order', 'POST', { bucket, ids: order });
+  if (!r.ok) showToast(todoFailMessage(r.error));
+  await refreshTodos();
+}
+
+function todoDragCleanup() {
+  if (todoDrag.ghost) todoDrag.ghost.remove();
+  if (todoDrag.line) todoDrag.line.remove();
+  document.querySelectorAll('.todo-section.drop-target').forEach((el) => el.classList.remove('drop-target'));
+  document.querySelectorAll('.todo-row-full.drag-src').forEach((el) => el.classList.remove('drag-src'));
+  document.body.classList.remove('todo-dragging');
+  cancelAnimationFrame(todoDrag.raf);
+  const repaint = todoDrag.repaint;
+  Object.assign(todoDrag, { id: null, pointerId: null, active: false, ghost: null, line: null,
+    target: null, scroller: null, raf: 0, grip: null, repaint: false });
+  if (repaint) renderTodosPaint();   // a refresh that landed mid-drag
+}
+
+/* Find the list under the pointer and the slot within it, and draw the
+   drop line there. */
+function todoDragTrack(x, y) {
+  const hit = document.elementFromPoint(x, y);
+  const sec = hit && hit.closest ? hit.closest('.todo-section[data-bucket]') : null;
+  document.querySelectorAll('.todo-section.drop-target').forEach((el) => { if (el !== sec) el.classList.remove('drop-target'); });
+  if (!sec) { todoDrag.target = null; if (todoDrag.line) todoDrag.line.remove(); return; }
+  sec.classList.add('drop-target');
+  const rows = Array.from(sec.querySelectorAll('.todo-row-full:not(.done)'))
+    .filter((r) => Number(r.dataset.row) !== todoDrag.id);
+  let index = rows.length;
+  for (let i = 0; i < rows.length; i++) {
+    const rc = rows[i].getBoundingClientRect();
+    if (y < rc.top + rc.height / 2) { index = i; break; }
+  }
+  todoDrag.target = sec.dataset.bucket;
+  todoDrag.index = index;
+  if (!todoDrag.line) {
+    todoDrag.line = document.createElement('div');
+    todoDrag.line.className = 'todo-drop-line';
+  }
+  const before = rows[index] || null;
+  if (before) sec.insertBefore(todoDrag.line, before);
+  else {
+    // after the last open row (ahead of any just-checked ones and the empty note)
+    const lastOpen = rows[rows.length - 1];
+    if (lastOpen) lastOpen.after(todoDrag.line);
+    else sec.querySelector('.todo-sec-head').after(todoDrag.line);
+  }
+}
+
+/* Scroll the list's container while the pointer rests near its top or
+   bottom edge, so an item can travel past what fits on screen. */
+function todoDragAutoScroll() {
+  if (!todoDrag.active) return;
+  const sc = todoDrag.scroller;
+  if (sc) {
+    const box = sc === document.scrollingElement ? { top: 0, bottom: innerHeight } : sc.getBoundingClientRect();
+    const edge = 70;
+    let dy = 0;
+    if (todoDrag.lastY < box.top + edge) dy = -Math.ceil((box.top + edge - todoDrag.lastY) / 6);
+    else if (todoDrag.lastY > box.bottom - edge) dy = Math.ceil((todoDrag.lastY - (box.bottom - edge)) / 6);
+    if (dy) { sc.scrollTop += dy; todoDragTrack(todoDrag.lastX, todoDrag.lastY); }
+  }
+  todoDrag.raf = requestAnimationFrame(todoDragAutoScroll);
+}
+
+function todoDragStart(grip) {
+  const row = grip.closest('.todo-row-full');
+  todoDrag.active = true;
+  todoState.openId = null;
+  row.classList.add('drag-src');
+  const rc = row.getBoundingClientRect();
+  const ghost = row.cloneNode(true);
+  ghost.classList.add('todo-ghost');
+  ghost.classList.remove('drag-src', 'open');
+  const panel = ghost.querySelector('.todo-panel');
+  if (panel) panel.remove();
+  ghost.setAttribute('aria-hidden', 'true');
+  ghost.style.width = `${rc.width}px`;
+  ghost.style.left = `${rc.left}px`;
+  ghost.style.top = `${rc.top}px`;
+  todoDrag.offX = todoDrag.startX - rc.left;
+  todoDrag.offY = todoDrag.startY - rc.top;
+  document.body.appendChild(ghost);
+  todoDrag.ghost = ghost;
+  todoDrag.scroller = scrollParentOf(row);
+  document.body.classList.add('todo-dragging');
+  armIdle();
+  todoDrag.raf = requestAnimationFrame(todoDragAutoScroll);
+}
+
+function onTodoGripDown(e) {
+  const grip = e.target && e.target.closest && e.target.closest('[data-todo-grip]');
+  if (!grip || (e.button != null && e.button !== 0)) return;
+  e.preventDefault();   // no text selection, no focus jump while dragging
+  todoDrag.id = Number(grip.dataset.todoGrip);
+  todoDrag.pointerId = e.pointerId;
+  todoDrag.startX = e.clientX; todoDrag.startY = e.clientY;
+  todoDrag.lastX = e.clientX; todoDrag.lastY = e.clientY;
+  todoDrag.grip = grip;
+  try { grip.setPointerCapture(e.pointerId); } catch (err) { /* already released */ }
+}
+
+function onTodoGripMove(e) {
+  if (todoDrag.id == null || e.pointerId !== todoDrag.pointerId) return;
+  todoDrag.lastX = e.clientX; todoDrag.lastY = e.clientY;
+  if (!todoDrag.active) {
+    if (Math.hypot(e.clientX - todoDrag.startX, e.clientY - todoDrag.startY) < TODO_DRAG_SLOP) return;
+    todoDragStart(todoDrag.grip);
+  }
+  todoDrag.ghost.style.transform = `translate(${e.clientX - todoDrag.startX}px, ${e.clientY - todoDrag.startY}px) rotate(-1.2deg)`;
+  todoDragTrack(e.clientX, e.clientY);
+}
+
+function onTodoGripUp(e) {
+  if (todoDrag.id == null || e.pointerId !== todoDrag.pointerId) return;
+  const { id, active, target, index } = todoDrag;
+  todoDragCleanup();
+  if (!active) {
+    // a tap on the grip: open the item's controls, same as tapping its name
+    todoState.openId = todoState.openId === id ? null : id;
+    renderTodosPaint();
+    return;
+  }
+  if (e.type === 'pointercancel' || !target) { renderTodosPaint(); return; }
+  const order = todoDropOrder(todoOpenIds(target), id, index);
+  const from = Object.keys((todoState.data && todoState.data.buckets) || {})
+    .find((b) => todoOpenIds(b).includes(id));
+  if (from === target && order.join() === todoOpenIds(target).join()) { renderTodosPaint(); return; }
+  placeTodo(id, target, order);
+}
+
+function onTodoGripKey(e) {
+  const grip = e.target && e.target.closest && e.target.closest('[data-todo-grip]');
+  if (!grip || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+  e.preventDefault();
+  const id = Number(grip.dataset.todoGrip);
+  const keys = TODO_BUCKETS.map(([b]) => b);
+  const from = keys.find((b) => todoOpenIds(b).includes(id));
+  if (!from) return;
+  const ids = todoOpenIds(from);
+  const at = ids.indexOf(id);
+  let target = from;
+  let index = at;
+  if (e.key === 'ArrowUp') index = at - 1;
+  else if (e.key === 'ArrowDown') index = at + 1;
+  else {
+    const k = keys.indexOf(from) + (e.key === 'ArrowLeft' ? -1 : 1);
+    if (k < 0 || k >= keys.length) return;
+    target = keys[k];
+    index = todoOpenIds(target).length;
+  }
+  if (target === from && (index < 0 || index >= ids.length)) return;
+  placeTodo(id, target, todoDropOrder(todoOpenIds(target), id, index)).then(() => {
+    const again = document.querySelector(`[data-todo-grip="${id}"]`);
+    if (again) again.focus();
+  });
+}
+
+document.addEventListener('pointerdown', onTodoGripDown);
+document.addEventListener('pointermove', onTodoGripMove);
+document.addEventListener('pointerup', onTodoGripUp);
+document.addEventListener('pointercancel', onTodoGripUp);
+document.addEventListener('keydown', onTodoGripKey);
 
 async function deleteTodo(id) {
   const r = await attemptTodo(`/api/todos/${id}`, 'DELETE');
@@ -3648,7 +3904,7 @@ function refreshIdleTodosView() {
   if (document.body.dataset.conn !== 'up') return undefined;
   const inp = document.getElementById('todo-add-input');
   if (inp && (inp.value || document.activeElement === inp)) return undefined;
-  if (todoState.openId != null) return undefined;
+  if (todoState.openId != null || todoDrag.id != null) return undefined;
   return renderTodosFull();
 }
 
@@ -3742,19 +3998,39 @@ async function refreshChoresAfterEdit() {
 
 /* POST/PATCH the chore via the shared j() helper. On failure the editor stays
    OPEN (input isn't lost) and the reason surfaces as a toast — same
-   detect-don't-swallow contract as toggleChore. */
+   detect-don't-swallow contract as toggleChore. "Each of them" hands over an
+   ARRAY of bodies (one chore per person), posted one after another; if one
+   fails part way, the ones already saved are said out loud and the editor
+   closes on a refreshed list rather than inviting a re-save that would
+   duplicate them. */
 async function submitChore(url, method, body) {
+  const bodies = Array.isArray(body) ? body : [body];
+  let saved = 0;
   try {
-    await j(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    for (const b of bodies) {
+      await j(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(b),
+      });
+      saved += 1;
+    }
   } catch (e) {
-    showToast(e.message || 'Couldn’t save the chore — check the hub and try again.');
-    return;
+    const why = e.message || 'Couldn’t save the chore. Check the hub and try again.';
+    if (saved === 0) { showToast(why); return; }
+    showToast(`Saved ${saved} of ${bodies.length}. ${why}`);
   }
   await refreshChoresAfterEdit();
+}
+
+/* The chore form's live "Coming up" strip: who does it on the next few days,
+   for a draft that isn't saved yet (POST /api/admin/chores/preview). */
+function previewChore(body) {
+  return j('/api/admin/chores/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 async function openChoreEditor(seed) {
@@ -3781,15 +4057,20 @@ async function openChoreEditor(seed) {
     const ch = state.chores.find((x) => x.id === seed.choreId);
     if (!ch) { showToast('That chore is no longer here — refreshing.'); refreshChoresAfterEdit(); return; }
     model = choreToModel(ch);
-    label = 'Save';
+    label = 'Save changes';
     onsubmit = (body) => submitChore(`/api/admin/chores/${ch.id}`, 'PATCH', body);
   } else {
-    // add: seed the person picker to the card's person (preselected)
-    model = { ...freshChoreModel(), fixed_person_id: seed.personId };
+    // add: seed the person picker to the card's person (preselected); the
+    // "+ New chore" button carries no person, so nobody is picked yet
+    model = { ...freshChoreModel(), fixed_person_id: seed.personId == null ? null : seed.personId };
     label = 'Add chore';
     onsubmit = (body) => submitChore('/api/admin/chores', 'POST', body);
   }
-  buildChoreForm(host, model, label, onsubmit, state.people);
+  buildChoreForm(host, model, label, onsubmit, state.people, {
+    preview: previewChore,
+    choreId: seed.mode === 'edit' ? seed.choreId : null,
+    allowEach: seed.mode !== 'edit',
+  });
   document.getElementById('chore-modal').classList.remove('hidden');
   dialogOpened('chore-modal', document.getElementById('chore-card').querySelector('.chore-close'));
   armIdle();   // keep the overlay alive while the editor is up
@@ -4085,7 +4366,8 @@ document.addEventListener('click', (e) => {
   // come BEFORE the check-off branch below.
   const addChore = e.target.closest('[data-add-chore]');
   if (addChore) {
-    openChoreEditor({ mode: 'add', personId: Number(addChore.dataset.addChore) });
+    const pid = addChore.dataset.addChore;
+    openChoreEditor({ mode: 'add', personId: pid === '' || pid == null ? null : Number(pid) });
     return;
   }
   // delete sits INSIDE the data-edit-chore row, so it MUST be checked first —
@@ -4124,6 +4406,20 @@ document.addEventListener('click', (e) => {
     return;
   }
   // to-dos: action buttons first, then check-off rows, then the add controls
+  // the grip is driven by pointer events (onTodoGripUp opens the controls on
+  // a tap); its click must not fall through to anything below
+  const tgrip = e.target.closest('[data-todo-grip]');
+  if (tgrip) {
+    // Enter/Space on a focused grip (a click with no pointer: detail 0)
+    if (e.detail === 0) {
+      const id = Number(tgrip.dataset.todoGrip);
+      todoState.openId = todoState.openId === id ? null : id;
+      renderTodosPaint();
+    }
+    return;
+  }
+  const tren = e.target.closest('[data-todo-rename]');
+  if (tren) { renameTodo(tren.dataset.todoRename); return; }
   const tmove = e.target.closest('[data-todo-move]');
   if (tmove) { moveTodo(tmove.dataset.tid, tmove.dataset.todoMove); return; }
   const tdel = e.target.closest('[data-todo-del]');
@@ -5663,6 +5959,54 @@ function paintViewportDiag() {
     + ` · best ${d.learnedMax || '?'} · gap ${d.shortfall} · ${d.orient} · ${mode}`;
 }
 
+/* ---------------------------------------------- still glass, scroll-free ----
+   On wide screens a seasonal look's glass is a ready-blurred copy of the
+   photo lined up with the photo behind it (styles.css, "still glass"). It
+   used to be each surface's own background with background-attachment:
+   fixed, and a fixed background is repainted on EVERY scroll frame, for
+   every card: on the wall (Firefox, an i3's GPU) scrolling the main page
+   with Halloween on ran at about 20 frames a second (owner, 2026-10-18:
+   "lag when scrolling on the main page"; measured on the wall: 51 ms a
+   frame, against 17 ms with the look off). Now each glass surface holds one
+   empty <i class="glass-pane"> whose ::before is position: fixed (lined up
+   with the photo for free) and is clipped to the surface by the pane's
+   clip-path. A fixed layer under a clip scrolls on the compositor: nothing
+   repaints, and the wall measures 17 ms a frame with the look on.
+   Cards are re-rendered all the time (innerHTML), so a MutationObserver
+   gives every new glass surface its pane before the next paint. The pane is
+   a first child with z-index -1 and no layout box (position: absolute), and
+   it is an <i>, so no :first-of-type rule on the surfaces' div/button
+   children shifts. */
+const GLASS_SURFACES = '.wrap .card, .wrap .expand, .wrap .shead h2, .topbar';
+
+function ensureGlassPanes(root) {
+  if (!root || root.nodeType !== 1) return;
+  const list = [];
+  if (root.matches && root.matches(GLASS_SURFACES)) list.push(root);
+  if (root.querySelectorAll) root.querySelectorAll(GLASS_SURFACES).forEach((el) => list.push(el));
+  list.forEach((el) => {
+    const first = el.firstElementChild;
+    if (first && first.classList.contains('glass-pane')) return;
+    const pane = document.createElement('i');
+    pane.className = 'glass-pane';
+    pane.setAttribute('aria-hidden', 'true');
+    el.insertBefore(pane, el.firstChild);
+  });
+}
+
+function watchGlassPanes() {
+  if (typeof MutationObserver !== 'function' || !document.body) return;
+  ensureGlassPanes(document.body);
+  new MutationObserver((records) => {
+    records.forEach((r) => {
+      // a surface whose own children were replaced lost its pane
+      if (r.target.nodeType === 1 && r.target.matches && r.target.matches(GLASS_SURFACES)) ensureGlassPanes(r.target);
+      r.addedNodes.forEach((n) => ensureGlassPanes(n));
+    });
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+watchGlassPanes();
 mountSeasonScene();
 watchSeasonLights();
 // once only: two loops on one element would fight over its transform

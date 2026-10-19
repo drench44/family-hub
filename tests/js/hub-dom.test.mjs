@@ -1442,7 +1442,7 @@ test('buildChoreForm: clicking "Once" from a rotation model coerces to fixed and
   ];
   const host = document.createElement('div');
   // start rotation-capable, no date — the real add-flow starting point
-  const model = { ...sandbox.freshChoreModel(), repeat: 'weekly', assign: 'rotation', rot: [1, 2] };
+  const model = { ...sandbox.freshChoreModel(), title: 'Dishes', fixed_person_id: 1, repeat: 'weekly', assign: 'rotation', rot: [1, 2] };
   let captured = null;
   sandbox.buildChoreForm(host, model, 'Add chore', (body) => { captured = body; }, people);
 
@@ -1492,11 +1492,17 @@ const P2 = [
   { id: 2, name: 'Alex', color: '#8AE0AD', active: 1 },
 ];
 
+// A fresh model with what the form now asks for before it saves: a name and
+// a person (it used to POST blank ones and let the server 422).
+function readyModel(sandbox) {
+  return { ...sandbox.freshChoreModel(), title: 'Chore', fixed_person_id: 1 };
+}
+
 test('buildChoreForm: choosing "Every N days" reveals the stepper, seeds a default, hides days/date', () => {
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
   let captured = null;
-  sandbox.buildChoreForm(host, sandbox.freshChoreModel(), 'Add chore', (b) => { captured = b; }, P2);
+  sandbox.buildChoreForm(host, readyModel(sandbox), 'Add chore', (b) => { captured = b; }, P2);
 
   tapDelegated(host, '.f-repeat', '[data-repeat="interval"]');
   assert.ok(!host.querySelector('.f-interval').classList.contains('hidden'), 'interval stepper shown');
@@ -1529,7 +1535,7 @@ test('buildChoreForm: an interval chore edit populates the stepper and round-tri
 test('buildChoreForm: interval with a blank field blocks submit with an inline error', () => {
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
-  const model = { ...sandbox.freshChoreModel(), repeat: 'interval', intervalDays: '' };
+  const model = { ...readyModel(sandbox), repeat: 'interval', intervalDays: '' };
   let called = false;
   sandbox.buildChoreForm(host, model, 'Save', () => { called = true; }, P2);
   host.querySelector('.f-intervaldays').value = '';   // user cleared it
@@ -1543,7 +1549,7 @@ test('buildChoreForm: interval with a blank field blocks submit with an inline e
 test('buildChoreForm: the week-cadence toggle round-trips biweekly (week_interval 2)', () => {
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
-  const model = { ...sandbox.freshChoreModel(), repeat: 'weekly', days: new Set([2]) };
+  const model = { ...readyModel(sandbox), repeat: 'weekly', days: new Set([2]) };
   let captured = null;
   sandbox.buildChoreForm(host, model, 'Add chore', (b) => { captured = b; }, P2);
   assert.ok(!host.querySelector('.f-weekfreq').classList.contains('hidden'),
@@ -1581,9 +1587,10 @@ test('buildChoreForm: adding a reminder time renders a chip and round-trips due_
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
   let captured = null;
-  sandbox.buildChoreForm(host, sandbox.freshChoreModel(), 'Add chore', (b) => { captured = b; }, P2);
-  // empty starts as the "none yet" hint, not a chip
-  assert.match(host.querySelector('.f-times').innerHTML, /No reminder times/);
+  sandbox.buildChoreForm(host, readyModel(sandbox), 'Add chore', (b) => { captured = b; }, P2);
+  // empty starts with no chips, and the folded section says "none"
+  assert.doesNotMatch(host.querySelector('.f-times').innerHTML, /data-remtime/);
+  assert.equal(host.querySelector('.f-remindcount').textContent, 'none');
 
   host.querySelector('.f-timeinput').value = '08:00';
   host.querySelector('.f-timeadd').onclick();
@@ -1599,7 +1606,7 @@ test('buildChoreForm: reminder times de-dupe and sort; removing a chip drops it'
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
   let captured = null;
-  sandbox.buildChoreForm(host, sandbox.freshChoreModel(), 'Add chore', (b) => { captured = b; }, P2);
+  sandbox.buildChoreForm(host, readyModel(sandbox), 'Add chore', (b) => { captured = b; }, P2);
 
   const add = (v) => { host.querySelector('.f-timeinput').value = v; host.querySelector('.f-timeadd').onclick(); };
   add('20:00'); add('07:30'); add('20:00');   // last is a duplicate -> ignored
@@ -2047,8 +2054,8 @@ test('chores overlay edit mode: "+ Add chore" opens the shared form with that pe
     'the chore editor modal is shown above the overlay');
   const host = document.getElementById('chore-editor');
   assert.ok(host.querySelector('.f-title'), 'the shared chore form rendered (one form, reused)');
-  // add seeds fixed_person_id -> that person's <option> carries `selected`
-  assert.match(host.querySelector('.f-person').innerHTML, /value="1" selected/,
+  // add seeds fixed_person_id -> that person's name button is selected
+  assert.match(host.querySelector('.f-person').innerHTML, /person-chip selected" type="button" data-pick="1"/,
     'the tapped person is preselected');
   assert.equal(read('choreState.editing'), true, 'still in edit mode with the editor open');
 });
@@ -2176,12 +2183,11 @@ test('chores overlay edit mode: tapping a chore row seeds the form from choreToM
   const host = document.getElementById('chore-editor');
   // seeded from choreToModel(the FULL record fetched via /api/admin/state)
   assert.equal(host.querySelector('.f-title').value, 'Feed cat', 'title seeded from the chore');
-  assert.match(host.querySelector('.f-person').innerHTML, /value="1" selected/,
+  assert.match(host.querySelector('.f-person').innerHTML, /person-chip selected" type="button" data-pick="1"/,
     'the assigned person is seeded');
 
   // rename and save
   host.querySelector('.f-title').value = 'Feed the cat';
-  host.querySelector('.f-person').value = '1';
   host.querySelector('[data-submit]').onclick();
   await flush();
 
@@ -2989,9 +2995,11 @@ test('todosFullHtml: full-screen buckets are boxed like every other section, row
 
   // Each Now/Soon/Later column is boxed (Task 3 consistency pass) via the
   // existing bare-.card padding utility.
-  const sectionCount = (html.match(/class="card pad todo-section"/g) || []).length;
-  assert.equal(sectionCount, 3, 'three boxed bucket columns render');
-  assert.match(html, /<div class="todo-sec-head">Now<\/div>/);
+  const sectionCount = (html.match(/class="card pad todo-section" data-bucket="(now|soon|later)"/g) || []).length;
+  assert.equal(sectionCount, 3, 'three boxed bucket columns render, each a drop target');
+  assert.match(html, /<div class="todo-sec-head">Now<span class="todo-sec-count">1<\/span><\/div>/);
+  // an open item carries the drag grip; the move controls open on a tap
+  assert.match(html, /data-todo-grip="1"/);
 
   // Full-row markup (the check/move/delete data-attributes attemptTodo's
   // handlers key off) is unchanged by the boxing.
@@ -8814,7 +8822,12 @@ test('chores edit mode lists chores nobody can do, and Reassign opens that chore
   const html = ctx.choresFull.innerHTML;
   assert.match(html, /No one to do these/);
   assert.match(html, /Walk dog/);
-  assert.ok(!/padmin-unassigned[\s\S]*Feed cat/.test(html), 'an assigned chore is not listed');
+  // the "No one to do these" block alone (the "Every chore" list after it
+  // names every chore, assigned or not)
+  const start = html.indexOf('padmin-unassigned');
+  const unassigned = html.slice(start, html.indexOf('class="padmin', start + 1));
+  assert.ok(!/Feed cat/.test(unassigned), 'an assigned chore is not listed');
+  assert.match(html, /class="padmin allch"[\s\S]*Feed cat[\s\S]*Walk dog/, 'every chore is in the full list');
   ctx.tap('[data-edit-chore="11"]');
   await flush();                       // openChoreEditor awaits /api/admin/state
   assert.ok(!ctx.document.getElementById('chore-modal').classList.contains('hidden'),
@@ -9659,4 +9672,104 @@ test('placeSeasonLights: window panes that make no box keep the room dry and say
   assert.equal(st.farSnow.dataset.where, 'none');
   assert.equal(st.paneSnow.style.width, '');
   assert.ok(warned.some((w) => /make no box/.test(w)));
+});
+
+// ---- the plain-words chore form (2026-10-19 UX pass) ------------------------
+
+test('buildChoreForm: "Take turns" + "Every week" saves rotate_every week', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  let captured = null;
+  sandbox.buildChoreForm(host, readyModel(sandbox), 'Add chore', (b) => { captured = b; }, P2);
+  tapDelegated(host, '.f-assign', '[data-assign="rotation"]');
+  assert.ok(!host.querySelector('.f-turns').classList.contains('hidden'), 'the turn controls show');
+  // switching from one person carries that person into the turns
+  assert.match(host.querySelector('.f-rotation').innerHTML, /Sam/);
+  tapDelegated(host, '.f-rotadd', '[data-add="2"]');
+  tapDelegated(host, '.f-rotevery', '[data-rotevery="week"]');
+  assert.ok(host.querySelector('[data-rotevery="week"]').classList.contains('active'));
+  assert.match(host.querySelector('.f-summary').textContent, /Sam and Alex take turns, switching every Monday/);
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(captured.assign_kind, 'rotation');
+  assert.deepEqual([...captured.rotation_order], [1, 2]);
+  assert.equal(captured.rotate_every, 'week');
+});
+
+test('buildChoreForm: the turn order moves up and down without retyping it', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  let captured = null;
+  const model = { ...readyModel(sandbox), assign: 'rotation', rot: [1, 2] };
+  sandbox.buildChoreForm(host, model, 'Save', (b) => { captured = b; }, P2);
+  tapDelegated(host, '.f-rotation', '[data-down="0"]');
+  host.querySelector('[data-submit]').onclick();
+  assert.deepEqual([...captured.rotation_order], [2, 1]);
+  tapDelegated(host, '.f-rotation', '[data-rem="0"]');
+  host.querySelector('[data-submit]').onclick();
+  assert.deepEqual([...captured.rotation_order], [1]);
+});
+
+test('buildChoreForm: "Each of them" (adding only) saves one chore per person', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  let captured = null;
+  sandbox.buildChoreForm(host, readyModel(sandbox), 'Add chore', (b) => { captured = b; }, P2, { allowEach: true });
+  tapDelegated(host, '.f-assign', '[data-assign="each"]');
+  tapDelegated(host, '.f-each', '[data-each="2"]');
+  host.querySelector('[data-submit]').onclick();
+  assert.ok(Array.isArray(captured), 'an array of bodies');
+  assert.deepEqual(JSON.parse(JSON.stringify(captured.map((b) => [b.assign_kind, b.fixed_person_id]))),
+    [['fixed', 1], ['fixed', 2]]);
+  // an edit never offers it: a saved chore is one person's or one rotation's
+  const host2 = document.createElement('div');
+  sandbox.buildChoreForm(host2, readyModel(sandbox), 'Save', () => {}, P2);
+  assert.equal(host2.querySelector('[data-assign="each"]'), null);
+});
+
+test('buildChoreForm: it asks for a name and a person before it saves', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  let called = false;
+  sandbox.buildChoreForm(host, sandbox.freshChoreModel(), 'Add chore', () => { called = true; }, P2);
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(called, false);
+  assert.match(host.querySelector('.f-error').textContent, /name/);
+  host.querySelector('.f-title').value = 'Dishes';
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(called, false);
+  assert.match(host.querySelector('.f-error').textContent, /who does it/);
+  tapDelegated(host, '.f-person', '[data-pick="2"]');
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(called, true);
+});
+
+test('buildChoreForm: the Coming up strip shows the server\'s preview, and only for a complete draft', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms);   // the strip is debounced on real time
+  sandbox.clearTimeout = (id) => clearTimeout(id);
+  const host = document.createElement('div');
+  const asked = [];
+  const preview = async (body) => {
+    asked.push(body);
+    return { upcoming: [{ date: sandbox.todayISO(), person_id: 2 }], slot: 1 };
+  };
+  const model = { ...readyModel(sandbox), assign: 'rotation', rot: [1, 2] };
+  sandbox.buildChoreForm(host, model, 'Save', () => {}, P2, { preview, choreId: 7 });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.length, 1, 'one (debounced) preview request');
+  assert.equal(asked[0].chore_id, 7, 'an edit previews from its own start date');
+  assert.ok(!host.querySelector('.f-preview').classList.contains('hidden'));
+  assert.match(host.querySelector('.f-cells').innerHTML, /Today[\s\S]*Alex/);
+  // "Who goes next?" restarts the cycle on Sam without changing who is in it
+  assert.match(host.querySelector('.f-first').innerHTML, /person-chip small selected" type="button" data-first="1"/);
+  tapDelegated(host, '.f-first', '[data-first="0"]');
+  assert.match(host.querySelector('.f-rotation').innerHTML, /1<\/span><span class="pc-dot" aria-hidden="true"><\/span><span class="rot-name">Alex/);
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.length, 2, 'the new order asked again');
+  // an incomplete draft (no one taking turns) asks nothing and hides the strip
+  tapDelegated(host, '.f-rotation', '[data-rem="0"]');
+  tapDelegated(host, '.f-rotation', '[data-rem="0"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.length, 2, 'nothing asked for an empty turn list');
+  assert.ok(host.querySelector('.f-preview').classList.contains('hidden'));
 });

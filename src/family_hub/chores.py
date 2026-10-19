@@ -109,6 +109,24 @@ def occurrences_before(chore: dict, d: dt.date) -> int:
     return _f(a + total_days) - _f(a)
 
 
+def turn_slot(chore: dict, d: dt.date) -> int:
+    """How many turns have gone by before ``d``, which picks whose turn it is
+    in a rotation (``order[turn_slot % len(order)]``).
+
+    ``rotate_every`` says when the turn passes on:
+    * 'turn' (the default): every time the chore comes up, so a daily chore
+      shared by two people alternates day by day.
+    * 'week': once a week, on Monday. One person has every occurrence of the
+      chore for the whole week, the next person has all of next week, and so
+      on ("Ava has the dishes this week, Ruby next week"). On an every-other-
+      week schedule the turn passes once per on-cycle week, so two people
+      still alternate instead of the same person landing every time."""
+    if chore.get("rotate_every") == "week":
+        w = (chore.get("week_interval") or 1) if chore["schedule_kind"] == "days" else 1
+        return _week_index(d, _epoch(chore)) // w
+    return occurrences_before(chore, d)
+
+
 def assignee_id(chore: dict, d: dt.date,
                 active_ids: set | None = None) -> int | None:
     """Who is assigned on ``d``. ``active_ids`` (when given) drops inactive
@@ -121,7 +139,7 @@ def assignee_id(chore: dict, d: dt.date,
         order = [pid for pid in order if pid in active_ids]
     if not order:
         return None
-    return order[occurrences_before(chore, d) % len(order)]
+    return order[turn_slot(chore, d) % len(order)]
 
 
 def away_view_on(amap: dict, d_iso: str) -> dict:
@@ -172,7 +190,7 @@ def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
         if chore["assign_kind"] == "rotation" and aid in away_ids:
             order = [pid for pid in chore["rotation_order"] if pid in active_ids]
             # the turn's own slot (a person can hold two slots, e.g. laundry)
-            start = occurrences_before(chore, d) % len(order)
+            start = turn_slot(chore, d) % len(order)
             nxt = next((order[(start + k) % len(order)] for k in range(1, len(order))
                         if order[(start + k) % len(order)] in present_ids), None)
             if nxt is None:
