@@ -46,6 +46,43 @@
 
   if (!kiosk) return;
 
+  // Pointer hiding (kiosk only). The wall is a touchscreen with a wireless mouse
+  // the family sometimes uses, so the pointer should vanish while people tap and
+  // come back the moment someone really uses the mouse. It starts VISIBLE: on
+  // load we can't know whether the last input was a finger or the mouse.
+  // Only a press that looks like touch hides it: pointerType 'touch' or 'pen',
+  // or a mouse event Firefox made from a touch (mozInputSource 5, or
+  // sourceCapabilities.firesTouchEvents). A plain mouse click never hides it.
+  // A mouse move with no button held, at least KIOSK_CURSOR_MOVE_PX from where
+  // the tap landed, or a wheel turn brings it back; the distance skips the small
+  // motion some systems send right after a tap. Capture phase, so a handler that
+  // stops propagation (the keyboard's own keys) can't hide a tap from us.
+  const KIOSK_CURSOR_CLASS = 'kiosk-cursor-hidden';
+  const KIOSK_CURSOR_MOVE_PX = 3;
+  let pressX = null;
+  let pressY = null;
+  const touchSourced = (e) => e.pointerType === 'touch' || e.pointerType === 'pen'
+    || e.mozInputSource === 5   // MouseEvent.MOZ_SOURCE_TOUCH: Firefox's touch-made mouse event
+    || !!(e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents);
+  const showPointer = () => document.body.classList.remove(KIOSK_CURSOR_CLASS);
+  const hideOnTouch = (e) => {
+    if (!touchSourced(e)) return;
+    pressX = Number.isFinite(e.clientX) ? e.clientX : null;
+    pressY = Number.isFinite(e.clientY) ? e.clientY : null;
+    document.body.classList.add(KIOSK_CURSOR_CLASS);
+  };
+  document.addEventListener('pointerdown', hideOnTouch, { capture: true, passive: true });
+  document.addEventListener('pointerup', hideOnTouch, { capture: true, passive: true });
+  document.addEventListener('pointermove', (e) => {
+    if (!document.body.classList.contains(KIOSK_CURSOR_CLASS)) return;
+    if (e.pointerType !== 'mouse' || touchSourced(e) || e.buttons) return;
+    if (pressX !== null && pressY !== null && Number.isFinite(e.clientX) && Number.isFinite(e.clientY)
+        && Math.hypot(e.clientX - pressX, e.clientY - pressY) < KIOSK_CURSOR_MOVE_PX) return;
+    showPointer();
+  }, { capture: true, passive: true });
+  // A finger can't turn a wheel; a mouse (or touchpad) scroll means a hand on it.
+  document.addEventListener('wheel', showPointer, { capture: true, passive: true });
+
   // The inputs the keyboard serves. A `.txt-input` <select> (the chore person
   // picker) also carries the class, so oskTypeable() below excludes non-text
   // controls - the keyboard must only attach to something you can type into.

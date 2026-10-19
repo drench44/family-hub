@@ -2686,6 +2686,60 @@ def calendar(days: int = CAL_FETCH_DAYS, past: int = CAL_FETCH_PAST):
         return _calendar_block(c, _today(), days, past_days=past)
 
 
+@app.post("/api/calendar/sync")
+def calendar_sync_now():
+    """The wall's refresh button calls this just before it reloads the page: one
+    pass of the same sync the background loop runs (Google and ICS, then iCloud),
+    so the reload shows current data rather than whatever the 5-minute loop last
+    fetched. Always answers 200 (the page reloads regardless): {"synced": true},
+    or {"synced": false, "reason": ...} where reason is demo, cooldown, busy (a
+    sync was already running and did not let go in time) or error (with
+    needs_auth when the Google sign-in has expired). `synced` speaks for Google
+    and ICS; iCloud syncs in the same pass but reports through its own status in
+    Settings. A failed sync still uses the cooldown; a busy one does not. It does
+    not bypass sync_once's empty-calendar guard, so a calendar emptied in Google
+    can still take up to a day to clear."""
+    global _sync_now_last
+    if DEMO:
+        return {"synced": False, "reason": "demo"}
+    with _sync_now_gate:
+        now = time.monotonic()
+        if now - _sync_now_last < SYNC_NOW_COOLDOWN_S:
+            return {"synced": False, "reason": "cooldown"}
+        previous, _sync_now_last = _sync_now_last, now
+    conn = None
+    try:
+        _db()   # runs the one-time schema setup if this is the process's first request
+        # its own connection, like the loop's: _sync_all may close and replace it
+        conn = fdb.connect(DB_PATH)
+        conn, status = _sync_all(GoogleCalendarClient(TOKEN_PATH), conn, cfg,
+                                 lock_wait=SYNC_NOW_LOCK_WAIT_S)
+    except Exception:
+        log.exception("refresh-button sync failed")
+        return {"synced": False, "reason": "error", "needs_auth": False}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                log.warning("refresh-button sync: closing its DB connection failed",
+                            exc_info=True)
+    if status.get("busy"):
+        with _sync_now_gate:
+            # nothing ran, so nothing to cool down from (unless a newer tap
+            # has stamped the gate since; leave that one alone)
+            if _sync_now_last == now:
+                _sync_now_last = previous
+        log.info("refresh-button sync skipped: a calendar sync was already running")
+        return {"synced": False, "reason": "busy"}
+    if not status.get("ok"):
+        log.warning("refresh-button sync did not succeed: %s",
+                    status.get("error") or "no status")
+        return {"synced": False, "reason": "error",
+                "needs_auth": bool(status.get("needs_auth"))}
+    return {"synced": True}
+
+
 @app.get("/api/tiles/climate")
 async def tile_climate():
     if DEMO:
@@ -3595,6 +3649,25 @@ _caldav_sync_lock = threading.Lock()
 # Kept well under the wall's 12s request timeout (J_TIMEOUT_MS in common.js),
 # so a busy lock reads as "already running", not as a generic failed request.
 CALDAV_TEST_WAIT_S = 5
+# Every Google/ICS sync (the 5-minute loop and the wall's refresh button) runs
+# under this lock, for the same reason as the CalDAV one above: each uses its
+# own connection, and two at once would fetch and replace the same rows twice.
+_google_sync_lock = threading.Lock()
+# The wall's refresh button syncs before it reloads. A second tap inside this
+# window just reloads, so mashing it can't hammer Google.
+SYNC_NOW_COOLDOWN_S = 15
+# How long the button's request waits, in all, for the locks (Google, then
+# iCloud) held by a sync already mid-run, before answering "busy" or skipping
+# iCloud. Bounded because the request holds one of the shared worker threads,
+# and a lock that is never released would otherwise park one per tap. This
+# bounds the wait for a lock only: once the request holds it, the sync itself
+# takes as long as Google and the ICS feeds take. Under the wall's 10 s wait
+# (WALL_SYNC_WAIT_MS in hub.js).
+SYNC_NOW_LOCK_WAIT_S = 8
+# Makes the button's cooldown check-and-stamp one step, so two taps landing
+# together on the thread pool can't both pass it.
+_sync_now_gate = threading.Lock()
+_sync_now_last = float("-inf")     # time.monotonic() of the last button sync
 
 
 def _get_caldav_client():
@@ -3608,27 +3681,49 @@ def _get_caldav_client():
     return _caldav_client
 
 
-def _sync_tick(client, conn, cfg):
-    """One sync iteration: run sync_once; on failure log + self-heal the DB
-    connection. Returns the connection to use next tick (a fresh one after a
-    failure). Extracted from sync_loop so the reconnect path is unit-testable —
-    the old bare `pass` froze calendar sync forever on a dropped DB handle with
-    no log line (sync_once captures per-source errors itself, but its own final
+def _sync_all(client, conn, cfg, lock_wait=None):
+    """One sync pass over every source: Google/ICS (under the Google lock), then
+    iCloud CalDAV (under its own lock, never inside the Google one, so a slow
+    iCloud can't hold up the next Google sync). Returns (conn, status): the
+    connection to use next (a fresh one after a failure) and the Google/ICS
+    status dict sync_once recorded, or {"ok": False, "busy": True} when
+    `lock_wait` seconds passed without getting the Google lock. `lock_wait` is
+    one budget for both locks; None waits as long as it takes (the background
+    loop). The status is Google/ICS only: iCloud keeps its own (caldav_status,
+    shown in Settings), and a busy iCloud lock just skips that leg this pass.
+    Never raises: on failure it logs and self-heals the DB connection, so the
+    loop doesn't freeze on a dropped DB handle with no log line (the old bare
+    `pass` did; sync_once captures per-source errors itself, but its own final
     kv_set can still raise if the DB went unwritable)."""
+    deadline = None if lock_wait is None else time.monotonic() + lock_wait
+
+    def _wait_left():
+        return -1 if deadline is None else max(0.0, deadline - time.monotonic())
+
     try:
-        sync_once(client, conn, cfg, _now_local())
-        # CalDAV runs in the same tick but is isolated: it never raises (records
+        if not _google_sync_lock.acquire(timeout=_wait_left()):
+            return conn, {"ok": False, "busy": True}
+        try:
+            status = sync_once(client, conn, cfg, _now_local())
+        finally:
+            _google_sync_lock.release()
+        # CalDAV runs in the same pass but is isolated: it never raises (records
         # its own caldav_status), and a defensive guard keeps any surprise from
         # disrupting the Google sync's reconnect logic. Inert without credentials.
         try:
             cdav = _get_caldav_client()
             if cdav is not None:
-                with _caldav_sync_lock:
-                    caldav_sync.sync_once(cdav, conn, cfg, _now_local())
+                if _caldav_sync_lock.acquire(timeout=_wait_left()):
+                    try:
+                        caldav_sync.sync_once(cdav, conn, cfg, _now_local())
+                    finally:
+                        _caldav_sync_lock.release()
+                else:
+                    log.info("iCloud sync already running; skipped this pass")
         except Exception:
             log.exception("caldav sync tick error (non-fatal)")
-        return conn
-    except Exception:
+        return conn, status if isinstance(status, dict) else {}
+    except Exception as e:
         log.exception("calendar sync tick error; reconnecting DB")
         try:
             conn.close()
@@ -3639,7 +3734,13 @@ def _sync_tick(client, conn, cfg):
             fdb.ensure_schema(conn)
         except Exception:
             log.exception("sync tick DB reconnect failed; will retry")
-        return conn
+        return conn, {"ok": False, "error": str(e)}
+
+
+def _sync_tick(client, conn, cfg):
+    """The background loop's iteration: _sync_all, waiting as long as it takes
+    for the locks. Returns the connection to use next tick."""
+    return _sync_all(client, conn, cfg)[0]
 
 
 def _open_sync_conn():

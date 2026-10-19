@@ -146,8 +146,11 @@ def test_ws_bridges_both_ways_text_and_binary(tmp_path, monkeypatch, fake):
             assert len(ws.receive_bytes()) == 2 * 1024 * 1024
             ws.send_bytes(b"\x01\x02\x03")
             assert ws.receive_text() == "got 3 bytes"
-    # the browser leaving closes go2rtc's side too (else its consumer lingers)
-    assert g.closed.wait(5), "the proxy never closed the upstream socket"
+        # the browser leaving closes go2rtc's side too (else its consumer lingers). Wait for it
+        # INSIDE the TestClient: leaving that block stops the app's event loop, and the proxy's
+        # teardown (which closes the upstream) runs on it after the browser has gone. Outside,
+        # a busy runner could stop the loop first and fail this on a race, not a bug.
+        assert g.closed.wait(5), "the proxy never closed the upstream socket"
     assert g.paths == ["/api/ws?src=cam"]
     # go2rtc lists viewers by user agent and address: the browser's, not the hub's
     assert g.headers[0]["User-Agent"] == "WallBrowser/1.0"
