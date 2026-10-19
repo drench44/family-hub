@@ -23,15 +23,18 @@ sometimes uses), so the pointer is not hidden for good:
 
 - It starts **visible** on every load, because the page can't know whether the
   last input was a finger or the mouse.
-- **Any press hides it** (`body.kiosk-cursor-hidden`, which sets
-  `cursor: none` on the body and everything in it). That includes a press the
-  browser reports as a mouse click, because this wall's touchscreen can reach
-  Firefox as a mouse (see below). A mouse click hides it too, until the mouse
-  moves again.
-- **A real mouse move brings it back**: a `mouse` pointer move with no button
-  held, at least 3px from where the last press landed. A finger dragging the
-  page, the small motion some systems send right after a tap, and Firefox's
-  touch-made mouse events (`mozInputSource` 5) don't count.
+- **A tap hides it** (`body.kiosk-cursor-hidden`, which sets `cursor: none`
+  on the body and everything in it). A press counts as a tap when the browser
+  says it came from a finger or pen (`pointerType` `touch` or `pen`), or when
+  Firefox turned a touch into a mouse event (`mozInputSource` 5, or
+  `sourceCapabilities.firesTouchEvents`). A plain mouse click never hides it.
+- **Using the mouse brings it back**: a `mouse` pointer move with no button
+  held, at least 3px from where the last tap landed, or a turn of the wheel. A
+  finger dragging the page, the small motion some systems send right after a
+  tap, and Firefox's touch-made mouse events don't count.
+- If this wall's Firefox ever reports a finger as a plain mouse with none of
+  those markers, the pointer simply stays visible, the same as before this
+  feature.
 - Phones and laptops never latch the flag, so their pointer never changes.
 
 It can't hide the pointer inside embedded iframes (separate documents), such as

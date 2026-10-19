@@ -10160,6 +10160,14 @@ function seedRefresh(document) {
   const btn = document.createElement('button'); btn._id = 'wall-refresh'; document.body.appendChild(btn);
   return btn;
 }
+// Records every value set for one attribute, still passing each call through
+// to the element's own setAttribute.
+function recordAttr(el, name) {
+  const seen = [];
+  const own = el.setAttribute.bind(el);
+  el.setAttribute = (k, v) => { if (k === name) seen.push(String(v)); return own(k, v); };
+  return seen;
+}
 const tapRefresh = (fire, btn) =>
   fire('click', { target: { closest: (s) => (s === '#wall-refresh' ? btn : null) } });
 
@@ -10241,28 +10249,36 @@ test('refresh button: the cutoff timer is cleared once the sync answers', async 
 test('refresh button: an error answer from the hub still reloads the page', async () => {
   const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
   const btn = seedRefresh(document);
+  const warned = [];
+  sandbox.console = { ...console, warn: (...a) => warned.push(a) };
   sandbox.fetch = async () => ({ ok: false, status: 500, json: async () => ({ detail: 'boom' }) });
   tapRefresh(fire, btn);
   await settle();
+  assert.equal(warned.length, 1, 'the failure is left in the console');
+  assert.match(String(warned[0][0]), /calendar sync failed; reloading anyway/);
+  assert.match(String(warned[0][1] && warned[0][1].message), /boom/);
   assert.equal(reloadCalls.length, 1);
 });
 
 test('refresh button: if the reload does not navigate, the button comes back to life', async () => {
   const { document, sandbox, fire, reloadCalls, timers, runTimers } = newHub({ mobile: false });
   const btn = seedRefresh(document);
+  const ariaBusy = recordAttr(btn, 'aria-busy');
   sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ synced: true }) });
   tapRefresh(fire, btn);
   await settle();
   assert.equal(reloadCalls.length, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'dimmed while the reload is under way');
+  assert.equal(ariaBusy.at(-1), 'true');
   runTimers((t) => t.ms === 3000);   // the page is still here: the reload went nowhere (offline, bfcache)
   assert.ok(!btn.classList.contains('is-syncing'), 'no longer dimmed');
+  assert.equal(ariaBusy.at(-1), 'false', 'no longer announced as busy');
   tapRefresh(fire, btn);
   await settle();
   assert.equal(reloadCalls.length, 2, 'a second tap works');
 });
 
-test('refresh button: a sync that did not run leaves its reason in the console, then reloads', async () => {
+test('refresh button: a sync that ran with an error says so in the console (not "did not run"), then reloads', async () => {
   const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
   const btn = seedRefresh(document);
   const warned = [];
@@ -10272,6 +10288,8 @@ test('refresh button: a sync that did not run leaves its reason in the console, 
   tapRefresh(fire, btn);
   await settle();
   assert.equal(warned.length, 1);
+  assert.match(warned[0][0], /ran with an error/, 'a partial failure must not read as "did not run"');
+  assert.match(warned[0][0], /Google sign-in has expired/);
   assert.equal(warned[0][1].reason, 'error');
   assert.equal(warned[0][1].needs_auth, true);
   assert.equal(reloadCalls.length, 1);
@@ -10281,8 +10299,7 @@ test('refresh button: says it is busy while it works, and taps during the 10 s w
   const { document, sandbox, fire, reloadCalls, timers } = newHub({ mobile: false });
   const btn = seedRefresh(document);
   sandbox.AbortController = AbortController;
-  const busy = [];
-  btn.setAttribute = (k, v) => { if (k === 'aria-busy') busy.push(v); };
+  const busy = recordAttr(btn, 'aria-busy');
   let fetches = 0;
   sandbox.fetch = (url, opts) => new Promise((_, reject) => {
     fetches++;
@@ -10298,4 +10315,42 @@ test('refresh button: says it is busy while it works, and taps during the 10 s w
   cutoff.done = true; cutoff.fn();
   await settle();
   assert.equal(reloadCalls.length, 1, 'one reload, not two');
+});
+
+test('refresh button: the console says why a sync was skipped, in words', async () => {
+  for (const [reason, words] of [['busy', /another sync was already running/],
+    ['cooldown', /under 15 s ago/], ['demo', /demo mode/]]) {
+    const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+    const btn = seedRefresh(document);
+    const warned = [];
+    sandbox.console = { ...console, warn: (...a) => warned.push(a) };
+    sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ synced: false, reason }) });
+    tapRefresh(fire, btn);
+    await settle();
+    assert.match(warned[0][0], words, reason);
+    assert.doesNotMatch(warned[0][0], /sign-in/, reason);
+    assert.equal(reloadCalls.length, 1, reason);
+  }
+});
+
+test('refresh button: a tap that lands on the arrow glyph inside the button still refreshes', async () => {
+  // The arrow is a <span> inside the <button> (so it can spin on its own); a
+  // tap on it targets the span, and the handler must find the button through
+  // closest('#wall-refresh').
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  const glyph = { parentNode: btn, id: '' };
+  glyph.closest = (sel) => {
+    for (let n = glyph; n; n = n.parentNode) {
+      if (sel.startsWith('#') && n.id === sel.slice(1)) return n;
+    }
+    return null;
+  };
+  let calls = 0;
+  sandbox.fetch = async () => { calls++; return { ok: true, status: 200, json: async () => ({ synced: true }) }; };
+  fire('click', { target: glyph });
+  await settle();
+  assert.equal(calls, 1, 'the sync was asked for');
+  assert.equal(reloadCalls.length, 1);
+  assert.ok(btn.classList.contains('is-syncing'), 'the button itself shows it is working');
 });
