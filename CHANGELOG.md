@@ -10,6 +10,13 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- The wall's pointer now hides only after a finger (or pen) tap. A mouse
+  click no longer hides it, and turning the mouse wheel brings it back.
+- When the ↻ button's calendar sync partly fails, the browser console now
+  says it ran with an error (and whether the Google sign-in has expired)
+  instead of saying it did not run.
+
 ## [1.13.2] — 2026-10-19
 
 ### Changed
