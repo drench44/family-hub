@@ -1387,3 +1387,7 @@ test('todoFailMessage: a name the server refuses says so instead of "tap again"'
   assert.match(sandbox.todoFailMessage('unknown todo'), /another device/);
   assert.match(sandbox.todoFailMessage('Failed to fetch'), /check the hub/);
 });
+
+test('todoFailMessage: an item checked off elsewhere mid-move says so', () => {
+  assert.match(sandbox.todoFailMessage("a checked-off item can't be moved"), /checked that item off/);
+});

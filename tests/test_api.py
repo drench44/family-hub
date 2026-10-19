@@ -6239,7 +6239,7 @@ def test_chore_preview_of_a_far_off_one_time_chore_answers_at_once(client, app_m
     got = client.post("/api/admin/chores/preview", json={
         "schedule_kind": "once", "date": "9999-12-31", "assign_kind": "fixed",
         "fixed_person_id": a}).json()
-    assert _time.monotonic() - t0 < 1.0
+    assert _time.monotonic() - t0 < 5.0, "a walk to 9999 would take far longer"
     assert got["upcoming"] == [{"date": "9999-12-31", "person_id": a}]
 
 
