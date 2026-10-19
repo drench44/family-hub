@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.3] — 2026-10-19
+
 ### Fixed
 - The wall's pointer now hides only after a finger (or pen) tap. A mouse
   click no longer hides it, and turning the mouse wheel brings it back.
