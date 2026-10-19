@@ -1301,7 +1301,8 @@ body {
   color: var(--faint);
   padding: 12px 2px 2px;
 }
-.todo-grp:first-child .todo-grp-head { padding-top: 4px; }
+/* first-of-type, not first-child: the card's first child is its glass pane */
+.todo-grp:first-of-type .todo-grp-head { padding-top: 4px; }
 .todo-grp-count { color: var(--dim); letter-spacing: normal; }
 /* "+N more" is a real tap target on the wall touchscreen (>= 44px, CLAUDE.md). */
 .todo-more {

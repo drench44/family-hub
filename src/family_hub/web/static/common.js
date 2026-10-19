@@ -741,8 +741,8 @@ function unassignedChoresHtml(list) {
 }
 
 /* Every chore in one list for the chores edit mode, each with what it is
-   in plain words ("Every Monday. Ava and Ruby take turns, switching every
-   Monday.") and Edit / Delete. The person cards only show the chores ON
+   in plain words ("Every Monday. Ava and Ruby take turns, a new person
+   each week.") and Edit / Delete. The person cards only show the chores ON
    the day on screen, so a Saturday-only chore could only be found by paging
    to a Saturday; here everything is one tap away. Sorted by name. Pure. */
 function allChoresHtml(chores, people) {
@@ -854,8 +854,8 @@ function shortDate(d) {
 }
 
 /* The chore form's plain-English summary of what is about to be saved:
-   "Every Monday and Thursday. Ava and Ruby take turns, switching every
-   Monday." Built from the same model the payload comes from, so it can
+   "Every Monday and Thursday. Ava and Ruby take turns, a new person each
+   week." Built from the same model the payload comes from, so it can
    never describe something the save does not do. Pure. */
 function choreSummary(m, people) {
   const nameOf = (id) => {
@@ -884,7 +884,7 @@ function choreSummary(m, people) {
     if (names.length === 0) who = 'Add the people who take turns';
     else if (names.length === 1) who = `${names[0]} every time`;
     else who = m.rotateEvery === 'week'
-      ? `${listPhrase(names)} take turns, switching every Monday`
+      ? `${listPhrase(names)} take turns, a new person each week`
       : `${listPhrase(names)} take turns, a new person each time`;
   } else if (assign === 'each') {
     const names = (m.each || []).map(nameOf).filter(Boolean);
