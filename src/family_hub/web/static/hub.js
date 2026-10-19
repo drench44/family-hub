@@ -5616,6 +5616,18 @@ function closeThemePop() {
 const WALL_SYNC_WAIT_MS = 10000;   // under j()'s 12 s: never leave the wall hanging
 const WALL_RELOAD_STUCK_MS = 3000; // a reload that hasn't torn the page down by now went nowhere
 let wallRefreshing = false;
+// What the hub said about a refresh-button sync that did not fully succeed, in
+// words. "error" can be a partial failure (one calendar failed, the others
+// synced), so it must not read as "nothing ran".
+function wallSyncNote(r) {
+  const why = {
+    demo: 'skipped (demo mode)',
+    cooldown: 'skipped (the last one was under 15 s ago)',
+    busy: 'skipped (another sync was already running)',
+    error: 'ran with an error (one or more calendars may not have updated)',
+  }[r.reason] || `did not succeed (reason: ${r.reason})`;
+  return `refresh: calendar sync ${why}${r.needs_auth ? '; the Google sign-in has expired' : ''}:`;
+}
 async function refreshWall(btn) {
   if (wallRefreshing) return;
   wallRefreshing = true;
@@ -5631,7 +5643,7 @@ async function refreshWall(btn) {
     const r = await j('/api/calendar/sync', opts);
     // The wall shows nothing about why; leave the reason where a person
     // debugging a stale wall (remote inspector, kiosk console) can find it.
-    if (r && r.synced === false) console.warn('refresh: calendar sync did not run:', r);
+    if (r && r.synced === false) console.warn(wallSyncNote(r), r);
   } catch (e) {
     console.warn('refresh: calendar sync failed; reloading anyway', e);
   } finally {

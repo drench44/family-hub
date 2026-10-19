@@ -6535,6 +6535,29 @@ def test_calendar_sync_now_a_failed_sync_still_uses_the_cooldown(client, app_mod
     assert len(calls["google"]) == 1
 
 
+class _WatchedLock:
+    """Wraps a real lock and records each acquire's timeout, setting `tried`
+    once a caller has started waiting on it, so a test can confirm the request
+    really was blocked on the lock before it lets go."""
+
+    def __init__(self, real):
+        import threading
+        self.real = real
+        self.tried = threading.Event()
+        self.timeouts = []
+
+    def acquire(self, blocking=True, timeout=-1):
+        self.timeouts.append(timeout)
+        self.tried.set()
+        return self.real.acquire(blocking, timeout)
+
+    def release(self):
+        self.real.release()
+
+    def locked(self):
+        return self.real.locked()
+
+
 def test_calendar_sync_now_gives_up_on_a_busy_lock_instead_of_wedging(client, app_mod, monkeypatch):
     """A Google sync that never lets go must not park a request thread per tap
     forever (the threadpool is shared by every sync endpoint): wait a bounded
@@ -6542,10 +6565,13 @@ def test_calendar_sync_now_gives_up_on_a_busy_lock_instead_of_wedging(client, ap
     import threading
     calls = _stub_syncs(app_mod, monkeypatch)
     monkeypatch.setattr(app_mod, "SYNC_NOW_LOCK_WAIT_S", 0.05)
+    watched = _WatchedLock(app_mod._google_sync_lock)
+    monkeypatch.setattr(app_mod, "_google_sync_lock", watched)
     out = {}
-    with app_mod._google_sync_lock:
+    with watched.real:
         t = threading.Thread(target=lambda: out.update(r=client.post("/api/calendar/sync").json()))
         t.start()
+        assert watched.tried.wait(5), "the request never reached the Google lock"
         t.join(5)
         stuck = t.is_alive()
     t.join(5)
@@ -6556,16 +6582,41 @@ def test_calendar_sync_now_gives_up_on_a_busy_lock_instead_of_wedging(client, ap
         "a busy answer must not start the cooldown"
 
 
+def test_calendar_sync_now_busy_answer_leaves_a_newer_taps_cooldown_alone(client, app_mod, monkeypatch):
+    """A busy tap hands back the cooldown stamp it took, but only if it is
+    still its own: a newer tap's stamp landing meanwhile must survive."""
+    newer = {}
+
+    def busy_after_a_newer_tap(client_, conn, cfg_, lock_wait=None):
+        with app_mod._sync_now_gate:
+            app_mod._sync_now_last = newer["t"] = app_mod.time.monotonic() + 1000
+        return conn, {"ok": False, "busy": True}
+    monkeypatch.setattr(app_mod, "_sync_all", busy_after_a_newer_tap)
+    assert client.post("/api/calendar/sync").json() == {"synced": False, "reason": "busy"}
+    assert app_mod._sync_now_last == newer["t"], "the newer tap's stamp was clobbered"
+
+
+def test_calendar_sync_now_busy_answer_hands_back_its_own_stamp(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_sync_all",
+                        lambda c, conn, cfg_, lock_wait=None: (conn, {"ok": False, "busy": True}))
+    before = app_mod._sync_now_last
+    assert client.post("/api/calendar/sync").json()["reason"] == "busy"
+    assert app_mod._sync_now_last == before
+
+
 def test_calendar_sync_now_skips_a_busy_icloud_lock_instead_of_wedging(client, app_mod, monkeypatch):
     """The Google lock wait is bounded; the iCloud lock must be too, or a stuck
     iCloud sync parks the button's request thread just the same."""
     import threading
     calls = _stub_syncs(app_mod, monkeypatch)
     monkeypatch.setattr(app_mod, "SYNC_NOW_LOCK_WAIT_S", 0.05)
+    watched = _WatchedLock(app_mod._caldav_sync_lock)
+    monkeypatch.setattr(app_mod, "_caldav_sync_lock", watched)
     out = {}
-    with app_mod._caldav_sync_lock:
+    with watched.real:
         t = threading.Thread(target=lambda: out.update(r=client.post("/api/calendar/sync")))
         t.start()
+        assert watched.tried.wait(5), "the request never reached the iCloud lock"
         t.join(5)
         stuck = t.is_alive()
     t.join(5)
@@ -6577,23 +6628,31 @@ def test_calendar_sync_now_skips_a_busy_icloud_lock_instead_of_wedging(client, a
 
 def test_sync_all_lock_wait_is_one_budget_for_both_locks(app_mod, monkeypatch):
     """The button waits SYNC_NOW_LOCK_WAIT_S in all, not that much per lock:
-    a Google sync that used up the budget leaves iCloud a non-blocking try."""
+    a Google sync that used up the budget leaves iCloud only a non-blocking
+    try, and a quick one leaves iCloud what remains (never more)."""
     import time as _time
-    calls = _stub_syncs(app_mod, monkeypatch)
-
-    def slow_google(client, conn, cfg, now):
-        _time.sleep(0.2)
-        return {"ok": True}
-    monkeypatch.setattr(app_mod, "sync_once", slow_google)
+    _stub_syncs(app_mod, monkeypatch)
     conn = app_mod.fdb.connect(app_mod.DB_PATH)
     app_mod.fdb.ensure_schema(conn)
-    with app_mod._caldav_sync_lock:
-        t0 = _time.monotonic()
-        _, status = app_mod._sync_all(None, conn, app_mod.cfg, lock_wait=0.1)
-        took = _time.monotonic() - t0
+
+    def slow_google(client, conn, cfg, now):
+        _time.sleep(0.15)
+        return {"ok": True}
+    monkeypatch.setattr(app_mod, "sync_once", slow_google)
+    watched = _WatchedLock(app_mod._caldav_sync_lock)
+    monkeypatch.setattr(app_mod, "_caldav_sync_lock", watched)
+    _, status = app_mod._sync_all(None, conn, app_mod.cfg, lock_wait=0.1)
     assert status == {"ok": True}
-    assert calls["caldav"] == []
-    assert took < 0.6, f"iCloud got its own full wait on top ({took:.2f}s)"
+    assert watched.timeouts == [0.0], "the spent budget left iCloud a non-blocking try"
+
+    monkeypatch.setattr(app_mod, "sync_once", lambda *a, **k: {"ok": True})
+    watched.timeouts.clear()
+    app_mod._sync_all(None, conn, app_mod.cfg, lock_wait=5)
+    assert len(watched.timeouts) == 1 and 4 < watched.timeouts[0] <= 5
+
+    watched.timeouts.clear()
+    app_mod._sync_all(None, conn, app_mod.cfg)     # the background loop
+    assert watched.timeouts == [-1], "the loop waits as long as it takes"
 
 
 def test_google_syncs_never_overlap(tmp_path, monkeypatch):

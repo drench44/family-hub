@@ -302,11 +302,32 @@ test('kiosk pointer: starts visible, a touch hides it, a real mouse move shows i
   assert.ok(!document.body.classList.contains(HIDDEN), 'back after the mouse moved');
 });
 
-test('kiosk pointer: a tap the browser reports as a mouse still hides it', () => {
-  // The wall's touchscreen can reach Firefox as a mouse (docs/on-screen-keyboard.md).
+test('kiosk pointer: a plain mouse click never hides it', () => {
   const { document, fire } = loadOsk();
   tap(fire, 'mouse');
+  assert.ok(!document.body.classList.contains(HIDDEN), 'mouse users keep their pointer');
+});
+
+test('kiosk pointer: a mouse event Firefox made from a touch hides it', () => {
+  // The wall's touchscreen can reach Firefox as a mouse (docs/on-screen-keyboard.md).
+  for (const extra of [{ mozInputSource: 5 }, { sourceCapabilities: { firesTouchEvents: true } }]) {
+    const { document, fire } = loadOsk();
+    fire('pointerdown', { pointerType: 'mouse', clientX: 5, clientY: 5, buttons: 1, ...extra });
+    assert.ok(document.body.classList.contains(HIDDEN), JSON.stringify(extra));
+  }
+});
+
+test('kiosk pointer: a pen tap hides it', () => {
+  const { document, fire } = loadOsk();
+  tap(fire, 'pen');
   assert.ok(document.body.classList.contains(HIDDEN));
+});
+
+test('kiosk pointer: a wheel turn brings it back', () => {
+  const { document, fire } = loadOsk();
+  tap(fire, 'touch');
+  fire('wheel', { deltaY: 100 });
+  assert.ok(!document.body.classList.contains(HIDDEN));
 });
 
 test('kiosk pointer: moves that are not a real mouse move keep it hidden', () => {
@@ -336,7 +357,7 @@ test('kiosk pointer: hides again on the next tap after the mouse brought it back
 test('kiosk pointer: a phone or laptop (no kiosk flag) never changes, and gets no listeners', () => {
   const { document, fire, osk, docListeners } = loadOsk(false);
   assert.equal(osk, undefined, 'no keyboard outside kiosk mode');
-  for (const t of ['pointerdown', 'pointerup', 'pointermove']) {
+  for (const t of ['pointerdown', 'pointerup', 'pointermove', 'wheel']) {
     assert.equal(docListeners[t], undefined, `no ${t} listener off the wall`);
   }
   tap(fire, 'touch');
