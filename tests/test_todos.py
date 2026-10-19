@@ -130,3 +130,24 @@ def test_recent_done_windows_and_orders_newest_first():
     ]
     out = td.recent_done(items, TODAY)
     assert [t["id"] for t in out] == [2, 1]
+
+
+
+def test_group_orders_by_place_then_age_with_checked_items_last():
+    """Items someone placed by hand come first, in their place; never-moved
+    items follow oldest first; a just-checked item sits after the open ones."""
+    import datetime as _dt
+    now = _dt.datetime(2026, 10, 19, 12, 0, tzinfo=_dt.timezone.utc)
+    rows = [
+        {"id": 1, "title": "old, never moved", "bucket": "now", "created_at": "2026-10-01T00:00:00+00:00",
+         "done_at": None, "done_date": None, "sort": None},
+        {"id": 2, "title": "placed second", "bucket": "now", "created_at": "2026-10-05T00:00:00+00:00",
+         "done_at": None, "done_date": None, "sort": 1},
+        {"id": 3, "title": "placed first", "bucket": "now", "created_at": "2026-10-09T00:00:00+00:00",
+         "done_at": None, "done_date": None, "sort": 0},
+        {"id": 4, "title": "just checked", "bucket": "now", "created_at": "2026-09-01T00:00:00+00:00",
+         "done_at": "2026-10-19T11:58:00+00:00", "done_date": "2026-10-19", "sort": 0},
+        {"id": 5, "title": "new, never moved", "bucket": "now", "created_at": "2026-10-10T00:00:00+00:00",
+         "done_at": None, "done_date": None},   # a row from before the column: no key at all
+    ]
+    assert [t["id"] for t in td.group(rows, now)["now"]] == [3, 2, 1, 5, 4]

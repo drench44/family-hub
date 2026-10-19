@@ -724,3 +724,13 @@ def test_weekly_rotation_rows_say_so_for_the_card():
     plan = ch.day_plan(rows, people, set())
     flags = {c["id"]: (c["rot"], c["rot_week"]) for p in plan for c in p["chores"]}
     assert flags == {5: (True, True), 6: (True, False), 7: (False, False)}
+
+
+
+def test_weekly_rotation_on_an_every_few_days_chore_counts_calendar_weeks():
+    """Every 2 days, switching weekly: the turn passes on Monday whatever day
+    the chore lands on (week_interval only means something for 'days')."""
+    chore = _weekly_rot(5, [1, 2], schedule_kind="interval", interval_days=2, week_interval=2)
+    assert ch.turn_slot(chore, dt.date(2026, 8, 9)) == 0     # Sunday of the epoch's week
+    assert ch.turn_slot(chore, dt.date(2026, 8, 11)) == 1    # Tuesday, next week
+    assert ch.turn_slot(chore, dt.date(2026, 8, 17)) == 2

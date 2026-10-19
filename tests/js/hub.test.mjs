@@ -1367,3 +1367,23 @@ test('todoDropOrder: puts the item at the slot, never twice', () => {
   assert.deepEqual(D([1, 2], 9, 99), [1, 2, 9], 'past the end lands last');
   assert.deepEqual(D([], 9, 0), [9]);
 });
+
+test('todoKeyMove: arrows move one place, or to the end of the next list, and stop at the ends', () => {
+  const B = { now: [{ id: 1 }, { id: 2 }, { id: 9, done_at: 'x' }], soon: [{ id: 3 }], later: [] };
+  const K = (id, key) => JSON.parse(JSON.stringify(sandbox.todoKeyMove(B, id, key)));
+  assert.deepEqual(K(1, 'ArrowDown'), { bucket: 'now', order: [2, 1] });
+  assert.deepEqual(K(2, 'ArrowUp'), { bucket: 'now', order: [2, 1] });
+  assert.deepEqual(K(1, 'ArrowUp'), { edge: 'top', bucket: 'now' });
+  assert.deepEqual(K(2, 'ArrowDown'), { edge: 'bottom', bucket: 'now' }, 'a checked item does not count');
+  assert.deepEqual(K(1, 'ArrowRight'), { bucket: 'soon', order: [3, 1] });
+  assert.deepEqual(K(3, 'ArrowRight'), { bucket: 'later', order: [3] });
+  assert.deepEqual(K(1, 'ArrowLeft'), { edge: 'first', bucket: 'now' });
+  assert.equal(sandbox.todoKeyMove(B, 9, 'ArrowDown'), null, 'a checked item has no grip to move');
+  assert.equal(sandbox.todoKeyMove(B, 1, 'Enter'), null);
+});
+
+test('todoFailMessage: a name the server refuses says so instead of "tap again"', () => {
+  assert.match(sandbox.todoFailMessage('title must be 1-120 characters'), /120 characters/);
+  assert.match(sandbox.todoFailMessage('unknown todo'), /another device/);
+  assert.match(sandbox.todoFailMessage('Failed to fetch'), /check the hub/);
+});

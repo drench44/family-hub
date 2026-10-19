@@ -1682,12 +1682,14 @@ def todos_patch(tid: int, t: TodoPatch):
     _validate_todo(merged)
     if "title" in fields:
         fields["title"] = fields["title"].strip()
-    # A move to another list lands at the END of that list (db.move_todo);
-    # the plain column write would drop it in by creation date instead.
+    # A move to another list lands at the END of that list (db.move_todo),
+    # in the same transaction as any rename; the plain column write would
+    # drop it in by creation date instead.
     new_bucket = fields.pop("bucket", None)
-    fdb.update_todo(c, tid, **fields)
     if new_bucket is not None and new_bucket != row["bucket"]:
-        fdb.move_todo(c, tid, new_bucket)
+        fdb.move_todo(c, tid, new_bucket, title=fields.get("title"))
+    else:
+        fdb.update_todo(c, tid, **fields)
     return _todo_row(c, tid)
 
 
@@ -1698,17 +1700,21 @@ class TodoOrderIn(BaseModel):
 
 @app.post("/api/todo-order")   # not under /api/todos/: see /api/todo-source
 def todos_order(body: TodoOrderIn):
-    """A drag and drop: put these items into `bucket` in this order. Every id
-    must be a real item and appear once; anything else is a 422, never a
-    half-applied shuffle."""
+    """A drag and drop: put these open items into `bucket` in this order.
+    Every id must be a real, open item and appear once; anything else is
+    refused before anything is written, never a half-applied shuffle. Open
+    items of `bucket` the request didn't name (added on another device
+    since this one last looked) keep their order after the named ones."""
     c = _db()
     if body.bucket not in tdlogic.BUCKETS:
         raise HTTPException(422, "bucket must be now, soon or later")
     if not body.ids or len(set(body.ids)) != len(body.ids):
         raise HTTPException(422, "ids must list each item once")
-    known = {t["id"] for t in fdb.list_todos(c)}
-    if any(i not in known for i in body.ids):
+    rows = {t["id"]: t for t in fdb.list_todos(c)}
+    if any(i not in rows for i in body.ids):
         raise HTTPException(404, "unknown todo")
+    if any(rows[i]["done_at"] is not None for i in body.ids):
+        raise HTTPException(422, "a checked-off item can't be moved")
     fdb.place_todos(c, body.bucket, body.ids)
     return {"ok": True}
 
@@ -2047,7 +2053,7 @@ class ChoreIn(BaseModel):
     rotation_order: list[int] = []
     # When a rotation passes the turn on: 'turn' (every time it comes up) or
     # 'week' (one person all week, the next person next week).
-    rotate_every: str = "turn"
+    rotate_every: Literal["turn", "week"] = "turn"
     # A one-time chore's single due date ('YYYY-MM-DD'); stored as rotation_epoch.
     # Ignored for daily/weekly chores (those anchor to today).
     date: str | None = None
@@ -2064,7 +2070,7 @@ class ChorePatch(BaseModel):
     assign_kind: str | None = None
     fixed_person_id: int | None = None
     rotation_order: list[int] | None = None
-    rotate_every: str | None = None
+    rotate_every: Literal["turn", "week"] | None = None
     date: str | None = None
     sort: int | None = None
     active: Literal[0, 1] | None = None   # 0/1 only, as on PersonPatch
@@ -2327,9 +2333,10 @@ class ChorePreviewIn(ChoreIn):
     chore_id: int | None = None   # editing: keep that chore's own anchor date
 
 
-# How far ahead the form's preview looks, and how many days it lists at
-# most (enough for four weeks of a daily chore: the form groups a weekly
-# rotation by week).
+# How far ahead the form's preview looks (at least; a chore that comes up
+# less often looks far enough to find its next two days), and how many days
+# it lists at most (four weeks and change of a daily chore: the form groups
+# a weekly rotation by week).
 _PREVIEW_DAYS = 120
 _PREVIEW_MAX = 31
 
@@ -2372,20 +2379,30 @@ def admin_preview_chore(ch: ChorePreviewIn):
         "rotation_epoch": epoch,
     }
     active_ids = {p["id"] for p in fdb.list_people(c)}
+    horizon = _PREVIEW_DAYS
+    if kind == "interval":
+        horizon = max(horizon, 2 * chore["interval_days"] + 1)
+    elif kind == "once":
+        horizon = max(horizon, (dt.date.fromisoformat(epoch) - today).days + 1)
     out = []
     d = today
-    for _ in range(_PREVIEW_DAYS):
+    for _ in range(horizon):
         if len(out) >= _PREVIEW_MAX:
             break
         if chlogic.occurs(chore, d):
             out.append({"date": d.isoformat(),
                         "person_id": chlogic.assignee_id(chore, d, active_ids)})
         d += dt.timedelta(days=1)
+    # The slot indexes rotation_order as stored. With someone in it no longer
+    # active, the wall turns over the shorter, active-only list instead
+    # (assignee_id), so a slot into the stored list would name the wrong
+    # person: say nothing rather than something wrong.
     slot = None
-    if chore["assign_kind"] == "rotation" and out:
+    order = chore["rotation_order"]
+    if chore["assign_kind"] == "rotation" and out and all(i in active_ids for i in order):
         first = dt.date.fromisoformat(out[0]["date"])
-        slot = chlogic.turn_slot(chore, first) % len(chore["rotation_order"])
-    return {"upcoming": out, "slot": slot}
+        slot = chlogic.turn_slot(chore, first) % len(order)
+    return {"upcoming": out, "slot": slot, "days": horizon}
 
 
 @app.delete("/api/admin/chores/{cid}")
