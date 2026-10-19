@@ -6111,7 +6111,7 @@ def test_chore_preview_rejects_what_a_save_would(client, app_mod):
            "assign_kind": "fixed", "fixed_person_id": a}
     got = client.post("/api/admin/chores/preview", json=one).json()
     assert got == {"upcoming": [{"date": _today().isoformat(), "person_id": a}], "slot": None,
-                   "days": 120}
+                   "days": 120, "rotation_order": [], "before": None}
     assert client.post("/api/admin/chores/preview",
                        json={**one, "chore_id": 999}).status_code == 404
 
