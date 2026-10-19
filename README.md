@@ -246,17 +246,22 @@ Then open `http://localhost:8139/`. Everything is fake sample data seeded on
 first launch, so it's safe to poke at. (`docker compose` users can pass the
 same `DEMO=1` in the `web` service's environment.)
 
-## Put it on a wall (Raspberry Pi kiosk)
+## Put it on a wall
 
-To mount the wall on a touchscreen, a Raspberry Pi makes a tidy appliance:
-it boots straight into the dashboard, fullscreen, no browser chrome, no
-cursor, and never sleeps. See **[docs/raspberry-pi-kiosk.md](docs/raspberry-pi-kiosk.md)**
-for the full walkthrough, with copy-paste files in [`docs/kiosk/`](docs/kiosk/).
+Any always-on browser works. Two setups are written up:
 
-**No Pi required.** Any always-on browser works — a cheap **all-in-one
-touchscreen PC** (or a touch monitor on a mini-PC) is a great no-fuss option:
-one device, nothing to wire up, just open the dashboard fullscreen in its
-browser.
+- **A used all-in-one touchscreen PC (what we run).** One box, with the
+  screen, touch, speakers and power built in, and nothing to wire up. Ours is
+  a used HP All-in-One 24 (23.8", 1920×1080, 10-point touch, Intel i3,
+  16 GB), bought for $150. A used all-in-one is often cheaper than a
+  Raspberry Pi plus a touchscreen, and faster. See
+  **[docs/all-in-one-wall.md](docs/all-in-one-wall.md)** for what to look for
+  and the setup tips we learned the hard way (sleep, overnight dimming,
+  full screen at login, power-on after an outage).
+- **A Raspberry Pi kiosk.** It boots straight into the dashboard, full screen,
+  with no browser chrome or cursor, and never sleeps. See
+  **[docs/raspberry-pi-kiosk.md](docs/raspberry-pi-kiosk.md)**, with
+  copy-paste files in [`docs/kiosk/`](docs/kiosk/).
 
 **Typing on the wall.** A wall has no keyboard, so tapping a text field pops up
 a built-in on-screen keyboard (letters, symbols, and emoji). It's for the wall
