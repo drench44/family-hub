@@ -708,6 +708,9 @@ function buildChorePayload(f) {
       ? (f.person === null || f.person === '' || f.person === undefined ? null : Number(f.person))
       : null,
     rotation_order: assign === 'rotation' ? (f.rot || []).slice() : [],
+    // When the turn passes on: 'week' keeps one person all week; anything
+    // else is the per-occurrence default. Only a rotation carries it.
+    rotate_every: assign === 'rotation' && f.rotateEvery === 'week' ? 'week' : 'turn',
     // The one-time due date; the server ignores it for daily/weekly chores.
     date: kind === 'once' ? (f.date || '') : null,
   };
@@ -737,6 +740,31 @@ function unassignedChoresHtml(list) {
     + `</div>`;
 }
 
+/* Every chore in one list for the chores edit mode, each with what it is
+   in plain words ("Every Monday. Ava and Ruby take turns, switching every
+   Monday.") and Edit / Delete. The person cards only show the chores ON
+   the day on screen, so a Saturday-only chore could only be found by paging
+   to a Saturday; here everything is one tap away. Sorted by name. Pure. */
+function allChoresHtml(chores, people) {
+  const list = (chores || []).filter((ch) => ch.active)
+    .slice().sort((a, b) => a.title.localeCompare(b.title));
+  const rows = list.map((ch) => {
+    const m = choreToModel(ch);
+    const label = escapeHtml(ch.icon ? `${ch.icon} ${ch.title}` : ch.title);
+    return `<div class="allch-row">`
+      + `<div class="allch-text"><span class="allch-title">${label}</span>`
+      + `<span class="allch-when">${escapeHtml(choreSummary(m, people))}</span></div>`
+      + `<button class="padmin-btn" type="button" data-edit-chore="${ch.id}">Edit</button>`
+      + `<button class="padmin-btn padmin-del" type="button" data-del-chore="${ch.id}" aria-label="Delete ${escapeHtml(ch.title)}">Delete</button>`
+      + `</div>`;
+  }).join('');
+  return `<div class="padmin allch">`
+    + `<div class="padmin-head"><span class="padmin-head-label">Every chore</span>`
+    + `<button class="padmin-btn padmin-add" type="button" data-add-chore="">+ New chore</button></div>`
+    + (rows || `<div class="cal-empty">No chores yet. Tap New chore to add the first one.</div>`)
+    + `</div>`;
+}
+
 function choreToModel(ch) {
   const days = new Set();
   for (let i = 0; i < 7; i++) if ((ch.days_mask >> i) & 1) days.add(i);
@@ -754,6 +782,8 @@ function choreToModel(ch) {
     times: Array.isArray(ch.due_times) ? ch.due_times.slice() : [],
     assign: ch.assign_kind, fixed_person_id: ch.fixed_person_id,
     rot: ch.rotation_order.slice(),
+    rotateEvery: ch.rotate_every === 'week' ? 'week' : 'turn',
+    each: [],
     // For a one-time chore the due date is stored as rotation_epoch.
     date: ch.schedule_kind === 'once' ? (ch.rotation_epoch || '') : '',
   };
@@ -782,67 +812,245 @@ function paintSwatches(host, selected, onpick) {
 }
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // bit 0..6
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];   // Date#getDay order
 
-/* One reusable chore form. `model` seeds it; `onsubmit(body, errEl)` fires with
-   the assembled request body; `people` is the full people list (active status
-   included) the form needs for the person picker + rotation names. Opened from
-   the wall's all-chores edit mode (add + every inline edit). */
-function buildChoreForm(host, model, submitLabel, onsubmit, people) {
+/* Household chores people reach for most, one tap each under the emoji box.
+   The OSK's emoji keyboard still offers everything else. */
+const CHORE_EMOJI = ['🍽️', '🧺', '🗑️', '♻️', '🧹', '🛏️', '🚿', '🪥',
+  '🐶', '🐱', '🐟', '🌱', '📚', '🏃', '💊', '🚗'];
+
+/* "Ava", "Ava and Ruby", "Ava, Ruby and Milo". Pure. */
+function listPhrase(names) {
+  const n = (names || []).filter(Boolean);
+  if (n.length <= 1) return n[0] || '';
+  return `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`;
+}
+
+/* The days of a weekly chore in words: "day" for all seven, "weekday" or
+   "weekend day" for those sets, else the names ("Monday and Thursday").
+   Plural is the caller's ("every Monday", "every other Monday"). Pure. */
+function choreDaysPhrase(days) {
+  const set = new Set(days == null ? [] : Array.from(days));
+  const key = [0, 1, 2, 3, 4, 5, 6].filter((i) => set.has(i)).join('');
+  if (key === '0123456') return 'day';
+  if (key === '01234') return 'weekday';
+  if (key === '56') return 'Saturday and Sunday';
+  return listPhrase([0, 1, 2, 3, 4, 5, 6].filter((i) => set.has(i)).map((i) => DAY_NAMES[i]));
+}
+
+/* 'YYYY-MM-DD' -> a local Date at midnight (never UTC: a phone west of
+   Greenwich would otherwise read the day before). Invalid -> null. */
+function parseISODate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function shortDate(d) {
+  return `${WEEKDAY_SHORT[d.getDay()]} ${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`;
+}
+
+/* The chore form's plain-English summary of what is about to be saved:
+   "Every Monday and Thursday. Ava and Ruby take turns, switching every
+   Monday." Built from the same model the payload comes from, so it can
+   never describe something the save does not do. Pure. */
+function choreSummary(m, people) {
+  const nameOf = (id) => {
+    const p = (people || []).find((x) => x.id === Number(id));
+    return p ? p.name : '';
+  };
+  let when;
+  if (m.repeat === 'weekly') {
+    const daysWord = choreDaysPhrase(m.days);
+    if (!daysWord) when = 'Pick the days';
+    else when = Number(m.weekInterval) === 2 ? `Every other ${daysWord}` : `Every ${daysWord}`;
+  } else if (m.repeat === 'interval') {
+    const n = clampIntervalDays(m.intervalDays);
+    when = n == null ? 'Pick how many days apart' : (n === 1 ? 'Every day' : `Every ${n} days`);
+  } else if (m.repeat === 'once') {
+    const d = parseISODate(m.date);
+    when = d ? `Once, on ${shortDate(d)}` : 'Once';
+  } else {
+    when = 'Every day';
+  }
+  const assign = m.repeat === 'once' ? 'fixed' : m.assign;
+  let who;
+  if (assign === 'rotation') {
+    const names = [];
+    (m.rot || []).forEach((id) => { const n = nameOf(id); if (n && !names.includes(n)) names.push(n); });
+    if (names.length === 0) who = 'Add the people who take turns';
+    else if (names.length === 1) who = `${names[0]} every time`;
+    else who = m.rotateEvery === 'week'
+      ? `${listPhrase(names)} take turns, switching every Monday`
+      : `${listPhrase(names)} take turns, a new person each time`;
+  } else if (assign === 'each') {
+    const names = (m.each || []).map(nameOf).filter(Boolean);
+    who = names.length ? `${listPhrase(names)} ${names.length > 1 ? 'each do their own' : 'does it'}`
+      : 'Pick who does it';
+  } else {
+    const n = nameOf(m.fixed_person_id);
+    who = n ? `${n} does it` : 'Pick who does it';
+  }
+  return `${when}. ${who}.`;
+}
+
+/* Rotate a turn order so the person at index `idx` is up at `slot` (the
+   place whose turn the next chore day is, from the server's preview). The
+   cycle itself is unchanged, only where it starts. Pure. */
+function rotateOrderToStart(order, slot, idx) {
+  const o = (order || []).slice();
+  const n = o.length;
+  if (n < 2 || slot == null) return o;
+  const s = (((idx - slot) % n) + n) % n;
+  return o.map((_, i) => o[(i + s) % n]);
+}
+
+/* The preview strip's cells from the server's upcoming days. A weekly
+   rotation reads by WEEK ("This week · Ava", "Next week · Ruby"); anything
+   else by day ("Today", "Tomorrow", "Wed Oct 21"). Pure; `today` is
+   'YYYY-MM-DD'. */
+function chorePreviewCells(upcoming, byWeek, today) {
+  const t = parseISODate(today);
+  if (!t) return [];
+  const monday = (d) => { const x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+  const days = (a, b) => Math.round((b - a) / 86400000);
+  const rows = (upcoming || []).map((u) => ({ d: parseISODate(u.date), pid: u.person_id })).filter((r) => r.d);
+  if (byWeek) {
+    const out = [];
+    const seen = new Set();
+    const m0 = monday(t);
+    rows.forEach((r) => {
+      const wk = days(m0, monday(r.d)) / 7;
+      if (seen.has(wk) || out.length >= 4) return;
+      seen.add(wk);
+      const mon = monday(r.d);
+      const label = wk === 0 ? 'This week' : wk === 1 ? 'Next week' : `Week of ${MONTH_SHORT[mon.getMonth()]} ${mon.getDate()}`;
+      out.push({ label, person_id: r.pid });
+    });
+    return out;
+  }
+  return rows.slice(0, 6).map((r) => {
+    const gap = days(t, r.d);
+    return { label: gap === 0 ? 'Today' : gap === 1 ? 'Tomorrow' : shortDate(r.d), person_id: r.pid };
+  });
+}
+
+/* One reusable chore form. `model` seeds it; `onsubmit(body | bodies, errEl)`
+   fires with the assembled request body (an ARRAY of bodies when "each of
+   them" makes one chore per person); `people` is the full people list
+   (active status included). `opts.preview(body)` (optional) resolves the
+   server's {upcoming, slot} for the live "who's up" strip; `opts.choreId`
+   rides along so an edit previews from the chore's own start date;
+   `opts.allowEach` offers "Each of them" (adding only: an existing chore is
+   one person's or one rotation's). Opened from the wall's all-chores edit
+   mode (add + every inline edit). */
+function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
+  const allowEach = !!opts.allowEach;
   host.innerHTML = `
-    <div class="field"><label>Title</label>
-      <input class="txt-input f-title" maxlength="60" autocomplete="off"></div>
-    <div class="field"><label>Emoji (optional)</label>
-      <input class="txt-input f-icon" maxlength="4" autocomplete="off"></div>
-    <div class="field"><label>Repeat</label>
-      <div class="segmented f-repeat">
-        <button class="seg-btn" type="button" data-repeat="daily">Daily</button>
-        <button class="seg-btn" type="button" data-repeat="weekly">Weekly</button>
-        <button class="seg-btn" type="button" data-repeat="interval">Every N days</button>
-        <button class="seg-btn" type="button" data-repeat="once">Once</button>
+    <div class="field"><label>What needs doing?</label>
+      <div class="title-row">
+        <input class="txt-input f-icon" maxlength="4" autocomplete="off" aria-label="Emoji (optional)" placeholder="🙂">
+        <input class="txt-input f-title" maxlength="60" autocomplete="off" aria-label="Chore name" placeholder="e.g. Dishes">
       </div>
-      <div class="day-chips f-days"></div>
-      <div class="segmented f-weekfreq">
-        <button class="seg-btn" type="button" data-weekfreq="1">Every week</button>
-        <button class="seg-btn" type="button" data-weekfreq="2">Every 2 weeks</button>
+      <div class="emoji-row f-emoji">${CHORE_EMOJI.map((e) =>
+    `<button class="emoji-pick" type="button" data-emoji="${e}" aria-label="Use ${e}">${e}</button>`).join('')}</div></div>
+    <div class="field"><label>How often?</label>
+      <div class="segmented f-repeat">
+        <button class="seg-btn" type="button" data-repeat="daily">Every day</button>
+        <button class="seg-btn" type="button" data-repeat="weekly">Some days</button>
+        <button class="seg-btn" type="button" data-repeat="interval">Every few days</button>
+        <button class="seg-btn" type="button" data-repeat="once">Just once</button>
+      </div>
+      <div class="sub-field f-weekly">
+        <div class="day-chips f-days"></div>
+        <div class="preset-row f-presets">
+          <button class="preset-btn" type="button" data-preset="weekdays">Weekdays</button>
+          <button class="preset-btn" type="button" data-preset="weekends">Weekends</button>
+          <button class="preset-btn" type="button" data-preset="all">All week</button>
+        </div>
+        <div class="segmented f-weekfreq">
+          <button class="seg-btn" type="button" data-weekfreq="1">Every week</button>
+          <button class="seg-btn" type="button" data-weekfreq="2">Every other week</button>
+        </div>
       </div>
       <div class="interval-row f-interval">
         <span class="interval-word">Every</span>
-        <input class="txt-input interval-num f-intervaldays" type="number" min="1" max="365" inputmode="numeric" autocomplete="off">
+        <input class="txt-input interval-num f-intervaldays" type="number" min="1" max="365" inputmode="numeric" autocomplete="off" aria-label="Days apart">
         <span class="interval-word">days</span>
       </div>
-      <input class="txt-input f-date" type="date"></div>
-    <div class="field"><label>Reminder times</label>
+      <input class="txt-input f-date" type="date" aria-label="Date"></div>
+    <div class="field"><label>Who does it?</label>
+      <div class="segmented f-assign">
+        <button class="seg-btn" type="button" data-assign="fixed">One person</button>
+        <button class="seg-btn" type="button" data-assign="rotation">Take turns</button>
+        ${allowEach ? '<button class="seg-btn" type="button" data-assign="each">Each of them</button>' : ''}
+      </div>
+      <div class="person-chips f-person" role="group" aria-label="Who does it"></div>
+      <div class="person-chips f-each" role="group" aria-label="Everyone who does their own"></div>
+      <div class="sub-field f-turns">
+        <div class="hint f-rothint">Tap names in the order they take turns. Tap a name twice to give someone two turns.</div>
+        <div class="person-chips f-rotadd"></div>
+        <div class="rot-list f-rotation"></div>
+        <div class="turn-when">
+          <span class="turn-when-label">Switch to the next person</span>
+          <div class="segmented f-rotevery">
+            <button class="seg-btn" type="button" data-rotevery="turn">Each time</button>
+            <button class="seg-btn" type="button" data-rotevery="week">Every week</button>
+          </div>
+        </div>
+      </div></div>
+    <div class="chore-preview f-preview hidden" aria-live="polite">
+      <div class="preview-head">Coming up</div>
+      <div class="preview-cells f-cells"></div>
+      <div class="preview-first f-first"></div>
+    </div>
+    <details class="remind f-remind"><summary>Phone reminders <span class="remind-count f-remindcount"></span></summary>
       <div class="time-add">
-        <input class="txt-input time-input f-timeinput" type="time" autocomplete="off">
+        <input class="txt-input time-input f-timeinput" type="time" autocomplete="off" aria-label="Reminder time">
         <button class="time-add-btn f-timeadd" type="button">Add time</button>
       </div>
       <div class="time-list f-times"></div>
-      <div class="hint">Optional phone-reminder times, up to 6.</div></div>
-    <div class="field"><label>Who does it</label>
-      <div class="segmented f-assign">
-        <button class="seg-btn" type="button" data-assign="fixed">One person</button>
-        <button class="seg-btn" type="button" data-assign="rotation">Rotation</button>
-      </div>
-      <select class="txt-input f-person"></select>
-      <div class="rot-add f-rotadd"></div>
-      <div class="rot-list f-rotation"></div>
-      <div class="hint f-rothint">Tap people in the order they take turns — repeats are fine (e.g. dishes: Sam, Alex, Riley, Sam…).</div></div>
+      <div class="hint">Up to 6 times a day, sent to each person's phone list.</div></details>
+    <p class="chore-summary f-summary"></p>
     <div class="form-error hidden f-error"></div>
     <button class="btn-primary" type="button" data-submit>${escapeHtml(submitLabel)}</button>`;
 
   const $ = (sel) => host.querySelector(sel);
+  if (!model.rotateEvery) model.rotateEvery = 'turn';
+  if (!Array.isArray(model.each)) model.each = [];
   $('.f-title').value = model.title || '';
   $('.f-icon').value = model.icon || '';
   $('.f-date').value = model.date || (model.repeat === 'once' ? todayISO() : '');
   $('.f-intervaldays').value = model.intervalDays == null || model.intervalDays === ''
     ? '' : String(model.intervalDays);
   const active = people.filter((p) => p.active);
-  $('.f-person').innerHTML = active.map((p) =>
-    `<option value="${p.id}"${p.id === model.fixed_person_id ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+  const personOf = (id) => people.find((x) => x.id === Number(id));
+  if (model.times.length) $('.f-remind').open = true;   // already has times: show them
+  let lastPreview = null;   // the server's {upcoming, slot} for the current draft
+
+  const chip = (p, attr, on) => `<button class="person-chip${on ? ' selected' : ''}" type="button" ${attr}="${p.id}"`
+    + ` aria-pressed="${on ? 'true' : 'false'}" style="--pc:${safeColor(p.color)}">`
+    + `<span class="pc-dot" aria-hidden="true"></span>${escapeHtml(p.name)}</button>`;
+
+  const draft = () => ({
+    title: $('.f-title').value, icon: $('.f-icon').value, repeat: model.repeat,
+    days: model.days, weekInterval: model.weekInterval,
+    intervalDays: $('.f-intervaldays').value, times: model.times,
+    assign: model.repeat === 'once' ? 'fixed' : model.assign,
+    person: model.fixed_person_id, rot: model.rot, rotateEvery: model.rotateEvery,
+    each: model.each, date: $('.f-date').value,
+  });
+  const paintSummary = () => {
+    $('.f-summary').textContent = choreSummary({ ...model, ...draft(), fixed_person_id: model.fixed_person_id }, people);
+  };
 
   const paintRepeat = () => {
     $('.f-repeat').querySelectorAll('.seg-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.repeat === model.repeat));
+    $('.f-weekly').classList.toggle('hidden', model.repeat !== 'weekly');
     $('.f-days').classList.toggle('hidden', model.repeat !== 'weekly');
     $('.f-weekfreq').classList.toggle('hidden', model.repeat !== 'weekly');
     $('.f-interval').classList.toggle('hidden', model.repeat !== 'interval');
@@ -850,7 +1058,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
   };
   const paintDays = () => {
     $('.f-days').innerHTML = DAY_LABELS.map((d, i) =>
-      `<button class="day-chip${model.days.has(i) ? ' selected' : ''}" type="button" data-day="${i}">${d}</button>`).join('');
+      `<button class="day-chip${model.days.has(i) ? ' selected' : ''}" type="button" data-day="${i}" aria-pressed="${model.days.has(i)}">${d}</button>`).join('');
   };
   const paintWeekFreq = () => {
     const wk = model.weekInterval === 2 ? 2 : 1;
@@ -858,42 +1066,148 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       b.classList.toggle('active', Number(b.dataset.weekfreq) === wk));
   };
   // Reminder-time chips render the app's compact time label ("20:00" -> "8pm"),
-  // the same fmtTime the calendar uses. The whole chip is the remove button
-  // (data-remtime index), mirroring the rotation list's tap-to-remove chips.
+  // the same fmtTime the calendar uses. The whole chip is the remove button.
   const paintTimes = () => {
     const full = model.times.length >= 6;
     $('.time-add').classList.toggle('hidden', full);
     $('.f-times').innerHTML = model.times.length
       ? model.times.map((t, i) =>
-        `<button class="time-chip" type="button" data-remtime="${i}">${escapeHtml(fmtTime('T' + t))} ✕</button>`).join('')
-      : `<div class="hint">No reminder times yet.</div>`;
+        `<button class="time-chip" type="button" data-remtime="${i}" aria-label="Remove ${escapeHtml(fmtTime('T' + t))}">${escapeHtml(fmtTime('T' + t))} ✕</button>`).join('')
+      : '';
+    $('.f-remindcount').textContent = model.times.length
+      ? model.times.map((t) => fmtTime('T' + t)).join(', ') : 'none';
   };
   const paintAssign = () => {
-    // A one-time chore is always one person — hide the Rotation choice entirely
-    // and pin the assignment to a fixed person.
+    // A one-time chore is always one person: no turns, no copies.
     const once = model.repeat === 'once';
-    const rotBtn = $('.f-assign').querySelector('[data-assign="rotation"]');
-    if (rotBtn) rotBtn.classList.toggle('hidden', once);
+    ['rotation', 'each'].forEach((k) => {
+      const b = $('.f-assign').querySelector(`[data-assign="${k}"]`);
+      if (b) b.classList.toggle('hidden', once);
+    });
     const assign = once ? 'fixed' : model.assign;
     $('.f-assign').querySelectorAll('.seg-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.assign === assign));
     $('.f-person').classList.toggle('hidden', assign !== 'fixed');
+    $('.f-each').classList.toggle('hidden', assign !== 'each');
+    $('.f-turns').classList.toggle('hidden', assign !== 'rotation');
     $('.f-rotadd').classList.toggle('hidden', assign !== 'rotation');
     $('.f-rotation').classList.toggle('hidden', assign !== 'rotation');
     $('.f-rothint').classList.toggle('hidden', assign !== 'rotation');
   };
+  const paintPeople = () => {
+    // a chore whose owner was turned off still shows them, so the edit can
+    // keep or change it knowingly instead of silently re-picking someone
+    const owner = personOf(model.fixed_person_id);
+    const choices = owner && !owner.active ? [...active, owner] : active;
+    $('.f-person').innerHTML = choices.map((p) => chip(p, 'data-pick', p.id === model.fixed_person_id)).join('');
+    $('.f-each').innerHTML = active.map((p) => chip(p, 'data-each', model.each.includes(p.id))).join('');
+  };
   const paintRotation = () => {
     $('.f-rotadd').innerHTML = active.map((p) =>
-      `<button class="day-chip" type="button" data-add="${p.id}">＋ ${escapeHtml(p.name)}</button>`).join('');
+      `<button class="person-chip add" type="button" data-add="${p.id}" style="--pc:${safeColor(p.color)}">`
+      + `<span class="pc-plus" aria-hidden="true">+</span>${escapeHtml(p.name)}</button>`).join('');
     $('.f-rotation').innerHTML = model.rot.length
       ? model.rot.map((id, idx) => {
-        const p = people.find((x) => x.id === id);
-        return `<button class="rot-item" type="button" data-rem="${idx}">${idx + 1}. ${escapeHtml(p ? p.name : '?')} ✕</button>`;
+        const p = personOf(id);
+        const name = escapeHtml(p ? p.name : 'Someone removed');
+        // an attribute, not a class (the class-styled guard reads ' x' as a class)
+        const firstOne = idx === 0 ? 'disabled' : '';                     // can't move up
+        const lastOne = idx === model.rot.length - 1 ? 'disabled' : '';   // can't move down
+        return `<div class="rot-item" style="--pc:${safeColor(p ? p.color : '')}">`
+          + `<span class="rot-num">${idx + 1}</span><span class="pc-dot" aria-hidden="true"></span>`
+          + `<span class="rot-name">${name}</span>`
+          + `<button class="rot-btn" type="button" data-up="${idx}" aria-label="Move ${name} earlier" ${firstOne}>↑</button>`
+          + `<button class="rot-btn" type="button" data-down="${idx}" aria-label="Move ${name} later" ${lastOne}>↓</button>`
+          + `<button class="rot-btn rot-del" type="button" data-rem="${idx}" aria-label="Take ${name} out">✕</button>`
+          + `</div>`;
       }).join('')
-      : `<div class="hint">No turns yet — add people above.</div>`;
+      : `<div class="hint">No one yet: tap names above.</div>`;
+    $('.f-rotevery').querySelectorAll('.seg-btn').forEach((b) =>
+      b.classList.toggle('active', b.dataset.rotevery === model.rotateEvery));
   };
-  paintRepeat(); paintDays(); paintWeekFreq(); paintTimes(); paintAssign(); paintRotation();
 
+  // Live "Coming up" strip: who does it on the next few chore days, straight
+  // from the server (the same code the wall runs). Debounced; a reply for
+  // an older draft is dropped. Any failure just hides the strip: the form
+  // still saves, and the summary sentence still describes the chore.
+  let previewSeq = 0;
+  let previewTimer = null;
+  const paintPreview = () => {
+    const box = $('.f-preview');
+    const assign = model.repeat === 'once' ? 'fixed' : model.assign;
+    const pv = lastPreview;
+    if (!pv || !pv.upcoming || !pv.upcoming.length || assign === 'each') { box.classList.add('hidden'); return; }
+    const byWeek = assign === 'rotation' && model.rotateEvery === 'week';
+    const cells = chorePreviewCells(pv.upcoming, byWeek, todayISO());
+    $('.f-cells').innerHTML = cells.map((c) => {
+      const p = personOf(c.person_id);
+      return `<div class="preview-cell" style="--pc:${safeColor(p ? p.color : '')}">`
+        + `<span class="preview-when">${escapeHtml(c.label)}</span>`
+        + `<span class="preview-who"><span class="pc-dot" aria-hidden="true"></span>${escapeHtml(p ? p.name : 'No one')}</span></div>`;
+    }).join('');
+    // "Who's up first?": restart the cycle on anyone in it without
+    // retyping the order (same people, same order, new starting point)
+    const first = $('.f-first');
+    const uniq = [];
+    model.rot.forEach((id, idx) => { if (!uniq.some((u) => u.id === id)) uniq.push({ id, idx }); });
+    const allActive = model.rot.every((id) => { const p = personOf(id); return p && p.active; });
+    if (assign === 'rotation' && uniq.length > 1 && pv.slot != null && allActive) {
+      const upNow = model.rot[pv.slot];
+      first.innerHTML = `<span class="first-label">${byWeek ? 'Who has this week?' : 'Who goes next?'}</span>`
+        + uniq.map((u) => {
+          const p = personOf(u.id);
+          const cls = u.id === upNow ? 'person-chip small selected' : 'person-chip small';
+          return `<button class="${cls}" type="button" data-first="${u.idx}"`
+            + ` aria-pressed="${u.id === upNow}" style="--pc:${safeColor(p.color)}"><span class="pc-dot" aria-hidden="true"></span>${escapeHtml(p.name)}</button>`;
+        }).join('');
+      first.classList.remove('hidden');
+    } else {
+      first.innerHTML = '';
+      first.classList.add('hidden');
+    }
+    box.classList.remove('hidden');
+  };
+  const refreshPreview = () => {
+    paintSummary();
+    if (typeof opts.preview !== 'function') return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+      const seq = ++previewSeq;
+      const f = draft();
+      // nothing to preview yet: no person, no turns, no days. The strip
+      // waits instead of asking the server about a chore that can't save.
+      const incomplete = f.assign === 'each'
+        || (f.assign === 'fixed' && model.fixed_person_id == null)
+        || (f.assign === 'rotation' && !model.rot.length)
+        || (model.repeat === 'weekly' && model.days.size === 0)
+        || (model.repeat === 'interval' && clampIntervalDays(f.intervalDays) === null)
+        || (model.repeat === 'once' && !parseISODate(f.date));
+      if (incomplete) { lastPreview = null; paintPreview(); return; }
+      const body = buildChorePayload({ ...f, person: model.fixed_person_id });
+      if (opts.choreId != null) body.chore_id = opts.choreId;
+      let got = null;
+      try { got = await opts.preview(body); } catch (e) { got = null; }
+      if (seq !== previewSeq) return;   // a newer draft owns the strip
+      lastPreview = got;
+      paintPreview();
+    }, 180);
+  };
+  const repaintAll = () => {
+    paintRepeat(); paintDays(); paintWeekFreq(); paintTimes(); paintAssign(); paintPeople(); paintRotation();
+    refreshPreview();
+  };
+  repaintAll();
+
+  $('.f-title').oninput = paintSummary;
+  $('.f-icon').oninput = paintSummary;
+  $('.f-date').onchange = refreshPreview;
+  $('.f-intervaldays').oninput = refreshPreview;
+  $('.f-emoji').onclick = (e) => {
+    const b = e.target.closest('[data-emoji]');
+    if (!b) return;
+    $('.f-icon').value = b.dataset.emoji;
+    paintSummary();
+  };
   $('.f-repeat').onclick = (e) => {
     const b = e.target.closest('[data-repeat]');
     if (!b) return;
@@ -902,11 +1216,12 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
       model.assign = 'fixed';                       // one-time is one person
       if (!$('.f-date').value) $('.f-date').value = todayISO();
     }
-    // Seed a sensible cadence the first time "Every N days" is chosen so the
+    // Seed a sensible gap the first time "Every few days" is chosen so the
     // field is never empty (empty would fail the server's interval rule).
     if (model.repeat === 'interval' && !$('.f-intervaldays').value) $('.f-intervaldays').value = '2';
     paintRepeat();
-    paintAssign();                                  // rotation choice shows/hides with once
+    paintAssign();                                  // turns/each show/hide with once
+    refreshPreview();
   };
   $('.f-days').onclick = (e) => {
     const b = e.target.closest('[data-day]');
@@ -914,12 +1229,22 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
     const i = Number(b.dataset.day);
     if (model.days.has(i)) model.days.delete(i); else model.days.add(i);
     paintDays();
+    refreshPreview();
+  };
+  $('.f-presets').onclick = (e) => {
+    const b = e.target.closest('[data-preset]');
+    if (!b) return;
+    const sets = { weekdays: [0, 1, 2, 3, 4], weekends: [5, 6], all: [0, 1, 2, 3, 4, 5, 6] };
+    model.days = new Set(sets[b.dataset.preset] || []);
+    paintDays();
+    refreshPreview();
   };
   $('.f-weekfreq').onclick = (e) => {
     const b = e.target.closest('[data-weekfreq]');
     if (!b) return;
     model.weekInterval = Number(b.dataset.weekfreq) === 2 ? 2 : 1;
     paintWeekFreq();
+    refreshPreview();
   };
   $('.f-timeadd').onclick = () => {
     const v = ($('.f-timeinput').value || '').trim();
@@ -939,47 +1264,93 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people) {
   };
   $('.f-assign').onclick = (e) => {
     const b = e.target.closest('[data-assign]');
-    if (b) { model.assign = b.dataset.assign; paintAssign(); }
+    if (!b) return;
+    model.assign = b.dataset.assign;
+    // carry the people across a switch so nobody retypes them
+    if (model.assign === 'rotation' && !model.rot.length && model.fixed_person_id != null) model.rot = [model.fixed_person_id];
+    if (model.assign === 'each' && !model.each.length && model.fixed_person_id != null) model.each = [model.fixed_person_id];
+    paintAssign(); paintPeople(); paintRotation();
+    refreshPreview();
+  };
+  $('.f-person').onclick = (e) => {
+    const b = e.target.closest('[data-pick]');
+    if (!b) return;
+    model.fixed_person_id = Number(b.dataset.pick);
+    paintPeople();
+    refreshPreview();
+  };
+  $('.f-each').onclick = (e) => {
+    const b = e.target.closest('[data-each]');
+    if (!b) return;
+    const id = Number(b.dataset.each);
+    model.each = model.each.includes(id) ? model.each.filter((x) => x !== id) : [...model.each, id];
+    paintPeople();
+    paintSummary();
   };
   $('.f-rotadd').onclick = (e) => {
     const b = e.target.closest('[data-add]');
     if (!b) return;
     model.rot.push(Number(b.dataset.add));
     paintRotation();
+    refreshPreview();
   };
   $('.f-rotation').onclick = (e) => {
-    const b = e.target.closest('[data-rem]');
-    if (!b) return;
-    model.rot.splice(Number(b.dataset.rem), 1);
+    const b = e.target.closest('[data-rem]') || e.target.closest('[data-up]') || e.target.closest('[data-down]');
+    if (!b || b.disabled) return;
+    if (b.dataset.rem !== undefined) model.rot.splice(Number(b.dataset.rem), 1);
+    else {
+      const i = Number(b.dataset.up !== undefined ? b.dataset.up : b.dataset.down);
+      const j = b.dataset.up !== undefined ? i - 1 : i + 1;
+      if (j >= 0 && j < model.rot.length) [model.rot[i], model.rot[j]] = [model.rot[j], model.rot[i]];
+    }
     paintRotation();
+    refreshPreview();
+  };
+  $('.f-rotevery').onclick = (e) => {
+    const b = e.target.closest('[data-rotevery]');
+    if (!b) return;
+    model.rotateEvery = b.dataset.rotevery === 'week' ? 'week' : 'turn';
+    paintRotation();
+    refreshPreview();
+  };
+  $('.f-first').onclick = (e) => {
+    const b = e.target.closest('[data-first]');
+    if (!b || !lastPreview) return;
+    model.rot = rotateOrderToStart(model.rot, lastPreview.slot, Number(b.dataset.first));
+    paintRotation();
+    refreshPreview();
   };
   $('[data-submit]').onclick = oneSaveAtATime($('[data-submit]'), () => {
-    // Serialization lives in buildChorePayload above (pure, tested).
-    const assign = model.repeat === 'once' ? 'fixed' : model.assign;
+    // Serialization lives in buildChorePayload (pure, tested).
+    const f = draft();
     const err = $('.f-error');
     err.classList.add('hidden');
+    const fail = (msg) => { err.textContent = msg; err.classList.remove('hidden'); };
+    if (!f.title.trim()) return fail('Give the chore a name.');
+    if (model.repeat === 'weekly' && model.days.size === 0) return fail('Pick at least one day.');
     // Mirror the server's "interval needs 1–365" rule for an inline message
     // instead of a generic toast (clampIntervalDays would send null otherwise).
     if (model.repeat === 'interval' && clampIntervalDays($('.f-intervaldays').value) === null) {
-      err.textContent = 'Enter how many days between (1–365).';
-      err.classList.remove('hidden');
-      return;
+      return fail('Enter how many days apart (1–365).');
     }
-    const body = buildChorePayload({
-      title: $('.f-title').value,
-      icon: $('.f-icon').value,
-      repeat: model.repeat,
-      days: model.days,
-      weekInterval: model.weekInterval,
-      intervalDays: $('.f-intervaldays').value,
-      times: model.times,
-      assign,
-      person: assign === 'fixed' ? $('.f-person').value : null,
-      rot: model.rot,
-      date: $('.f-date').value,
-    });
-    return onsubmit(body, err);
+    if (f.assign === 'fixed' && model.fixed_person_id == null) return fail('Pick who does it.');
+    if (f.assign === 'rotation' && !model.rot.length) return fail('Add the people who take turns.');
+    if (f.assign === 'each') {
+      if (!model.each.length) return fail('Pick who does it.');
+      // one chore per person: each keeps their own check-off and streak
+      return onsubmit(model.each.map((pid) => buildChorePayload({ ...f, assign: 'fixed', person: pid })), err);
+    }
+    return onsubmit(buildChorePayload({ ...f, person: model.fixed_person_id }), err);
   });
+}
+
+/* Where a dragged item lands: the target list's open ids with `id` taken out
+   and put back at `index`. Pure (the to-do board in
+   hub.js drives it). */
+function todoDropOrder(ids, id, index) {
+  const rest = ids.filter((x) => x !== id);
+  const at = Math.max(0, Math.min(index, rest.length));
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
 }
 
 /* Wrap a form's Save handler so it runs one write at a time. A double tap
@@ -1013,7 +1384,7 @@ function todayISO() {
 function freshChoreModel() {
   return { title: '', icon: '', repeat: 'daily', days: new Set(),
     weekInterval: 1, intervalDays: '', times: [],
-    assign: 'fixed', fixed_person_id: null, rot: [], date: '' };
+    assign: 'fixed', fixed_person_id: null, rot: [], rotateEvery: 'turn', each: [], date: '' };
 }
 
 function freshPersonModel() {

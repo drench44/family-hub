@@ -1182,3 +1182,63 @@ def test_each_reset_path_clears_the_refusal_count(cdb, reset):
     assert fdb.record_cal_object_error(cdb, oid, "no", "t3",
                                        permanent=True) is False
     assert fdb.caldav_parked(cdb) == []
+
+
+def test_rotate_every_and_todo_sort_migrations_keep_old_rows(tmp_path):
+    """rotate_every (chores) and sort (todos) land on an EXISTING db by plain
+    additive ALTER: every old rotation keeps the per-turn behavior it always
+    had ('turn'), every old to-do keeps its oldest-first place (NULL sort),
+    and a second boot is a no-op."""
+    path = str(tmp_path / "old.db")
+    c = fdb.connect(path)
+    c.executescript("""
+      CREATE TABLE chores(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+        schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once','interval')),
+        days_mask INTEGER NOT NULL DEFAULT 0, week_interval INTEGER NOT NULL DEFAULT 1,
+        interval_days INTEGER, due_times TEXT NOT NULL DEFAULT '[]',
+        assign_kind TEXT NOT NULL CHECK(assign_kind IN ('fixed','rotation')),
+        fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
+        rotation_epoch TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+      INSERT INTO chores(title, schedule_kind, assign_kind, rotation_order, rotation_epoch)
+        VALUES('Dishes', 'daily', 'rotation', '[1,2]', '2026-08-01');
+      CREATE TABLE todos(
+        id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+        bucket TEXT NOT NULL CHECK(bucket IN ('now','soon','later')),
+        created_at TEXT NOT NULL, done_at TEXT, done_date TEXT);
+      INSERT INTO todos(title, bucket, created_at) VALUES('Fix gate', 'now', '2026-08-01T00:00:00+00:00');""")
+    c.commit()
+    fdb.ensure_schema(c)
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    [chore] = fdb.list_chores(c)
+    assert chore["rotate_every"] == "turn" and chore["rotation_order"] == [1, 2]
+    [todo] = fdb.list_todos(c)
+    assert todo["sort"] is None and todo["title"] == "Fix gate"
+    c.close()
+
+
+def _todo_ids(conn, bucket):
+    from family_hub import todos as tdlogic
+    return [t["id"] for t in tdlogic.group(fdb.list_todos(conn))[bucket]]
+
+
+def test_move_todo_lands_at_the_end_of_the_new_list(conn):
+    a = fdb.add_todo(conn, "a", "soon")
+    b = fdb.add_todo(conn, "b", "soon")
+    x = fdb.add_todo(conn, "x", "now")
+    fdb.move_todo(conn, x, "soon")
+    assert _todo_ids(conn, "soon") == [a, b, x]
+    assert _todo_ids(conn, "now") == []
+    # an item added after the move still goes to the bottom
+    c = fdb.add_todo(conn, "c", "soon")
+    assert _todo_ids(conn, "soon") == [a, b, x, c]
+
+
+def test_place_todos_sets_list_and_order(conn):
+    a = fdb.add_todo(conn, "a", "now")
+    b = fdb.add_todo(conn, "b", "now")
+    c = fdb.add_todo(conn, "c", "later")
+    fdb.place_todos(conn, "now", [c, b, a])
+    assert _todo_ids(conn, "now") == [c, b, a]
+    assert _todo_ids(conn, "later") == []

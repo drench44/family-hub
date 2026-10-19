@@ -10,6 +10,28 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- Chores can take turns a week at a time: one person has the chore every
+  day it comes up this week, the next person has all of next week, and so
+  on (pick "Take turns", then "Switch to the next person: Every week").
+- The chore form asks plain questions ("How often?", "Who does it?"),
+  shows people as colored name buttons, offers quick emoji and day presets
+  (Weekdays, Weekends), and shows who does the chore on the next few days
+  (or weeks) before you save, with a one-tap "who has this week". "Each of
+  them" makes the same chore for several people at once.
+- Chores edit mode lists every chore with what it is in plain words, so a
+  chore that is not on today can still be found and edited, and has a
+  "+ New chore" button at the top.
+- To-dos: drag an item by its handle to another list or another place in
+  its list (touch, mouse, or the arrow keys). Tap an item to rename it,
+  move it to Now, Soon or Later, or delete it. A moved item lands at the
+  end of its new list.
+
+### Fixed
+- Scrolling the main page with a seasonal look on was slow on the wall
+  (about 20 frames a second with Halloween on). The frosted glass on the
+  cards no longer redraws on every scroll frame; it scrolls at a smooth 60.
+
 ## [1.12.0] — 2026-10-14
 
 ### Added
