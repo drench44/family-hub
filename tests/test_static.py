@@ -42,7 +42,13 @@ UNSTYLED_OK = {"f-title", "f-icon", "f-repeat", "f-days", "f-assign",
                # routine-type + reminder-times hooks (styling rides sibling
                # classes: .segmented / .interval-row / .txt-input / .time-list)
                "f-weekfreq", "f-interval", "f-intervaldays", "f-timeinput",
-               "f-timeadd", "f-times"}
+               "f-timeadd", "f-times",
+               # the plain-words form (2026-10-19): styling rides .emoji-row,
+               # .sub-field, .preset-row, .person-chips, .chore-preview,
+               # .preview-cells, .preview-first, .remind, .chore-summary
+               "f-emoji", "f-weekly", "f-presets", "f-each", "f-turns",
+               "f-rotevery", "f-preview", "f-cells", "f-first", "f-remind",
+               "f-remindcount", "f-summary"}
 
 
 def _css_rule(selector):
@@ -2388,31 +2394,71 @@ def test_wide_screens_use_still_glass_not_a_live_blur():
     under a card, and on the wall's Firefox and a laptop that sometimes drew
     a row of a card as a blinking dark band ("still glitching", 2026-10-14).
     On wide screens (and a phone forced to Desktop) every glass surface turns
-    the live blur off and paints the still copy fixed to the viewport, at the
-    photo layer's focal point and cover size, under the haze, wash and tint.
-    Not on iOS (fixed backgrounds are ignored there) and not at night (the
-    dim filter can unpin a fixed background; night glass is solid)."""
+    the live blur off and shows its glass pane, whose fixed ::before paints
+    the still copy at the photo layer's focal point and cover size, under the
+    haze, wash and tint. Not on iOS (fixed layers there are a separate trap)
+    and not at night (the dim filter would re-anchor the fixed copy; night
+    glass is solid)."""
     sup = CSS.index("@supports not (-webkit-touch-callout: none) {")
     block = CSS[sup:CSS.index("\n}\n", sup)]
     assert "@media (min-width: 1001px) {" in block
-    paint = (r"\{\s*-webkit-backdrop-filter: none; backdrop-filter: none;\s*"
-             r"background: linear-gradient\(var\(--glass\), var\(--glass\)\), var\(--sn-haze[^;]*"
-             r"var\(--sn-wash\), var\(--sn-glass\) var\(--sn-pos\) / cover no-repeat, var\(--ground\);\s*"
-             r"background-attachment: fixed;\s*\}")
-    rules = re.findall(r"([^{}]+)" + paint, block)
+    off = (r"\{\s*-webkit-backdrop-filter: none; backdrop-filter: none;\s*"
+           r"background: transparent;\s*position: relative; isolation: isolate;\s*\}")
+    rules = re.findall(r"([^{}]+)" + off, block)
     assert len(rules) == 2, "one rule for wide screens, one for the forced Desktop layout"
     for sel in rules:
         for target in (".card", ".expand", ".shead h2", ".topbar"):
             assert target in sel, f"{target} still blurs live on wide screens"
     assert 'data-layout="desktop"' in rules[1]
+    shown = re.findall(r"\.glass-pane \{ display: block; \}", block)
+    assert len(shown) == 2, "the panes show on wide screens and the forced Desktop layout"
+    pane = re.search(r"\.glass-pane::before \{\s*content: \"\"; position: fixed; inset: 0; pointer-events: none;\s*"
+                     r"background: linear-gradient\(var\(--glass\), var\(--glass\)\), var\(--sn-haze[^;]*"
+                     r"var\(--sn-wash\), var\(--sn-glass\) var\(--sn-pos\) / cover no-repeat, var\(--ground\);\s*\}", CSS)
+    assert pane, "the pane paints the still copy, fixed to the viewport"
+    assert re.search(r"\.glass-pane \{\s*display: none; position: absolute; inset: 0; z-index: -1;\s*"
+                     r"pointer-events: none; border-radius: inherit;\s*clip-path: inset\(0 round var\(--pane-r", CSS), \
+        "the pane is hidden by default, never takes a tap, and clips the fixed copy to its surface"
     night = re.search(r':where\(:root\[data-look\]:not\(\[data-look="none"\]\) \.is-night \.wrap\) '
                       r':is\(\.card, \.expand, \.shead h2\),\s*:where\(:root\[data-look\]:not\(\[data-look="none"\]\) '
                       r'\.is-night\) \.topbar \{\s*background: linear-gradient\(var\(--glass\), var\(--glass\)\), '
                       r'var\(--ground\);\s*\}', CSS)
     assert night and night.start() > sup, "at night the glass must drop the fixed copy, after the wide rules"
+    assert ".is-night .glass-pane { display: none !important; }" in CSS
     assert ".look-swatch" not in block, "the Settings tiles paint their own photo; keep them out of still glass"
     # the tiles keep a small live blur, so nothing under it may animate
     assert re.search(r"\.look-swatch \.sn-bat b::before \{ animation: none; \}", CSS)
+
+
+def test_no_fixed_backgrounds_they_repaint_on_every_scroll_frame():
+    """background-attachment: fixed is repainted on every scroll frame. On
+    the glass it cost the wall 51 ms a frame scrolling the main page with
+    Halloween on (about 20 fps; owner: "lag when scrolling on the main page",
+    2026-10-18). A fixed layer clipped to its surface (the glass pane)
+    scrolls on the compositor instead: 17 ms. Keep it out of the CSS."""
+    assert "background-attachment: fixed" not in CSS
+    assert "background-attachment:fixed" not in CSS.replace(" ", "")
+
+
+def test_no_first_child_rules_inside_glass_surfaces():
+    """Every glass surface's FIRST child is its pane (an <i>), so a
+    :first-child rule on a card's own children never matches again: the
+    To-Do card's first group lost its top padding and the card grew 4px.
+    Use :first-of-type (the pane is the only <i>). The one :first-child
+    left is in the Settings overlay, which has no glass."""
+    rules = re.findall(r"([^{}]*:first-child[^{}]*)\{", CSS)
+    assert [r.strip() for r in rules] == [".integ-group-title:first-child"], rules
+
+
+def test_every_glass_surface_gets_its_pane():
+    """hub.js gives every glass surface a pane at boot and again whenever a
+    render replaces it (cards are rebuilt with innerHTML all the time), with
+    the same surface list the CSS styles."""
+    assert "const GLASS_SURFACES = '.wrap .card, .wrap .expand, .wrap .shead h2, .topbar';" in HUB
+    assert "new MutationObserver(" in HUB and "ensureGlassPanes(document.body)" in HUB
+    assert re.search(r"watchGlassPanes\(\);\s*mountSeasonScene\(\);", HUB), "panes are watched from boot"
+    # an <i>, never a div/span: the surfaces' :first-of-type rules must not shift
+    assert "document.createElement('i')" in HUB
 
 
 def test_phones_and_ios_keep_the_live_blur():

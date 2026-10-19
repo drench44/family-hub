@@ -62,7 +62,8 @@ def is_visible(todo: dict, now: dt.datetime) -> bool:
 
 def group(todos: list[dict], now: dt.datetime | None = None) -> dict:
     """Visible items by bucket. Within a bucket: open items before
-    just-checked items, each oldest-first (created_at, then id). Rows with an
+    just-checked items; each group in the order someone dragged them (sort),
+    then never-moved items oldest first (created_at, then id). Rows with an
     unrecognized bucket are dropped, never crash."""
     now = now or dt.datetime.now(dt.timezone.utc)
     out: dict[str, list[dict]] = {b: [] for b in BUCKETS}
@@ -71,6 +72,7 @@ def group(todos: list[dict], now: dt.datetime | None = None) -> dict:
             out[t["bucket"]].append(t)
     for b in BUCKETS:
         out[b].sort(key=lambda t: (t["done_at"] is not None,
+                                   t.get("sort") is None, t.get("sort") or 0,
                                    t["created_at"], t["id"]))
     return out
 
