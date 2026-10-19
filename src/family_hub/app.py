@@ -1710,6 +1710,8 @@ def todos_order(body: TodoOrderIn):
         raise HTTPException(422, "bucket must be now, soon or later")
     if not body.ids or len(set(body.ids)) != len(body.ids):
         raise HTTPException(422, "ids must list each item once")
+    if len(body.ids) > 1000:      # a list on a wall, not a bulk import
+        raise HTTPException(422, "too many items in one move")
     rows = {t["id"]: t for t in fdb.list_todos(c)}
     if any(i not in rows for i in body.ids):
         raise HTTPException(404, "unknown todo")
@@ -2380,19 +2382,26 @@ def admin_preview_chore(ch: ChorePreviewIn):
     }
     active_ids = {p["id"] for p in fdb.list_people(c)}
     horizon = _PREVIEW_DAYS
-    if kind == "interval":
-        horizon = max(horizon, 2 * chore["interval_days"] + 1)
-    elif kind == "once":
-        horizon = max(horizon, (dt.date.fromisoformat(epoch) - today).days + 1)
     out = []
-    d = today
-    for _ in range(horizon):
-        if len(out) >= _PREVIEW_MAX:
-            break
-        if chlogic.occurs(chore, d):
-            out.append({"date": d.isoformat(),
-                        "person_id": chlogic.assignee_id(chore, d, active_ids)})
-        d += dt.timedelta(days=1)
+    if kind == "once":
+        # one dated day, however far off: read it directly, never walk to it
+        # (a walk to a year-9999 date would tie the server up for seconds)
+        due = dt.date.fromisoformat(epoch)
+        horizon = max(horizon, (due - today).days + 1)
+        if due >= today:
+            out.append({"date": due.isoformat(),
+                        "person_id": chlogic.assignee_id(chore, due, active_ids)})
+    else:
+        if kind == "interval":   # interval_days is at most 365: at most 731 days
+            horizon = max(horizon, 2 * chore["interval_days"] + 1)
+        d = today
+        for _ in range(horizon):
+            if len(out) >= _PREVIEW_MAX:
+                break
+            if chlogic.occurs(chore, d):
+                out.append({"date": d.isoformat(),
+                            "person_id": chlogic.assignee_id(chore, d, active_ids)})
+            d += dt.timedelta(days=1)
     # The slot indexes rotation_order as stored. With someone in it no longer
     # active, the wall turns over the shorter, active-only list instead
     # (assignee_id), so a slot into the stored list would name the wrong

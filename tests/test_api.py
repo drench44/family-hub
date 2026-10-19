@@ -6227,3 +6227,23 @@ def test_todos_patch_same_list_and_rename_with_move(client):
     # a bad rename moves nothing
     assert client.patch(f"/api/todos/{a}", json={"title": "x" * 121, "bucket": "soon"}).status_code == 422
     assert client.get("/api/todos").json()["buckets"]["now"][0]["id"] == a
+
+
+
+def test_chore_preview_of_a_far_off_one_time_chore_answers_at_once(client, app_mod):
+    """A one-time chore is read straight off its date: a date centuries out
+    must not walk the calendar day by day (that tied the server up)."""
+    import time as _time
+    a = _mk_person(client, "Ava")
+    t0 = _time.monotonic()
+    got = client.post("/api/admin/chores/preview", json={
+        "schedule_kind": "once", "date": "9999-12-31", "assign_kind": "fixed",
+        "fixed_person_id": a}).json()
+    assert _time.monotonic() - t0 < 1.0
+    assert got["upcoming"] == [{"date": "9999-12-31", "person_id": a}]
+
+
+def test_todo_order_refuses_an_oversized_move(client):
+    a = client.post("/api/todos", json={"title": "a"}).json()["id"]
+    ids = [a] + list(range(10_000, 11_000))
+    assert client.post("/api/todo-order", json={"bucket": "now", "ids": ids}).status_code == 422

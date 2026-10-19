@@ -36,6 +36,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A to-do move that can't be saved puts the item straight back and says
   so, a second finger can't break a drag on the wall, and a to-do name that
   is too long says why instead of "tap again".
+- The chore preview reads a one-time chore's date directly, so a date far
+  in the future can't tie the hub up.
 
 ## [1.12.0] — 2026-10-14
 
