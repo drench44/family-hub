@@ -6247,3 +6247,111 @@ def test_todo_order_refuses_an_oversized_move(client):
     a = client.post("/api/todos", json={"title": "a"}).json()["id"]
     ids = [a] + list(range(10_000, 11_000))
     assert client.post("/api/todo-order", json={"bucket": "now", "ids": ids}).status_code == 422
+
+
+# --- chores: an edit keeps whoever is up next (keep_turn, 2026-10-19) -------
+# The real report: "Curbside cans" was every other Monday, taking turns by the
+# week. Changing it to every Monday quietly moved that day's turn from one kid
+# to the other, because the number of turns gone by changed with the schedule.
+
+def _today_only_biweekly(client, app_mod, order):
+    """A weekly-turn chore on today's weekday, every other week, anchored so
+    that switching it to every week WOULD hand today to someone else."""
+    bit = 1 << _today().weekday()
+    cid = _rot_chore(client, order, schedule_kind="days", days_mask=bit,
+                     week_interval=2).json()["id"]
+    c = app_mod._db()
+    weekly = {"schedule_kind": "days", "days_mask": bit, "week_interval": 1,
+              "assign_kind": "rotation", "rotation_order": order,
+              "rotate_every": "week", "chore_id": cid}
+    for weeks in range(2, 12):   # find an anchor where the schedule change flips today
+        epoch = _today() - dt.timedelta(days=7 * weeks + _today().weekday())
+        c.execute("UPDATE chores SET rotation_epoch = ? WHERE id = ?", (epoch.isoformat(), cid))
+        c.commit()
+        was = client.post("/api/admin/chores/preview", json={**weekly, "week_interval": 2}).json()
+        now = client.post("/api/admin/chores/preview", json=weekly).json()
+        if (was["upcoming"][0]["date"] == _today().isoformat()
+                and was["upcoming"][0]["person_id"] != now["upcoming"][0]["person_id"]):
+            return cid, was["upcoming"][0]["person_id"], weekly
+    raise AssertionError("no anchor flips the turn")
+
+
+def _owner_today(client, cid):
+    people = client.get(f"/api/chores/day?date={_today().isoformat()}").json()["people"]
+    return [p["person"]["id"] for p in people if any(ch["id"] == cid for ch in p["chores"])]
+
+
+def test_schedule_edit_with_keep_turn_leaves_todays_turn_alone(client, app_mod):
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid, had, weekly = _today_only_biweekly(client, app_mod, [b, a])
+    assert _owner_today(client, cid) == [had]
+    r = client.patch(f"/api/admin/chores/{cid}", json={"week_interval": 1, "keep_turn": True})
+    assert r.status_code == 200 and r.json()["week_interval"] == 1
+    assert _owner_today(client, cid) == [had]
+    # and the turns still alternate week by week after it
+    nxt = (_today() + dt.timedelta(days=7)).isoformat()
+    people = client.get(f"/api/chores/day?date={nxt}").json()["people"]
+    assert [p["person"]["id"] for p in people
+            if any(ch["id"] == cid for ch in p["chores"])] == [x for x in (a, b) if x != had]
+    assert sorted(r.json()["rotation_order"]) == sorted([a, b])
+
+
+def test_schedule_edit_without_keep_turn_still_does_what_it_is_told(client, app_mod):
+    """keep_turn is opt-in: an API caller that sends an order gets that order."""
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid, had, _ = _today_only_biweekly(client, app_mod, [b, a])
+    r = client.patch(f"/api/admin/chores/{cid}", json={"week_interval": 1})
+    assert r.json()["rotation_order"] == [b, a]
+    assert _owner_today(client, cid) != [had]
+
+
+def test_preview_with_keep_turn_shows_the_order_the_save_stores(client, app_mod):
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid, had, weekly = _today_only_biweekly(client, app_mod, [b, a])
+    got = client.post("/api/admin/chores/preview", json={**weekly, "keep_turn": True}).json()
+    assert got["before"] == had
+    assert got["upcoming"][0]["person_id"] == had
+    assert got["rotation_order"][got["slot"]] == had
+    saved = client.patch(f"/api/admin/chores/{cid}", json={
+        k: v for k, v in {**weekly, "keep_turn": True}.items() if k != "chore_id"}).json()
+    assert saved["rotation_order"] == got["rotation_order"]
+    # without keep_turn the preview says who loses the turn: no `before`
+    plain = client.post("/api/admin/chores/preview", json=weekly).json()
+    assert plain["before"] is None and plain["rotation_order"] == [b, a]
+    assert plain["upcoming"][0]["person_id"] != had
+
+
+def test_keep_turn_keeps_the_cycle_and_skips_what_it_cannot_keep(client, app_mod):
+    a, b, z = _mk_person(client, "Ava"), _mk_person(client, "Ben"), _mk_person(client, "Zed")
+    cid, had, weekly = _today_only_biweekly(client, app_mod, [a, b, z])
+    r = client.patch(f"/api/admin/chores/{cid}", json={"week_interval": 1, "keep_turn": True}).json()
+    order = r["rotation_order"]
+    i = order.index(a)
+    assert order[i:] + order[:i] == [a, b, z]          # same cycle, new start
+    assert _owner_today(client, cid) == [had]
+    # someone inactive in the order: the wall turns a shorter list, nothing to keep
+    cid2, _, _ = _today_only_biweekly(client, app_mod, [b, a])
+    client.patch(f"/api/admin/people/{z}", json={"active": 0})
+    r = client.patch(f"/api/admin/chores/{cid2}", json={
+        "rotation_order": [b, a, z], "week_interval": 1, "keep_turn": True}).json()
+    assert r["rotation_order"] == [b, a, z]
+    # the person up next left the turns: nothing to keep either
+    cid3, had3, _ = _today_only_biweekly(client, app_mod, [b, a])
+    other = a if had3 == b else b
+    solo = _mk_person(client, "Solo")
+    r = client.patch(f"/api/admin/chores/{cid3}", json={
+        "rotation_order": [other, solo], "keep_turn": True}).json()
+    assert r["rotation_order"] == [other, solo]
+
+
+def test_keep_turn_carries_a_one_person_chore_into_turns(client, app_mod):
+    """A chore Ben does alone that becomes "take turns" stays Ben's for now."""
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": b}).json()["id"]
+    r = client.patch(f"/api/admin/chores/{cid}", json={
+        "assign_kind": "rotation", "rotation_order": [a, b], "rotate_every": "week",
+        "keep_turn": True}).json()
+    assert r["rotation_order"] == [b, a]
+    assert _owner_today(client, cid) == [b]

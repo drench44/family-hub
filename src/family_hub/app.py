@@ -2076,6 +2076,10 @@ class ChorePatch(BaseModel):
     date: str | None = None
     sort: int | None = None
     active: Literal[0, 1] | None = None   # 0/1 only, as on PersonPatch
+    # Not a column: whoever is up next before this edit stays up next after
+    # it (see _keep_turn). The chore form sends it on every edit until the
+    # person editing changes the turns themselves.
+    keep_turn: bool = False
 
 
 # An explicit JSON null for a field backed by a NOT NULL column is a bad request
@@ -2326,6 +2330,11 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
         fields["rotation_epoch"] = _today().isoformat()
     if "title" in fields:
         fields["title"] = fields["title"].strip()
+    if fields.pop("keep_turn", False):
+        active_ids = {p["id"] for p in fdb.list_people(c)}
+        kept = _keep_turn(row, {**row, **fields}, _today(), active_ids)
+        if kept is not None:
+            fields["rotation_order"] = kept
     fdb.update_chore(c, cid, **fields)
     return _chore_row(c, cid)
 
@@ -2333,6 +2342,60 @@ def admin_patch_chore(cid: int, ch: ChorePatch):
 class ChorePreviewIn(ChoreIn):
     title: str = ""
     chore_id: int | None = None   # editing: keep that chore's own anchor date
+    keep_turn: bool = False       # editing: what the PATCH's keep_turn would do
+
+
+def _upcoming(chore: dict, today: dt.date, active_ids: set) -> tuple[list, int]:
+    """A chore's next days from ``today`` and who does each, as the wall
+    would assign them: ([{"date", "person_id"}], days looked ahead)."""
+    kind = chore["schedule_kind"]
+    horizon = _PREVIEW_DAYS
+    out = []
+    if kind == "once":
+        # one dated day, however far off: read it directly, never walk to it
+        # (a walk to a year-9999 date would tie the server up for seconds)
+        due = dt.date.fromisoformat(chore["rotation_epoch"])
+        horizon = max(horizon, (due - today).days + 1)
+        if due >= today:
+            out.append({"date": due.isoformat(),
+                        "person_id": chlogic.assignee_id(chore, due, active_ids)})
+        return out, horizon
+    if kind == "interval":   # interval_days is at most 365: at most 731 days
+        horizon = max(horizon, 2 * chore["interval_days"] + 1)
+    d = today
+    for _ in range(horizon):
+        if len(out) >= _PREVIEW_MAX:
+            break
+        if chlogic.occurs(chore, d):
+            out.append({"date": d.isoformat(),
+                        "person_id": chlogic.assignee_id(chore, d, active_ids)})
+        d += dt.timedelta(days=1)
+    return out, horizon
+
+
+def _keep_turn(old: dict, new: dict, today: dt.date, active_ids: set) -> list | None:
+    """The turn order that keeps whoever is up next on ``old`` up next on
+    ``new``, or None when there is nothing to keep.
+
+    Changing how often a rotation repeats (or when it switches people) also
+    changes how many turns have gone by, so without this an edit like "every
+    other Monday" to "every Monday" quietly hands this week to someone else.
+    Only where the cycle starts moves: the same people, in the same order."""
+    if new["assign_kind"] != "rotation" or not old.get("active", 1):
+        return None
+    order = list(new["rotation_order"])
+    if len(order) < 2 or not all(i in active_ids for i in order):
+        return None   # with someone inactive the wall turns a shorter list
+    was = _upcoming(old, today, active_ids)[0]
+    now = _upcoming(new, today, active_ids)[0]
+    if not was or not now or was[0]["person_id"] not in order:
+        return None
+    pid = was[0]["person_id"]
+    if now[0]["person_id"] == pid:
+        return None
+    slot = chlogic.turn_slot(new, dt.date.fromisoformat(now[0]["date"])) % len(order)
+    shift = (order.index(pid) - slot) % len(order)
+    return order[shift:] + order[:shift]
 
 
 # How far ahead the form's preview looks (at least; a chore that comes up
@@ -2353,9 +2416,13 @@ def admin_preview_chore(ch: ChorePreviewIn):
     PATCH would: a rotation's turns count from it. Away periods are left out
     on purpose: the preview shows the plan, and the wall shows who covers.
 
-    Returns {"upcoming": [{"date", "person_id"}], "slot": n} where `slot` is
-    the place in rotation_order whose turn the FIRST upcoming day is (the
-    form uses it for "start with ..."), or null for a one-person chore."""
+    Returns {"upcoming": [{"date", "person_id"}], "slot": n,
+    "rotation_order": [...], "before": id} where `slot` is the place in
+    rotation_order whose turn the FIRST upcoming day is (the form uses it for
+    "start with ..."), or null for a one-person chore. With `keep_turn` an
+    edit previews the PATCH's keep_turn: `rotation_order` is the restarted
+    order the save would store, and `before` is who was up next on the chore
+    as saved (null otherwise), so the form can say when a turn changes hands."""
     c = _db()
     merged = ch.model_dump()
     merged["title"] = merged["title"].strip() or "preview"
@@ -2381,27 +2448,14 @@ def admin_preview_chore(ch: ChorePreviewIn):
         "rotation_epoch": epoch,
     }
     active_ids = {p["id"] for p in fdb.list_people(c)}
-    horizon = _PREVIEW_DAYS
-    out = []
-    if kind == "once":
-        # one dated day, however far off: read it directly, never walk to it
-        # (a walk to a year-9999 date would tie the server up for seconds)
-        due = dt.date.fromisoformat(epoch)
-        horizon = max(horizon, (due - today).days + 1)
-        if due >= today:
-            out.append({"date": due.isoformat(),
-                        "person_id": chlogic.assignee_id(chore, due, active_ids)})
-    else:
-        if kind == "interval":   # interval_days is at most 365: at most 731 days
-            horizon = max(horizon, 2 * chore["interval_days"] + 1)
-        d = today
-        for _ in range(horizon):
-            if len(out) >= _PREVIEW_MAX:
-                break
-            if chlogic.occurs(chore, d):
-                out.append({"date": d.isoformat(),
-                            "person_id": chlogic.assignee_id(chore, d, active_ids)})
-            d += dt.timedelta(days=1)
+    before = None
+    if merged["chore_id"] is not None and merged["keep_turn"]:
+        now = _upcoming(row, today, active_ids)[0]
+        before = now[0]["person_id"] if now else None
+        kept = _keep_turn(row, chore, today, active_ids)
+        if kept is not None:
+            chore["rotation_order"] = kept
+    out, horizon = _upcoming(chore, today, active_ids)
     # The slot indexes rotation_order as stored. With someone in it no longer
     # active, the wall turns over the shorter, active-only list instead
     # (assignee_id), so a slot into the stored list would name the wrong
@@ -2411,7 +2465,11 @@ def admin_preview_chore(ch: ChorePreviewIn):
     if chore["assign_kind"] == "rotation" and out and all(i in active_ids for i in order):
         first = dt.date.fromisoformat(out[0]["date"])
         slot = chlogic.turn_slot(chore, first) % len(order)
-    return {"upcoming": out, "slot": slot, "days": horizon}
+    # rotation_order: the order the save would store (keep_turn may have
+    # restarted it); before: who was up next on the chore as saved, so the
+    # form can say when an edit hands that turn to someone else.
+    return {"upcoming": out, "slot": slot, "days": horizon,
+            "rotation_order": order, "before": before}
 
 
 @app.delete("/api/admin/chores/{cid}")
