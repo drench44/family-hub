@@ -9817,6 +9817,32 @@ test('buildChoreForm: an edit keeps whoever is up next, and says so when a turn 
   assert.deepEqual(saved.rotation_order, [1, 2]);
 });
 
+test('buildChoreForm: adding or removing someone keeps the turn; moving someone is the person\'s call', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms);
+  sandbox.clearTimeout = (id) => clearTimeout(id);
+  const host = document.createElement('div');
+  const asked = [];
+  // the server changes nothing: same order back, same person as before
+  const preview = async (body) => { asked.push(JSON.parse(JSON.stringify(body)));
+    return { upcoming: [{ date: sandbox.todayISO(), person_id: body.rotation_order[0] }], slot: 0,
+      rotation_order: body.rotation_order, before: body.rotation_order[0] }; };
+  const P3 = [...P2, { id: 3, name: 'Kai', color: '#F5A623', active: 1 }];
+  sandbox.buildChoreForm(host, { ...readyModel(sandbox), assign: 'rotation', rot: [1, 2] }, 'Save', () => {}, P3,
+    { preview, choreId: 7 });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.ok(host.querySelector('.f-turnnote').classList.contains('hidden'), 'nothing changed: no note');
+  tapDelegated(host, '.f-rotadd', '[data-add="3"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.at(-1).keep_turn, true, 'adding someone still keeps the turn');
+  tapDelegated(host, '.f-rotation', '[data-rem="2"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.at(-1).keep_turn, true, 'removing someone still keeps the turn');
+  tapDelegated(host, '.f-rotation', '[data-down="0"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.at(-1).keep_turn, false, 'a move says who goes when');
+});
+
 test('buildChoreForm: a new chore never sends keep_turn and shows no turn note', async () => {
   const { document, sandbox } = newHub();
   sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms);

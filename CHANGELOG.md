@@ -17,6 +17,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The chore form says in plain words when an edit keeps the turn ("Ava
   keeps this week, same as before") or moves it ("This moves this week
   from Ava to Ruby").
+- When an edit changes the first day a chore comes up (say Fridays only to
+  every day), the turn kept is whoever had that same day before.
 
 ## [1.13.0] — 2026-10-19
 
