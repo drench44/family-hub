@@ -2109,6 +2109,9 @@ body.overlay-open { overflow: hidden; }
 /* While the keyboard is docked (osk.js stamps this on <body>), lift the failure
    toast clear of it so a "couldn't save" message isn't hidden behind the keys. */
 .osk-open .hub-toast { bottom: calc(56px + 5 * 54px); }
+/* The wall (a browser that latched ?kiosk=1) hides the mouse pointer after a tap
+   and shows it again when the mouse really moves; osk.js stamps this class. */
+body.kiosk-cursor-hidden, body.kiosk-cursor-hidden * { cursor: none !important; }
 
 /* ====================== mobile tab bar ======================= */
 /* Hidden on the wall; the mobile block below turns it on. */

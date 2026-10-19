@@ -10,6 +10,13 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- The wall hides the mouse pointer while people tap it, and shows it again
+  as soon as someone really moves a mouse. Only a browser opened once with
+  `?kiosk=1` does this; phones and laptops keep their pointer. (Idea from
+  dapperdodger's fork, PR #10, which hid it for good; ours keeps the mouse
+  usable.)
+
 ## [1.13.1] — 2026-10-19
 
 ### Fixed

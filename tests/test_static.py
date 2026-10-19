@@ -2630,3 +2630,17 @@ def test_house_folder_check(tmp_path, case):
     else:
         with pytest.raises(AssertionError):
             _check_house_folder(h)
+
+
+def test_kiosk_hides_the_mouse_pointer_after_a_tap():
+    """The wall is a touchscreen with a wireless mouse. osk.js hides the pointer
+    after a tap and shows it again on a real mouse move, only once the kiosk flag
+    is latched (phones and laptops never latch it). The CSS rule is what actually
+    hides it, on the body and everything inside it."""
+    gate = OSK.index("if (!kiosk) return;")
+    assert OSK.index("kiosk-cursor-hidden") > gate, \
+        "only a latched kiosk may hide the pointer, never a phone or laptop"
+    assert "'pointerdown'" in OSK and "'pointermove'" in OSK
+    assert re.search(
+        r"body\.kiosk-cursor-hidden,\s*body\.kiosk-cursor-hidden \*\s*\{[^}]*cursor:\s*none\s*!important",
+        CSS), "the kiosk body and everything in it must hide the pointer"
