@@ -10,6 +10,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- Editing a chore that takes turns no longer quietly changes whose turn it
+  is. Changing how often it repeats (say every other Monday to every
+  Monday) keeps whoever has it now, and the form says so in plain words if
+  an edit does move a turn to someone else.
+
 ## [1.13.0] — 2026-10-19
 
 ### Added
