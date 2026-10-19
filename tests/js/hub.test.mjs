@@ -1313,7 +1313,7 @@ test('choreSummary: says when and who in plain words', () => {
     'Every weekday. Ava does it.');
   assert.equal(S({ repeat: 'interval', intervalDays: '3', assign: 'fixed', fixed_person_id: 1 }), 'Every 3 days. Ava does it.');
   assert.equal(S({ repeat: 'daily', assign: 'rotation', rot: [1, 2], rotateEvery: 'week' }),
-    'Every day. Ava and Ruby take turns, switching every Monday.');
+    'Every day. Ava and Ruby take turns, a new person each week.');
   assert.equal(S({ repeat: 'daily', assign: 'rotation', rot: [1, 2, 1], rotateEvery: 'turn' }),
     'Every day. Ava and Ruby take turns, a new person each time.');
   assert.equal(S({ repeat: 'daily', assign: 'each', each: [1, 2, 3] }), 'Every day. Ava, Ruby and Milo each do their own.');

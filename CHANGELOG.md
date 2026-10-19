@@ -14,6 +14,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Chores can take turns a week at a time: one person has the chore every
   day it comes up this week, the next person has all of next week, and so
   on (pick "Take turns", then "Switch to the next person: Every week").
+  The chore's row says whose week it is ("↻ Ruby's week").
+- The chores page's Edit button now reads "Edit chores".
 - The chore form asks plain questions ("How often?", "Who does it?"),
   shows people as colored name buttons, offers quick emoji and day presets
   (Weekdays, Weekends), and shows who does the chore on the next few days

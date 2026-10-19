@@ -216,7 +216,10 @@ def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
             # renders it alongside their Away badge) instead of vanishing.
         rows.append({"chore_id": chore["id"], "person_id": aid,
                      "title": chore["title"], "icon": chore["icon"],
-                     "rot": 1 if chore["assign_kind"] == "rotation" else 0,
+                     # 0 one person, 1 a rotation, 2 a rotation that
+                     # switches weekly (the card says whose WEEK it is)
+                     "rot": (0 if chore["assign_kind"] != "rotation"
+                             else 2 if chore.get("rotate_every") == "week" else 1),
                      "covering_for": covering_for})
     return rows
 
@@ -231,7 +234,8 @@ def day_plan(rows: list[dict], people: list[dict], completions) -> list[dict]:
     for person in people:
         pid = person["id"]
         prows = [{"id": r["chore_id"], "title": r["title"], "icon": r["icon"],
-                  "rot": bool(r["rot"]), "done": r["chore_id"] in completed,
+                  "rot": bool(r["rot"]), "rot_week": r["rot"] == 2,
+                  "done": r["chore_id"] in completed,
                   "covering_for": r.get("covering_for"),
                   # finished, then taken off today's plan: shown done, read-only
                   "locked": bool(r.get("locked"))}

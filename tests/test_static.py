@@ -2440,6 +2440,16 @@ def test_no_fixed_backgrounds_they_repaint_on_every_scroll_frame():
     assert "background-attachment:fixed" not in CSS.replace(" ", "")
 
 
+def test_no_first_child_rules_inside_glass_surfaces():
+    """Every glass surface's FIRST child is its pane (an <i>), so a
+    :first-child rule on a card's own children never matches again: the
+    To-Do card's first group lost its top padding and the card grew 4px.
+    Use :first-of-type (the pane is the only <i>). The one :first-child
+    left is in the Settings overlay, which has no glass."""
+    rules = re.findall(r"([^{}]*:first-child[^{}]*)\{", CSS)
+    assert [r.strip() for r in rules] == [".integ-group-title:first-child"], rules
+
+
 def test_every_glass_surface_gets_its_pane():
     """hub.js gives every glass surface a pane at boot and again whenever a
     render replaces it (cards are rebuilt with innerHTML all the time), with

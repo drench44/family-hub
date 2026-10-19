@@ -467,7 +467,10 @@ function choreRowHtml(ch, firstName, opts = {}) {
   // later poll moved on to.
   const { readonly = false, editing = false, nameById = null, day = '' } = opts;
   const icon = ch.icon ? `<span class="chore-icon">${escapeHtml(ch.icon)}</span>` : '';
-  const rot = ch.rot ? `<span class="chore-rot">↻ ${escapeHtml(firstName)}</span>` : '';
+  // a weekly turn says whose week it is ("↻ Ruby's week"); a per-time turn
+  // keeps the plain "↻ Ruby"
+  const rot = ch.rot
+    ? `<span class="chore-rot">↻ ${escapeHtml(firstName)}${ch.rot_week ? '’s week' : ''}</span>` : '';
   // Backup's card: this row is standing in for an away person's fixed chore
   // (chores.py tags it covering_for=<away person id>). Resolve the name from
   // the people list the caller built (nameById) rather than trusting a raw id
@@ -560,7 +563,7 @@ function choresNavHtml() {
       + (choreState.editing
         ? `<button class="cal-nav-btn ch-new" type="button" data-add-chore="">+ New chore</button>` : '')
       + `<button class="cal-nav-btn ch-edit-toggle${choreState.editing ? ' active' : ''}"`
-      + ` type="button" data-chedit="1">${choreState.editing ? 'Done' : 'Edit'}</button>`
+      + ` type="button" data-chedit="1">${choreState.editing ? 'Done' : 'Edit chores'}</button>`
     : '';
   return `<div class="cal-nav">`
     + `<button class="cal-nav-btn" type="button" data-chnav="prev">‹</button>`
