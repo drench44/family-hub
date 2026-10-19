@@ -13,8 +13,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 ### Fixed
 - Editing a chore that takes turns no longer quietly changes whose turn it
   is. Changing how often it repeats (say every other Monday to every
-  Monday) keeps whoever has it now, and the form says so in plain words if
-  an edit does move a turn to someone else.
+  Monday) keeps whoever has it now.
+- The chore form says in plain words when an edit keeps the turn ("Ava
+  keeps this week, same as before") or moves it ("This moves this week
+  from Ava to Ruby").
 
 ## [1.13.0] — 2026-10-19
 

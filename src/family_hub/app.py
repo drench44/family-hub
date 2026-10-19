@@ -2421,8 +2421,9 @@ def admin_preview_chore(ch: ChorePreviewIn):
     rotation_order whose turn the FIRST upcoming day is (the form uses it for
     "start with ..."), or null for a one-person chore. With `keep_turn` an
     edit previews the PATCH's keep_turn: `rotation_order` is the restarted
-    order the save would store, and `before` is who was up next on the chore
-    as saved (null otherwise), so the form can say when a turn changes hands."""
+    order the save would store. Editing (`chore_id`), `before` is who was up
+    next on the chore as saved (null for a new chore), so the form can say
+    when an edit hands a turn to someone else."""
     c = _db()
     merged = ch.model_dump()
     merged["title"] = merged["title"].strip() or "preview"
@@ -2449,12 +2450,13 @@ def admin_preview_chore(ch: ChorePreviewIn):
     }
     active_ids = {p["id"] for p in fdb.list_people(c)}
     before = None
-    if merged["chore_id"] is not None and merged["keep_turn"]:
-        now = _upcoming(row, today, active_ids)[0]
-        before = now[0]["person_id"] if now else None
-        kept = _keep_turn(row, chore, today, active_ids)
-        if kept is not None:
-            chore["rotation_order"] = kept
+    if merged["chore_id"] is not None:
+        was = _upcoming(row, today, active_ids)[0] if row.get("active", 1) else []
+        before = was[0]["person_id"] if was else None
+        if merged["keep_turn"]:
+            kept = _keep_turn(row, chore, today, active_ids)
+            if kept is not None:
+                chore["rotation_order"] = kept
     out, horizon = _upcoming(chore, today, active_ids)
     # The slot indexes rotation_order as stored. With someone in it no longer
     # active, the wall turns over the shorter, active-only list instead
@@ -2466,8 +2468,7 @@ def admin_preview_chore(ch: ChorePreviewIn):
         first = dt.date.fromisoformat(out[0]["date"])
         slot = chlogic.turn_slot(chore, first) % len(order)
     # rotation_order: the order the save would store (keep_turn may have
-    # restarted it); before: who was up next on the chore as saved, so the
-    # form can say when an edit hands that turn to someone else.
+    # restarted it); before: who was up next on the chore as saved.
     return {"upcoming": out, "slot": slot, "days": horizon,
             "rotation_order": order, "before": before}
 
