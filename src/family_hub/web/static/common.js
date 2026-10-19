@@ -1132,11 +1132,27 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
   // still saves, and the summary sentence still describes the chore.
   let previewSeq = 0;
   let previewTimer = null;
+  let previewFailed = false;   // the last ask failed (not: nothing to show)
   const paintPreview = () => {
     const box = $('.f-preview');
+    if (!box) return;            // the editor closed while an ask was out
     const assign = model.repeat === 'once' ? 'fixed' : model.assign;
     const pv = lastPreview;
-    if (!pv || !pv.upcoming || !pv.upcoming.length || assign === 'each') { box.classList.add('hidden'); return; }
+    if (previewFailed) {
+      $('.f-cells').innerHTML = '<div class="hint">Couldn’t load who’s up next. Saving still works.</div>';
+      $('.f-first').innerHTML = '';
+      $('.f-first').classList.add('hidden');
+      box.classList.remove('hidden');
+      return;
+    }
+    if (!pv || !pv.upcoming || assign === 'each') { box.classList.add('hidden'); return; }
+    if (!pv.upcoming.length) {
+      $('.f-cells').innerHTML = `<div class="hint">Not in the next ${Number(pv.days) || 120} days.</div>`;
+      $('.f-first').innerHTML = '';
+      $('.f-first').classList.add('hidden');
+      box.classList.remove('hidden');
+      return;
+    }
     const byWeek = assign === 'rotation' && model.rotateEvery === 'week';
     const cells = chorePreviewCells(pv.upcoming, byWeek, todayISO());
     $('.f-cells').innerHTML = cells.map((c) => {
@@ -1153,7 +1169,14 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     const allActive = model.rot.every((id) => { const p = personOf(id); return p && p.active; });
     if (assign === 'rotation' && uniq.length > 1 && pv.slot != null && allActive) {
       const upNow = model.rot[pv.slot];
-      first.innerHTML = `<span class="first-label">${byWeek ? 'Who has this week?' : 'Who goes next?'}</span>`
+      // the slot is the FIRST upcoming day's turn, which is next week's on a
+      // Saturday for a weekday chore: name the week the cells start with
+      const firstWeek = cells[0] ? cells[0].label : 'This week';
+      const ask = !byWeek ? 'Who goes next?'
+        : firstWeek === 'This week' ? 'Who has this week?'
+          : firstWeek === 'Next week' ? 'Who has next week?'
+            : `Who has the ${firstWeek.replace(/^Week/, 'week')}?`;
+      first.innerHTML = `<span class="first-label">${escapeHtml(ask)}</span>`
         + uniq.map((u) => {
           const p = personOf(u.id);
           const cls = u.id === upNow ? 'person-chip small selected' : 'person-chip small';
@@ -1171,8 +1194,11 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     paintSummary();
     if (typeof opts.preview !== 'function') return;
     clearTimeout(previewTimer);
+    // numbered when the draft changes, not when the ask goes out: a reply
+    // for an older draft that lands inside the debounce must not paint
+    const seq = ++previewSeq;
     previewTimer = setTimeout(async () => {
-      const seq = ++previewSeq;
+      if (seq !== previewSeq || !$('.f-title')) return;   // superseded, or the editor closed
       const f = draft();
       // nothing to preview yet: no person, no turns, no days. The strip
       // waits instead of asking the server about a chore that can't save.
@@ -1182,13 +1208,18 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
         || (model.repeat === 'weekly' && model.days.size === 0)
         || (model.repeat === 'interval' && clampIntervalDays(f.intervalDays) === null)
         || (model.repeat === 'once' && !parseISODate(f.date));
-      if (incomplete) { lastPreview = null; paintPreview(); return; }
+      if (incomplete) { lastPreview = null; previewFailed = false; paintPreview(); return; }
       const body = buildChorePayload({ ...f, person: model.fixed_person_id });
       if (opts.choreId != null) body.chore_id = opts.choreId;
       let got = null;
-      try { got = await opts.preview(body); } catch (e) { got = null; }
+      let failed = false;
+      try { got = await opts.preview(body); } catch (e) {
+        failed = true;
+        console.warn('chore preview failed:', e && e.message);
+      }
       if (seq !== previewSeq) return;   // a newer draft owns the strip
       lastPreview = got;
+      previewFailed = failed;
       paintPreview();
     }, 180);
   };
@@ -1342,6 +1373,15 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     }
     return onsubmit(buildChorePayload({ ...f, person: model.fixed_person_id }), err);
   });
+  return {
+    // "Each of them" saved for some people and not others: keep the form
+    // open on just the ones still to save, so Save again can't duplicate
+    keepOnlyEach(ids) {
+      model.each = model.each.filter((id) => ids.includes(id));
+      paintPeople();
+      paintSummary();
+    },
+  };
 }
 
 /* Where a dragged item lands: the target list's open ids with `id` taken out
@@ -1351,6 +1391,32 @@ function todoDropOrder(ids, id, index) {
   const rest = ids.filter((x) => x !== id);
   const at = Math.max(0, Math.min(index, rest.length));
   return [...rest.slice(0, at), id, ...rest.slice(at)];
+}
+
+/* What an arrow key on a focused to-do grip asks for: up/down one place in
+   its list, left/right to the end of the list beside it. Returns
+   {bucket, order} for a move, {edge} when the item is already at that end
+   (nothing to send), or null for any other key or an unknown item. Pure
+   (the to-do board in hub.js drives it). */
+function todoKeyMove(buckets, id, key) {
+  const keys = ['now', 'soon', 'later'];
+  const open = (b) => ((buckets && buckets[b]) || []).filter((t) => !t.done_at).map((t) => t.id);
+  const from = keys.find((b) => open(b).includes(id));
+  if (!from) return null;
+  const ids = open(from);
+  const at = ids.indexOf(id);
+  if (key === 'ArrowUp' || key === 'ArrowDown') {
+    const to = at + (key === 'ArrowUp' ? -1 : 1);
+    if (to < 0 || to >= ids.length) return { edge: key === 'ArrowUp' ? 'top' : 'bottom', bucket: from };
+    return { bucket: from, order: todoDropOrder(ids, id, to) };
+  }
+  if (key === 'ArrowLeft' || key === 'ArrowRight') {
+    const k = keys.indexOf(from) + (key === 'ArrowLeft' ? -1 : 1);
+    if (k < 0 || k >= keys.length) return { edge: key === 'ArrowLeft' ? 'first' : 'last', bucket: from };
+    const target = keys[k];
+    return { bucket: target, order: todoDropOrder(open(target), id, open(target).length) };
+  }
+  return null;
 }
 
 /* Wrap a form's Save handler so it runs one write at a time. A double tap
@@ -1573,6 +1639,10 @@ function todoFailMessage(error) {
   // 404 — the JS test pins this exact substring.
   if (String(error || '').includes('unknown todo')) {
     return 'That item was already changed on another device.';
+  }
+  // the server's own rule (app.py _validate_todo): retrying can't help
+  if (String(error || '').includes('title must be')) {
+    return 'That name is too long. Keep it to 120 characters.';
   }
   return 'Couldn’t save — check the hub and tap again.';
 }

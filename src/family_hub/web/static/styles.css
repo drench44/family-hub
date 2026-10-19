@@ -3315,27 +3315,27 @@ body.integ-off-todos .todo-slot { display: none; }
    anyway. */
 @supports not (-webkit-touch-callout: none) {
   @media (min-width: 1001px) {
-    :where(:root[data-look]:not([data-look="none"]) .wrap) .card,
-    :where(:root[data-look]:not([data-look="none"]) .wrap) .expand,
-    :where(:root[data-look]:not([data-look="none"]) .wrap) .shead h2,
-    :where(:root[data-look]:not([data-look="none"])) .topbar {
+    :where(:root.glass-panes[data-look]:not([data-look="none"]) .wrap) .card,
+    :where(:root.glass-panes[data-look]:not([data-look="none"]) .wrap) .expand,
+    :where(:root.glass-panes[data-look]:not([data-look="none"]) .wrap) .shead h2,
+    :where(:root.glass-panes[data-look]:not([data-look="none"])) .topbar {
       -webkit-backdrop-filter: none; backdrop-filter: none;
       background: transparent;
       position: relative; isolation: isolate;
     }
-    :where(:root[data-look]:not([data-look="none"]) .wrap) :is(.card, .expand, .shead h2) > .glass-pane,
-    :where(:root[data-look]:not([data-look="none"])) .topbar > .glass-pane { display: block; }
+    :where(:root.glass-panes[data-look]:not([data-look="none"]) .wrap) :is(.card, .expand, .shead h2) > .glass-pane,
+    :where(:root.glass-panes[data-look]:not([data-look="none"])) .topbar > .glass-pane { display: block; }
   }
-  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .card,
-  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .expand,
-  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .shead h2,
-  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"])) .topbar {
+  :where(:root.glass-panes[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .card,
+  :where(:root.glass-panes[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .expand,
+  :where(:root.glass-panes[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) .shead h2,
+  :where(:root.glass-panes[data-layout="desktop"][data-look]:not([data-look="none"])) .topbar {
     -webkit-backdrop-filter: none; backdrop-filter: none;
     background: transparent;
     position: relative; isolation: isolate;
   }
-  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) :is(.card, .expand, .shead h2) > .glass-pane,
-  :where(:root[data-layout="desktop"][data-look]:not([data-look="none"])) .topbar > .glass-pane { display: block; }
+  :where(:root.glass-panes[data-layout="desktop"][data-look]:not([data-look="none"]) .wrap) :is(.card, .expand, .shead h2) > .glass-pane,
+  :where(:root.glass-panes[data-layout="desktop"][data-look]:not([data-look="none"])) .topbar > .glass-pane { display: block; }
 }
 /* The pane (hub.js ensureGlassPanes): fills its surface, sits under the
    surface's content, and clips its fixed ::before to the surface's rounded

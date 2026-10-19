@@ -33,6 +33,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Scrolling the main page with a seasonal look on was slow on the wall
   (about 20 frames a second with Halloween on). The frosted glass on the
   cards no longer redraws on every scroll frame; it scrolls at a smooth 60.
+- A to-do move that can't be saved puts the item straight back and says
+  so, a second finger can't break a drag on the wall, and a to-do name that
+  is too long says why instead of "tap again".
 
 ## [1.12.0] — 2026-10-14
 

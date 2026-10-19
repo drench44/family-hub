@@ -9781,3 +9781,194 @@ test('choreRowHtml: a weekly turn says whose week it is', () => {
   assert.match(sandbox.choreRowHtml({ id: 1, title: 'Dishes', rot: true, rot_week: false }, 'Ruby'),
     /<span class="chore-rot">↻ Ruby<\/span>/);
 });
+
+// ---- the to-do board: grip taps, keyboard moves, failed writes (review) -----
+
+function mountTodoBoard(buckets) {
+  const ctx = newHub();
+  const { document, sandbox } = ctx;
+  const host = document.createElement('div'); host._id = 'todos-full'; document.body.appendChild(host);
+  sandbox.__buckets = buckets;
+  vm.runInContext('todoState.source = "local"; todoState.data = { buckets: __buckets, recent_done: [] };', sandbox);
+  sandbox.renderTodosPaint();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push({ url, method: (opts && opts.method) || 'GET', body: opts && opts.body ? JSON.parse(opts.body) : null });
+    if (url === '/api/todos') return okResp({ buckets: sandbox.__buckets, recent_done: [] });
+    return okResp({ ok: true });
+  };
+  const grip = (id) => {
+    const node = document.querySelector(`[data-todo-grip="${id}"]`);
+    assert.ok(node, `grip ${id} rendered`);
+    node.closest = (s) => (selectorMatches(node, s) ? node : null);
+    return node;
+  };
+  const read = (expr) => vm.runInContext(expr, sandbox);
+  return { ...ctx, host, calls, grip, read };
+}
+
+const T = (id, bucket, extra = {}) => ({ id, title: `item ${id}`, bucket, done_at: null, ...extra });
+
+test('to-do grip: a press without moving is a tap and opens the item; nothing is sent', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now')], soon: [], later: [] });
+  const g = b.grip(1);
+  b.fire('pointerdown', { type: 'pointerdown', target: g, pointerId: 7, button: 0, clientX: 10, clientY: 10, preventDefault() {} });
+  b.fire('pointerup', { type: 'pointerup', target: g, pointerId: 7, clientX: 12, clientY: 11 });
+  await flush();
+  assert.equal(b.read('todoState.openId'), 1, 'the controls opened');
+  assert.match(b.host.innerHTML, /data-todo-rename="1"/, 'rename/move/delete panel painted');
+  assert.equal(b.calls.filter((c) => c.method === 'POST').length, 0);
+});
+
+test('to-do grip: a cancelled press (the browser took it) neither opens nor moves anything', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now')], soon: [], later: [] });
+  const g = b.grip(1);
+  b.fire('pointerdown', { type: 'pointerdown', target: g, pointerId: 3, button: 0, clientX: 0, clientY: 0, preventDefault() {} });
+  b.fire('pointercancel', { type: 'pointercancel', target: g, pointerId: 3, clientX: 0, clientY: 0 });
+  await flush();
+  assert.equal(b.read('todoState.openId'), null);
+  assert.equal(b.read('todoDrag.id'), null, 'the press is over');
+});
+
+test('to-do grip: a second finger on another grip does not hijack the first press', () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now')], soon: [], later: [] });
+  b.fire('pointerdown', { type: 'pointerdown', target: b.grip(1), pointerId: 1, button: 0, clientX: 0, clientY: 0, preventDefault() {} });
+  b.fire('pointerdown', { type: 'pointerdown', target: b.grip(2), pointerId: 2, button: 0, clientX: 0, clientY: 0, preventDefault() {} });
+  assert.equal(b.read('todoDrag.id'), 1);
+  assert.equal(b.read('todoDrag.pointerId'), 1);
+});
+
+test('to-do grip: a repaint during a press waits until the press ends', () => {
+  const b = mountTodoBoard({ now: [T(1, 'now')], soon: [], later: [] });
+  const g = b.grip(1);
+  b.fire('pointerdown', { type: 'pointerdown', target: g, pointerId: 1, button: 0, clientX: 0, clientY: 0, preventDefault() {} });
+  const before = b.host.innerHTML;
+  b.read('todoState.data.buckets.now[0].title = "renamed elsewhere"; renderTodosPaint();');
+  assert.equal(b.host.innerHTML, before, 'the board under the finger is not rebuilt');
+  b.fire('pointerup', { type: 'pointerup', target: g, pointerId: 1, clientX: 0, clientY: 0 });
+  assert.match(b.host.innerHTML, /renamed elsewhere/, 'the deferred paint lands when the press ends');
+});
+
+test('to-do grip keys: arrow down sends the new order and arrow right moves to the next list', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now'), T(3, 'now')], soon: [T(4, 'soon')], later: [] });
+  b.fire('keydown', { key: 'ArrowDown', target: b.grip(1), preventDefault() {} });
+  await flush(); await flush();
+  let post = b.calls.find((c) => c.url === '/api/todo-order');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.body)), { bucket: 'now', ids: [2, 1, 3] });
+  b.calls.length = 0;
+  b.fire('keydown', { key: 'ArrowRight', target: b.grip(3), preventDefault() {} });
+  await flush(); await flush();
+  post = b.calls.find((c) => c.url === '/api/todo-order');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.body)), { bucket: 'soon', ids: [4, 3] }, 'lands last in Soon');
+});
+
+test('to-do grip keys: at an end nothing is sent and the toast says why', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now')], soon: [], later: [] });
+  b.fire('keydown', { key: 'ArrowUp', target: b.grip(1), preventDefault() {} });
+  b.fire('keydown', { key: 'ArrowLeft', target: b.grip(1), preventDefault() {} });
+  await flush();
+  assert.equal(b.calls.filter((c) => c.url === '/api/todo-order').length, 0);
+  assert.match(b.document.getElementById('toast').textContent, /Now is the first list/);
+});
+
+test('placeTodo: a failed write puts the board back the way it was at once', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now')], soon: [], later: [] });
+  b.sandbox.fetch = async () => { throw new Error('offline in test'); };
+  await b.read('placeTodo(2, "soon", [2])');
+  await flush();
+  const now = JSON.parse(JSON.stringify(b.read('todoState.data.buckets.now'))).map((t) => t.id);
+  assert.deepEqual(now, [1, 2], 'the item is back in Now, in its place');
+  assert.match(b.host.innerHTML, /data-bucket="now"[\s\S]*item 2[\s\S]*data-bucket="soon"/);
+  assert.ok(b.document.getElementById('toast').classList.contains('hub-toast-visible'));
+});
+
+test('placeTodo: a just-checked item stays after the open ones and nothing doubles', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(5, 'now', { done_at: '2026-10-19T00:00:00Z' }), T(2, 'now')], soon: [], later: [] });
+  b.sandbox.fetch = async () => new Promise(() => {});   // the write never answers
+  b.read('placeTodo(2, "now", [2, 1])');
+  await flush();
+  const now = JSON.parse(JSON.stringify(b.read('todoState.data.buckets.now'))).map((t) => t.id);
+  assert.deepEqual(now, [2, 1, 5]);
+});
+
+test('to-do panel: Rename sends the new name; a blank one sends nothing', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now')], soon: [], later: [] });
+  b.read('todoState.openId = 1; renderTodosPaint();');
+  const input = { value: '  New name  ' };
+  const getById = b.document.getElementById;
+  b.document.getElementById = (id) => (id === 'todo-rename-1' ? input : getById(id));
+  await b.read('renameTodo(1)');
+  const patch = b.calls.find((c) => c.method === 'PATCH');
+  assert.equal(patch.url, '/api/todos/1');
+  assert.equal(patch.body.title, 'New name');
+  b.calls.length = 0;
+  input.value = '   ';
+  await b.read('renameTodo(1)');
+  assert.equal(b.calls.filter((c) => c.method === 'PATCH').length, 0);
+  assert.match(b.document.getElementById('toast').textContent, /Give it a name/);
+});
+
+test('todosFullHtml: a just-checked item has no drag grip', () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now', { done_at: '2026-10-19T00:00:00Z' })], soon: [], later: [] });
+  assert.match(b.host.innerHTML, /data-todo-grip="1"/);
+  assert.doesNotMatch(b.host.innerHTML, /data-todo-grip="2"/);
+});
+
+test('ensureGlassPanes: every glass surface gets one pane, first, and only once', () => {
+  const { document, sandbox } = newHub();
+  const made = [];
+  const card = {
+    nodeType: 1, children: [], firstElementChild: null, firstChild: null,
+    matches: (sel) => sel.split(',').some((s) => s.trim() === '.wrap .card'),
+    querySelectorAll: () => [],
+    insertBefore(el) { this.children.unshift(el); this.firstElementChild = el; this.firstChild = el; made.push(el); },
+  };
+  const realCreate = document.createElement;
+  document.createElement = (tag) => {
+    const el = realCreate(tag);
+    el._tagName = tag;
+    el.setAttribute = el.setAttribute || (() => {});
+    return el;
+  };
+  sandbox.ensureGlassPanes(card);
+  sandbox.ensureGlassPanes(card);
+  assert.equal(made.length, 1, 'a second pass adds no second pane');
+  assert.equal(made[0]._tagName, 'i', 'an <i>, so no first-of-type rule shifts');
+  assert.equal(made[0].className, 'glass-pane');
+});
+
+test('chore editor: "Each of them" that saves for some people keeps the form open on just the rest', async () => {
+  const ctx = mountChoresFull(SAMPLE_PEOPLE);
+  const { document, sandbox, tap } = ctx;
+  const posts = [];
+  const realFetch = sandbox.fetch;
+  sandbox.fetch = async (url, opts) => {
+    if (url === '/api/admin/chores' && opts && opts.method === 'POST') {
+      const body = JSON.parse(opts.body);
+      posts.push(body);
+      if (body.fixed_person_id === 2) return failResp(503, 'hub busy (test)');
+    }
+    return realFetch(url, opts);
+  };
+  tap('[data-chedit="1"]');
+  tap('[data-add-chore="1"]');
+  await flush();
+  const host = document.getElementById('chore-editor');
+  host.querySelector('.f-title').value = 'Brush teeth';
+  tapDelegated(host, '.f-assign', '[data-assign="each"]');
+  tapDelegated(host, '.f-each', '[data-each="2"]');
+  host.querySelector('[data-submit]').onclick();
+  await flush(); await flush(); await flush();
+  assert.deepEqual(posts.map((b) => b.fixed_person_id), [1, 2]);
+  assert.ok(!document.getElementById('chore-modal').classList.contains('hidden'), 'the editor stays open');
+  assert.match(document.getElementById('toast').textContent, /Saved for Sam Rivera\. Not saved for Alex Kim: hub busy/);
+  // a second Save only tries the person still missing: no duplicate for Sam
+  posts.length = 0;
+  sandbox.fetch = async (url, opts) => {
+    if (url === '/api/admin/chores' && opts && opts.method === 'POST') posts.push(JSON.parse(opts.body));
+    return realFetch(url, opts);
+  };
+  host.querySelector('[data-submit]').onclick();
+  await flush(); await flush();
+  assert.deepEqual(posts.map((b) => b.fixed_person_id), [2]);
+});
