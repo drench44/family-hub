@@ -9774,6 +9774,93 @@ test('buildChoreForm: the Coming up strip shows the server\'s preview, and only 
   assert.ok(host.querySelector('.f-preview').classList.contains('hidden'));
 });
 
+test('buildChoreForm: an edit keeps whoever is up next, and says so when a turn moves', async () => {
+  // The real report: every other Monday -> every Monday quietly moved that
+  // day's turn to the other kid, and nothing on the form said so.
+  const { document, sandbox } = newHub();
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms);
+  sandbox.clearTimeout = (id) => clearTimeout(id);
+  const host = document.createElement('div');
+  const asked = [];
+  let answer = null;
+  const preview = async (body) => { asked.push(JSON.parse(JSON.stringify(body))); return answer(body); };
+  let saved = null;
+  const model = { ...readyModel(sandbox), assign: 'rotation', rot: [1, 2] };
+  // the server kept Alex (2) up next by restarting the order
+  answer = () => ({ upcoming: [{ date: sandbox.todayISO(), person_id: 2 }], slot: 0,
+    rotation_order: [2, 1], before: 2 });
+  sandbox.buildChoreForm(host, model, 'Save', (b) => { saved = JSON.parse(JSON.stringify(b)); }, P2,
+    { preview, choreId: 7 });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked[0].keep_turn, true, 'an edit asks the server to keep the turn');
+  assert.match(host.querySelector('.f-rotation').innerHTML,
+    /1<\/span><span class="pc-dot" aria-hidden="true"><\/span><span class="rot-name">Alex/,
+    'the turn list shows the order the save will store');
+  const note = host.querySelector('.f-turnnote');
+  assert.equal(note.textContent, 'Alex keeps the next turn, same as before.');
+  assert.ok(!note.classList.contains('hidden') && !note.classList.contains('moved'));
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(saved.keep_turn, true);
+  assert.deepEqual(saved.rotation_order, [2, 1]);
+
+  // picking who goes first is the person's own call: keep_turn stops, and
+  // the note names the turn changing hands
+  answer = (body) => ({ upcoming: [{ date: sandbox.todayISO(), person_id: body.rotation_order[0] }],
+    slot: 0, rotation_order: body.rotation_order, before: 2 });
+  tapDelegated(host, '.f-first', '[data-first="1"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.at(-1).keep_turn, false);
+  assert.equal(note.textContent, 'This moves the next turn from Alex to Sam.');
+  assert.ok(note.classList.contains('moved'));
+  host.querySelector('[data-submit]').onclick();
+  assert.equal(saved.keep_turn, false);
+  assert.deepEqual(saved.rotation_order, [1, 2]);
+});
+
+test('buildChoreForm: adding or removing someone keeps the turn; moving someone is the person\'s call', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms);
+  sandbox.clearTimeout = (id) => clearTimeout(id);
+  const host = document.createElement('div');
+  const asked = [];
+  // the server changes nothing: same order back, same person as before
+  const preview = async (body) => { asked.push(JSON.parse(JSON.stringify(body)));
+    return { upcoming: [{ date: sandbox.todayISO(), person_id: body.rotation_order[0] }], slot: 0,
+      rotation_order: body.rotation_order, before: body.rotation_order[0] }; };
+  const P3 = [...P2, { id: 3, name: 'Kai', color: '#F5A623', active: 1 }];
+  sandbox.buildChoreForm(host, { ...readyModel(sandbox), assign: 'rotation', rot: [1, 2] }, 'Save', () => {}, P3,
+    { preview, choreId: 7 });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.ok(host.querySelector('.f-turnnote').classList.contains('hidden'), 'nothing changed: no note');
+  tapDelegated(host, '.f-rotadd', '[data-add="3"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.at(-1).keep_turn, true, 'adding someone still keeps the turn');
+  tapDelegated(host, '.f-rotation', '[data-rem="2"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.at(-1).keep_turn, true, 'removing someone still keeps the turn');
+  tapDelegated(host, '.f-rotation', '[data-down="0"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(asked.at(-1).keep_turn, false, 'a move says who goes when');
+});
+
+test('buildChoreForm: a new chore never sends keep_turn and shows no turn note', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms);
+  sandbox.clearTimeout = (id) => clearTimeout(id);
+  const host = document.createElement('div');
+  const asked = [];
+  const preview = async (body) => { asked.push(JSON.parse(JSON.stringify(body)));
+    return { upcoming: [{ date: sandbox.todayISO(), person_id: 1 }], slot: 0, rotation_order: [1, 2], before: null }; };
+  let saved = null;
+  sandbox.buildChoreForm(host, { ...readyModel(sandbox), assign: 'rotation', rot: [1, 2] }, 'Add chore',
+    (b) => { saved = JSON.parse(JSON.stringify(b)); }, P2, { preview });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal('keep_turn' in asked[0], false);
+  assert.ok(host.querySelector('.f-turnnote').classList.contains('hidden'));
+  host.querySelector('[data-submit]').onclick();
+  assert.equal('keep_turn' in saved, false);
+});
+
 test('choreRowHtml: a weekly turn says whose week it is', () => {
   const { sandbox } = newHub();
   assert.match(sandbox.choreRowHtml({ id: 1, title: 'Dishes', rot: true, rot_week: true }, 'Ruby'),

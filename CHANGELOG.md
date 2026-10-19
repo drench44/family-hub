@@ -10,6 +10,18 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.1] — 2026-10-19
+
+### Fixed
+- Editing a chore that takes turns no longer quietly changes whose turn it
+  is. Changing how often it repeats (say every other Monday to every
+  Monday) keeps whoever has it now.
+- The chore form says in plain words when an edit keeps the turn ("Ava
+  keeps this week, same as before") or moves it ("This moves this week
+  from Ava to Ruby").
+- When an edit changes the first day a chore comes up (say Fridays only to
+  every day), the turn kept is whoever had that same day before.
+
 ## [1.13.0] — 2026-10-19
 
 ### Added
