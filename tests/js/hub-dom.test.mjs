@@ -9972,3 +9972,97 @@ test('chore editor: "Each of them" that saves for some people keeps the form ope
   await flush(); await flush();
   assert.deepEqual(posts.map((b) => b.fixed_person_id), [2]);
 });
+
+test('placeTodo: a refused write (an HTTP error, not a dropped line) also puts the board back', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now')], soon: [], later: [] });
+  b.sandbox.fetch = async (url) => (url === '/api/todo-order' ? failResp(422, 'a checked-off item can\'t be moved')
+    : okResp({ buckets: { now: [T(1, 'now'), T(2, 'now')], soon: [], later: [] }, recent_done: [] }));
+  await b.read('placeTodo(2, "soon", [2])');
+  await flush();
+  const now = JSON.parse(JSON.stringify(b.read('todoState.data.buckets.now'))).map((t) => t.id);
+  assert.deepEqual(now, [1, 2]);
+});
+
+test('to-do panel: Move sends the new list and closes the panel', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now')], soon: [], later: [] });
+  await b.read('todoState.openId = 1; moveTodo(1, "later")');
+  const patch = b.calls.find((c) => c.method === 'PATCH');
+  assert.equal(patch.url, '/api/todos/1');
+  assert.deepEqual(JSON.parse(JSON.stringify(patch.body)), { bucket: 'later' });
+  assert.equal(b.read('todoState.openId'), null);
+});
+
+test('to-do grip: Enter/Space (a click with no pointer) toggles the controls; a mouse click does not', () => {
+  const ctx = newHub();
+  const { document, sandbox } = ctx;
+  const host = document.createElement('div'); host._id = 'todos-full'; document.body.appendChild(host);
+  sandbox.__b = { now: [T(1, 'now')], soon: [], later: [] };
+  vm.runInContext('todoState.source = "local"; todoState.data = { buckets: __b, recent_done: [] }; openView = "todos";', sandbox);
+  sandbox.renderTodosPaint();
+  const grip = document.querySelector('[data-todo-grip="1"]');
+  grip.closest = (s) => (selectorMatches(grip, s) ? grip : null);
+  ctx.fire('click', { target: grip, detail: 1 });
+  assert.equal(vm.runInContext('todoState.openId', sandbox), null, 'a pointer click is the drag code\'s job');
+  ctx.fire('click', { target: grip, detail: 0 });
+  assert.equal(vm.runInContext('todoState.openId', sandbox), 1);
+});
+
+test('ensureGlassPanes: a surface that lost its pane to a re-render gets it back', () => {
+  const { document, sandbox } = newHub();
+  let first = null;
+  const card = {
+    nodeType: 1, get firstElementChild() { return first; }, get firstChild() { return first; },
+    matches: (sel) => sel.split(',').some((s) => s.trim() === '.wrap .card'),
+    querySelectorAll: () => [],
+    insertBefore(el) { first = el; },
+  };
+  const realCreate = document.createElement;
+  document.createElement = (tag) => { const el = realCreate(tag); el.setAttribute = el.setAttribute || (() => {}); return el; };
+  sandbox.ensureGlassPanes(card);
+  const pane = first;
+  first = { className: 'card-body' };   // innerHTML replaced the card's children
+  sandbox.ensureGlassPanes(card);
+  assert.notEqual(first, pane);
+  assert.equal(first.className, 'glass-pane');
+});
+
+test('buildChoreForm: the Coming up strip shows a refusal as the reason, a dropped line as "saving still works"', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.setTimeout = (fn, ms) => setTimeout(fn, ms);
+  sandbox.clearTimeout = (id) => clearTimeout(id);
+  let answer;
+  const preview = async () => answer();
+  const host = document.createElement('div');
+  sandbox.buildChoreForm(host, { ...readyModel(sandbox), repeat: 'once', date: '2026-01-01' }, 'Add chore', () => {}, P2, { preview });
+  answer = () => { const e = new Error('pick today or a later date for a one-time chore'); e.status = 422; throw e; };
+  tapDelegated(host, '.f-person', '[data-pick="2"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.match(host.querySelector('.f-cells').innerHTML, /Pick today or a later date for a one-time chore\./);
+  answer = () => { throw new Error('offline'); };
+  tapDelegated(host, '.f-person', '[data-pick="1"]');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.match(host.querySelector('.f-cells').innerHTML, /Saving still works/);
+});
+
+test('placeTodo: two quick moves that both fail put the board back to before the first', async () => {
+  const b = mountTodoBoard({ now: [T(1, 'now'), T(2, 'now'), T(3, 'now')], soon: [], later: [] });
+  const fails = [];
+  b.sandbox.fetch = (url) => new Promise((resolve, reject) => {
+    if (url === '/api/todo-order') fails.push(() => reject(new Error('offline in test')));
+    else reject(new Error('offline in test'));
+  });
+  const p1 = b.read('placeTodo(3, "soon", [3])');
+  const p2 = b.read('placeTodo(2, "later", [2])');
+  fails.forEach((f) => f());
+  await p1; await p2; await flush();
+  const now = JSON.parse(JSON.stringify(b.read('todoState.data.buckets.now'))).map((t) => t.id);
+  assert.deepEqual(now, [1, 2, 3], 'both moves undone, not just the last');
+});
+
+test('to-do grip: a press whose end never came stops holding the board after a while', () => {
+  const b = mountTodoBoard({ now: [T(1, 'now')], soon: [], later: [] });
+  b.fire('pointerdown', { type: 'pointerdown', target: b.grip(1), pointerId: 1, button: 0, clientX: 0, clientY: 0, preventDefault() {} });
+  b.read('todoDrag.t0 = Date.now() - 20000; todoState.data.buckets.now[0].title = "fresh"; renderTodosPaint();');
+  assert.equal(b.read('todoDrag.id'), null, 'the stale press is over');
+  assert.match(b.host.innerHTML, /fresh/, 'and the board repaints again');
+});

@@ -28,7 +28,9 @@ async function j(url, opts) {
     if (!r.ok) {
       let detail = '';
       try { detail = (await r.json()).detail || ''; } catch (e) { /* not json */ }
-      throw new Error(detail || `${url} -> HTTP ${r.status}`);
+      const err = new Error((typeof detail === 'string' && detail) || `${url} -> HTTP ${r.status}`);
+      err.status = r.status;   // lets a caller tell "refused" (4xx) from "down"
+      throw err;
     }
     // `return await` (not bare `return r.json()`) is load-bearing: it keeps the
     // finally — and so clearTimeout — deferred until the BODY resolves. A bare
@@ -1132,14 +1134,17 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
   // still saves, and the summary sentence still describes the chore.
   let previewSeq = 0;
   let previewTimer = null;
-  let previewFailed = false;   // the last ask failed (not: nothing to show)
+  // the last ask failed (not: nothing to show): false, or what to say. A
+  // refusal (4xx) is the server's own reason, which a Save would hit too;
+  // anything else (down, slow, 5xx) can't say anything about saving.
+  let previewFailed = false;
   const paintPreview = () => {
     const box = $('.f-preview');
     if (!box) return;            // the editor closed while an ask was out
     const assign = model.repeat === 'once' ? 'fixed' : model.assign;
     const pv = lastPreview;
     if (previewFailed) {
-      $('.f-cells').innerHTML = '<div class="hint">Couldn’t load who’s up next. Saving still works.</div>';
+      $('.f-cells').innerHTML = `<div class="hint">${escapeHtml(previewFailed)}</div>`;
       $('.f-first').innerHTML = '';
       $('.f-first').classList.add('hidden');
       box.classList.remove('hidden');
@@ -1214,7 +1219,9 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       let got = null;
       let failed = false;
       try { got = await opts.preview(body); } catch (e) {
-        failed = true;
+        const refused = e && e.status >= 400 && e.status < 500 && e.message;
+        failed = refused ? `${e.message[0].toUpperCase()}${e.message.slice(1)}.`
+          : 'Couldn’t load who’s up next. Saving still works.';
         console.warn('chore preview failed:', e && e.message);
       }
       if (seq !== previewSeq) return;   // a newer draft owns the strip
@@ -1639,6 +1646,10 @@ function todoFailMessage(error) {
   // 404 — the JS test pins this exact substring.
   if (String(error || '').includes('unknown todo')) {
     return 'That item was already changed on another device.';
+  }
+  // another device checked it off mid-move (app.py todos_order)
+  if (String(error || '').includes('checked-off item')) {
+    return 'Someone just checked that item off, so it stayed put.';
   }
   // the server's own rule (app.py _validate_todo): retrying can't help
   if (String(error || '').includes('title must be')) {
