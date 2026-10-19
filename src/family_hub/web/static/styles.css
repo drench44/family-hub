@@ -2109,6 +2109,9 @@ body.overlay-open { overflow: hidden; }
 /* While the keyboard is docked (osk.js stamps this on <body>), lift the failure
    toast clear of it so a "couldn't save" message isn't hidden behind the keys. */
 .osk-open .hub-toast { bottom: calc(56px + 5 * 54px); }
+/* The wall (a browser that latched ?kiosk=1) hides the mouse pointer after a tap
+   and shows it again when the mouse really moves; osk.js stamps this class. */
+body.kiosk-cursor-hidden, body.kiosk-cursor-hidden * { cursor: none !important; }
 
 /* ====================== mobile tab bar ======================= */
 /* Hidden on the wall; the mobile block below turns it on. */
@@ -2189,6 +2192,12 @@ body.overlay-open { overflow: hidden; }
 .wall-gear:focus-visible, .wall-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* the refresh glyph nudges toward the accent on press, so a touch feels acknowledged */
 .wall-refresh:active { color: var(--accent); transform: rotate(-90deg); transition: transform 120ms ease-out; }
+/* while the hub pulls fresh calendars, just before the page reloads (up to 10 s):
+   the glyph turns so the wall visibly says it's working, and taps are ignored */
+.wall-refresh-glyph { display: inline-block; }
+.wall-refresh.is-syncing { color: var(--accent); border-color: var(--accent); }
+.wall-refresh.is-syncing .wall-refresh-glyph { animation: wall-refresh-spin 1s linear infinite; }
+@keyframes wall-refresh-spin { to { transform: rotate(360deg); } }
 .theme-pop {
   position: absolute; top: 58px; right: 24px; z-index: 60;
   display: none;
@@ -2581,7 +2590,8 @@ body.integ-off-todos .todo-slot { display: none; }
   .sky-rain::before, .sky-rain::after,
   .sky-snow, .sky-snow::before, .sky-snow::after,
   .spark .sp-halo,
-  .card-celebrate { animation: none; }
+  .card-celebrate,
+  .wall-refresh.is-syncing .wall-refresh-glyph { animation: none; }
   /* the seasonal scene's motion is stopped by its own block at the END of the
      file ("seasonal looks, reduced motion"): its animated rules come later
      than this block, so rules here would lose the cascade to them */

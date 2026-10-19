@@ -473,3 +473,14 @@ def test_demo_multi_day_events_are_all_day_with_exclusive_ends(demo_client):
         assert ev["end_ts"] == (today + dt.timedelta(days=e)).isoformat(), title
     # the fair and the visit overlap so the month view stacks them in lanes
     assert by["Grandma visiting"]["start_ts"] < by["State fair"]["end_ts"]
+
+
+def test_demo_refresh_button_sync_is_a_noop(demo_client, demo_app, monkeypatch):
+    """The wall's refresh button asks for a sync before it reloads. In DEMO the
+    canned calendar must never be replaced by a real sync."""
+    ran = []
+    monkeypatch.setattr(demo_app, "sync_once", lambda *a, **k: ran.append(1) or {"ok": True})
+    r = demo_client.post("/api/calendar/sync")
+    assert r.status_code == 200
+    assert r.json() == {"synced": False, "reason": "demo"}
+    assert ran == []
