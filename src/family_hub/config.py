@@ -70,7 +70,7 @@ class Config:
     # never persists this into localStorage — it only stamps it live — so
     # changing it here re-themes every un-overridden device on next poll.
     theme: dict | None = None
-    # Fleet Console tile: proxies a separate fleet-dashboard app's compact
+    # Fleet Console tile: proxies a separate fleet console app's compact
     # rollup (host + 3D-printer status) via /api/tiles/fleet.
     # {"base": url, "label"?: str}. None/absent = no fleet integration.
     fleet: dict | None = None

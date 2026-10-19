@@ -10,6 +10,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+- Shared CI workflows now come from drench44/ci-shared, and comments and docs no
+  longer name private repositories. The operator push scanner is looked up at
+  `~/.config/privacy/scan-repo.sh`.
+
 ## [1.13.3] — 2026-10-19
 
 ### Fixed
@@ -795,7 +800,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Added
 - Fleet Console: registry descriptor + fail-soft tile proxy for a separate
-  fleet-dashboard app's compact rollup (host status + 3D-printer status),
+  fleet console app's compact rollup (host status + 3D-printer status),
   gated behind a `fleet` config block (`{base, label?}`, no config = the
   integration doesn't appear). Server side only so far — no card, no DEMO
   payload, no mobile surface yet.

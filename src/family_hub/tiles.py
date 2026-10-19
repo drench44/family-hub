@@ -458,7 +458,7 @@ async def weather_tile(client, cfg) -> dict:
 
 
 async def fleet_tile(client, cfg) -> dict:
-    """Proxy the separate fleet-dashboard app's compact rollup into a
+    """Proxy the separate fleet console app's compact rollup into a
     trimmed, fail-soft tile: ``{available, label?, fleet: {health, hostsUp,
     hostsTotal, worstProblem, alerts, cpuPercent, memPercent,
     storageUsedBytes, storageTotalBytes, hottestTempF}, internet: {up,

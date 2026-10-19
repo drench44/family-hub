@@ -991,7 +991,7 @@ async def health_full():
     """Does the hub WORK? Fresh data from every source the wall shows, read by
     THIS process; the settings those sources need; config.json being the one
     the deploy shipped; the commit the image was built from. See deep_health.py.
-    The deploy gate (homelab-deploy, in the garage overlay) reads it. Always
+    The deploy gate (homelab-deploy, in the private deploy overlay) reads it. Always
     200: a report, not a liveness probe."""
     now = time.time()
     try:
@@ -2757,7 +2757,7 @@ async def tile_weather():
 @app.get("/api/tiles/fleet")
 async def tile_fleet():
     if DEMO:
-        return fdemo.demo_fleet()   # canned rollup; no fleet-dashboard hit
+        return fdemo.demo_fleet()   # canned rollup; no fleet console hit
     return await tiles.fleet_tile(_http, cfg)
 
 

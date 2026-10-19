@@ -195,5 +195,5 @@ hub.js renderIntegrations(data):
 ## Rollout / migration
 
 None required. Additive registry entries + `INSERT OR IGNORE` seeding mean the
-deploy box (`gary`/garage) upgrades with both features enabled, no config.json
+deploy box (`gary`, the homelab deploy box) upgrades with both features enabled, no config.json
 change, no schema migration, no rsync-exclude change.
