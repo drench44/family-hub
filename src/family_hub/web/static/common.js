@@ -1047,12 +1047,15 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
   const active = people.filter((p) => p.active);
   const personOf = (id) => people.find((x) => x.id === Number(id));
   if (model.times.length) $('.f-remind').open = true;   // already has times: show them
-  let lastPreview = null;   // the server's {upcoming, slot} for the current draft
+  // the server's {upcoming, slot, days, rotation_order, before} for the draft
+  let lastPreview = null;
   // Editing: whoever is up next keeps the turn through a schedule change
-  // (the server's keep_turn), until the person editing changes the turns
-  // themselves: adds, removes or moves someone, or picks who goes first.
+  // (the server's keep_turn), until the person editing says who goes when
+  // themselves: moves someone up or down, or picks who goes first. Adding
+  // or removing someone (or turning a one-person chore into turns) still
+  // keeps it.
   let keepTurn = opts.choreId != null;
-  let turnKept = false;     // keep_turn has restarted the order in this edit
+  const savedRot = model.rot.slice();   // the turn order as saved
 
   const chip = (p, attr, on) => `<button class="person-chip${on ? ' selected' : ''}" type="button" ${attr}="${p.id}"`
     + ` aria-pressed="${on ? 'true' : 'false'}" style="--pc:${safeColor(p.color)}">`
@@ -1224,7 +1227,11 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     let say = '';
     if (assign === 'rotation' && was && now && cells[0]) {
       if (now.id !== was.id) say = turnNote('moved', was.name, now.name, cells[0].label, byWeek);
-      else if (turnKept && keepTurn) say = turnNote('kept', was.name, now.name, cells[0].label, byWeek);
+      // kept: the edit restarted the saved order to hold the turn (the same
+      // order as saved means nothing moved, so nothing to say)
+      else if (keepTurn && model.rot.join() !== savedRot.join()) {
+        say = turnNote('kept', was.name, now.name, cells[0].label, byWeek);
+      }
     }
     note.textContent = say;
     note.classList.toggle('hidden', !say);
@@ -1265,7 +1272,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       const kept = got && keepTurn && model.assign === 'rotation' && Array.isArray(got.rotation_order)
         && got.rotation_order.length === model.rot.length
         && got.rotation_order.some((id, i) => id !== model.rot[i]);
-      if (kept) { model.rot = got.rotation_order.slice(); turnKept = true; paintRotation(); }
+      if (kept) { model.rot = got.rotation_order.slice(); paintRotation(); }
       lastPreview = got;
       previewFailed = failed;
       paintPreview();
@@ -1370,7 +1377,6 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     const b = e.target.closest('[data-add]');
     if (!b) return;
     model.rot.push(Number(b.dataset.add));
-    keepTurn = false;
     paintRotation();
     refreshPreview();
   };
@@ -1382,8 +1388,8 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
       const i = Number(b.dataset.up !== undefined ? b.dataset.up : b.dataset.down);
       const j = b.dataset.up !== undefined ? i - 1 : i + 1;
       if (j >= 0 && j < model.rot.length) [model.rot[i], model.rot[j]] = [model.rot[j], model.rot[i]];
+      keepTurn = false;   // a move says who goes when
     }
-    keepTurn = false;
     paintRotation();
     refreshPreview();
   };
