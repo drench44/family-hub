@@ -6363,29 +6363,35 @@ def test_keep_turn_carries_a_one_person_chore_into_turns(client, app_mod):
     assert _owner_today(client, cid) == [b]
 
 
-def test_keep_turn_compares_the_same_day_when_the_first_day_changes(client, app_mod):
-    """Fridays-only turned into every day: the first day moves from the next
-    Friday to today. What is kept (and named) is whose turn TODAY was under
-    the old schedule, not whose turn that next Friday was."""
-    a, b, z = _mk_person(client, "Ava"), _mk_person(client, "Ben"), _mk_person(client, "Zed")
-    later = (_today().weekday() + 4) % 7          # a weekday four days off
-    cid = _rot_chore(client, [a, b, z], schedule_kind="days", days_mask=1 << later,
-                     rotate_every="turn").json()["id"]
+def test_keep_turn_compares_the_same_day_when_the_first_day_changes(client, app_mod, monkeypatch):
+    """Every other Friday, by the week, turned into every day: the first day
+    moves from a Friday two weeks off to today. What is kept is whose week
+    THIS week was under the old schedule (Ava), not whose turn that far
+    Friday is (Ben, which is also who every-day would give this week)."""
+    monday = dt.date(2026, 10, 19)
+    monkeypatch.setattr(app_mod, "_today", lambda: monday)
+    a, b = _mk_person(client, "Ava"), _mk_person(client, "Ben")
+    cid = _rot_chore(client, [a, b], schedule_kind="days", days_mask=1 << 4,
+                     week_interval=2).json()["id"]
     c = app_mod._db()
-    c.execute("UPDATE chores SET rotation_epoch = ? WHERE id = ?",
-              ((_today() - dt.timedelta(days=30)).isoformat(), cid))
+    # anchored the Monday before: this week is an off week, Fri Oct 30 is on
+    c.execute("UPDATE chores SET rotation_epoch = '2026-10-12' WHERE id = ?", (cid,))
     c.commit()
-    old = app_mod._chore_row(c, cid)
-    held_today = app_mod.chlogic.assignee_id(old, _today(), {a, b, z})
     daily = {"schedule_kind": "daily", "assign_kind": "rotation",
-             "rotation_order": [a, b, z], "rotate_every": "turn", "chore_id": cid}
+             "rotation_order": [a, b], "rotate_every": "week", "chore_id": cid}
+    plain = client.post("/api/admin/chores/preview", json=daily).json()
+    assert plain["upcoming"][0] == {"date": "2026-10-19", "person_id": b}
+    assert plain["before"] == a                     # this week was Ava's
     got = client.post("/api/admin/chores/preview", json={**daily, "keep_turn": True}).json()
-    assert got["upcoming"][0]["date"] == _today().isoformat()
-    assert got["before"] == held_today
-    assert got["upcoming"][0]["person_id"] == held_today
+    assert got["upcoming"][0]["person_id"] == a and got["rotation_order"] == [b, a]
     client.patch(f"/api/admin/chores/{cid}", json={
-        "schedule_kind": "daily", "rotate_every": "turn", "keep_turn": True})
-    assert _owner_today(client, cid) == [held_today]
+        "schedule_kind": "daily", "rotate_every": "week", "keep_turn": True})
+
+    def owner(d):
+        people = client.get(f"/api/chores/day?date={d}").json()["people"]
+        return [p["person"]["id"] for p in people if any(ch["id"] == cid for ch in p["chores"])]
+    assert owner("2026-10-19") == [a] and owner("2026-10-25") == [a]
+    assert owner("2026-10-26") == [b]
 
 
 def test_keep_turn_through_a_switch_from_each_time_to_every_week(client, app_mod):
