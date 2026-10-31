@@ -10,6 +10,15 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+- Camera tiles load reliably after a refresh. A tile whose video is playing
+  no longer flips to "offline" (and restarts) because one snapshot check
+  timed out; a tile whose stream was refused or froze is reconnected by
+  itself instead of staying black under a LIVE badge until the next page
+  load; and a tile that comes up offline is checked again within seconds
+  instead of waiting half a minute. Cameras that are not on screen (the
+  wall's hidden phone grid) are no longer checked every 30 seconds.
+
 ### Changed
 - Shared CI workflows now come from drench44/ci-shared, and comments and docs no
   longer name private repositories. The optional operator push scanner is now

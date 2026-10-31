@@ -366,6 +366,14 @@ wall's stacked column. It defaults to your `cameras`; set `camera_page` to give
 that grid its own set and order (top-left, top-right, bottom-left, bottom-right)
 — handy for surfacing a camera there that isn't on the wall.
 
+**How a tile decides it is live.** Two signals: a snapshot check of each
+camera on screen (every 30 seconds, and every few seconds while a tile is
+offline or starting), and the tile's own player, whose frame count the wall
+reads through the same-origin `/go2rtc/` page. A tile is live if either says
+so, so one slow snapshot never blanks a playing camera. A tile whose camera is
+up but whose player gave up, never started, or froze is reloaded after a short
+wait, with the wait doubling each time it doesn't take.
+
 > **Slow first picture? Check the camera's keyframe interval.** An H.264
 > viewer can only start decoding at a keyframe, and go2rtc passes streams
 > through without transcoding — so every viewer that joins an
