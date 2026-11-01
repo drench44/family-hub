@@ -28,6 +28,9 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A camera tile's LIVE badge no longer flashes "connecting" over a playing
   picture, and a camera whose stream keeps reconnecting can't fake being
   live by its frame count starting over.
+- A camera whose stream keeps reconnecting without ever being judged is
+  treated as stuck after its start window, and a stalled stats read can no
+  longer stop the wall's camera checks.
 - The demo wall's weekly dishes turn is always Ruby's this week, so Ava's
   card no longer switches between five and six chores every other week.
 
