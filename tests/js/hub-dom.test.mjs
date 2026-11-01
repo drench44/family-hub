@@ -4110,13 +4110,40 @@ test('a connection rebuilt on every look is judged stuck once a start window pas
   rebuild();
   await sandbox.probeCamera();      // inside its start window: no verdict, LIVE
   assert.ok(!tile.classList.contains('is-offline'));
-  frame._camVerdictAt = Date.now() - 16000;   // a whole start window unjudged
+  frame._camLook.since -= 16000;    // that run of baselines began a start window ago
   frame._camStartedAt = Date.now() - 16000;
   frame.src = '/wr/cam1#rebuilding';
   rebuild();
   await sandbox.probeCamera();      // yet another new connection
   assert.ok(tile.classList.contains('is-offline'), 'no verdict for that long: stuck, not LIVE');
   assert.equal(frame.src, '/wr/cam1', 'and reloaded');
+});
+
+test('one connection rebuild between 30s beats on a healthy tile is not "stuck" (no reload)', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  // the hub's own clock, moved forward for real (every timestamp sees it)
+  vm.runInContext('var __rbOff = 0, __rbNow = Date.now; Date.now = () => __rbNow() + __rbOff;', sandbox);
+  const later = (ms) => vm.runInContext(`__rbOff += ${ms};`, sandbox);
+  try {
+    await sandbox.probeCamera();
+    const p = fakePlayer(frame, { decoded: 100 });
+    later(20000);
+    await sandbox.probeCamera();    // baseline
+    later(30000);
+    p.decoded = 900;
+    await sandbox.probeCamera();    // a verdict: playing
+    assert.ok(!tile.classList.contains('is-offline'));
+    frame.src = '/wr/cam1#healthy';
+    const vs = frame.contentDocument.querySelector('video-stream');
+    vs.pc = { getStats: async () => new Map([['v', { type: 'inbound-rtp', kind: 'video', framesDecoded: 40 }]]) };
+    later(30000);                   // next beat: go2rtc rebuilt the connection meanwhile
+    await sandbox.probeCamera();
+    assert.ok(!tile.classList.contains('is-offline'), 'still LIVE');
+    assert.equal(frame.src, '/wr/cam1#healthy', 'a working stream is not reloaded');
+  } finally {
+    vm.runInContext('Date.now = __rbNow;', sandbox);
+  }
 });
 
 test('a stats read that never answers is given up on, so camera checks keep running', async () => {

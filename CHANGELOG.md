@@ -31,6 +31,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A camera whose stream keeps reconnecting without ever being judged is
   treated as stuck after its start window, and a stalled stats read can no
   longer stop the wall's camera checks.
+- A single reconnect on a healthy camera stream no longer counts as stuck
+  (only one that keeps reconnecting does), so a working tile isn't reloaded.
 - The demo wall's weekly dishes turn is always Ruby's this week, so Ava's
   card no longer switches between five and six chores every other week.
 
