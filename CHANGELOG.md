@@ -25,6 +25,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   instead of LIVE, and a stream go2rtc refused is reconnected in seconds.
   Coming back to the page or the Cameras tab checks the tiles at once and
   no longer restarts a video that was only paused.
+- A camera tile's LIVE badge no longer flashes "connecting" over a playing
+  picture, and a camera whose stream keeps reconnecting can't fake being
+  live by its frame count starting over.
 - The demo wall's weekly dishes turn is always Ruby's this week, so Ava's
   card no longer switches between five and six chores every other week.
 
