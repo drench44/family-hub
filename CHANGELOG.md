@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.4] — 2026-11-01
+
 ### Fixed
 - Camera tiles load reliably after a refresh. A tile whose video is playing
   no longer flips to "offline" (and restarts) because one snapshot check
