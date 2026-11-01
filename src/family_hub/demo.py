@@ -130,9 +130,14 @@ def seed_demo(conn, today: dt.date) -> None:
     # Ava and Ruby take turns on the dishes a WEEK at a time (rotate_every
     # 'week'): one of them has every day of this week, the other all of next
     # week. Always finished in the history below, so it never moves a streak.
+    # Ruby always has THIS week, whatever the date: the order is picked from
+    # the week's parity. A fixed order flipped Ava's card between five and six
+    # chores every other week (and the demo test with it).
+    weeks_in = chlogic._week_index(today, dt.date.fromisoformat(epoch))
+    dishes_order = [ruby, ava] if weeks_in % 2 == 0 else [ava, ruby]
     dishes = fdb.add_chore(conn, title="Dishes", icon="🍽️", schedule_kind="daily",
                            days_mask=0, assign_kind="rotation", fixed_person_id=None,
-                           rotation_order=[ava, ruby], rotation_epoch=epoch,
+                           rotation_order=dishes_order, rotation_epoch=epoch,
                            rotate_every="week")
 
     people = fdb.list_people(conn)
