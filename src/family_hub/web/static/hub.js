@@ -1840,27 +1840,32 @@ async function camPlayerState(frame) {
     // Shown again after being hidden, or a throttled tab: judge from here,
     // with a full start window, instead of calling a paused video frozen.
     resetCamLook(frame);
-    frame._camLook = { mark, at: now };
+    frame._camLook = { mark, at: now, since: now };
     return null;
   }
   // A new baseline, not a verdict: the first look, a different counter (the
   // clock until the first frame, a fallback while stats fail), a rebuilt
   // connection, or a count that went down: none can be compared.
-  // Either way, a player that has gone a whole start window without any
-  // verdict (its connection keeps being rebuilt, say) is stuck: no
-  // verdict must not mean LIVE forever.
-  const longUnjudged = now - (frame._camVerdictAt || 0) >= CAM_STALL_MS;
+  // One new baseline is normal (go2rtc rebuilds its connection now and
+  // then). But an unbroken run of them lasting a whole start window, with no
+  // verdict in between (a connection rebuilt on every look), is stuck: no
+  // verdict must not mean LIVE forever. The run is timed from its FIRST
+  // baseline, never from the last verdict: verdicts on a healthy tile come
+  // only once per 30s beat.
   if (!last || last.mark.kind !== mark.kind || last.mark.conn !== mark.conn
       || mark.value < last.mark.value) {
-    frame._camLook = { mark, at: now };
-    if (longUnjudged) { frame._camVerdictAt = now; return 'stuck'; }
+    const since = last && last.since !== undefined ? last.since : now;
+    if (now - since >= CAM_STALL_MS) {
+      frame._camLook = { mark, at: now, since: now };
+      return 'stuck';
+    }
+    frame._camLook = { mark, at: now, since };
     return null;
   }
   // Too soon after the last look to tell a still picture from a slow one:
   // keep the older baseline and judge next time.
   if (now - last.at < CAM_LOOK_MIN_MS) return null;
-  frame._camLook = { mark, at: now };
-  frame._camVerdictAt = now;
+  frame._camLook = { mark, at: now };   // a verdict ends any run of baselines
   if (mark.value === last.mark.value) return 'stuck';
   frame._camMoved = mark.kind === 'clock' ? 'clock' : 'frames';
   return 'playing';
@@ -1921,7 +1926,6 @@ async function camVideoMark(vs, video) {
 function resetCamLook(frame) {
   frame._camLook = undefined;
   frame._camStartedAt = Date.now();
-  frame._camVerdictAt = frame._camStartedAt;   // a start window before "long unjudged"
   frame._camPlayedSinceStart = false;
   frame._camGen = (frame._camGen || 0) + 1;
   // Only a judging restart, not a new stream: until it is judged again the
