@@ -3760,8 +3760,10 @@ test('a failed probe marks the tile offline and keeps the frame hidden', async (
 // getVideoPlaybackQuality() reports; bump it to "play" the video.
 // `moz` stands in for Firefox, which reports 0 there for WebRTC video and
 // counts painted frames in mozPaintedFrames instead.
-function fakePlayer(frame, { mode = 'RTC', frames = 0, moz = undefined } = {}) {
-  const p = { mode, frames, moz, currentTime: 0 };
+// `decoded` adds go2rtc's WebRTC connection (.pc) whose getStats reports
+// that many decoded video frames, the count the wall trusts first.
+function fakePlayer(frame, { mode = 'RTC', frames = 0, moz = undefined, decoded = undefined } = {}) {
+  const p = { mode, frames, moz, decoded, currentTime: 0 };
   const video = {
     get currentTime() { return p.currentTime; },
     get mozPaintedFrames() { return p.moz; },
@@ -3771,6 +3773,12 @@ function fakePlayer(frame, { mode = 'RTC', frames = 0, moz = undefined } = {}) {
     querySelector: (sel) => (sel === '.mode' ? { textContent: p.mode }
       : sel === 'video' ? video : null),
   };
+  if (decoded !== undefined) {
+    vs.pc = { getStats: async () => new Map([
+      ['a', { type: 'inbound-rtp', kind: 'audio', framesDecoded: undefined }],
+      ['v', { type: 'inbound-rtp', kind: 'video', framesDecoded: p.decoded }],
+    ]) };
+  }
   frame.contentDocument = { querySelector: (sel) => (sel === 'video-stream' ? vs : null) };
   return p;
 }
@@ -3917,18 +3925,127 @@ test('a frozen video under a live probe is reloaded, then the reloads back off',
   await sandbox.probeCamera();
   assert.equal(frame.src, '/wr/cam1', 'reloaded once the doubled wait passed');
 
-  // Playing again resets the backoff, but only once it has kept playing:
-  // one moving look right after a reload is what a stream that plays a few
-  // seconds and freezes again does every time.
+  // Playing again resets the backoff, but only once it is still playing
+  // CAM_SETTLE_MS (60s) after its restart: a stream that plays a few
+  // seconds and freezes again does that after every reload.
   await sandbox.probeCamera();   // baseline after the restart
   p.frames = 400;
   ageLook(frame);
   await sandbox.probeCamera();
-  assert.equal(frame._camStalls, 2, 'one playing look does not clear the backoff yet');
+  assert.equal(frame._camStalls, 2, 'playing just after a reload does not clear the backoff');
+  frame._camStartedAt = Date.now() - 61000;
   p.frames = 480;
   ageLook(frame);
   await sandbox.probeCamera();
-  assert.equal(frame._camStalls, 0, 'playing on two looks in a row clears it');
+  assert.equal(frame._camStalls, 0, 'still playing a minute in: cleared');
+});
+
+test('WebRTC decoded frames are the count when there is a connection (Firefox off-screen paints nothing)', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  let up = true;
+  const { tile, frame } = liveTile(sandbox, document, () => up);
+  await sandbox.probeCamera();
+  // scrolled out of view in Firefox: painted count stuck at 0, decoding on
+  const p = fakePlayer(frame, { frames: 0, moz: 0, decoded: 100 });
+  await sandbox.probeCamera();   // baseline
+  frame._camStartedAt = Date.now() - 60000;
+  frame.src = '/wr/cam1#offscreen';
+  up = false;                    // and one snapshot times out
+  p.decoded = 160;
+  ageLook(frame);
+  await sandbox.probeCamera();
+  assert.ok(!tile.classList.contains('is-offline'), 'decoding moved: live');
+  assert.equal(frame.src, '/wr/cam1#offscreen', 'not reloaded for an unpainted off-screen tile');
+});
+
+test('a black WebRTC video whose clock runs is stuck when its decoded count stands at 0', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  const p = fakePlayer(frame, { frames: 0, decoded: 0 });
+  p.currentTime = 2;
+  await sandbox.probeCamera();   // baseline
+  frame._camStartedAt = Date.now() - 16000;
+  frame.src = '/wr/cam1#black';
+  p.currentTime = 9;             // the clock runs on over nothing
+  ageLook(frame);
+  await sandbox.probeCamera();
+  assert.ok(tile.classList.contains('is-offline'), 'no LIVE over a black picture');
+  assert.equal(frame.src, '/wr/cam1', 'reloaded');
+});
+
+test('a WebRTC connection with no video stats yet counts from 0, so the first frames read as playing', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  const p = fakePlayer(frame, { frames: 0, decoded: 0 });
+  const vs = frame.contentDocument.querySelector('video-stream');
+  const stats = vs.pc.getStats;
+  vs.pc.getStats = async () => new Map();   // still negotiating: no inbound-rtp yet
+  frame._camStalls = 1;                     // after a reload, LIVE needs a play
+  await sandbox.probeCamera();              // baseline at 0
+  vs.pc.getStats = stats;
+  p.decoded = 45;                           // first frames decoded
+  ageLook(frame);
+  await sandbox.probeCamera();
+  assert.ok(!tile.classList.contains('is-offline'), 'playing on the very next look');
+});
+
+test('getStats failing falls back to the element\'s own counters', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  const p = fakePlayer(frame, { frames: 10, decoded: 0 });
+  frame.contentDocument.querySelector('video-stream').pc.getStats = async () => { throw new Error('closed'); };
+  await sandbox.probeCamera();
+  frame._camStartedAt = Date.now() - 60000;
+  frame.src = '/wr/cam1#sentinel';
+  p.frames = 70;
+  ageLook(frame);
+  await sandbox.probeCamera();
+  assert.equal(frame.src, '/wr/cam1#sentinel', 'getVideoPlaybackQuality saw it play');
+});
+
+test('playing for a while (not just two looks) is what clears the backoff', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  const p = fakePlayer(frame, { frames: 10 });
+  await sandbox.probeCamera();
+  frame._camStalls = 2;
+  frame._camStartedAt = Date.now() - 20000;   // past the start window, under a minute
+  for (let i = 0; i < 4; i++) {   // many quick plays (another camera's fast lane drives probes)
+    p.frames += 30; ageLook(frame); await sandbox.probeCamera();
+  }
+  assert.equal(frame._camStalls, 2, 'still under CAM_SETTLE_MS: not cleared');
+});
+
+test('after a failed reload a mere baseline is not LIVE (no flash after each reload)', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  const p = fakePlayer(frame, { mode: 'error' });
+  frame._camStartedAt = Date.now() - 10 * 60000;
+  await sandbox.probeCamera();   // one failed reload
+  assert.equal(frame._camStalls, 1);
+  p.mode = 'RTC';
+  p.frames = 5;
+  await sandbox.probeCamera();   // the fresh connect: only a baseline so far
+  assert.ok(tile.classList.contains('is-offline'), 'connecting until it is seen to play');
+  p.frames = 40;
+  ageLook(frame);
+  await sandbox.probeCamera();
+  assert.ok(!tile.classList.contains('is-offline'), 'seen to play: LIVE');
+});
+
+test('a camera that gave up says "no video", not "connecting" forever', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  fakePlayer(frame, { mode: 'error' });
+  for (let i = 0; i < 3; i++) { frame._camStartedAt = Date.now() - 10 * 60000; await sandbox.probeCamera(); }
+  await sandbox.probeCamera();
+  assert.equal(tile.querySelector('.tile-offline').textContent, 'no video');
 });
 
 test('a stream that plays briefly after each reload, then freezes, still backs off and gives up', async () => {
@@ -4089,7 +4206,24 @@ test('back from a hidden page, a reconnecting player gets its start window again
   assert.equal(frame.src, '/wr/cam1#sentinel', 'no cold restart of its own reconnect');
 });
 
-test('a player the wall cannot read (cross-origin) leaves the probe in charge', async () => {
+test('a player the wall cannot read (cross-origin: contentDocument is null) leaves the probe in charge, and says so once', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  frame.contentDocument = null;   // what browsers give for a cross-origin page
+  const warns = [];
+  sandbox.console = { warn: (...a) => warns.push(a.join(' ')), error() {}, log() {} };
+  frame._camStartedAt = Date.now() - 600000;
+  frame.src = '/wr/cam1#sentinel';
+  await sandbox.probeCamera();
+  await sandbox.probeCamera();
+  await sandbox.probeCamera();
+  assert.ok(!tile.classList.contains('is-offline'), 'probe ok: live');
+  assert.equal(frame.src, '/wr/cam1#sentinel', 'nothing to judge, nothing reloaded');
+  assert.equal(warns.filter((w) => w.includes('cannot read its player')).length, 1, 'warned once');
+});
+
+test('a contentDocument getter that throws is treated the same as null', async () => {
   const { document, sandbox } = hubWithTiles([CAM1]);
   const { tile, frame } = liveTile(sandbox, document);
   await sandbox.probeCamera();
@@ -4379,6 +4513,213 @@ test('one camera whose tile update throws does not stop the others or the fast l
   const t2 = document.querySelector('.tile-camera[data-cam="cam2"]');
   assert.ok(!t2.classList.contains('is-offline'), 'the other camera still updated');
   assert.ok(timers.some((t) => t.ms === 3000), 'and a retry is armed');
+});
+
+test('a player element that never built its <video> is an error once its start window ends', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  const vs = { querySelector: (sel) => (sel === '.mode' ? { textContent: '' } : null) };
+  frame.contentDocument = { readyState: 'complete', location: { href: 'http://hub/go2rtc/stream.html' },
+                            querySelector: (sel) => (sel === 'video-stream' ? vs : null) };
+  frame.src = '/wr/cam1#no-video';
+  await sandbox.probeCamera();
+  assert.equal(frame.src, '/wr/cam1#no-video', 'not inside its start window');
+  assert.ok(!tile.classList.contains('is-offline'));
+  frame._camStartedAt = Date.now() - 16000;
+  await sandbox.probeCamera();
+  assert.equal(frame.src, '/wr/cam1', 'then reloaded');
+});
+
+test('opening the Cameras tab starts every tile\'s judging over (its videos painted nothing while hidden)', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  fakePlayer(frame, { frames: 100 });
+  await sandbox.probeCamera();   // baseline
+  frame._camStartedAt = Date.now() - 10 * 60000;
+  frame.src = '/wr/cam1#tab';
+  ageLook(frame);                // left the tab and came back within one beat
+  sandbox.setTab('cams');
+  await flush();
+  ageLook(frame);
+  await sandbox.probeCamera();
+  assert.equal(frame.src, '/wr/cam1#tab', 'no reload on return to the tab');
+});
+
+test('coming back to the page while a probe is in flight queues one follow-up probe', async () => {
+  const { document, sandbox, fire } = hubWithTiles([CAM1]);
+  const held = [];
+  let calls = 0;
+  sandbox.fetch = (url) => {
+    if (!String(url).includes('camera.jpg')) return Promise.resolve({ ok: true });
+    calls++;
+    return new Promise((r) => held.push(() => r({ ok: true })));
+  };
+  await flush();
+  sandbox.scheduledProbeCamera();   // a run held open (a sleeping phone's fetch)
+  await flush();
+  const n = calls;
+  document.visibilityState = 'visible';
+  fire('visibilitychange');
+  await flush();
+  assert.equal(calls, n, 'not stacked on the run in flight');
+  held.splice(0).forEach((r) => r());
+  for (let i = 0; i < 6; i++) await flush();
+  assert.equal(calls, n + 1, 'the queued probe runs once that one ends');
+});
+
+test('a stale look restarts the start window, so the next still look is not reloaded', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  fakePlayer(frame, { frames: 100 });
+  await sandbox.probeCamera();
+  frame._camStartedAt = Date.now() - 10 * 60000;
+  frame.src = '/wr/cam1#throttled';
+  ageLook(frame, 5 * 60000);
+  await sandbox.probeCamera();      // stale: new baseline
+  ageLook(frame);
+  await sandbox.probeCamera();      // video has not resumed yet, 5s later
+  assert.equal(frame.src, '/wr/cam1#throttled', 'inside the fresh start window: no reload');
+  assert.ok(!tile.classList.contains('is-offline'));
+});
+
+test('a throwing tile on its own keeps the fast lane armed', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1, CAM2]);
+  sandbox.fetch = async () => ({ ok: true });
+  const t2 = document.querySelector('.tile-camera[data-cam="cam2"]');
+  const f2 = t2.querySelector('.cam-frame');
+  await sandbox.probeCamera();
+  const p = fakePlayer(f2, { frames: 10 });
+  await sandbox.probeCamera();
+  f2._camStartedAt = Date.now() - 60000;
+  p.frames = 50; ageLook(f2);
+  const timers = captureTimers(sandbox);
+  vm.runInContext('camRetryTimer = null; camRetryStep = 0;', sandbox);
+  const t1 = document.querySelector('.tile-camera[data-cam="cam1"]');
+  t1.querySelector = () => { throw new Error('broken tile'); };
+  await sandbox.probeCamera();
+  assert.ok(timers.some((t) => t.ms === 3000), 'only the throw is unsettled, and it arms a retry');
+});
+
+test('coming back to the page resets a used-up fast backoff', async () => {
+  const { document, sandbox, fire } = hubWithTiles([CAM1]);
+  const timers = captureTimers(sandbox);
+  const retries = () => timers.filter((t) => [3000, 6000, 12000, 24000].includes(t.ms));
+  sandbox.fetch = async () => ({ ok: false });
+  for (let i = 0; i < 6; i++) {
+    retries().forEach((t) => { t.done = true; });
+    vm.runInContext('camRetryTimer = null;', sandbox);
+    await sandbox.probeCamera();
+  }
+  const n = retries().length;
+  vm.runInContext('camRetryTimer = null;', sandbox);
+  document.visibilityState = 'hidden'; fire('visibilitychange');
+  document.visibilityState = 'visible'; fire('visibilitychange');
+  await flush(); await flush();
+  assert.equal(retries().length, n + 1);
+  assert.equal(retries().at(-1).ms, 3000);
+});
+
+test('a camera back up over a frozen player reloads at once, not after its backoff', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  let up = true;
+  const { frame } = liveTile(sandbox, document, () => up);
+  await sandbox.probeCamera();
+  fakePlayer(frame, { frames: 100 });
+  await sandbox.probeCamera();
+  frame._camStartedAt = Date.now() - 60000;
+  up = false; ageLook(frame);
+  await sandbox.probeCamera();          // offline, reconnect queued
+  assert.equal(frame.dataset.reconnect, '1');
+  frame._camStalls = 3;                 // long backoff: only the reconnect path reloads now
+  frame.src = '/wr/cam1#frozen';
+  up = true; ageLook(frame);
+  await sandbox.probeCamera();          // camera answers, picture still frozen
+  assert.equal(frame.src, '/wr/cam1', 'fresh connect on recovery');
+  assert.ok(!frame.dataset.reconnect);
+});
+
+test('the reload cap is 240s: not reloaded at 239s', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  fakePlayer(frame, { mode: 'error' });
+  frame._camStalls = 10;
+  frame.src = '/wr/cam1#capped';
+  frame._camStartedAt = Date.now() - 239000;
+  await sandbox.probeCamera();
+  assert.equal(frame.src, '/wr/cam1#capped');
+});
+
+test('a player page still loading is not an error', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { tile, frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  frame.contentDocument = { readyState: 'loading', location: { href: 'http://hub/go2rtc/stream.html' }, querySelector: () => null };
+  await sandbox.probeCamera();
+  assert.ok(!tile.classList.contains('is-offline'), 'still loading: probe answers, LIVE');
+});
+
+test('the clock-to-frames switch is a baseline, not a play', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const { frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();
+  const p = fakePlayer(frame, { frames: 0 });
+  p.currentTime = 3;
+  await sandbox.probeCamera();         // clock baseline
+  frame._camStalls = 2;
+  frame._camStartedAt = Date.now() - 10 * 60000;   // a real play now would clear the backoff
+  frame.src = '/wr/cam1#switch';
+  p.frames = 40; ageLook(frame);
+  await sandbox.probeCamera();         // first frame counted: kinds differ
+  assert.equal(frame._camStalls, 2, 'the switch itself is not a play');
+  assert.equal(frame.src, '/wr/cam1#switch', 'nor a stuck verdict');
+});
+
+test('a starting tile whose camera answers is looked at again in 2s until it is seen playing', async () => {
+  const { document, sandbox } = hubWithTiles([CAM1]);
+  const timers = captureTimers(sandbox);
+  const quick = () => timers.filter((t) => t.ms === 2000 && !t.done);
+  const { frame } = liveTile(sandbox, document);
+  await sandbox.probeCamera();   // stream just started
+  assert.equal(quick().length, 1, 'a quick look is armed');
+  await sandbox.probeCamera();
+  assert.equal(quick().length, 1, 'one at a time');
+  const p = fakePlayer(frame, { frames: 10 });
+  quick().forEach((t) => { t.done = true; t.fn(); });
+  await flush(); await flush();
+  assert.equal(quick().length, 1, 'still not seen playing: another');
+  p.frames = 60;
+  ageLook(frame);
+  quick().forEach((t) => { t.done = true; t.fn(); });
+  await flush(); await flush();
+  assert.equal(quick().length, 0, 'seen playing: no more quick looks');
+});
+
+test('no quick look for a camera that does not answer, one long started, or on a hidden page', async () => {
+  const down = hubWithTiles([CAM1]);
+  let timers = captureTimers(down.sandbox);
+  liveTile(down.sandbox, down.document, false);
+  await down.sandbox.probeCamera();
+  assert.equal(timers.filter((t) => t.ms === 2000).length, 0, 'down camera: the fast lane handles it');
+
+  const old = hubWithTiles([CAM1]);
+  const { frame } = liveTile(old.sandbox, old.document);
+  await old.sandbox.probeCamera();
+  frame._camStartedAt = Date.now() - 31000;
+  timers = captureTimers(old.sandbox);
+  vm.runInContext('if (camStartTimer) clearTimeout(camStartTimer); camStartTimer = null;', old.sandbox);
+  await old.sandbox.probeCamera();
+  assert.equal(timers.filter((t) => t.ms === 2000).length, 0, 'past CAM_STARTING_MS: none');
+
+  const hid = hubWithTiles([CAM1]);
+  timers = captureTimers(hid.sandbox);
+  liveTile(hid.sandbox, hid.document);
+  hid.document.visibilityState = 'hidden';
+  await hid.sandbox.probeCamera();
+  assert.equal(timers.filter((t) => t.ms === 2000).length, 0, 'hidden page: none');
 });
 
 test('a camera that drops later gets the fast re-probe even after another used it up', async () => {
