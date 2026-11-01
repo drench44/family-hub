@@ -367,14 +367,15 @@ that grid its own set and order (top-left, top-right, bottom-left, bottom-right)
 — handy for surfacing a camera there that isn't on the wall.
 
 **How a tile decides it is live.** Two signals: a snapshot check of each
-camera on screen (every 30 seconds, and every few seconds while a tile is
-offline or starting), and the tile's own player, whose frame count the wall
-reads through the same-origin `/go2rtc/` page (in Firefox, its painted-frame
-count). A moving picture is live even if one snapshot is slow, so a playing
-camera never blanks. A camera that answers but whose player gave up, never
-started, or froze shows "connecting" instead of LIVE and is reloaded after a
-short wait, with the wait doubling each time it doesn't take (up to four
-minutes). "Offline" means the camera itself isn't answering.
+camera on screen (every 30 seconds, with a few quick re-checks over the
+first minute while a tile is offline or starting), and the tile's own
+player, whose count of decoded video frames the wall reads through the
+same-origin `/go2rtc/` page. A moving picture is live even if a snapshot is
+slow, so a playing camera never blanks. A camera that answers but whose
+player gave up, never started, or froze shows "connecting" instead of LIVE
+and is reloaded after a short wait, with the wait doubling each time it
+doesn't take (up to four minutes; after three tries it says "no video").
+"Offline" means the camera itself isn't answering.
 
 > **Slow first picture? Check the camera's keyframe interval.** An H.264
 > viewer can only start decoding at a keyframe, and go2rtc passes streams
