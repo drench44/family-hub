@@ -18,6 +18,11 @@ rolls that section to a dated version via `python scripts/release.py`.
   load; and a tile that comes up offline is checked again within seconds
   instead of waiting half a minute. Cameras that are not on screen (the
   wall's hidden phone grid) are no longer checked every 30 seconds.
+- Camera tiles judge the picture itself more carefully. The wall's Firefox is read by its painted-frame count, so a frozen picture
+  is caught there too. A camera that answers but won't play shows
+  "connecting" instead of LIVE. Coming back to the page (or the Cameras tab)
+  checks the tiles at once and no longer restarts a video that was only
+  paused.
 - The demo wall's weekly dishes turn is always Ruby's this week, so Ava's
   card no longer switches between five and six chores every other week.
 
