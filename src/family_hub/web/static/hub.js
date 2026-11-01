@@ -1748,6 +1748,10 @@ const CAM_RETRY_MS = [3000, 6000, 12000, 24000];   // fast re-probe backoff, the
 // seconds, so these extra checks are cheap.
 const CAM_START_CHECK_MS = 2000;
 const CAM_STARTING_MS = 30000;
+// A stats read that hasn't answered in this long is given up on (the
+// element's counters are used instead): one stuck promise must not keep
+// the probe "in flight" and stop every later camera check.
+const CAM_STATS_TIMEOUT_MS = 4000;
 
 async function probeCamera() {
   // Probe the UNION of the wall column and the Cameras-tab grid, deduped by
@@ -1842,15 +1846,21 @@ async function camPlayerState(frame) {
   // A new baseline, not a verdict: the first look, a different counter (the
   // clock until the first frame, a fallback while stats fail), a rebuilt
   // connection, or a count that went down: none can be compared.
+  // Either way, a player that has gone a whole start window without any
+  // verdict (its connection keeps being rebuilt, say) is stuck: no
+  // verdict must not mean LIVE forever.
+  const longUnjudged = now - (frame._camVerdictAt || 0) >= CAM_STALL_MS;
   if (!last || last.mark.kind !== mark.kind || last.mark.conn !== mark.conn
       || mark.value < last.mark.value) {
     frame._camLook = { mark, at: now };
+    if (longUnjudged) { frame._camVerdictAt = now; return 'stuck'; }
     return null;
   }
   // Too soon after the last look to tell a still picture from a slow one:
   // keep the older baseline and judge next time.
   if (now - last.at < CAM_LOOK_MIN_MS) return null;
   frame._camLook = { mark, at: now };
+  frame._camVerdictAt = now;
   if (mark.value === last.mark.value) return 'stuck';
   frame._camMoved = mark.kind === 'clock' ? 'clock' : 'frames';
   return 'playing';
@@ -1878,7 +1888,14 @@ async function camVideoMark(vs, video) {
     // look before a reloaded tile could be seen to play.
     try {
       let decoded = 0;
-      (await vs.pc.getStats()).forEach((r) => {
+      let timer = null;
+      const stats = await Promise.race([
+        vs.pc.getStats(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('getStats timed out')), CAM_STATS_TIMEOUT_MS);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      stats.forEach((r) => {
         if (r.type === 'inbound-rtp' && r.kind === 'video' && typeof r.framesDecoded === 'number') {
           decoded += r.framesDecoded;
         }
@@ -1904,6 +1921,7 @@ async function camVideoMark(vs, video) {
 function resetCamLook(frame) {
   frame._camLook = undefined;
   frame._camStartedAt = Date.now();
+  frame._camVerdictAt = frame._camStartedAt;   // a start window before "long unjudged"
   frame._camPlayedSinceStart = false;
   frame._camGen = (frame._camGen || 0) + 1;
   // Only a judging restart, not a new stream: until it is judged again the
@@ -1957,7 +1975,7 @@ async function probeOneCamera(cam) {
   // same go2rtc producer, so the WebRTC connect overlaps the probe's
   // round-trip and the tile paints on the stream's next keyframe instead of
   // queueing behind the snapshot. The frame stays hidden (offline badge up)
-  // until the camera is confirmed live.
+  // until the camera answers, so a dead camera never shows a black frame.
   // Look at each player before the probe as well as after it: a slow probe
   // (a failing one waits out go2rtc's timeout) then spans a real interval,
   // so a playing video is known in this same cycle, not the next.
