@@ -1695,11 +1695,64 @@ function initCamGrid() {
   camGridBuilt = true;
 }
 
-/* The live player iframe doesn't report stream health, so a snapshot probe
-   per camera toggles each tile's live/offline state (shares the same go2rtc
-   producer as the stream — cheap). All cameras probe in PARALLEL: the probes
-   are independent, and a serial loop made every tile queue behind the slowest
-   probe ahead of it (a cold snapshot is seconds). */
+/* Two signals decide a tile's state.
+
+   1. A snapshot probe per camera (/api/tiles/camera.jpg: go2rtc grabs one
+      keyframe). It answers "is this camera up at all?" even before the tile's
+      own stream has connected, so a dead camera never shows a black frame.
+   2. The tile's own player. The iframe is the hub's same-origin /go2rtc/ page,
+      so the wall can read its <video>: a frame count that moves is a stream
+      that is really playing.
+
+   Both are needed because each fails on its own (seen on the live wall,
+   2026-10): Wyze cameras reach go2rtc through the bridge's cloud path, and
+   one snapshot in a few dozen times out while the video plays fine. Trusting
+   the probe alone flipped a playing tile to "offline" for a whole 30s cycle
+   and then cold-restarted its stream. And go2rtc's player gives up for good
+   when its first connect is refused (it shows "error" and never retries), or
+   sits on a frozen frame after its source stalls, under a LIVE badge.
+
+   So: a tile is LIVE when its video is moving, or when the probe answers and
+   the player has nothing against it yet (just started, or can't be read)
+   and no reload has failed yet; after one, it must be seen playing.
+   A camera that answers but whose player errored, never started, or froze
+   reads "connecting" (frame dimmed, no LIVE badge) and gets its frame
+   reloaded after CAM_STALL_MS, then backing off: a device that can never
+   play a stream must not restart it every cycle forever. While any shown
+   tile is offline or still starting, the probe re-runs on a short backoff
+   (CAM_RETRY_MS) rather than waiting out the 30s cadence, so a refresh that
+   lands on a slow first snapshot paints in seconds, not half a minute.
+
+   Only cameras with a tile on screen are probed: the wall carries the hidden
+   phone grid too, and probing those every 30s woke their Wyze cloud sessions
+   for nobody. Opening the Cameras tab or the camera page probes them then. */
+const CAM_STALL_MS = 15000;    // a shown stream gets this long to start (or stall) before a reload
+const CAM_ERROR_MS = 5000;     // the same, for a player that already gave up (it never retries itself)
+const CAM_STALL_MAX_MS = 240000;   // reload backoff cap for a stream that keeps failing to play
+const CAM_GIVE_UP_STALLS = 3;  // reloads that didn't play before a tile stops claiming LIVE
+const CAM_LOOK_MIN_MS = 1000;  // two looks at a player closer than this can't tell still from slow
+// A baseline older than this is no baseline: the tile was hidden (its video
+// paused) or the tab was throttled, so a still picture since then means
+// nothing. Comfortably above the CAM_PROBE_MS beat plus a probe timeout.
+const CAM_LOOK_STALE_MS = 60000;
+// Reloads only stop counting toward giving up once the stream is still
+// playing this long after its (re)start. Counting moving looks instead was
+// beatable: probes come irregularly (another camera's fast lane, tab taps),
+// so a stream that plays a few seconds and freezes again could rack up two.
+const CAM_SETTLE_MS = 60000;
+const CAM_RETRY_MS = [3000, 6000, 12000, 24000];   // fast re-probe backoff, then the CAM_PROBE_MS beat
+// A tile whose camera answers but which hasn't been seen playing since its
+// (re)start is looked at again this soon, so LIVE (or a reload) follows the
+// picture within seconds instead of waiting on the backoff above. Bounded by
+// CAM_STARTING_MS after each start; the hub caches snapshots for a few
+// seconds, so these extra checks are cheap.
+const CAM_START_CHECK_MS = 2000;
+const CAM_STARTING_MS = 30000;
+// A stats read that hasn't answered in this long is given up on (the
+// element's counters are used instead): one stuck promise must not keep
+// the probe "in flight" and stop every later camera check.
+const CAM_STATS_TIMEOUT_MS = 4000;
+
 async function probeCamera() {
   // Probe the UNION of the wall column and the Cameras-tab grid, deduped by
   // src: one camera can appear on both surfaces (its snapshot producer is
@@ -1708,29 +1761,235 @@ async function probeCamera() {
   for (const cam of [...(links.cameras || []), ...(links.camera_page || [])]) {
     if (!bySrc.has(cam.src)) bySrc.set(cam.src, cam);
   }
-  await Promise.all([...bySrc.values()].map(probeOneCamera));
+  // One camera's bad tile must not stop the rest updating, or the fast lane
+  // being armed: a throw is logged and counts as "not settled yet".
+  const results = await Promise.all([...bySrc.values()].map((cam) =>
+    probeOneCamera(cam).catch((e) => {
+      console.warn(`camera ${cam.src}: tile update failed`, e);
+      return { unsettled: true };
+    })));
+  scheduleCamRetry(results.some((r) => r.unsettled || r.fresh || r.starting),
+    results.some((r) => r.fresh));
+  scheduleCamStartCheck(results.some((r) => r.starting));
+}
+
+/* What the tile's go2rtc player is doing, read from its same-origin iframe:
+   'error' (it gave up: go2rtc refused the connect; or the page loaded with
+   no player in it, e.g. the hub's 502 while go2rtc restarted; or, past its
+   start window, there is still no player or no <video> in it), 'playing'
+   (the same counter on the same connection grew since the last look),
+   'stuck' (it did not), or null when there is nothing to judge yet:
+   the player can't be read (still loading, or the browser won't let us
+   look), this is the first look since a (re)start, or the page is hidden
+   (the player pauses itself there, so a still video means nothing). null
+   never triggers a reload.
+   frame._camMoved records whether a 'playing' came from a real frame count
+   or only from the clock (see camVideoMark).
+   A count is only compared with the same counter on the same connection:
+   go2rtc's player rebuilds its connection on its own (counting from 0
+   again), and a look can fall back from one counter to another; a jump
+   across either is a new baseline, never proof of life. */
+async function camPlayerState(frame) {
+  if (document.visibilityState === 'hidden') {
+    // Start over on return: the player reconnects itself then, so give it
+    // the same start window as a fresh load before judging it.
+    resetCamLook(frame);
+    return null;
+  }
+  let doc;
+  try {
+    doc = frame.contentDocument;
+  } catch (e) {
+    doc = null;
+  }
+  if (doc === undefined) return null;   // no document to look at here at all
+  if (doc === null) {
+    // A browser gives null (or throws) for a cross-origin page, e.g. a proxy
+    // in between: the probe alone is in charge then. Say so once, or that
+    // silently drops the player signal.
+    if (frame.src && !frame._camUnreadable) {
+      frame._camUnreadable = true;
+      console.warn('camera tile: cannot read its player (cross-origin?); judging by snapshots only');
+    }
+    return null;
+  }
+  const pastStart = Date.now() - (frame._camStartedAt || 0) >= CAM_STALL_MS;
+  const vs = doc.querySelector('video-stream');
+  if (!vs) {
+    // A loaded page with no player is not "still loading": a fresh iframe's
+    // about:blank is complete too, so that one is skipped until the start
+    // window ends (a navigation that never finishes is stuck as well).
+    const loaded = doc.readyState === 'complete'
+      && doc.location && doc.location.href !== 'about:blank';
+    return loaded || pastStart ? 'error' : null;
+  }
+  const mode = vs.querySelector('.mode');
+  if (mode && mode.textContent === 'error') return 'error';
+  const video = vs.querySelector('video');
+  // A player element that never built its <video> (its script failed to
+  // load) is as stuck as one that said "error", once it has had its chance.
+  if (!video) return pastStart ? 'error' : null;
+  // The frame may be reloaded by an overlapping run while the stats are
+  // read: this look then belongs to the old stream, so it says nothing.
+  const gen = frame._camGen;
+  const mark = await camVideoMark(vs, video);
+  if (!mark || frame._camGen !== gen) return null;
+  const now = Date.now();
+  const last = frame._camLook;
+  if (last && now - last.at > CAM_LOOK_STALE_MS) {
+    // Shown again after being hidden, or a throttled tab: judge from here,
+    // with a full start window, instead of calling a paused video frozen.
+    resetCamLook(frame);
+    frame._camLook = { mark, at: now, since: now };
+    return null;
+  }
+  // A new baseline, not a verdict: the first look, a different counter (the
+  // clock until the first frame, a fallback while stats fail), a rebuilt
+  // connection, or a count that went down: none can be compared.
+  // One new baseline is normal (go2rtc rebuilds its connection now and
+  // then). But an unbroken run of them lasting a whole start window, with no
+  // verdict in between (a connection rebuilt on every look), is stuck: no
+  // verdict must not mean LIVE forever. The run is timed from its FIRST
+  // baseline, never from the last verdict: verdicts on a healthy tile come
+  // only once per 30s beat.
+  if (!last || last.mark.kind !== mark.kind || last.mark.conn !== mark.conn
+      || mark.value < last.mark.value) {
+    const since = last && last.since !== undefined ? last.since : now;
+    if (now - since >= CAM_STALL_MS) {
+      frame._camLook = { mark, at: now, since: now };
+      return 'stuck';
+    }
+    frame._camLook = { mark, at: now, since };
+    return null;
+  }
+  // Too soon after the last look to tell a still picture from a slow one:
+  // keep the older baseline and judge next time.
+  if (now - last.at < CAM_LOOK_MIN_MS) return null;
+  frame._camLook = { mark, at: now };   // a verdict ends any run of baselines
+  if (mark.value === last.mark.value) return 'stuck';
+  frame._camMoved = mark.kind === 'clock' ? 'clock' : 'frames';
+  return 'playing';
+}
+
+/* How far a <video> has got. A live WebRTC video's clock keeps running over
+   a frozen or black picture; a frame count can't, so use one whenever there
+   is one. Best is the WebRTC connection's own count of decoded frames
+   (go2rtc's player keeps it as .pc): it is standard, and it keeps counting
+   while the tile is scrolled out of view. Firefox (the real wall's browser)
+   stops painting an off-screen iframe, so its mozPaintedFrames stands still
+   there, and its getVideoPlaybackQuality reports 0 for WebRTC video (both
+   checked on Firefox 140 ESR against the live cameras). Tiles always ask for
+   WebRTC, so no connection means it isn't made yet or is between a drop and
+   go2rtc's own reconnect; the element's counters are the backstop then, and
+   the clock is the last resort, never trusted over a failed snapshot (see
+   probeOneCamera). Each mark names its counter (`kind`) and connection
+   (`conn`) so camPlayerState never compares two different counts. null if
+   the player went away mid-read. */
+async function camVideoMark(vs, video) {
+  if (vs.pc && typeof vs.pc.getStats === 'function') {
+    // A connection with no video stats yet (it is still negotiating) counts
+    // as 0 decoded frames, not as "no counter": switching from the clock to
+    // the frame count once the first frame lands would cost a whole extra
+    // look before a reloaded tile could be seen to play.
+    try {
+      let decoded = 0;
+      let timer = null;
+      const stats = await Promise.race([
+        vs.pc.getStats(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('getStats timed out')), CAM_STATS_TIMEOUT_MS);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      stats.forEach((r) => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video' && typeof r.framesDecoded === 'number') {
+          decoded += r.framesDecoded;
+        }
+      });
+      return { kind: 'decoded', conn: vs.pc, value: decoded };
+    } catch (e) { /* connection closing: try the element's counters */ }
+  }
+  try {
+    try {
+      const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+      if (q && q.totalVideoFrames > 0) return { kind: 'quality', conn: null, value: q.totalVideoFrames };
+    } catch (e) { /* not supported here: try the next counter */ }
+    const painted = Number(video.mozPaintedFrames);
+    if (painted > 0) return { kind: 'painted', conn: null, value: painted };
+    return { kind: 'clock', conn: null, value: Number(video.currentTime) || 0 };
+  } catch (e) {
+    return null;   // the page was torn down mid-read (a reload): no look
+  }
+}
+
+/* Forget what the player looked like and restart its start window: after a
+   (re)load, after being hidden, or after the page was in the background. */
+function resetCamLook(frame) {
+  frame._camLook = undefined;
+  frame._camStartedAt = Date.now();
+  frame._camPlayedSinceStart = false;
+  frame._camGen = (frame._camGen || 0) + 1;
+  // Only a judging restart, not a new stream: until it is judged again the
+  // tile keeps whatever badge it had (see probeOneCamera).
+  frame._camResetOnly = true;
+}
+
+/* Every shown tile starts its judging over: for a tab that shows them again
+   (its videos were display:none and painted nothing meanwhile). */
+function freshCamLooks() {
+  document.querySelectorAll('.tile-camera').forEach((tile) => {
+    const frame = tile.querySelector('.cam-frame');
+    if (frame && frame.src) resetCamLook(frame);
+  });
+}
+
+/* (Re)start a tile's stream and note when, so camPlayerState's verdicts are
+   judged against how long the player has actually had. */
+function startCamFrame(frame, url) {
+  frame.src = url;
+  resetCamLook(frame);
+  frame._camResetOnly = false;
+  frame._camLoadedAt = frame._camStartedAt;   // the settle clock: real loads only
+  frame._camUnreadable = false;               // a new page: say it again if it can't be read
 }
 
 async function probeOneCamera(cam) {
-  if (cam.demo) return;   // placeholder tile: no stream, nothing to probe
+  const idle = { unsettled: false, fresh: false, starting: false };
+  if (cam.demo) return idle;   // placeholder tile: no stream, nothing to probe
   // A src can render on two surfaces (wall column + Cameras-tab grid); update
-  // EVERY tile for it. One snapshot probe drives them all — the producer is
-  // shared — but each tile owns its own frame/live/offline state.
+  // EVERY shown tile for it. One snapshot probe drives them all (the
+  // producer is shared), but each tile owns its own frame/live/offline state.
   // Match on dataset.cam, not a selector built from cam.src: a config src
   // with a quote or backslash in it would break (or change) the selector.
-  const tiles = Array.from(document.querySelectorAll('.tile-camera'))
+  // Never touch a hidden tile (mobile: cams live behind their tab; the wall's
+  // phone grid; offsetParent is null while display:none): no stream starts
+  // into it and no probe is spent on it. The tab or page that shows it
+  // probes again when it opens. Its last look is dropped, so when it shows
+  // again a video that was paused meanwhile is not taken for frozen.
+  const all = Array.from(document.querySelectorAll('.tile-camera'))
     .filter((t) => t.dataset.cam === cam.src);
-  if (!tiles.length) return;
-  // Start each VISIBLE tile's stream WITH the probe, not after it: both share
-  // the same go2rtc producer, so the WebRTC connect overlaps the probe's
+  const tiles = all.filter((t) => t.offsetParent !== null);
+  all.forEach((t) => {
+    const frame = t.querySelector('.cam-frame');
+    if (!frame) return;
+    if (t.offsetParent === null) frame._camWasHidden = true;
+    else if (frame._camWasHidden) { delete frame._camWasHidden; if (frame.src) resetCamLook(frame); }
+  });
+  if (!tiles.length) return idle;
+  // Start each tile's stream WITH the probe, not after it: both share the
+  // same go2rtc producer, so the WebRTC connect overlaps the probe's
   // round-trip and the tile paints on the stream's next keyframe instead of
   // queueing behind the snapshot. The frame stays hidden (offline badge up)
-  // until the probe confirms live — a dead camera never shows a black frame.
-  // Never start a stream into a hidden tile (mobile: cams live behind their
-  // tab; offsetParent is null while display:none).
+  // until the camera answers, so a dead camera never shows a black frame.
+  // Look at each player before the probe as well as after it: a slow probe
+  // (a failing one waits out go2rtc's timeout) then spans a real interval,
+  // so a playing video is known in this same cycle, not the next.
+  const before = new Map();
   tiles.forEach((tile) => {
     const frame = tile.querySelector('.cam-frame');
-    if (frame && !frame.src && tile.offsetParent !== null) frame.src = cam.tile;
+    if (!frame) return;
+    frame._camMoved = undefined;   // set by this cycle's looks only
+    if (!frame.src) startCamFrame(frame, cam.tile);
+    else before.set(frame, camPlayerState(frame));   // a promise; read after the probe
   });
   let ok = false;
   try {
@@ -1739,28 +1998,160 @@ async function probeOneCamera(cam) {
     // and drops the snapshot body instead of downloading it.
     ok = await probeOk(`/api/tiles/camera.jpg?src=${encodeURIComponent(cam.src)}&probe=${Date.now()}`);
   } catch (e) { /* down (or timed out) */ }
-  // Offline -> live transition: reload the frame for a deterministic fresh
-  // connect. A player that connected against a DEAD producer may never have
-  // established its session, and its self-reconnect is go2rtc internals this
-  // repo doesn't control — don't trust it to revive under the LIVE badge.
-  // Healthy cycles never touch src (reassigning restarts a live stream), and
-  // the reload happens only while the frame is hidden behind the offline
-  // badge, so nothing visible ever cold-restarts.
-  tiles.forEach((tile) => {
+  let unsettled = false;
+  let fresh = false;
+  let starting = false;
+  for (const tile of tiles) {
     const frame = tile.querySelector('.cam-frame');
-    if (!frame) return;
-    if (ok && frame.dataset.reconnect) {
-      delete frame.dataset.reconnect;
-      frame.src = cam.tile;
-    } else if (!ok && frame.src) {
-      frame.dataset.reconnect = '1';
+    if (!frame) continue;
+    // Either look seeing movement wins: the look after a fast probe spans
+    // barely CAM_LOOK_MIN_MS, too short to overrule a longer one that saw
+    // the video move.
+    const looks = [before.has(frame) ? await before.get(frame) : null, await camPlayerState(frame)];
+    let player = looks.includes('error') ? 'error'
+      : looks.includes('playing') ? 'playing'
+      : (looks[1] ?? looks[0]);
+    // A moving clock is weak evidence (it runs over a frozen WebRTC picture):
+    // it keeps a tile live while the snapshot agrees, never against it.
+    if (player === 'playing' && !ok && frame._camMoved !== 'frames') player = null;
+    if (player === 'playing') frame._camPlayedSinceStart = true;
+    if (player !== null) frame._camResetOnly = false;   // judged again
+    // Settled: still playing a minute after the stream was LOADED. Judging
+    // restarts (tab switches, coming back to the page) don't move that clock,
+    // or a phone whose Cameras tab is opened often would never settle.
+    const loadedAt = frame._camLoadedAt ?? frame._camStartedAt ?? 0;
+    if (player === 'playing' && Date.now() - loadedAt >= CAM_SETTLE_MS) {
+      frame._camStalls = 0;
     }
-    frame.classList.toggle('hidden', !ok);
-    tile.querySelector('.tile-live').classList.toggle('hidden', !ok);
-    tile.querySelector('.tile-offline').classList.toggle('hidden', ok);
-    tile.classList.toggle('is-offline', !ok);
-  });
+    const stallsSoFar = frame._camStalls || 0;
+    const gaveUp = stallsSoFar >= CAM_GIVE_UP_STALLS;
+    // A still picture inside the first start window is not held against a
+    // stream yet (a cold Wyze connect takes seconds; a re-shown or woken
+    // tile's video resumes a moment later), so a refresh doesn't flicker
+    // LIVE -> connecting -> LIVE. Once a reload has already failed, it is.
+    const inStart = Date.now() - (frame._camStartedAt || 0) < CAM_STALL_MS;
+    const startGrace = player === 'stuck' && inStart && stallsSoFar === 0;
+    // LIVE: the video is moving, or the camera answers and its player has
+    // shown nothing wrong yet. A camera that answers but whose player errored
+    // or froze is "connecting", not LIVE over a black or frozen frame. After
+    // a failed reload, "nothing wrong yet" isn't enough: the fresh connect
+    // must be seen to play, or the badge would flash LIVE after every reload.
+    let live = player === 'playing'
+      || (ok && stallsSoFar === 0 && (player === null || startGrace));
+    const wasLive = !tile.classList.contains('is-offline');
+    // No verdict this cycle (looks too close together, or a judging restart
+    // that hasn't been judged yet) keeps the LIVE badge of a tile already
+    // seen playing since its start, or one only restarted for judging,
+    // instead of flashing "connecting" over a playing picture.
+    const keep = ok && player === null && wasLive
+      && (frame._camResetOnly || frame._camPlayedSinceStart);
+    if (keep) live = true;
+    if (wasLive && !live) {
+      fresh = true;   // a new drop: restart the fast re-probe
+      console.warn(`camera ${cam.src}: ${ok ? 'answers but its stream is not playing' : 'not answering'}`);
+    }
+    if (frame.dataset.reconnect && player === 'playing') {
+      // It came back by itself (go2rtc's player reconnects on its own when
+      // its connection drops): the picture is moving, leave it be.
+      delete frame.dataset.reconnect;
+    } else if (ok && frame.dataset.reconnect) {
+      // Offline -> up: reload for a deterministic fresh connect. A player
+      // that connected against a DEAD producer may never have established
+      // its session, and its self-reconnect is go2rtc internals this repo
+      // doesn't control. The reload happens while the frame is still hidden
+      // behind the offline badge, so nothing visible cold-restarts.
+      delete frame.dataset.reconnect;
+      startCamFrame(frame, cam.tile);
+      unsettled = true;   // re-check soon that the fresh connect plays
+    } else if (ok && (player === 'error' || player === 'stuck')) {
+      // Up, but this tile isn't showing it: the player gave up ('error'), or
+      // never started or froze ('stuck'). Give a fresh start CAM_STALL_MS to
+      // play first (a cold Wyze stream takes seconds; an 'error' is final,
+      // so CAM_ERROR_MS), then reload it, doubling the wait after each
+      // reload that didn't take, up to CAM_STALL_MAX_MS. The reloads carry
+      // on past CAM_GIVE_UP_STALLS: giving up only drops the LIVE claim.
+      const stalls = frame._camStalls || 0;
+      const base = player === 'error' ? CAM_ERROR_MS : CAM_STALL_MS;
+      const wait = Math.min(base * 2 ** stalls, CAM_STALL_MAX_MS);
+      if (Date.now() - (frame._camStartedAt || 0) >= wait) {
+        console.warn(`camera ${cam.src}: stream ${player === 'error' ? 'refused' : 'not playing'}, reconnecting`);
+        startCamFrame(frame, cam.tile);
+        frame._camStalls = stalls + 1;
+        if (frame._camStalls === CAM_GIVE_UP_STALLS) {
+          console.warn(`camera ${cam.src}: ${CAM_GIVE_UP_STALLS} reconnects never played; no longer shown as LIVE until it does`);
+        }
+      }
+      unsettled = true;
+    } else if (!live) {
+      if (frame.src && !ok) frame.dataset.reconnect = '1';
+      unsettled = true;
+    } else if (player === null && Date.now() - (frame._camStartedAt || 0) < CAM_STALL_MS) {
+      unsettled = true;   // just started: look again soon to see it play
+    }
+    // A camera that answers keeps its frame on screen even when not LIVE
+    // (dimmed, "connecting"): a reload may yet take, and a frame left in
+    // display:none can't be seen to start playing again. Only a camera that
+    // doesn't answer hides its frame behind the offline badge.
+    frame.classList.toggle('hidden', !live && !ok);
+    tile.querySelector('.tile-live').classList.toggle('hidden', !live);
+    const badge = tile.querySelector('.tile-offline');
+    badge.classList.toggle('hidden', live);
+    badge.textContent = !ok ? 'offline' : gaveUp ? 'no video' : 'connecting';
+    tile.classList.toggle('is-offline', !live);
+    if (ok && !frame._camPlayedSinceStart
+        && Date.now() - (frame._camStartedAt || 0) < CAM_STARTING_MS) starting = true;
+  }
+  return { unsettled, fresh, starting };
 }
+
+/* The fast lane between CAM_PROBE_MS beats: while any shown tile is offline
+   or still starting, probe again on the CAM_RETRY_MS backoff; once every
+   tile is settled, stop and reset. A tile that has just dropped (`fresh`)
+   restarts the backoff, so one camera that stays down for hours doesn't use
+   up the fast lane for another that drops later. One timer at a time, and it
+   goes through scheduledProbeCamera so it never stacks on a run in flight.
+   Nothing is armed while the page is hidden (nobody is watching, and every
+   look there reads "just started"); coming back runs a probe at once and
+   starts the backoff over (see the visibilitychange listener below). */
+let camRetryTimer = null;
+let camRetryStep = 0;
+function scheduleCamRetry(unsettled, fresh = false) {
+  if (!unsettled) { camRetryStep = 0; return; }
+  if (fresh) camRetryStep = 0;
+  if (document.visibilityState === 'hidden') return;
+  if (camRetryTimer !== null || camRetryStep >= CAM_RETRY_MS.length) return;
+  camRetryTimer = setTimeout(() => {
+    camRetryTimer = null;
+    scheduledProbeCamera();
+  }, CAM_RETRY_MS[camRetryStep]);
+  camRetryStep += 1;
+}
+
+/* The quick look while a tile is starting (CAM_START_CHECK_MS): its own
+   timer, so it never uses up the CAM_RETRY_MS backoff, and like that lane
+   it goes through scheduledProbeCamera and does nothing on a hidden page. */
+let camStartTimer = null;
+function scheduleCamStartCheck(starting) {
+  if (!starting || camStartTimer !== null || document.visibilityState === 'hidden') return;
+  camStartTimer = setTimeout(() => {
+    camStartTimer = null;
+    scheduledProbeCamera();
+  }, CAM_START_CHECK_MS);
+}
+
+/* A phone that slept, or a tab in the background: the players paused, so
+   every tile starts its judging over, and on return the tiles are probed at
+   once instead of keeping a stale LIVE badge until the next 30s beat. */
+document.addEventListener('visibilitychange', () => {
+  document.querySelectorAll('.tile-camera').forEach((tile) => {
+    const frame = tile.querySelector('.cam-frame');
+    if (frame && frame.src) resetCamLook(frame);
+  });
+  if (document.visibilityState !== 'hidden') {
+    camRetryStep = 0;
+    scheduledProbeCamera({ queue: true });
+  }
+});
 
 /* ------------------------------------------------------------ mobile tabs */
 
@@ -1913,7 +2304,7 @@ function setTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.tab === tab));
   if (tab === 'weather') { wirePanels(); fitPanels(); }  // deferred while hidden
-  if (tab === 'cams') probeCamera();
+  if (tab === 'cams') { freshCamLooks(); probeCamera(); }
   if (tab === 'todos') renderTodosFull();
   scrollPageToTop();   // every tab tap lands at the top, not mid-scroll
 }
@@ -3948,11 +4339,24 @@ function refreshIdleTodosView() {
 // stacking requests toward the browser's connection budget. Direct
 // probeCamera() calls (tab switch, overlay open) are user-paced and
 // intentionally always run, so the guard lives here, not inside probeCamera().
+// With { queue: true } (coming back to the page) a request that lands on a
+// run in flight is not dropped: one follow-up run starts when it ends, since
+// that run may be a fetch the sleeping phone held open for seconds.
 let scheduledProbeCameraInFlight = false;
-function scheduledProbeCamera() {
-  if (scheduledProbeCameraInFlight) return;
+let scheduledProbeCameraQueued = false;
+function scheduledProbeCamera({ queue = false } = {}) {
+  if (scheduledProbeCameraInFlight) {
+    if (queue) scheduledProbeCameraQueued = true;
+    return;
+  }
   scheduledProbeCameraInFlight = true;
-  probeCamera().finally(() => { scheduledProbeCameraInFlight = false; });
+  probeCamera().finally(() => {
+    scheduledProbeCameraInFlight = false;
+    if (scheduledProbeCameraQueued) {
+      scheduledProbeCameraQueued = false;
+      scheduledProbeCamera();
+    }
+  });
 }
 
 let _toastTimer = null;

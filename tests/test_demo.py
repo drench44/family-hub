@@ -345,6 +345,23 @@ def test_demo_seeds_an_away_person_with_backup(tmp_path):
     c.close()
 
 
+@pytest.mark.parametrize("offset", range(14))
+def test_demo_dishes_are_rubys_this_week_on_any_date(tmp_path, offset):
+    """The weekly Dishes turn is Ruby's on whatever day the demo is seeded.
+    A fixed rotation order handed it to Ava every other week, so her card
+    (and test_demo_hub_seeds_the_sample_family) flipped between five and six
+    chores depending on the date CI ran. Two weeks of start dates cover both
+    week parities and every weekday."""
+    today = dt.date(2026, 10, 26) + dt.timedelta(days=offset)
+    c = db.connect(str(tmp_path / "t.db"))
+    db.ensure_schema(c)
+    demo.seed_demo(c, today)
+    ruby = next(p["id"] for p in db.list_people(c) if p["name"] == "Ruby")
+    dishes = next(ch for ch in db.list_chores(c) if ch["title"] == "Dishes")
+    assert chlogic.assignee_id(dishes, today) == ruby
+    c.close()
+
+
 def test_demo_away_state_is_coherent_for_today(tmp_path):
     """Row-count-of-away_periods is not enough: prove the seed is actually
     coherent by resolving today's live plan (the same call app.py's
