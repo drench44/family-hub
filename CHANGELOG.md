@@ -18,6 +18,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   load; and a tile that comes up offline is checked again within seconds
   instead of waiting half a minute. Cameras that are not on screen (the
   wall's hidden phone grid) are no longer checked every 30 seconds.
+- The demo wall's weekly dishes turn is always Ruby's this week, so Ava's
+  card no longer switches between five and six chores every other week.
 
 ### Changed
 - Shared CI workflows now come from drench44/ci-shared, and comments and docs no
