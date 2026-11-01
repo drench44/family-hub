@@ -10,6 +10,34 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.4] — 2026-11-01
+
+### Fixed
+- Camera tiles load reliably after a refresh. A tile whose video is playing
+  no longer flips to "offline" (and restarts) because one snapshot check
+  timed out; a tile whose stream was refused or froze is reconnected by
+  itself instead of staying black under a LIVE badge until the next page
+  load; and a tile that comes up offline is checked again within seconds
+  instead of waiting half a minute. Cameras that are not on screen (the
+  wall's hidden phone grid) are no longer checked every 30 seconds.
+- Camera tiles judge the picture itself, by the stream's own count of
+  decoded frames, so a frozen or black picture is caught on the wall's
+  Firefox too, even for a tile scrolled out of view. A camera that answers
+  but won't play shows "connecting" (or "no video" after three tries)
+  instead of LIVE, and a stream go2rtc refused is reconnected in seconds.
+  Coming back to the page or the Cameras tab checks the tiles at once and
+  no longer restarts a video that was only paused.
+- A camera tile's LIVE badge no longer flashes "connecting" over a playing
+  picture, and a camera whose stream keeps reconnecting can't fake being
+  live by its frame count starting over.
+- A camera whose stream keeps reconnecting without ever being judged is
+  treated as stuck after its start window, and a stalled stats read can no
+  longer stop the wall's camera checks.
+- A single reconnect on a healthy camera stream no longer counts as stuck
+  (only one that keeps reconnecting does), so a working tile isn't reloaded.
+- The demo wall's weekly dishes turn is always Ruby's this week, so Ava's
+  card no longer switches between five and six chores every other week.
+
 ### Changed
 - Shared CI workflows now come from drench44/ci-shared, and comments and docs no
   longer name private repositories. The optional operator push scanner is now
