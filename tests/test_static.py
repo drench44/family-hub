@@ -585,6 +585,26 @@ def test_mobile_app_shell_scrolls_content_not_the_body():
         ".wrap needs flex:1 + min-height:0 to actually scroll inside the shell"
 
 
+def test_mobile_wrap_fills_the_phone_width_not_its_content():
+    """The phone .wrap must be exactly the screen width, never sized to its
+    content. The base wall rule gives .wrap `margin: 0 auto`, and in the phone's
+    flex-column body an auto margin switches off stretch, so a `width: auto`
+    .wrap shrink-wraps its content up to max-width (640px). One long unbreakable
+    line then widened the whole page past the screen and cut every card off on
+    the right: a 3D print file name on the Weather tab (2026-11-14, the job line
+    is nowrap + ellipsis, which only works inside a box of fixed width).
+    width:100% (border-box) pins it to the body; max-width + auto margins still
+    center it on tablets."""
+    wrap = _shell_rule(f'{SHELL_GUARD} .wrap')
+    assert wrap, f'no phone .wrap rule keyed on {SHELL_GUARD} .wrap'
+    assert "width:100%" in re.sub(r"(max|min)-width:[^;]*", "", wrap), \
+        "phone .wrap needs width:100%; width:auto + the base margin:0 auto " \
+        "sizes it to its content and long text overflows the screen"
+    assert "box-sizing:border-box" in _ns(_css_rule("*") or "") \
+        or "box-sizing:border-box" in wrap, \
+        "width:100% plus padding only fits the screen with border-box sizing"
+
+
 def test_no_backdrop_filter_on_fixed_elements():
     """Generalizes the tab-bar fix into a rule for the whole stylesheet: a
     `backdrop-filter` on ANY position:fixed/sticky element goes intermittently
