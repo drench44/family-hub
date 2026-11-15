@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.14.1] — 2026-11-15
+
 ### Changed
 - The 3D printer card now sits above the Fleet card, where the family
   looks first.
