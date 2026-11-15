@@ -1310,10 +1310,14 @@ def test_fleet_printer_color_must_be_exactly_rrggbb():
         assert p["ams"][0]["trays"][0]["color"] is None, repr(bad)
 
 
-def test_fleet_printer_error_code_is_none_for_zero_and_hex_otherwise():
+def test_fleet_printer_error_code_is_none_only_for_zero_or_nothing():
     for raw, want in (("0", None), ("00000000", None), (0, None), (None, None),
-                      ("nope", None), (True, None), ("3008001", "03008001"),
-                      ("0500c010", "0500C010"), (0x03008001, "03008001")):
+                      ("   ", None), (True, None), ("3008001", "03008001"),
+                      ("0500c010", "0500C010"), (50364417, "03008001"),
+                      # an unexpected shape is still an error: shown, never dropped
+                      ("nope", "nope"), ("0300-8001", "0300-8001"),
+                      ("123456789", "123456789"), (2**32, "4294967296"),
+                      (50364417.0, "03008001"), (0.0, None)):
         tiles.reset_caches()
         body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], errorCode=raw))
         p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]

@@ -4089,14 +4089,18 @@ async function fetchFleet() {
 
 /* Raw printer state (Bambu gcode_state, or the demo's lower-case word) ->
    the word the wall shows and a tone for the ring and the state word. */
+/* Each state carries a word, a tone (the color) and a phase (what the card
+   shows). They are separate on purpose: an error code turns the card red,
+   but a print that paused on an error is still a paused print, so its time
+   left, layers and loaded spool stay on the card. */
 const PRINTER_STATES = {
-  running: ['Printing', 'run'], printing: ['Printing', 'run'],
-  prepare: ['Getting ready', 'run'], slicing: ['Getting ready', 'run'],
-  init: ['Getting ready', 'run'],
-  pause: ['Paused', 'warn'], paused: ['Paused', 'warn'],
-  failed: ['Failed', 'crit'],
-  finish: ['Finished', 'good'], finished: ['Finished', 'good'],
-  idle: ['Idle', 'idle'],
+  running: ['Printing', 'run', 'printing'], printing: ['Printing', 'run', 'printing'],
+  prepare: ['Getting ready', 'run', 'prep'], slicing: ['Getting ready', 'run', 'prep'],
+  init: ['Getting ready', 'run', 'prep'],
+  pause: ['Paused', 'warn', 'paused'], paused: ['Paused', 'warn', 'paused'],
+  failed: ['Failed', 'crit', 'failed'],
+  finish: ['Finished', 'good', 'done'], finished: ['Finished', 'good', 'done'],
+  idle: ['Idle', 'idle', 'idle'],
 };
 function printerState(p) {
   // a non-string state (a flaky upstream's number or object) is unknown
@@ -4104,11 +4108,12 @@ function printerState(p) {
   // own keys only: "constructor" must not find Object.prototype's
   const known = Object.prototype.hasOwnProperty.call(PRINTER_STATES, raw)
     ? PRINTER_STATES[raw] : null;
+  const pretty = raw.replace(/_/g, ' ').trim();
   const word = known ? known[0]
-    : raw ? raw.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Unknown';
+    : pretty ? pretty.replace(/^./, (c) => c.toUpperCase()) : 'Unknown';
   // an error code turns any state red: it is the one thing to act on
   const tone = p.errorCode ? 'crit' : (known ? known[1] : 'idle');
-  return { raw, word, tone };
+  return { raw, word, tone, phase: known ? known[2] : 'unknown' };
 }
 
 /* "holiday-ornaments_4_colors.gcode.3mf" -> "holiday ornaments 4 colors".
@@ -4219,7 +4224,7 @@ function printerAmsHtml(ams, feeding = true) {
     && Number.isInteger(u.id) && u.id >= 0).map((u) => {
     // named from the printer's own unit id (0 -> AMS 1), so a unit that
     // failed to report never renumbers the ones after it
-    const label = u.id >= 128 ? 'AMS HT' : `AMS ${u.id + 1}`;
+    const label = u.id >= 128 ? `AMS HT${u.id > 128 ? ` ${u.id - 127}` : ''}` : `AMS ${u.id + 1}`;
     const rh = (Number.isFinite(u.humidityPercent) && u.humidityPercent >= 0
       && u.humidityPercent <= 100)
       ? `<span class="pr-ams-rh num">${Math.round(u.humidityPercent)}% RH</span>` : '';
@@ -4247,8 +4252,9 @@ function printerActiveFilament(ams) {
 
 /* "03008001" -> "0300-8001", the way Bambu's own app and wiki write it. */
 function printerErrorStr(code) {
-  const c = String(code).replace(/[^0-9a-f]/gi, '').toUpperCase();
-  return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c;
+  const c = String(code).trim();
+  // anything else is shown as sent: an odd code is still an error to read
+  return /^[0-9a-f]{8}$/i.test(c) ? `${c.slice(0, 4)}-${c.slice(4)}`.toUpperCase() : c;
 }
 
 // A time left past two weeks is a bad reading, not a print (and would push
@@ -4263,45 +4269,50 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
     return `<div class="wx-offline">Printer status unknown</div>`;
   }
   const st = printerState(p);
-  const active = st.tone === 'run' || st.tone === 'warn' || st.raw === 'failed';
-  const raw = p.progressPercent;
-  const pct = st.raw === 'idle' ? null : raw;
+  const underway = st.phase === 'printing' || st.phase === 'paused';
+  // the ring only for a print (under way, getting ready, ended); idle or an
+  // unknown state has no progress to show
+  const pct = ['printing', 'paused', 'prep', 'failed', 'done'].includes(st.phase)
+    ? p.progressPercent : null;
   const lines = [];
-  const left = Number.isFinite(p.remainingMinutes) && p.remainingMinutes > 0
+  // Time left only on fresh data for a print under way: a stale card would
+  // show a number that no longer counts down. The finish clock time only
+  // while it is actually printing (a pause slides it every minute).
+  const left = !stale && (underway || st.phase === 'prep')
+    && Number.isFinite(p.remainingMinutes) && p.remainingMinutes > 0
     && p.remainingMinutes <= PR_MAX_MINUTES
     ? fleetRemainStr(p.remainingMinutes).replace(/^~/, '') : '';
-  // A finish clock time only while it is really printing on fresh data: a
-  // paused print's finish slides with every minute of the pause, a failed
-  // one has none, and a stale card's "now + left" would slide every poll.
-  if (left && st.tone === 'run' && !stale) {
+  if (left && st.phase === 'printing') {
     const when = lnWhen(new Date(now + p.remainingMinutes * 60000).toISOString(), now);
     lines.push(`done ${when} · ${left}`);
-  } else if (left && (st.tone === 'warn' || st.tone === 'run')) {
+  } else if (left) {
     lines.push(left);
   }
-  if (active && Number.isInteger(p.layerCurrent) && Number.isInteger(p.layerTotal)
+  // layers for a print under way, or where a failed one stopped
+  if ((underway || st.phase === 'failed')
+      && Number.isInteger(p.layerCurrent) && Number.isInteger(p.layerTotal)
       && p.layerTotal > 0 && p.layerCurrent >= 0 && p.layerCurrent <= p.layerTotal) {
-    lines.push(`Layer ${Math.round(p.layerCurrent)} of ${Math.round(p.layerTotal)}`);
+    lines.push(`Layer ${p.layerCurrent} of ${p.layerTotal}`);
   }
   const job = printerJobName(p.job);
   const jobHtml = job
-    ? `<div class="pr-job">${st.tone === 'good' ? '<span>Last print · </span>' : ''}${escapeHtml(job)}</div>`
+    ? `<div class="pr-job">${st.phase === 'done' ? '<span>Last print · </span>' : ''}${escapeHtml(job)}</div>`
     : '';
-  const stage = (typeof p.stage === 'string' && p.stage && st.raw !== 'idle')
+  const stage = (typeof p.stage === 'string' && p.stage && st.phase !== 'idle')
     ? `<div class="pr-stage">${escapeHtml(p.stage)}</div>` : '';
   const err = p.errorCode
     ? `<div class="pr-error">Error ${escapeHtml(printerErrorStr(p.errorCode))} · check the printer</div>`
     : '';
-  const warming = st.tone === 'run';
+  const warming = st.phase === 'printing' || st.phase === 'prep';
   const temps = printerTempHtml('Nozzle', p.nozzleF, p.nozzleTargetF, warming)
     + printerTempHtml('Bed', p.bedF, p.bedTargetF, warming)
     + printerTempHtml('Chamber', p.chamberF, null);
-  const filament = printerActiveFilament(p.ams);
+  // a spool is "feeding" only mid-print or paused: while getting ready, or
+  // after a print ends, the printer can still report the last job's spool
+  const filament = underway ? printerActiveFilament(p.ams) : '';
   const foot = [
-    filament ? `${st.tone === 'run' ? 'Printing with' : 'Loaded'} ${escapeHtml(filament)}` : '',
-    // speed is a setting of a print under way, not of a failed one
-    (typeof p.speed === 'string' && p.speed && (st.tone === 'run' || st.tone === 'warn'))
-      ? `${escapeHtml(p.speed)} speed` : '',
+    filament ? `${st.phase === 'printing' ? 'Printing with' : 'Paused on'} ${escapeHtml(filament)}` : '',
+    (typeof p.speed === 'string' && p.speed && underway) ? `${escapeHtml(p.speed)} speed` : '',
   ].filter(Boolean).join(' · ');
   const staleTag = stale ? '<span class="fleet-stale">stale</span>' : '';
   return `<article class="card printer tone-${st.tone}${stale ? ' is-stale' : ''}">`
@@ -4311,7 +4322,7 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
     + `</div></div>`
     + stage + err + jobHtml
     + (temps ? `<div class="pr-temps">${temps}</div>` : '')
-    + printerAmsHtml(p.ams, st.tone === 'run' || st.tone === 'warn')
+    + printerAmsHtml(p.ams, underway)
     + (foot ? `<div class="pr-foot">${foot}</div>` : '')
     + `</article>`;
 }
