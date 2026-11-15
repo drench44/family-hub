@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-11-15
+
 ### Added
 - The 3D printer has its own card under Fleet: a progress ring, when the
   print will be done, the layer count, nozzle, bed and chamber temperatures,
