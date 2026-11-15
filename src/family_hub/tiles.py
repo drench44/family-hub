@@ -461,7 +461,7 @@ async def weather_tile(client, cfg) -> dict:
 # anything past these is a bad upstream, not a bigger printer.
 AMS_MAX_UNITS = 8
 AMS_MAX_TRAYS = 4
-_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}")   # used with fullmatch only
 
 
 def _short_text(value, limit: int = 24):
@@ -470,6 +470,18 @@ def _short_text(value, limit: int = 24):
     if not isinstance(value, str) or not value.strip():
         return None
     return value.strip()[:limit]
+
+
+def _error_code(value):
+    """The printer's error code as 8 hex digits, or None for none/unknown.
+    The console sends a hex string; an all-zero one, or 0, is "no error" and
+    must never turn the card red."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return f"{value:08X}" if 0 < value < 2**32 else None
+    text = _short_text(value)
+    if text is None or not re.fullmatch(r"[0-9A-Fa-f]{1,8}", text) or int(text, 16) == 0:
+        return None
+    return text.upper().rjust(8, "0")
 
 
 def _finite(value):
@@ -511,7 +523,7 @@ def _printer_ams(raw) -> list:
                 "loaded": loaded,
                 "type": _short_text(tray.get("type"), 12) if loaded else None,
                 "color": color if loaded and isinstance(color, str)
-                and _HEX_COLOR.match(color) else None,
+                and _HEX_COLOR.fullmatch(color) else None,
                 "name": _short_text(tray.get("name")) if loaded else None,
                 "remainPercent": remain if loaded and remain is not None
                 and 0 <= remain <= 100 else None,
@@ -630,7 +642,7 @@ async def fleet_tile(client, cfg) -> dict:
             "layerTotal": raw_printer.get("layerTotal"),
             "speed": _short_text(raw_printer.get("speed")),
             "stage": _short_text(raw_printer.get("stage"), 48),
-            "errorCode": _short_text(raw_printer.get("errorCode")),
+            "errorCode": _error_code(raw_printer.get("errorCode")),
             "ams": _printer_ams(raw_printer.get("ams")),
         },
     }
