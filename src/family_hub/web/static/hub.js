@@ -4270,15 +4270,15 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
   }
   const st = printerState(p);
   const underway = st.phase === 'printing' || st.phase === 'paused';
-  // the ring only for a print (under way, getting ready, ended); idle or an
-  // unknown state has no progress to show
-  const pct = ['printing', 'paused', 'prep', 'failed', 'done'].includes(st.phase)
+  // the ring only for a print under way or ended; getting ready can still
+  // carry the last job's numbers, and idle or unknown has no progress
+  const pct = ['printing', 'paused', 'failed', 'done'].includes(st.phase)
     ? p.progressPercent : null;
   const lines = [];
   // Time left only on fresh data for a print under way: a stale card would
   // show a number that no longer counts down. The finish clock time only
   // while it is actually printing (a pause slides it every minute).
-  const left = !stale && (underway || st.phase === 'prep')
+  const left = !stale && underway
     && Number.isFinite(p.remainingMinutes) && p.remainingMinutes > 0
     && p.remainingMinutes <= PR_MAX_MINUTES
     ? fleetRemainStr(p.remainingMinutes).replace(/^~/, '') : '';
@@ -4303,13 +4303,16 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
   const err = p.errorCode
     ? `<div class="pr-error">Error ${escapeHtml(printerErrorStr(p.errorCode))} · check the printer</div>`
     : '';
-  const warming = st.phase === 'printing' || st.phase === 'prep';
+  // live claims ("heating to", the lit spool, "Printing with") only on
+  // fresh data: a stale card shows what was last seen, not what is happening
+  const warming = !stale && (st.phase === 'printing' || st.phase === 'prep');
+  const feeding = underway && !stale;
   const temps = printerTempHtml('Nozzle', p.nozzleF, p.nozzleTargetF, warming)
     + printerTempHtml('Bed', p.bedF, p.bedTargetF, warming)
     + printerTempHtml('Chamber', p.chamberF, null);
   // a spool is "feeding" only mid-print or paused: while getting ready, or
   // after a print ends, the printer can still report the last job's spool
-  const filament = underway ? printerActiveFilament(p.ams) : '';
+  const filament = feeding ? printerActiveFilament(p.ams) : '';
   const foot = [
     filament ? `${st.phase === 'printing' ? 'Printing with' : 'Paused on'} ${escapeHtml(filament)}` : '',
     (typeof p.speed === 'string' && p.speed && underway) ? `${escapeHtml(p.speed)} speed` : '',
@@ -4322,7 +4325,7 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
     + `</div></div>`
     + stage + err + jobHtml
     + (temps ? `<div class="pr-temps">${temps}</div>` : '')
-    + printerAmsHtml(p.ams, underway)
+    + printerAmsHtml(p.ams, feeding)
     + (foot ? `<div class="pr-foot">${foot}</div>` : '')
     + `</article>`;
 }
