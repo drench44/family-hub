@@ -472,33 +472,60 @@ def _short_text(value, limit: int = 24):
     return value.strip()[:limit]
 
 
+# "no error" as some upstreams spell it; anything else non-empty is a code
+_NO_ERROR_WORDS = {"none", "null", "n/a", "na", "false", "ok", "-"}
+_error_warned: set = set()
+
+
+def _warn_error_code_once(value) -> None:
+    """Log an unexpected printer error code once per distinct value, not on
+    every 30 s fleet poll."""
+    key = repr(value)[:64]
+    if key not in _error_warned:
+        _error_warned.add(key)
+        log.warning("fleet tile: unexpected printer error code %s", key)
+
+
 def _error_code(value):
     """The printer's error code for the card, or None for "no error".
 
     The fleet console sends Bambu's print_error as 8 hex digits (its
-    printer-words.ts), and an int is the same number before formatting. Only
-    zero or nothing means no error: a non-empty code in a shape this proxy
-    doesn't expect is still an error, so it is passed on as (trimmed) text
-    and logged rather than dropped, which would show a failing printer as
-    fine."""
+    printer-words.ts), and an int is the same number before formatting.
+    Zero, nothing, or a "no error" word means no error. A non-empty code in
+    some other text shape is still an error, so it is passed on as text
+    (and logged once) rather than dropped, which would show a failing
+    printer as fine. A value that can't be a Bambu code at all (a list, an
+    out-of-range or fractional number) is logged and left off the card:
+    showing it would be a made-up code."""
     if isinstance(value, bool) or value is None:
         return None
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)   # 3008001.0 is the same code, not "no error"
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")) or not value.is_integer():
+            _warn_error_code_once(value)
+            return None
+        value = int(value)   # 3008001.0 is the same code
     if isinstance(value, int):
         if value == 0:
             return None
         if 0 < value < 2**32:
             return f"{value:08X}"
-        log.warning("fleet tile: printer error code out of range: %r", value)
-        return str(value)[:16]
-    text = _short_text(value, 16)
-    if text is None:
+        _warn_error_code_once(value)
         return None
-    if re.fullmatch(r"[0-9A-Fa-f]{1,8}", text):
-        return None if int(text, 16) == 0 else text.upper().rjust(8, "0")
-    log.warning("fleet tile: unexpected printer error code shape: %r", text)
-    return text
+    if not isinstance(value, str):
+        _warn_error_code_once(value)
+        return None
+    text = value.strip()
+    if not text or text.lower() in _NO_ERROR_WORDS:
+        return None
+    digits = re.sub(r"^0[xX]|[-\s]", "", text)
+    if re.fullmatch(r"[0-9A-Fa-f]+", digits):
+        n = int(digits, 16)
+        if n == 0:
+            return None
+        if n < 2**32:
+            return f"{n:08X}"
+    _warn_error_code_once(text)
+    return text[:16]
 
 
 def _finite(value):
