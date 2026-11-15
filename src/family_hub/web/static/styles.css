@@ -997,7 +997,7 @@ body {
 /* a stale last-good card is visibly dimmed (this is a health monitor — a
    riding-out-a-failure card must never look as pristine as a live one) */
 .fleet.is-stale { opacity: .62; }
-/* ------- native printer card (its own card under fleet, 2026-11-15) ------- */
+/* ------- native printer card (its own card above fleet, 2026-11-15) ------- */
 /* No motion by design: the ring and the spool rings are plain dash values,
    so there is nothing for prefers-reduced-motion to guard and nothing for
    the wall's Firefox to keep repainting. Every color is a theme token

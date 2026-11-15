@@ -1383,7 +1383,7 @@ def test_fleet_card_static_guards():
     fc = re.search(r"function fleetCardHtml\(", hub)
     assert fc and "printer" not in hub[fc.start():hub.index("\n}\n", fc.start())].replace(
         "printerCardHtml", ""), "fleetCardHtml must not render printer data"
-    # the wall places fleet directly under laundry in the panels column
+    # the wall places fleet under laundry and the printer card in the panels column
     # (owner's placement intent); the phone rides the Weather tab since it
     # has no tab of its own ("no new tab" per the mobile gate) — the fleet
     # slot must NOT be excluded from the Weather tab the way laundry is.
@@ -1392,15 +1392,15 @@ def test_fleet_card_static_guards():
 
 
 def test_printer_card_static_guards():
-    """The printer card (its own card under fleet, 2026-11-15): its own
-    off-toggle hides it, its slot is built unconditionally right after the
+    """The printer card (its own card above fleet, 2026-11-15): its own
+    off-toggle hides it, its slot is built unconditionally right before the
     fleet slot, it repaints on every fleet poll, it keeps the panels column
     and the phone Weather tab alive on its own, and it never animates."""
     hub = (STATIC / "hub.js").read_text()
     assert re.search(r"body\.integ-off-printer[^\{]*#printer-slot[^\{]*\{[^}]*display:\s*none",
                      CSS), "printer-off must hide the printer slot"
-    assert "laundrySlotHtml() + fleetSlotHtml() + printerSlotHtml()" in hub, \
-        "the printer slot must be built unconditionally, right under fleet"
+    assert "laundrySlotHtml() + printerSlotHtml() + fleetSlotHtml()" in hub, \
+        "the printer slot must be built unconditionally, right above fleet (owner's order)"
     fetch = hub[hub.index("async function fetchFleet()"):]
     fetch = fetch[:fetch.index("\n}\n")]
     assert "renderPrinter();" in fetch, "every fleet poll must repaint the printer card"
