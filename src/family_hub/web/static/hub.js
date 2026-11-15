@@ -2743,13 +2743,15 @@ function buildPanels() {
       // covers its native card, appended once regardless of this entry.
       if (p.id === 'fleet') return '';
       return panelHtml(p);
-    }).join('') + laundrySlotHtml() + fleetSlotHtml() + printerSlotHtml();
+    // the printer sits ABOVE fleet (owner, 2026-11-15): it's the card the
+    // family reads; fleet is the admin's
+    }).join('') + laundrySlotHtml() + printerSlotHtml() + fleetSlotHtml();
   panelsBuilt = true;
   renderWeather();   // fill the just-built weather slot from cached data (if any)
   renderClimate();   // fill the just-built climate slot from cached data (if any)
   renderLaundry();   // fill the just-built laundry slot from cached data (if any)
-  renderFleet();     // fill the just-built fleet slot from cached data (if any)
-  renderPrinter();   // ...and the printer card under it, from the same data
+  renderPrinter();   // fill the just-built printer slot from cached data (if any)
+  renderFleet();     // ...and the fleet card under it, from the same data
 }
 
 function wirePanels() {
@@ -4075,7 +4077,7 @@ async function fetchFleet() {
 
 /* ---------------------------------------------------- native printer card */
 
-/* The 3D printer gets its own card under Fleet (owner's pick, 2026-11-15):
+/* The 3D printer gets its own card, above Fleet (owner's pick, 2026-11-15):
    a progress ring, when it will be done, layers, the three temperatures,
    and every AMS spool drawn in its real filament color with the one feeding
    the nozzle lit. It reads the same /api/tiles/fleet payload as the fleet
@@ -4330,7 +4332,7 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
     + `</article>`;
 }
 
-/* The printer slot rides the panels column right under Fleet, built
+/* The printer slot rides the panels column right above Fleet, built
    unconditionally like the fleet slot (an outage never freezes it away). */
 function printerSlotHtml() {
   return `<div class="printer-slot" id="printer-slot"></div>`;
