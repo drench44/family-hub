@@ -8058,6 +8058,10 @@ test('printerCardHtml: getting ready shows the stage and the heaters climbing', 
   assert.match(html, /heating to 149°/);
   assert.match(html, /heating to 428°/);
   assert.doesNotMatch(html, /pr-ring-arc/, 'a 0% arc is not drawn (its round cap is a dot)');
+  // getting ready can still carry the LAST job's progress and time left
+  const prep = sandbox.printerCardHtml(prWith({ state: 'PREPARE', stage: 'Leveling the bed' }));
+  assert.match(prep, /pr-ring-none/, 'no ring percent while getting ready');
+  assert.doesNotMatch(prep, /m left|done /, 'no time left while getting ready');
 });
 
 test('printerCardHtml: paused shows time left but no finish clock; failed shows neither', () => {
@@ -8125,6 +8129,9 @@ test('printerCardHtml: a finish after midnight names the day; a stale card drops
   assert.doesNotMatch(stale, /done |m left/,
     'a stale card shows no time: it would not count down, and now + left would slide');
   assert.match(stale, /Layer 187 of 412/, 'the rest of the last-good card stays');
+  assert.doesNotMatch(stale, /is-active|Printing with/, 'no live "feeding" claim on stale data');
+  const staleWarm = sandbox.printerCardHtml(prWith({ state: 'PREPARE', bedF: 92 }), true, now);
+  assert.doesNotMatch(staleWarm, /heating to/, 'no live "heating" claim on stale data');
 });
 
 test('printerCardHtml: an absurd time left is ignored, never a crash or a far-future date', () => {

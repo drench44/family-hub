@@ -1310,18 +1310,36 @@ def test_fleet_printer_color_must_be_exactly_rrggbb():
         assert p["ams"][0]["trays"][0]["color"] is None, repr(bad)
 
 
-def test_fleet_printer_error_code_is_none_only_for_zero_or_nothing():
-    for raw, want in (("0", None), ("00000000", None), (0, None), (None, None),
-                      ("   ", None), (True, None), ("3008001", "03008001"),
-                      ("0500c010", "0500C010"), (50364417, "03008001"),
-                      # an unexpected shape is still an error: shown, never dropped
-                      ("nope", "nope"), ("0300-8001", "0300-8001"),
-                      ("123456789", "123456789"), (2**32, "4294967296"),
-                      (50364417.0, "03008001"), (0.0, None)):
+def test_fleet_printer_error_code_is_none_only_for_zero_or_nothing(caplog):
+    cases = (
+        # no error
+        ("0", None), ("00000000", None), ("000000000", None), ("0x0", None),
+        (0, None), (0.0, None), (None, None), ("   ", None), (True, None),
+        ("none", None), ("N/A", None), ("null", None), ("false", None),
+        # the console's shape, and the same code in other spellings
+        ("03008001", "03008001"), ("3008001", "03008001"), ("0500c010", "0500C010"),
+        ("0300-8001", "03008001"), ("0x03008001", "03008001"),
+        (50364417, "03008001"), (50364417.0, "03008001"),
+        # an unfamiliar non-empty code is still an error: shown, never dropped
+        ("nope", "nope"), ("ERR-12", "ERR-12"),
+        # can't be a Bambu code: logged and left off rather than made up
+        (2**32, None), (1e30, None), (3008001.5, None), ([1], None), ({"a": 1}, None),
+        ("123456789A", "123456789A"),
+    )
+    for raw, want in cases:
         tiles.reset_caches()
         body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], errorCode=raw))
         p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
         assert p["errorCode"] == want, repr(raw)
+
+
+def test_fleet_printer_odd_error_code_is_logged_once_not_every_poll(caplog):
+    tiles._error_warned.clear()
+    with caplog.at_level("WARNING", logger="family_hub.tiles"):
+        for _ in range(3):
+            assert tiles._error_code("weird-code") == "weird-code"
+    hits = [r for r in caplog.records if "unexpected printer error code" in r.message]
+    assert len(hits) == 1
 
 
 def test_fleet_printer_text_fields_are_trimmed_and_capped():
