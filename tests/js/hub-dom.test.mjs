@@ -8067,18 +8067,28 @@ test('printerCardHtml: paused shows time left but no finish clock; failed shows 
   assert.match(paused, /tone-warn/);
   assert.match(paused, /4h 10m left/);
   assert.doesNotMatch(paused, /done /, 'a paused finish time slides every minute');
-  assert.match(paused, /Loaded White PLA Basic/);
+  assert.match(paused, /Paused on White PLA Basic/);
   const failed = sandbox.printerCardHtml(prWith({ state: 'FAILED', errorCode: '03008001' }));
   assert.match(failed, /tone-crit/);
   assert.match(failed, /Error 0300-8001 · check the printer/);
   assert.doesNotMatch(failed, /m left|done |speed/);
 });
 
-test('printerCardHtml: an error code turns even a running print red', () => {
+test('printerCardHtml: an error turns the card red but a paused print keeps its details', () => {
   const { sandbox } = newHub();
   const html = sandbox.printerCardHtml(prWith({ errorCode: '0500C010' }));
   assert.match(html, /class="card printer tone-crit"/);
   assert.match(html, /Error 0500-C010/);
+  const paused = sandbox.printerCardHtml(prWith({ state: 'PAUSE', errorCode: '03008001',
+    stage: 'Paused: nozzle clog' }));
+  assert.match(paused, /tone-crit/);
+  assert.match(paused, /pr-state">Paused</);
+  assert.match(paused, /1h 36m left/, 'time left stays on a print paused by an error');
+  assert.match(paused, /Layer 187 of 412/);
+  assert.match(paused, /pr-spool is-active/, 'the loaded spool stays lit');
+  assert.match(paused, /Paused on White PLA Basic · Standard speed/);
+  // a code in an unexpected shape is shown as sent, never dropped
+  assert.match(sandbox.printerCardHtml(prWith({ errorCode: 'E-12' })), /Error E-12 ·/);
 });
 
 test('printerCardHtml: finished and idle never claim heating, a finish time or a 0%', () => {
@@ -8112,17 +8122,22 @@ test('printerCardHtml: a finish after midnight names the day; a stale card drops
   const html = sandbox.printerCardHtml(prWith({ remainingMinutes: 120 }), false, now);
   assert.match(html, /done Mon 1:30am · 2h 0m left/);
   const stale = sandbox.printerCardHtml(prWith({ remainingMinutes: 120 }), true, now);
-  assert.doesNotMatch(stale, /done /, 'now + left would slide on every failed poll');
-  assert.match(stale, /2h 0m left/);
+  assert.doesNotMatch(stale, /done |m left/,
+    'a stale card shows no time: it would not count down, and now + left would slide');
+  assert.match(stale, /Layer 187 of 412/, 'the rest of the last-good card stays');
 });
 
 test('printerCardHtml: an absurd time left is ignored, never a crash or a far-future date', () => {
   const { sandbox } = newHub();
-  for (const mins of [2e11, 1e300, 14 * 24 * 60 + 1]) {
-    let html;
-    assert.doesNotThrow(() => { html = sandbox.printerCardHtml(prWith({ remainingMinutes: mins })); });
-    assert.doesNotMatch(html, /done |m left/, String(mins));
+  for (const state of ['RUNNING', 'PAUSE']) {
+    for (const mins of [2e11, 1e300, 14 * 24 * 60 + 1]) {
+      let html;
+      assert.doesNotThrow(() => { html = sandbox.printerCardHtml(prWith({ state, remainingMinutes: mins })); });
+      assert.doesNotMatch(html, /done |m left|d left/, `${state} ${mins}`);
+    }
   }
+  // the two-week edge itself still shows
+  assert.match(sandbox.printerCardHtml(prWith({ remainingMinutes: 14 * 24 * 60 })), /336h 0m left/);
 });
 
 test('printerCardHtml: unknown, non-string and prototype-named states read as words, never undefined', () => {
@@ -8134,7 +8149,10 @@ test('printerCardHtml: unknown, non-string and prototype-named states read as wo
     const html = sandbox.printerCardHtml(prWith({ state }));
     assert.doesNotMatch(html, /undefined/, state);
   }
-  assert.match(sandbox.printerCardHtml(prWith({ state: 5 })), /pr-state">Unknown</);
+  const five = sandbox.printerCardHtml(prWith({ state: 5 }));
+  assert.match(five, /pr-state">Unknown</);
+  assert.match(five, /pr-ring-none/, 'an unknown state shows no progress');
+  assert.match(sandbox.printerCardHtml(prWith({ state: '__proto__' })), /pr-state">Proto</);
   assert.match(sandbox.printerCardHtml(prWith({ state: ' Running ' })), /pr-state">Printing</);
 });
 
@@ -8142,8 +8160,8 @@ test('printerCardHtml: the loaded spool glows only while a print is under way', 
   const { sandbox } = newHub();
   assert.match(sandbox.printerCardHtml(PRINTER_LIVE), /pr-spool is-active/);
   assert.match(sandbox.printerCardHtml(prWith({ state: 'PAUSE' })), /pr-spool is-active/);
-  for (const state of ['FINISH', 'IDLE', 'FAILED']) {
-    assert.doesNotMatch(sandbox.printerCardHtml(prWith({ state })), /is-active/, state);
+  for (const state of ['FINISH', 'IDLE', 'FAILED', 'PREPARE']) {
+    assert.doesNotMatch(sandbox.printerCardHtml(prWith({ state })), /is-active|Printing with|Loaded/, state);
   }
 });
 
