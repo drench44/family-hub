@@ -1316,6 +1316,7 @@ def test_fleet_printer_error_code_is_none_only_for_zero_or_nothing(caplog):
         ("0", None), ("00000000", None), ("000000000", None), ("0x0", None),
         (0, None), (0.0, None), (None, None), ("   ", None), (True, None),
         ("none", None), ("N/A", None), ("null", None), ("false", None),
+        ("no error", None), ("No", None), ("--", None),
         # the console's shape, and the same code in other spellings
         ("03008001", "03008001"), ("3008001", "03008001"), ("0500c010", "0500C010"),
         ("0300-8001", "03008001"), ("0x03008001", "03008001"),
@@ -1325,12 +1326,24 @@ def test_fleet_printer_error_code_is_none_only_for_zero_or_nothing(caplog):
         # can't be a Bambu code: logged and left off rather than made up
         (2**32, None), (1e30, None), (3008001.5, None), ([1], None), ({"a": 1}, None),
         ("123456789A", "123456789A"),
+        # a stray sign or space is not a code: shown as sent, never reshaped
+        ("-1", "-1"), ("1-2", "1-2"), ("12 34", "12 34"), ("0x", "0x"),
     )
     for raw, want in cases:
         tiles.reset_caches()
         body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], errorCode=raw))
         p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
         assert p["errorCode"] == want, repr(raw)
+
+
+def test_fleet_printer_impossible_error_code_is_logged_not_silent(caplog):
+    tiles._error_warned.clear()
+    with caplog.at_level("WARNING", logger="family_hub.tiles"):
+        for raw in (2**32, 3008001.5, [1]):
+            assert tiles._error_code(raw) is None
+    logged = " ".join(r.message for r in caplog.records)
+    for raw in ("4294967296", "3008001.5", "[1]"):
+        assert raw in logged, raw
 
 
 def test_fleet_printer_odd_error_code_is_logged_once_not_every_poll(caplog):
