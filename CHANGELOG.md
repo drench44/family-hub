@@ -22,6 +22,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 - A print that pauses on an error turns the card red but keeps its time
   left, layer count and loaded spool, and any error code the printer sends
   is shown (an unfamiliar one as sent), never dropped.
+- "No error" from the printer, in any spelling, never shows as an error.
 - While the printer is getting ready, or when the card is showing stale
   data, it makes no live claims: no progress ring, time left, "heating to"
   or lit spool from numbers that may belong to the last job.

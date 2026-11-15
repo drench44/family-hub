@@ -473,7 +473,12 @@ def _short_text(value, limit: int = 24):
 
 
 # "no error" as some upstreams spell it; anything else non-empty is a code
-_NO_ERROR_WORDS = {"none", "null", "n/a", "na", "false", "ok", "-"}
+_NO_ERROR_WORDS = {"none", "null", "n/a", "na", "false", "ok", "-", "--", "no",
+                   "no error", "no_error", "normal"}
+# a Bambu code: up to 8 hex digits, optionally 0x-prefixed or in the
+# 4-4 dashed form the wall itself prints ("0300-8001"); nothing looser, so a
+# stray sign or space never turns into a made-up code
+_HEX_CODE = re.compile(r"(?:0[xX])?([0-9A-Fa-f]{1,8}|[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})")
 _error_warned: set = set()
 
 
@@ -515,15 +520,13 @@ def _error_code(value):
         _warn_error_code_once(value)
         return None
     text = value.strip()
-    if not text or text.lower() in _NO_ERROR_WORDS:
+    # zero in any length or spelling is no error
+    if not text or text.lower() in _NO_ERROR_WORDS or re.fullmatch(r"(?:0[xX])?0+", text):
         return None
-    digits = re.sub(r"^0[xX]|[-\s]", "", text)
-    if re.fullmatch(r"[0-9A-Fa-f]+", digits):
-        n = int(digits, 16)
-        if n == 0:
-            return None
-        if n < 2**32:
-            return f"{n:08X}"
+    m = _HEX_CODE.fullmatch(text)
+    if m:
+        n = int(m.group(1).replace("-", ""), 16)
+        return None if n == 0 else f"{n:08X}"
     _warn_error_code_once(text)
     return text[:16]
 
