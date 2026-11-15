@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.13.5] — 2026-11-14
+
 ### Fixed
 - On a phone, a long 3D print file name no longer makes the page wider than
   the screen. The Weather tab cut off the right side of every card (climate,
