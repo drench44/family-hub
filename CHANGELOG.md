@@ -19,6 +19,9 @@ rolls that section to a dated version via `python scripts/release.py`.
   in Settings. The Fleet card now shows just the servers and the internet.
 - The printer card works with an older fleet console too: it then shows the
   state, job, progress and temperatures, and leaves out what isn't sent.
+- A print that pauses on an error turns the card red but keeps its time
+  left, layer count and loaded spool, and any error code the printer sends
+  is shown (an unfamiliar one as sent), never dropped.
 
 ## [1.13.5] — 2026-11-14
 

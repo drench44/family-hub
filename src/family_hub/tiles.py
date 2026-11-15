@@ -473,15 +473,32 @@ def _short_text(value, limit: int = 24):
 
 
 def _error_code(value):
-    """The printer's error code as 8 hex digits, or None for none/unknown.
-    The console sends a hex string; an all-zero one, or 0, is "no error" and
-    must never turn the card red."""
-    if isinstance(value, int) and not isinstance(value, bool):
-        return f"{value:08X}" if 0 < value < 2**32 else None
-    text = _short_text(value)
-    if text is None or not re.fullmatch(r"[0-9A-Fa-f]{1,8}", text) or int(text, 16) == 0:
+    """The printer's error code for the card, or None for "no error".
+
+    The fleet console sends Bambu's print_error as 8 hex digits (its
+    printer-words.ts), and an int is the same number before formatting. Only
+    zero or nothing means no error: a non-empty code in a shape this proxy
+    doesn't expect is still an error, so it is passed on as (trimmed) text
+    and logged rather than dropped, which would show a failing printer as
+    fine."""
+    if isinstance(value, bool) or value is None:
         return None
-    return text.upper().rjust(8, "0")
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)   # 3008001.0 is the same code, not "no error"
+    if isinstance(value, int):
+        if value == 0:
+            return None
+        if 0 < value < 2**32:
+            return f"{value:08X}"
+        log.warning("fleet tile: printer error code out of range: %r", value)
+        return str(value)[:16]
+    text = _short_text(value, 16)
+    if text is None:
+        return None
+    if re.fullmatch(r"[0-9A-Fa-f]{1,8}", text):
+        return None if int(text, 16) == 0 else text.upper().rjust(8, "0")
+    log.warning("fleet tile: unexpected printer error code shape: %r", text)
+    return text
 
 
 def _finite(value):
