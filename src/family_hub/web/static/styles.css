@@ -2470,8 +2470,12 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) .wrap {
     flex: 1; min-height: 0;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
-    width: auto; max-width: 640px; padding: 0 14px 16px;
+    width: 100%; max-width: 640px; padding: 0 14px 16px;
   }
+  /* width:100%, not auto: the base rule's margin:0 auto switches off flex
+     stretch here, so an auto width shrink-wrapped the content up to 640px and
+     one long unbreakable line (a 3D print file name) pushed every card off the
+     right edge. Guard: test_mobile_wrap_fills_the_phone_width_not_its_content. */
   /* An open overlay covers the viewport; also stop the content region behind it
      from touch-scrolling (iOS can bleed scroll through the fixed overlay). */
   :root:not([data-layout="desktop"]) body.overlay-open .wrap { overflow: hidden; }
