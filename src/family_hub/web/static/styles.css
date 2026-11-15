@@ -944,7 +944,7 @@ body {
 .ln-sub { margin-top: 1px; font-size: 13.5px; min-height: 17px;
   color: color-mix(in srgb, var(--ink) 30%, var(--dim)); }
 
-/* ------- native fleet card (system health + 3D printer status) ------- */
+/* ------- native fleet card (system health; the printer has its own) ------- */
 /* Rides the panels column directly under the laundry slot (buildPanels
    appends it last). No motion here by design — the progress bar is a plain
    width update, never an animation loop, so there's nothing for
@@ -997,27 +997,87 @@ body {
 /* a stale last-good card is visibly dimmed (this is a health monitor — a
    riding-out-a-failure card must never look as pristine as a live one) */
 .fleet.is-stale { opacity: .62; }
-.fleet-printer { border-top: 1px solid var(--edge-soft); padding-top: 9px;
-  display: flex; flex-direction: column; gap: 6px; }
-.fleet-printer.st-crit .fleet-pr-state { color: var(--crit); }
-.fleet-printer.st-warn .fleet-pr-state { color: var(--warn); }
-.fleet-printer.st-unknown .fleet-pr-state { color: var(--faint); }
-.fleet-printer-offline { border-top: 1px solid var(--edge-soft); padding-top: 9px;
-  color: var(--faint); font-size: 13px; font-style: italic; }
-.fleet-pr-head { display: flex; align-items: baseline; justify-content: space-between;
-  gap: 8px; }
-.fleet-pr-state { font-size: 15px; font-weight: 650; color: var(--ink);
-  text-transform: capitalize; }
-.fleet-remain { font-size: 12px; color: var(--dim); white-space: nowrap; }
-.fleet-job { font-size: 12.5px; color: var(--dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-bar { height: 6px; border-radius: 999px; background: var(--edge-soft);
-  overflow: hidden; }
-.fleet-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
-.fleet-printer.st-warn .fleet-bar-fill { background: var(--warn); }
-.fleet-printer.st-crit .fleet-bar-fill { background: var(--crit); }
-.fleet-pct { font-size: 11.5px; color: var(--dim); }
-.fleet-temps { font-size: 12px; color: var(--dim); }
+/* ------- native printer card (its own card under fleet, 2026-11-15) ------- */
+/* No motion by design: the ring and the spool rings are plain dash values,
+   so there is nothing for prefers-reduced-motion to guard and nothing for
+   the wall's Firefox to keep repainting. Every color is a theme token
+   except the spool fills, which are the real filament colors. */
+.printer-slot { display: flex; flex-direction: column; gap: 8px; }
+.printer-slot:empty { display: none; }
+.printer { padding: 14px; display: flex; flex-direction: column; gap: 11px; }
+.printer.is-stale { opacity: .62; }
+.pr-hero { display: flex; align-items: center; gap: 14px; }
+.pr-ring { position: relative; width: 84px; height: 84px; flex: none; }
+.pr-ring svg { display: block; }
+.pr-ring-track { fill: none; stroke: var(--edge-soft); stroke-width: 8; }
+.pr-ring-arc { fill: none; stroke: var(--accent); stroke-width: 8; stroke-linecap: round; }
+.pr-ring.tone-warn .pr-ring-arc { stroke: var(--warn); }
+.pr-ring.tone-crit .pr-ring-arc { stroke: var(--crit); }
+.pr-ring.tone-good .pr-ring-arc { stroke: var(--good); }
+.pr-ring.tone-idle .pr-ring-arc { stroke: var(--faint); }
+.pr-ring-pct { position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 23px; font-weight: 700; color: var(--ink); letter-spacing: -.02em; }
+.pr-ring-pct small { font-size: 12px; font-weight: 600; color: var(--dim); margin-left: 1px; }
+.pr-ring-none { color: var(--faint); font-weight: 500; }
+.pr-hero-txt { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pr-state { font-size: 19px; font-weight: 650; color: var(--ink);
+  display: flex; align-items: center; gap: 8px; }
+.printer.tone-warn .pr-state { color: var(--warn); }
+.printer.tone-crit .pr-state { color: var(--crit); }
+.printer.tone-good .pr-state { color: var(--good); }
+.printer.tone-idle .pr-state { color: var(--dim); }
+.pr-state .fleet-stale { margin-left: 0; }
+.pr-line { font-size: 13px; color: var(--dim); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+/* what the printer is busy with right now (changing filament, leveling...) */
+.pr-stage { align-self: flex-start; font-size: 12px; font-weight: 650;
+  color: var(--accent); background: var(--accent-soft);
+  border-radius: 999px; padding: 3px 10px; }
+.pr-error { font-size: 13px; font-weight: 650; color: var(--crit); }
+/* slicer file names are long and often one unbroken word: two lines, wrap
+   anywhere, never widen the column (the #120 phone lesson) */
+.pr-job { font-size: 13px; line-height: 1.35; color: var(--ink); min-width: 0;
+  overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.pr-job span { color: var(--faint); }
+.pr-temps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.pr-temp { background: var(--surface-2); border-radius: 10px; padding: 7px 9px;
+  display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pr-temp-k { font-size: 10px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--faint); }
+.pr-temp-v { font-size: 17px; font-weight: 650; color: var(--ink); white-space: nowrap; }
+.pr-temp-v small { font-size: 11px; font-weight: 600; color: var(--dim); margin-left: 1px; }
+.pr-temp-sub { font-size: 10.5px; color: var(--warn); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+/* AMS: one row per unit, spools seen from above in their filament colors */
+.pr-ams { display: flex; flex-direction: column; gap: 8px;
+  border-top: 1px solid var(--edge-soft); padding-top: 10px; }
+.pr-ams-row { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto;
+  align-items: center; gap: 8px; }
+.pr-ams-k { font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--faint); white-space: nowrap; }
+.pr-ams-rh { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.pr-spools { display: flex; gap: 6px; min-width: 0; }
+.pr-spool { width: 40px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding-top: 3px; }
+.pr-spool svg { display: block; width: 34px; height: 34px; border-radius: 50%; }
+/* a firm edge so a black spool on a dark theme (and white on light) stays a spool */
+.pr-spool-body { fill: var(--surface-2); stroke: color-mix(in srgb, var(--ink) 42%, transparent);
+  stroke-width: 1.25; }
+.pr-spool-hub { fill: var(--surface); stroke: color-mix(in srgb, var(--ink) 20%, transparent);
+  stroke-width: 1; }
+.pr-spool-left { fill: none; stroke: var(--dim); stroke-width: 2; stroke-linecap: round; }
+.pr-spool-empty { fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.pr-spool-k { font-size: 10px; font-weight: 650; color: var(--dim); white-space: nowrap; }
+.pr-spool-k b { font-weight: 600; color: var(--faint); }
+.pr-spool.is-empty .pr-spool-k { color: var(--faint); font-weight: 500; }
+/* a loaded spool whose color didn't come through: neutral fill, never a guess */
+.pr-spool.no-color .pr-spool-body { fill: var(--surface-2); }
+/* the spool feeding the nozzle: a lit ring, static (no pulse loop) */
+.pr-spool.is-active svg { outline: 2px solid var(--accent); outline-offset: 2px;
+  box-shadow: 0 0 14px 3px var(--accent-soft); }
+.pr-spool.is-active .pr-spool-k { color: var(--accent); }
+.pr-foot { font-size: 12.5px; color: var(--dim); }
 
 
 /* ========================== calendar ========================= */
@@ -2341,6 +2401,7 @@ body.integ-off-weather #weather-slot { display: none; }
 body.integ-off-climate #climate-slot { display: none; }
 body.integ-off-laundry #laundry-slot { display: none; }
 body.integ-off-fleet #fleet-slot { display: none; }
+body.integ-off-printer #printer-slot { display: none; }
 body.integ-off-cameras .tile-camera,
 body.integ-off-cameras #camgrid { display: none; }
 body.integ-off-chores .people-col { display: none; }

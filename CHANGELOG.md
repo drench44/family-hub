@@ -10,6 +10,18 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+- The 3D printer has its own card under Fleet: a progress ring, when the
+  print will be done, the layer count, nozzle, bed and chamber temperatures,
+  what the printer is busy with (changing filament, heating the bed ...),
+  any error code, the speed mode, and every AMS spool drawn in its real
+  filament color with the one feeding the nozzle lit. It has its own switch
+  in Settings. The Fleet card now shows just the servers and the internet.
+
+### Fixed
+- The printer's nozzle temperature now comes from the nozzle that is
+  printing (the fleet console reads both nozzles of a two-nozzle printer).
+
 ## [1.13.5] — 2026-11-14
 
 ### Fixed

@@ -168,6 +168,11 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       themes, and diff them.
 - [ ] **Phone with the widest real content**: 390px and 360px, and the
       clock at "12:59:59pm". A one-digit hour hid an 8px sideways overflow.
+- [ ] **Colors that come from data (filament spools, user-picked colors)
+      need a theme-token edge.** A black spool vanished on the dark themes
+      and a white one on light until its circle got a firm `--ink` stroke
+      (printer card, 2026-11-15). Check the darkest and lightest real value
+      on every theme. Guard: `test_printer_card_static_guards`.
 - [ ] **Reduced motion and night are states too.** Look at them. Anything
       that animates over the UI must not rest over text when stilled.
       A paused animation is only paused where you named it: check pseudo-

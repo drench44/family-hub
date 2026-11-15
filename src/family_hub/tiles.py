@@ -457,13 +457,86 @@ async def weather_tile(client, cfg) -> dict:
     return result
 
 
+# Printer AMS shape limits: an H2D takes up to four AMS units plus AMS HTs;
+# anything past these is a bad upstream, not a bigger printer.
+AMS_MAX_UNITS = 8
+AMS_MAX_TRAYS = 4
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _short_text(value, limit: int = 24):
+    """A display string from the rollup, or None. Non-strings (a flaky
+    upstream's number or dict) are dropped, never str()-ed into the card."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:limit]
+
+
+def _finite(value):
+    """A real number (not bool, not NaN/inf) or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if value == value and abs(value) != float("inf") else None
+
+
+def _printer_ams(raw) -> list:
+    """The rollup's AMS list trimmed to the card's needs: unit id, humidity,
+    and per slot {slot, loaded, type, color, name, remainPercent, active}.
+    Every field is checked here, not passed through, because `color` lands
+    in an inline style: only a literal ``#RRGGBB`` survives. A malformed
+    unit or slot is dropped on its own; a non-list is an empty AMS, never a
+    reason to mark the tile unavailable."""
+    if not isinstance(raw, list):
+        return []
+    units = []
+    for unit in raw[:AMS_MAX_UNITS]:
+        if not isinstance(unit, dict) or not isinstance(unit.get("trays"), list):
+            continue
+        uid = _finite(unit.get("id"))
+        if uid is None or uid != int(uid) or uid < 0:
+            continue
+        humidity = _finite(unit.get("humidityPercent"))
+        trays = []
+        for tray in unit["trays"][:AMS_MAX_TRAYS]:
+            if not isinstance(tray, dict):
+                continue
+            slot = _finite(tray.get("slot"))
+            if slot is None or slot != int(slot) or slot < 0:
+                continue
+            loaded = tray.get("loaded") is True
+            color = tray.get("color")
+            remain = _finite(tray.get("remainPercent"))
+            trays.append({
+                "slot": int(slot),
+                "loaded": loaded,
+                "type": _short_text(tray.get("type"), 12) if loaded else None,
+                "color": color if loaded and isinstance(color, str)
+                and _HEX_COLOR.match(color) else None,
+                "name": _short_text(tray.get("name")) if loaded else None,
+                "remainPercent": remain if loaded and remain is not None
+                and 0 <= remain <= 100 else None,
+                "active": loaded and tray.get("active") is True,
+            })
+        units.append({
+            "id": int(uid),
+            "humidityPercent": humidity if humidity is not None
+            and 0 <= humidity <= 100 else None,
+            "trays": trays,
+        })
+    return units
+
+
 async def fleet_tile(client, cfg) -> dict:
     """Proxy the separate fleet console app's compact rollup into a
     trimmed, fail-soft tile: ``{available, label?, fleet: {health, hostsUp,
     hostsTotal, worstProblem, alerts, cpuPercent, memPercent,
     storageUsedBytes, storageTotalBytes, hottestTempF}, internet: {up,
     downMbps, upMbps}, printer: {health, state, job, progressPercent,
-    remainingMinutes, nozzleF, bedF, online}}``. ``label`` is only present
+    remainingMinutes, nozzleF, bedF, online, nozzleTargetF, bedTargetF,
+    chamberF, layerCurrent, layerTotal, speed, stage, errorCode, ams}}``.
+    The printer's text fields and its ``ams`` list are the exception to
+    "passed through as-is": they are checked and trimmed (``_short_text``,
+    ``_printer_ams``) because a color lands in an inline style. ``label`` is only present
     when ``fleet.label`` is set in config - it rides straight through to the
     card header (``renderFleet``/``fleetCardHtml`` fall back to "Fleet" when
     it's absent).
@@ -550,6 +623,15 @@ async def fleet_tile(client, cfg) -> dict:
             "nozzleF": raw_printer.get("nozzleF"),
             "bedF": raw_printer.get("bedF"),
             "online": raw_printer.get("online"),
+            "nozzleTargetF": raw_printer.get("nozzleTargetF"),
+            "bedTargetF": raw_printer.get("bedTargetF"),
+            "chamberF": raw_printer.get("chamberF"),
+            "layerCurrent": raw_printer.get("layerCurrent"),
+            "layerTotal": raw_printer.get("layerTotal"),
+            "speed": _short_text(raw_printer.get("speed")),
+            "stage": _short_text(raw_printer.get("stage"), 48),
+            "errorCode": _short_text(raw_printer.get("errorCode")),
+            "ams": _printer_ams(raw_printer.get("ams")),
         },
     }
     if fleet_cfg.get("label"):

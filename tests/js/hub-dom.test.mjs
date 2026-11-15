@@ -7607,7 +7607,8 @@ test('fetchLaundry: an unchanged payload does not repaint (tumble never restarts
 });
 
 // ---------------------------------------------------------------------------
-// Fleet card: system health + 3D printer status (gauntlet Task 4). Rides the
+// Fleet card: system health (gauntlet Task 4; the printer moved to its own
+// card below it on 2026-11-15, see the printer tests further down). Rides the
 // panels column under the laundry slot; no tab of its own — it shares the
 // Weather tab (customPanelExists()-style rescue) since fleet has nowhere
 // else to live on a phone.
@@ -7633,18 +7634,12 @@ function renderFleetHtml(payload) {
   return { slot, html: slot.innerHTML, document, sandbox };
 }
 
-test('fleetCardHtml: RUNNING printer — bar width matches percent, remaining line renders', () => {
+test('fleetCardHtml: healthy fleet: vitals and internet, and no printer readout (it has its own card)', () => {
   const { sandbox } = newHub();
   const html = sandbox.fleetCardHtml(FLEET_HEALTHY);
   assert.match(html, /3 of 3 hosts up/);
   assert.doesNotMatch(html, /fleet-problem/, 'no problem line on a healthy fleet');
-  assert.match(html, /class="fleet-bar-fill" style="width:42%"/);
-  assert.match(html, /42%/);
-  assert.match(html, /~1h 36m left/);
-  assert.match(html, /410°F nozzle/);
-  assert.match(html, /140°F bed/);
-  assert.match(html, />printing</);
-  assert.match(html, /Bracket_v3\.gcode/);
+  assert.doesNotMatch(html, /printing|Bracket_v3|nozzle|42%/i, 'the printer lives on its own card now');
   // the enriched vitals grid + internet line
   assert.match(html, /fleet-vitals/);
   assert.match(html, /CPU<\/span><span class="fleet-vit-v num">17%/);
@@ -7746,33 +7741,7 @@ test('fleetBytesStr/fleetPctStr: unit thresholds and n/a for non-finite', () => 
   assert.equal(sandbox.fleetPctStr('nope'), 'n/a');
 });
 
-test('fleetCardHtml: idle printer never fabricates a 0% bar or a 0° temp', () => {
-  const { sandbox } = newHub();
-  const html = sandbox.fleetCardHtml({
-    available: true,
-    fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null },
-    printer: { health: 'ok', state: 'idle', job: null, progressPercent: null,
-      remainingMinutes: null, nozzleF: null, bedF: null, online: true },
-  });
-  assert.match(html, />idle</);
-  assert.doesNotMatch(html, /fleet-bar"/);
-  assert.doesNotMatch(html, /0%/);
-  assert.doesNotMatch(html, /fleet-temps/);
-  assert.doesNotMatch(html, /fleet-job/);
-});
 
-test('fleetCardHtml: offline printer (online:false) renders a muted note, never a zeroed reading', () => {
-  const { sandbox } = newHub();
-  const html = sandbox.fleetCardHtml({
-    available: true,
-    fleet: { health: 'ok', hostsUp: 3, hostsTotal: 3, worstProblem: null },
-    printer: { health: 'down', state: 'offline', job: null, progressPercent: null,
-      remainingMinutes: null, nozzleF: null, bedF: null, online: false },
-  });
-  assert.match(html, /fleet-printer-offline">Printer unavailable/);
-  assert.doesNotMatch(html, /fleet-bar"/);
-  assert.doesNotMatch(html, /0°F/);
-});
 
 test('fleetCardHtml: unhealthy fleet shows the worst problem, escaped', () => {
   const { sandbox } = newHub();
@@ -7855,17 +7824,17 @@ test('fetchFleet: keeps the last good card through a transient failure, gives up
   document.body.appendChild(slot);
   sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => FLEET_HEALTHY });
   await sandbox.fetchFleet();
-  assert.match(slot.innerHTML, /printing/, 'good card first');
+  assert.match(slot.innerHTML, /3 of 3 hosts up/, 'good card first');
   sandbox.fetch = async () => { throw new Error('down'); };
   await sandbox.fetchFleet();   // fail 1
-  assert.match(slot.innerHTML, /printing/, 'last-good retained after 1 fail');
+  assert.match(slot.innerHTML, /3 of 3 hosts up/, 'last-good retained after 1 fail');
   await sandbox.fetchFleet();   // fail 2
-  assert.match(slot.innerHTML, /printing/, 'last-good retained after 2 fails');
+  assert.match(slot.innerHTML, /3 of 3 hosts up/, 'last-good retained after 2 fails');
   await sandbox.fetchFleet();   // fail 3 -> gives up
   assert.match(slot.innerHTML, /Fleet unavailable/, 'gives up after the failure limit');
   sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => FLEET_HEALTHY });
   await sandbox.fetchFleet();
-  assert.match(slot.innerHTML, /printing/, 'recovers on the next good poll');
+  assert.match(slot.innerHTML, /3 of 3 hosts up/, 'recovers on the next good poll');
 });
 
 test('toggle off hides #fleet-slot via the registry CSS hook and reflows the wall/tab', () => {
@@ -7950,32 +7919,7 @@ test('fleetRemainStr: under 60 minutes omits the hour part ("~Xm left")', () => 
   assert.equal(sandbox.fleetRemainStr(59), '~59m left');
 });
 
-test('fleetPrinterHtml: missing `online` (undefined, not false) is treated as unknown, never shown online', () => {
-  const { sandbox } = newHub();
-  const html = sandbox.fleetPrinterHtml({
-    health: 'ok', state: 'printing', job: 'x.gcode', progressPercent: 50,
-    remainingMinutes: 10, nozzleF: 400, bedF: 130,
-    // online deliberately omitted
-  });
-  assert.match(html, /fleet-printer-offline">Printer unavailable/);
-  assert.doesNotMatch(html, /printing/);
-});
 
-test('fleetPrinterHtml: an out-of-range progressPercent is unknown, not clamped to 0/100', () => {
-  const { sandbox } = newHub();
-  const low = sandbox.fleetPrinterHtml({
-    health: 'ok', state: 'printing', job: null, progressPercent: -5,
-    remainingMinutes: null, nozzleF: null, bedF: null, online: true,
-  });
-  assert.doesNotMatch(low, /fleet-bar"/);
-  assert.doesNotMatch(low, /0%/);
-  const high = sandbox.fleetPrinterHtml({
-    health: 'ok', state: 'printing', job: null, progressPercent: 5000,
-    remainingMinutes: null, nozzleF: null, bedF: null, online: true,
-  });
-  assert.doesNotMatch(high, /fleet-bar"/);
-  assert.doesNotMatch(high, /100%/);
-});
 
 test('renderFleet: a custom fleet.label rides the card header, falling back to "Fleet"', () => {
   const { document, sandbox } = newHub();
@@ -8000,7 +7944,7 @@ test('fetchFleet: a stale last-good card is visibly marked from the FIRST failur
   assert.doesNotMatch(slot.innerHTML, /is-stale|fleet-stale/, 'a fresh good card is never marked stale');
   sandbox.fetch = async () => { throw new Error('down'); };
   await sandbox.fetchFleet();   // fail 1 — still last-good, but now stale
-  assert.match(slot.innerHTML, /printing/, 'still showing the last-good card');
+  assert.match(slot.innerHTML, /3 of 3 hosts up/, 'still showing the last-good card');
   assert.match(slot.innerHTML, /class="card fleet is-stale"/, 'stale affordance from the first failure');
   assert.match(slot.innerHTML, /fleet-stale">stale</, 'a visible stale badge, not just a class');
   sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => FLEET_HEALTHY });
@@ -8008,7 +7952,7 @@ test('fetchFleet: a stale last-good card is visibly marked from the FIRST failur
   assert.doesNotMatch(slot.innerHTML, /is-stale|fleet-stale/, 'stale affordance clears on the next good poll');
 });
 
-test('fleetCardHtml/fleetPrinterHtml: a wrong-typed/partial proxy payload renders "status unknown" and never throws', () => {
+test('fleetCardHtml/printerCardHtml: a wrong-typed/partial proxy payload renders "status unknown" and never throws', () => {
   const { sandbox } = newHub();
   // Exactly the shapes the fail-soft proxy can legitimately hand back on a
   // flaky upstream: numeric state, non-numeric progress, missing hostsUp/health.
@@ -8022,19 +7966,201 @@ test('fleetCardHtml/fleetPrinterHtml: a wrong-typed/partial proxy payload render
     });
     assert.match(html, /status unknown/);
     assert.match(html, /class="fleet-dot st-unknown"/);
-    assert.doesNotMatch(html, /fleet-bar"/);
+    const pr = sandbox.printerCardHtml({
+      available: true,
+      printer: { health: 'ok', state: 12345, job: 99, progressPercent: 'not-a-number',
+        remainingMinutes: 'x', nozzleF: 'hot', bedF: null, online: true,
+        layerCurrent: 'a', layerTotal: 0, speed: 3, stage: {}, ams: 'nope' },
+    });
+    assert.match(pr, /pr-ring-none/, 'a non-number progress is no ring, not 0%');
+    assert.doesNotMatch(pr, /pr-temp"|pr-ams"|Layer|done /);
   });
 });
 
-test('fleetPrinterHtml: job and state are HTML-escaped, not just worstProblem', () => {
+
+// ---------------------------------------------------------------------------
+// Printer card (2026-11-15): its own card under Fleet, fed by the same
+// /api/tiles/fleet payload. Progress ring, finish time, layers, temps, the AMS
+// spools in their real filament colors, stage / error / speed lines.
+// ---------------------------------------------------------------------------
+
+const PR_TRAY = (slot, type, color, extra = {}) => ({ slot, loaded: true, type, color,
+  name: null, remainPercent: null, active: false, ...extra });
+const PRINTER_LIVE = {
+  available: true,
+  fleet: FLEET_HEALTHY.fleet,
+  printer: { health: 'ok', state: 'RUNNING', online: true,
+    job: 'holiday-ornaments_4_colors.gcode.3mf', progressPercent: 45,
+    remainingMinutes: 96, nozzleF: 428, bedF: 149, chamberF: 88,
+    nozzleTargetF: 428, bedTargetF: 149, layerCurrent: 187, layerTotal: 412,
+    speed: 'Standard', stage: null, errorCode: null,
+    ams: [
+      { id: 0, humidityPercent: 21, trays: [
+        PR_TRAY(0, 'PLA', '#1F8A5B'),
+        PR_TRAY(1, 'PLA', '#F4F1EA', { name: 'PLA Basic', remainPercent: 62, active: true }),
+        { slot: 2, loaded: false, type: null, color: null, name: null, remainPercent: null, active: false },
+        PR_TRAY(3, 'PETG', '#2C6BD1', { remainPercent: 88 }),
+      ] },
+      { id: 128, humidityPercent: 12, trays: [PR_TRAY(0, 'PA', '#1B1B1F')] },
+    ] },
+};
+const prWith = (over) => ({ ...PRINTER_LIVE, printer: { ...PRINTER_LIVE.printer, ...over } });
+
+test('printerCardHtml: printing: ring at the percent, finish time, layers, temps', () => {
   const { sandbox } = newHub();
-  const html = sandbox.fleetPrinterHtml({
-    health: 'ok', state: '<img src=x onerror=alert(1)>', job: '<script>alert(2)</script>.gcode',
-    progressPercent: null, remainingMinutes: null, nozzleF: null, bedF: null, online: true,
-  });
-  assert.doesNotMatch(html, /<script>/);
-  assert.doesNotMatch(html, /<img/);
-  assert.match(html, /&lt;script&gt;/);
+  const now = new Date(2026, 10, 15, 14, 0).getTime();
+  const html = sandbox.printerCardHtml(PRINTER_LIVE, false, now);
+  assert.match(html, /class="card printer tone-run"/);
+  assert.match(html, /<div class="pr-state">Printing</);
+  const dash = (2 * Math.PI * 34 * 0.45).toFixed(2);
+  assert.match(html, new RegExp(`stroke-dasharray="${dash} `), 'arc length is 45% of the ring');
+  assert.match(html, />45<small>%<\/small>/);
+  assert.match(html, /done 3:36pm · 1h 36m left/);
+  assert.match(html, /Layer 187 of 412/);
+  assert.match(html, /holiday ornaments 4 colors</, 'file name reads as words');
+  assert.match(html, /Nozzle<\/span><span class="pr-temp-v num">428°<small>F/);
+  assert.match(html, /Chamber<\/span><span class="pr-temp-v num">88°/);
+  assert.doesNotMatch(html, /heating to/, 'at target: no heating line');
+  assert.match(html, /Printing with White PLA Basic · Standard speed/);
+});
+
+test('printerCardHtml: AMS spools in their colors, the feeding one lit, empty slots dashed', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.printerCardHtml(PRINTER_LIVE);
+  assert.match(html, /AMS 1<\/span>/);
+  assert.match(html, /AMS HT<\/span>/, 'an id of 128+ is an AMS HT, not "AMS 2"');
+  assert.match(html, /21% RH/);
+  assert.match(html, /style="fill:#1F8A5B"/);
+  assert.equal((html.match(/pr-spool is-active/g) || []).length, 1);
+  assert.match(html, /pr-spool is-empty/);
+  assert.match(html, /PLA <b class="num">62%<\/b>/, 'a tagged spool shows what is left');
+  const left = (2 * Math.PI * 18.5 * 0.88).toFixed(2);
+  assert.match(html, new RegExp(`pr-spool-left"[^>]*stroke-dasharray="${left} `));
+});
+
+test('printerCardHtml: a spool color is only ever a #RRGGBB in the style attribute', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.printerCardHtml(prWith({ ams: [{ id: 0, humidityPercent: null, trays: [
+    PR_TRAY(0, 'PLA', 'red;background:url(x)'), PR_TRAY(1, '<b>x</b>', '#12345'),
+  ] }] }));
+  assert.doesNotMatch(html, /style="fill:/, 'no unchecked color reaches the style');
+  assert.match(html, /pr-spool no-color/);
+  assert.doesNotMatch(html, /<b>x<\/b>/, 'type is escaped');
+  assert.doesNotMatch(html, /RH/, 'unknown humidity is left out');
+});
+
+test('printerCardHtml: getting ready shows the stage and the heaters climbing', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.printerCardHtml(prWith({ state: 'PREPARE', progressPercent: 0,
+    stage: 'Heating the bed', bedF: 92, nozzleF: 300 }));
+  assert.match(html, /Getting ready/);
+  assert.match(html, /<div class="pr-stage">Heating the bed</);
+  assert.match(html, /heating to 149°/);
+  assert.match(html, /heating to 428°/);
+  assert.doesNotMatch(html, /pr-ring-arc/, 'a 0% arc is not drawn (its round cap is a dot)');
+});
+
+test('printerCardHtml: paused shows time left but no finish clock; failed shows neither', () => {
+  const { sandbox } = newHub();
+  const paused = sandbox.printerCardHtml(prWith({ state: 'PAUSE', remainingMinutes: 250,
+    stage: 'Changing filament' }));
+  assert.match(paused, /tone-warn/);
+  assert.match(paused, /4h 10m left/);
+  assert.doesNotMatch(paused, /done /, 'a paused finish time slides every minute');
+  assert.match(paused, /Loaded White PLA Basic/);
+  const failed = sandbox.printerCardHtml(prWith({ state: 'FAILED', errorCode: '03008001' }));
+  assert.match(failed, /tone-crit/);
+  assert.match(failed, /Error 0300-8001 · check the printer/);
+  assert.doesNotMatch(failed, /m left|done |speed/);
+});
+
+test('printerCardHtml: an error code turns even a running print red', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.printerCardHtml(prWith({ errorCode: '0500C010' }));
+  assert.match(html, /class="card printer tone-crit"/);
+  assert.match(html, /Error 0500-C010/);
+});
+
+test('printerCardHtml: finished and idle never claim heating, a finish time or a 0%', () => {
+  const { sandbox } = newHub();
+  const done = sandbox.printerCardHtml(prWith({ state: 'FINISH', progressPercent: 100,
+    remainingMinutes: 0, nozzleF: 95, bedF: 88 }));
+  assert.match(done, /Finished/);
+  assert.match(done, /Last print · /);
+  assert.doesNotMatch(done, /heating to|done |Layer|speed/);
+  const idle = sandbox.printerCardHtml(prWith({ state: 'IDLE', job: null, progressPercent: 0,
+    remainingMinutes: 0, nozzleF: 72, bedF: 70 }));
+  assert.match(idle, /<div class="pr-state">Idle</);
+  assert.match(idle, /pr-ring-none/);
+  assert.doesNotMatch(idle, /0<small>%|heating to|pr-job/);
+});
+
+test('printerCardHtml: offline, missing `online`, or no state is a quiet note, never a reading', () => {
+  const { sandbox } = newHub();
+  for (const over of [{ online: false, state: 'offline' }, { online: undefined },
+    { online: 'true' }, { state: null }]) {
+    const html = sandbox.printerCardHtml(prWith(over));
+    assert.match(html, /Printer offline/, JSON.stringify(over));
+    assert.doesNotMatch(html, /pr-temp|pr-ring/);
+  }
+});
+
+test('printerCardHtml: missing readings are left out, never shown as 0', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.printerCardHtml(prWith({ nozzleF: null, chamberF: undefined,
+    layerCurrent: null, remainingMinutes: null, ams: [], speed: null }));
+  assert.doesNotMatch(html, /Nozzle|Chamber|Layer|done |pr-ams|pr-foot/);
+  assert.match(html, /Bed<\/span>/);
+  assert.doesNotMatch(html, /0°/);
+});
+
+test('printerCardHtml: state, stage, job, filament name and error code are escaped', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.printerCardHtml(prWith({ state: '<img src=x onerror=alert(1)>',
+    stage: '<script>a()</script>', job: '<script>b()</script>.3mf', errorCode: '<i>',
+    ams: [{ id: 0, humidityPercent: 1, trays: [PR_TRAY(0, 'PLA', '#FFFFFF',
+      { name: '<script>c()</script>', active: true })] }] }));
+  assert.doesNotMatch(html, /<script>|<img|<i>/);
+});
+
+test('printerColorName: plain color words from the filament hex', () => {
+  const { sandbox } = newHub();
+  const cases = { '#FFFFFF': 'White', '#F4F1EA': 'White', '#161616': 'Black',
+    '#808080': 'Gray', '#D6372E': 'Red', '#057748': 'Green', '#2C6BD1': 'Blue',
+    '#688197': 'Blue', '#F2B33D': 'Orange', '#F5E642': 'Yellow', '#8E5BD0': 'Purple',
+    '#E86FB0': 'Pink', '#6B3F1F': 'Brown' };
+  for (const [hex, name] of Object.entries(cases)) {
+    assert.equal(sandbox.printerColorName(hex), name, hex);
+  }
+  for (const bad of ['', 'red', '#12345', null, 7]) assert.equal(sandbox.printerColorName(bad), '');
+});
+
+test('printerJobName: slicer file names read as words', () => {
+  const { sandbox } = newHub();
+  assert.equal(sandbox.printerJobName('Bracket_v3.gcode'), 'Bracket v3');
+  assert.equal(sandbox.printerJobName('a--b__c.gcode.3mf'), 'a b c');
+  assert.equal(sandbox.printerJobName('plate.3mf'), 'plate');
+  assert.equal(sandbox.printerJobName(null), '');
+});
+
+test('renderPrinter: header, loading placeholder, unavailable note, and the stale mark', async () => {
+  const { document, sandbox } = newHub();
+  await flush();
+  const slot = document.createElement('div');
+  slot._id = 'printer-slot';
+  document.body.appendChild(slot);
+  sandbox.renderPrinter(null);
+  assert.match(slot.innerHTML, />3D Printer</);
+  assert.match(slot.innerHTML, /wx-loading/, 'boot: placeholder, not "unavailable"');
+  sandbox.renderPrinter({ available: false });
+  assert.match(slot.innerHTML, /Printer unavailable/);
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => PRINTER_LIVE });
+  await sandbox.fetchFleet();
+  assert.match(slot.innerHTML, /pr-state">Printing/, 'every fleet poll repaints the printer card');
+  sandbox.fetch = async () => { throw new Error('down'); };
+  await sandbox.fetchFleet();
+  assert.match(slot.innerHTML, /class="card printer tone-run is-stale"/);
+  assert.match(slot.innerHTML, /fleet-stale">stale</);
 });
 
 // ---------------------------------------------------------------------------
