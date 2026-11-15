@@ -600,7 +600,18 @@ def test_mobile_wrap_fills_the_phone_width_not_its_content():
     assert "width:100%" in re.sub(r"(max|min)-width:[^;]*", "", wrap), \
         "phone .wrap needs width:100%; width:auto + the base margin:0 auto " \
         "sizes it to its content and long text overflows the screen"
-    assert "box-sizing:border-box" in _ns(_css_rule("*") or "") \
+    # No other phone-shell rule that reaches .wrap (an overlay-open or tab
+    # variant) may set its width back to auto or a length.
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", _phone_shell_css()):
+        if re.search(r"\.wrap(?![\w-])", m.group(1)):
+            for w in re.finditer(r"(?<![\w-])width:([^;]*)", _ns(m.group(2))):
+                assert w.group(1) == "100%", \
+                    f"{_ns(m.group(1))}: phone .wrap width must stay 100% (found {w.group(1)!r})"
+    # The universal reset itself (selector exactly `*`), not any rule that
+    # merely contains a `*`, must give border-box, or 100% plus padding overflows.
+    universal = [_ns(m.group(2)) for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS)
+                 if _ns(re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)) == "*"]
+    assert any("box-sizing:border-box" in d for d in universal) \
         or "box-sizing:border-box" in wrap, \
         "width:100% plus padding only fits the screen with border-box sizing"
 
