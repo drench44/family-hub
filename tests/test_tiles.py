@@ -1256,7 +1256,8 @@ def test_fleet_printer_ams_is_checked_field_by_field():
     assert [u["id"] for u in p["ams"]] == [0, 2]
     u0 = p["ams"][0]
     assert u0["humidityPercent"] is None
-    # slots 0-3 kept (the 4-slot cap stops before the bad ones anyway)
+    # slots 0-3 kept; bad slots inside the cap are covered by
+    # test_fleet_printer_ams_drops_bad_trays_and_units_inside_the_cap
     assert [tr["slot"] for tr in u0["trays"]] == [0, 1, 2, 3]
     assert u0["trays"][0]["color"] is None
     assert u0["trays"][1]["color"] is None
@@ -1266,6 +1267,66 @@ def test_fleet_printer_ams_is_checked_field_by_field():
                               "remainPercent": None, "active": False}
     t2 = p["ams"][1]["trays"][0]
     assert len(t2["type"]) == 12 and t2["name"] is None and t2["active"] is False
+
+
+def test_fleet_printer_ams_caps_units_and_trays():
+    tiles.reset_caches()
+    ams = [{"id": i, "trays": [{"slot": n, "loaded": False} for n in range(6)]}
+           for i in range(12)]
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=ams))
+    p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+    assert [u["id"] for u in p["ams"]] == list(range(tiles.AMS_MAX_UNITS))
+    assert all([tr["slot"] for tr in u["trays"]] == [0, 1, 2, 3] for u in p["ams"])
+
+
+def test_fleet_printer_ams_drops_bad_trays_and_units_inside_the_cap():
+    tiles.reset_caches()
+    trays = ["junk", {"slot": -1, "loaded": True}, {"slot": 1.5, "loaded": True},
+             {"slot": 3, "loaded": True, "remainPercent": 0}]
+    ams = [{"id": 0, "humidityPercent": 0, "trays": trays},
+           {"id": 1.5, "trays": []}, {"id": True, "trays": []},
+           {"id": 2, "humidityPercent": 100, "trays": [{"slot": 0, "loaded": True,
+                                                        "remainPercent": 100}]}]
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=ams))
+    p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+    assert [u["id"] for u in p["ams"]] == [0, 2]
+    assert [tr["slot"] for tr in p["ams"][0]["trays"]] == [3]
+    assert p["ams"][0]["trays"][0]["remainPercent"] == 0      # edge kept
+    assert p["ams"][0]["humidityPercent"] == 0
+    assert p["ams"][1]["humidityPercent"] == 100
+    assert p["ams"][1]["trays"][0]["remainPercent"] == 100
+    # NaN can't ride JSON, but the helper must still refuse it
+    assert tiles._printer_ams([{"id": float("nan"), "trays": []}]) == []
+
+
+def test_fleet_printer_color_must_be_exactly_rrggbb():
+    tiles.reset_caches()
+    tray = {"slot": 0, "loaded": True, "type": "PLA", "remainPercent": None}
+    for bad in ("#AABBCC\n", "#AABBCCDD", "AABBCC", " #AABBCC"):
+        body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=[
+            {"id": 0, "trays": [dict(tray, color=bad)]}]))
+        tiles.reset_caches()
+        p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+        assert p["ams"][0]["trays"][0]["color"] is None, repr(bad)
+
+
+def test_fleet_printer_error_code_is_none_for_zero_and_hex_otherwise():
+    for raw, want in (("0", None), ("00000000", None), (0, None), (None, None),
+                      ("nope", None), (True, None), ("3008001", "03008001"),
+                      ("0500c010", "0500C010"), (0x03008001, "03008001")):
+        tiles.reset_caches()
+        body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], errorCode=raw))
+        p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+        assert p["errorCode"] == want, repr(raw)
+
+
+def test_fleet_printer_text_fields_are_trimmed_and_capped():
+    tiles.reset_caches()
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], speed="  Standard ",
+                                        stage="x" * 100))
+    p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+    assert p["speed"] == "Standard"
+    assert len(p["stage"]) == 48
 
 
 def test_fleet_printer_ams_non_list_is_empty_and_tile_stays_available():
