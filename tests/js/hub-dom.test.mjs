@@ -7979,7 +7979,7 @@ test('fleetCardHtml/printerCardHtml: a wrong-typed/partial proxy payload renders
 
 
 // ---------------------------------------------------------------------------
-// Printer card (2026-11-15): its own card under Fleet, fed by the same
+// Printer card (2026-11-15): its own card above Fleet, fed by the same
 // /api/tiles/fleet payload. Progress ring, finish time, layers, temps, the AMS
 // spools in their real filament colors, stage / error / speed lines.
 // ---------------------------------------------------------------------------

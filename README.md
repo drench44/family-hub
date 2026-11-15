@@ -119,11 +119,11 @@ at one URL.
 - **Fleet Console:** an optional card proxying a separate home-lab dashboard's
   compact status rollup: a system-health line ("N of M hosts up", the worst
   problem in words when something's down), the vitals grid and the internet
-  line. Rides the panels column under Laundry on the wall and the Weather tab
-  on the phone (no tab of its own). Tap **⛶ Console** to open the full
+  line. Rides the panels column under Laundry (and the 3D printer card, when
+  shown) on the wall and the Weather tab on the phone (no tab of its own). Tap **⛶ Console** to open the full
   dashboard full-screen, when configured. Fails soft like weather/climate;
   off entirely with no `fleet` config block.
-- **3D printer:** its own card under Fleet, from the same rollup (a Bambu Lab
+- **3D printer:** its own card above Fleet, from the same rollup (a Bambu Lab
   printer's live MQTT report, via the fleet console): a progress ring, when
   the print will be done, the layer count, nozzle / bed / chamber temps (with
   "heating to" while warming up), what the printer is busy with (changing
