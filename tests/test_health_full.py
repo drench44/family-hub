@@ -448,6 +448,36 @@ def test_route_disabled_integration_is_off_not_failing(hub, tmp_path):
                                        "ok": True, "status": "off"}
 
 
+def test_route_printer_card_alone_keeps_the_fleet_source_checked(hub, monkeypatch):
+    """The printer card reads the fleet rollup, so with only the printer
+    switched on, /health/full must still check (and fail on) that source:
+    a dead rollup must never leave the printer card dark behind an ok."""
+    appmod, client, _, path = hub
+    c = fdb.connect(str(path / "hub.db"))
+    fdb.set_integration_enabled(c, "fleet", False)   # printer stays on
+    c.close()
+    r = _full(client)
+    assert r["sources"]["fleet"]["enabled"] is True
+    assert r["sources"]["fleet"]["status"] == "ok"
+
+    async def down(*a, **k):
+        return {"available": False}
+    monkeypatch.setattr(appmod.tiles, "fleet_tile", down)
+    r = _full(client)
+    assert r["sources"]["fleet"]["ok"] is False
+
+
+def test_route_fleet_and_printer_both_off_is_off(hub):
+    appmod, client, _, path = hub
+    c = fdb.connect(str(path / "hub.db"))
+    fdb.set_integration_enabled(c, "fleet", False)
+    fdb.set_integration_enabled(c, "printer", False)
+    c.close()
+    r = _full(client)
+    assert r["sources"]["fleet"] == {"configured": True, "enabled": False,
+                                     "ok": True, "status": "off"}
+
+
 def test_route_config_matches_the_deploy_record(hub, monkeypatch):
     appmod, client, _, _ = hub
     sha = appmod.CONFIG_LOADED_SHA256

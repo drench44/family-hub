@@ -29,7 +29,7 @@ at one URL.
 ## What it looks like
 
 - **Wall (1920×1080):** chores | calendar + to-dos | cameras | weather +
-  climate + laundry + fleet, all in one card system. **Five display modes** (light, soft, blue,
+  climate + laundry + fleet + 3D printer, all in one card system. **Five display modes** (light, soft, blue,
   grey, black) **with a pick-your-accent color** (cyan, violet, amber, or green)
   and an optional subtle column
   separation, set from the wall itself or any phone and remembered per device.
@@ -117,12 +117,20 @@ at one URL.
   ThinQ's sensors, but any HA integration exposing a status enum + a
   remaining-time timestamp works. Fails soft like weather/climate.
 - **Fleet Console:** an optional card proxying a separate home-lab dashboard's
-  compact status rollup — a system-health line ("N of M hosts up", the worst
-  problem in words when something's down) over a 3D printer's state, job,
-  progress bar, ETA, and nozzle/bed temps. Rides the panels column under
-  Laundry on the wall and the Weather tab on the phone (no tab of its own).
-  Tap **⛶ Console** to open the full dashboard full-screen, when configured.
-  Fails soft like weather/climate; off entirely with no `fleet` config block.
+  compact status rollup: a system-health line ("N of M hosts up", the worst
+  problem in words when something's down), the vitals grid and the internet
+  line. Rides the panels column under Laundry on the wall and the Weather tab
+  on the phone (no tab of its own). Tap **⛶ Console** to open the full
+  dashboard full-screen, when configured. Fails soft like weather/climate;
+  off entirely with no `fleet` config block.
+- **3D printer:** its own card under Fleet, from the same rollup (a Bambu Lab
+  printer's live MQTT report, via the fleet console): a progress ring, when
+  the print will be done, the layer count, nozzle / bed / chamber temps (with
+  "heating to" while warming up), what the printer is busy with (changing
+  filament, leveling the bed ...), any error code, the speed mode, and every
+  AMS spool drawn in its real filament color, with what's left on tagged
+  spools and the spool feeding the nozzle lit. Has its own switch in
+  Settings, so either card can be turned off alone.
 - **Manage:** tap **Edit chores** on the wall's Chores page to add/edit chores
   and people (rename, recolor, deactivate, or delete) right on the touchscreen,
   no phone needed. Mark someone **away** here too, with an optional backup to
@@ -285,7 +293,7 @@ and brings it back when someone uses a mouse. See
 | `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
 | `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
 | `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). Optional per machine: `total_entity` (cycle length in minutes; LG *Total time*), `start_entity` (LG *Delayed start* timestamp) and `error_entity` (LG *Error* event). Each only adds detail; leave any out. The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
-| `fleet` | Fleet Console card: `{"base": "http://192.168.1.50:3000"}` — the base URL of a separate home-lab dashboard app exposing a compact `/api/rollup` status endpoint (host + 3D-printer status). Optional `"label"`. Omit to skip the card. Pair with a `"fleet"` entry in `panels` (below) to get the **⛶ Console** full-screen button. |
+| `fleet` | Fleet Console card and the 3D printer card (each with its own Settings switch): `{"base": "http://192.168.1.50:3000"}`, the base URL of a separate home-lab dashboard app exposing a compact `/api/rollup` status endpoint (host + 3D-printer status). Optional `"label"`. Omit to skip the card. Pair with a `"fleet"` entry in `panels` (below) to get the **⛶ Console** full-screen button. |
 | `theme` | House default display theme — `{"mode","accent","columns","layout","idleReturn","season"}` (`mode`: light/soft/dark/grey/black, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines, `layout`: auto/desktop, `idleReturn`: on/off, `season`: on/off for seasonal looks). Applied on a fresh device with no saved override |
 
 ### Calendars: Google

@@ -1158,7 +1158,14 @@ FLEET_KEYS = {"health", "hostsUp", "hostsTotal", "worstProblem", "alerts",
               "cpuPercent", "memPercent", "storageUsedBytes",
               "storageTotalBytes", "hottestTempF"}
 PRINTER_KEYS = {"health", "state", "job", "progressPercent",
-                "remainingMinutes", "nozzleF", "bedF", "online"}
+                "remainingMinutes", "nozzleF", "bedF", "online",
+                "nozzleTargetF", "bedTargetF", "chamberF", "layerCurrent",
+                "layerTotal", "speed", "stage", "errorCode", "ams"}
+# what an older console (before the printer detail) leaves the new keys as
+PRINTER_DETAIL_NONE = {"nozzleTargetF": None, "bedTargetF": None,
+                       "chamberF": None, "layerCurrent": None,
+                       "layerTotal": None, "speed": None, "stage": None,
+                       "errorCode": None, "ams": []}
 INTERNET_KEYS = {"up", "downMbps", "upMbps"}
 
 
@@ -1189,9 +1196,179 @@ def test_fleet_happy_trims_to_contract_fields():
         "internet": {"up": True, "downMbps": 2358.0, "upMbps": 2086.0},
         "printer": {"health": "ok", "state": "printing", "job": "benchy.gcode",
                     "progressPercent": 42, "remainingMinutes": 18,
-                    "nozzleF": 410.0, "bedF": 140.0, "online": True},
+                    "nozzleF": 410.0, "bedF": 140.0, "online": True,
+                    **PRINTER_DETAIL_NONE},
     }
     assert "generatedAt" not in t   # not part of the tile contract
+
+
+PRINTER_DETAIL = {
+    "nozzleTargetF": 410, "bedTargetF": 149, "chamberF": 88,
+    "layerCurrent": 187, "layerTotal": 412, "speed": "Standard",
+    "stage": "Changing filament", "errorCode": None,
+    "ams": [
+        {"id": 0, "humidityPercent": 42, "trays": [
+            {"slot": 0, "loaded": True, "type": "PLA", "color": "#057748",
+             "name": None, "remainPercent": None, "active": False},
+            {"slot": 1, "loaded": True, "type": "PETG", "color": "#688197",
+             "name": "PETG Basic", "remainPercent": 75, "active": True},
+            {"slot": 2, "loaded": False, "type": None, "color": None,
+             "name": None, "remainPercent": None, "active": False},
+        ]},
+    ],
+}
+
+
+def test_fleet_printer_detail_passes_through_when_well_formed():
+    tiles.reset_caches()
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], **PRINTER_DETAIL))
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    for key, value in PRINTER_DETAIL.items():
+        assert t["printer"][key] == value, key
+
+
+def test_fleet_printer_ams_is_checked_field_by_field():
+    """The AMS colors land in an inline style, so only a literal #RRGGBB
+    survives; a bad unit or slot is dropped on its own; nothing raises."""
+    tiles.reset_caches()
+    tray = {"slot": 0, "loaded": True, "type": "PLA", "color": "#057748",
+            "name": None, "remainPercent": 40, "active": True}
+    ams = [
+        {"id": 0, "humidityPercent": 250, "trays": [
+            dict(tray, color="red;background:url(x)"),     # not a hex color
+            dict(tray, slot=1, color="#12345"),               # too short
+            dict(tray, slot=2, remainPercent=140),            # out of range
+            dict(tray, slot=3, loaded="yes"),                 # not literal True
+            dict(tray, slot=-1),                              # bad slot: dropped
+            "junk",                                           # dropped
+        ]},
+        {"id": "x", "trays": []},                             # bad id: dropped
+        {"id": 1},                                            # no trays: dropped
+        "junk",                                               # dropped
+        {"id": 2, "humidityPercent": 30, "trays": [
+            dict(tray, type="P" * 40, name=12345, active="true")]},
+    ]
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=ams,
+                                        speed=3, stage={"x": 1}, errorCode=""))
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    p = t["printer"]
+    assert p["speed"] is None and p["stage"] is None and p["errorCode"] is None
+    assert [u["id"] for u in p["ams"]] == [0, 2]
+    u0 = p["ams"][0]
+    assert u0["humidityPercent"] is None
+    # slots 0-3 kept; bad slots inside the cap are covered by
+    # test_fleet_printer_ams_drops_bad_trays_and_units_inside_the_cap
+    assert [tr["slot"] for tr in u0["trays"]] == [0, 1, 2, 3]
+    assert u0["trays"][0]["color"] is None
+    assert u0["trays"][1]["color"] is None
+    assert u0["trays"][2]["remainPercent"] is None
+    assert u0["trays"][3] == {"slot": 3, "loaded": False, "type": None,
+                              "color": None, "name": None,
+                              "remainPercent": None, "active": False}
+    t2 = p["ams"][1]["trays"][0]
+    assert len(t2["type"]) == 12 and t2["name"] is None and t2["active"] is False
+
+
+def test_fleet_printer_ams_caps_units_and_trays():
+    tiles.reset_caches()
+    ams = [{"id": i, "trays": [{"slot": n, "loaded": False} for n in range(6)]}
+           for i in range(12)]
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=ams))
+    p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+    assert [u["id"] for u in p["ams"]] == list(range(tiles.AMS_MAX_UNITS))
+    assert all([tr["slot"] for tr in u["trays"]] == [0, 1, 2, 3] for u in p["ams"])
+
+
+def test_fleet_printer_ams_drops_bad_trays_and_units_inside_the_cap():
+    tiles.reset_caches()
+    trays = ["junk", {"slot": -1, "loaded": True}, {"slot": 1.5, "loaded": True},
+             {"slot": 3, "loaded": True, "remainPercent": 0}]
+    ams = [{"id": 0, "humidityPercent": 0, "trays": trays},
+           {"id": 1.5, "trays": []}, {"id": True, "trays": []},
+           {"id": 2, "humidityPercent": 100, "trays": [{"slot": 0, "loaded": True,
+                                                        "remainPercent": 100}]}]
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=ams))
+    p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+    assert [u["id"] for u in p["ams"]] == [0, 2]
+    assert [tr["slot"] for tr in p["ams"][0]["trays"]] == [3]
+    assert p["ams"][0]["trays"][0]["remainPercent"] == 0      # edge kept
+    assert p["ams"][0]["humidityPercent"] == 0
+    assert p["ams"][1]["humidityPercent"] == 100
+    assert p["ams"][1]["trays"][0]["remainPercent"] == 100
+    # NaN can't ride JSON, but the helper must still refuse it
+    assert tiles._printer_ams([{"id": float("nan"), "trays": []}]) == []
+
+
+def test_fleet_printer_color_must_be_exactly_rrggbb():
+    tiles.reset_caches()
+    tray = {"slot": 0, "loaded": True, "type": "PLA", "remainPercent": None}
+    for bad in ("#AABBCC\n", "#AABBCCDD", "AABBCC", " #AABBCC"):
+        body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=[
+            {"id": 0, "trays": [dict(tray, color=bad)]}]))
+        tiles.reset_caches()
+        p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+        assert p["ams"][0]["trays"][0]["color"] is None, repr(bad)
+
+
+def test_fleet_printer_error_code_is_none_only_for_zero_or_nothing(caplog):
+    cases = (
+        # no error
+        ("0", None), ("00000000", None), ("000000000", None), ("0x0", None),
+        (0, None), (0.0, None), (None, None), ("   ", None), (True, None),
+        ("none", None), ("N/A", None), ("null", None), ("false", None),
+        ("no error", None), ("No", None), ("--", None),
+        # the console's shape, and the same code in other spellings
+        ("03008001", "03008001"), ("3008001", "03008001"), ("0500c010", "0500C010"),
+        ("0300-8001", "03008001"), ("0x03008001", "03008001"),
+        (50364417, "03008001"), (50364417.0, "03008001"),
+        # an unfamiliar non-empty code is still an error: shown, never dropped
+        ("nope", "nope"), ("ERR-12", "ERR-12"),
+        # can't be a Bambu code: logged and left off rather than made up
+        (2**32, None), (1e30, None), (3008001.5, None), ([1], None), ({"a": 1}, None),
+        ("123456789A", "123456789A"),
+        # a stray sign or space is not a code: shown as sent, never reshaped
+        ("-1", "-1"), ("1-2", "1-2"), ("12 34", "12 34"), ("0x", "0x"),
+    )
+    for raw, want in cases:
+        tiles.reset_caches()
+        body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], errorCode=raw))
+        p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+        assert p["errorCode"] == want, repr(raw)
+
+
+def test_fleet_printer_impossible_error_code_is_logged_not_silent(caplog):
+    tiles._error_warned.clear()
+    with caplog.at_level("WARNING", logger="family_hub.tiles"):
+        for raw in (2**32, 3008001.5, [1]):
+            assert tiles._error_code(raw) is None
+    logged = " ".join(r.message for r in caplog.records)
+    for raw in ("4294967296", "3008001.5", "[1]"):
+        assert raw in logged, raw
+
+
+def test_fleet_printer_odd_error_code_is_logged_once_not_every_poll(caplog):
+    tiles._error_warned.clear()
+    with caplog.at_level("WARNING", logger="family_hub.tiles"):
+        for _ in range(3):
+            assert tiles._error_code("weird-code") == "weird-code"
+    hits = [r for r in caplog.records if "unexpected printer error code" in r.message]
+    assert len(hits) == 1
+
+
+def test_fleet_printer_text_fields_are_trimmed_and_capped():
+    tiles.reset_caches()
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], speed="  Standard ",
+                                        stage="x" * 100))
+    p = run_fleet(lambda req: httpx.Response(200, json=body))["printer"]
+    assert p["speed"] == "Standard"
+    assert len(p["stage"]) == 48
+
+
+def test_fleet_printer_ams_non_list_is_empty_and_tile_stays_available():
+    tiles.reset_caches()
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams={"x": 1}))
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    assert t["available"] is True and t["printer"]["ams"] == []
 
 
 def test_fleet_extra_upstream_keys_dropped():
