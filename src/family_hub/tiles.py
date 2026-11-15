@@ -457,13 +457,145 @@ async def weather_tile(client, cfg) -> dict:
     return result
 
 
+# Printer AMS shape limits: an H2D takes up to four AMS units plus AMS HTs;
+# anything past these is a bad upstream, not a bigger printer.
+AMS_MAX_UNITS = 8
+AMS_MAX_TRAYS = 4
+_HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}")   # used with fullmatch only
+
+
+def _short_text(value, limit: int = 24):
+    """A display string from the rollup, or None. Non-strings (a flaky
+    upstream's number or dict) are dropped, never str()-ed into the card."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:limit]
+
+
+# "no error" as some upstreams spell it; anything else non-empty is a code
+_NO_ERROR_WORDS = {"none", "null", "n/a", "na", "false", "ok", "-", "--", "no",
+                   "no error", "no_error", "normal"}
+# a Bambu code: up to 8 hex digits, optionally 0x-prefixed or in the
+# 4-4 dashed form the wall itself prints ("0300-8001"); nothing looser, so a
+# stray sign or space never turns into a made-up code
+_HEX_CODE = re.compile(r"(?:0[xX])?([0-9A-Fa-f]{1,8}|[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})")
+_error_warned: set = set()
+
+
+def _warn_error_code_once(value) -> None:
+    """Log an unexpected printer error code once per distinct value, not on
+    every 30 s fleet poll."""
+    key = repr(value)[:64]
+    if key not in _error_warned:
+        _error_warned.add(key)
+        log.warning("fleet tile: unexpected printer error code %s", key)
+
+
+def _error_code(value):
+    """The printer's error code for the card, or None for "no error".
+
+    The fleet console sends Bambu's print_error as 8 hex digits (its
+    printer-words.ts), and an int is the same number before formatting.
+    Zero, nothing, or a "no error" word means no error. A non-empty code in
+    some other text shape is still an error, so it is passed on as text
+    (and logged once) rather than dropped, which would show a failing
+    printer as fine. A value that can't be a Bambu code at all (a list, an
+    out-of-range or fractional number) is logged and left off the card:
+    showing it would be a made-up code."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")) or not value.is_integer():
+            _warn_error_code_once(value)
+            return None
+        value = int(value)   # 3008001.0 is the same code
+    if isinstance(value, int):
+        if value == 0:
+            return None
+        if 0 < value < 2**32:
+            return f"{value:08X}"
+        _warn_error_code_once(value)
+        return None
+    if not isinstance(value, str):
+        _warn_error_code_once(value)
+        return None
+    text = value.strip()
+    # zero in any length or spelling is no error
+    if not text or text.lower() in _NO_ERROR_WORDS or re.fullmatch(r"(?:0[xX])?0+", text):
+        return None
+    m = _HEX_CODE.fullmatch(text)
+    if m:
+        n = int(m.group(1).replace("-", ""), 16)
+        return None if n == 0 else f"{n:08X}"
+    _warn_error_code_once(text)
+    return text[:16]
+
+
+def _finite(value):
+    """A real number (not bool, not NaN/inf) or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if value == value and abs(value) != float("inf") else None
+
+
+def _printer_ams(raw) -> list:
+    """The rollup's AMS list trimmed to the card's needs: unit id, humidity,
+    and per slot {slot, loaded, type, color, name, remainPercent, active}.
+    Every field is checked here, not passed through, because `color` lands
+    in an inline style: only a literal ``#RRGGBB`` survives. A malformed
+    unit or slot is dropped on its own; a non-list is an empty AMS, never a
+    reason to mark the tile unavailable."""
+    if not isinstance(raw, list):
+        return []
+    units = []
+    for unit in raw[:AMS_MAX_UNITS]:
+        if not isinstance(unit, dict) or not isinstance(unit.get("trays"), list):
+            continue
+        uid = _finite(unit.get("id"))
+        if uid is None or uid != int(uid) or uid < 0:
+            continue
+        humidity = _finite(unit.get("humidityPercent"))
+        trays = []
+        for tray in unit["trays"][:AMS_MAX_TRAYS]:
+            if not isinstance(tray, dict):
+                continue
+            slot = _finite(tray.get("slot"))
+            if slot is None or slot != int(slot) or slot < 0:
+                continue
+            loaded = tray.get("loaded") is True
+            color = tray.get("color")
+            remain = _finite(tray.get("remainPercent"))
+            trays.append({
+                "slot": int(slot),
+                "loaded": loaded,
+                "type": _short_text(tray.get("type"), 12) if loaded else None,
+                "color": color if loaded and isinstance(color, str)
+                and _HEX_COLOR.fullmatch(color) else None,
+                "name": _short_text(tray.get("name")) if loaded else None,
+                "remainPercent": remain if loaded and remain is not None
+                and 0 <= remain <= 100 else None,
+                "active": loaded and tray.get("active") is True,
+            })
+        units.append({
+            "id": int(uid),
+            "humidityPercent": humidity if humidity is not None
+            and 0 <= humidity <= 100 else None,
+            "trays": trays,
+        })
+    return units
+
+
 async def fleet_tile(client, cfg) -> dict:
     """Proxy the separate fleet console app's compact rollup into a
     trimmed, fail-soft tile: ``{available, label?, fleet: {health, hostsUp,
     hostsTotal, worstProblem, alerts, cpuPercent, memPercent,
     storageUsedBytes, storageTotalBytes, hottestTempF}, internet: {up,
     downMbps, upMbps}, printer: {health, state, job, progressPercent,
-    remainingMinutes, nozzleF, bedF, online}}``. ``label`` is only present
+    remainingMinutes, nozzleF, bedF, online, nozzleTargetF, bedTargetF,
+    chamberF, layerCurrent, layerTotal, speed, stage, errorCode, ams}}``.
+    The printer's text fields and its ``ams`` list are the exception to
+    "passed through as-is": they are checked and trimmed (``_short_text``,
+    ``_printer_ams``) because a color lands in an inline style. ``label`` is only present
     when ``fleet.label`` is set in config - it rides straight through to the
     card header (``renderFleet``/``fleetCardHtml`` fall back to "Fleet" when
     it's absent).
@@ -550,6 +682,15 @@ async def fleet_tile(client, cfg) -> dict:
             "nozzleF": raw_printer.get("nozzleF"),
             "bedF": raw_printer.get("bedF"),
             "online": raw_printer.get("online"),
+            "nozzleTargetF": raw_printer.get("nozzleTargetF"),
+            "bedTargetF": raw_printer.get("bedTargetF"),
+            "chamberF": raw_printer.get("chamberF"),
+            "layerCurrent": raw_printer.get("layerCurrent"),
+            "layerTotal": raw_printer.get("layerTotal"),
+            "speed": _short_text(raw_printer.get("speed")),
+            "stage": _short_text(raw_printer.get("stage"), 48),
+            "errorCode": _error_code(raw_printer.get("errorCode")),
+            "ams": _printer_ams(raw_printer.get("ams")),
         },
     }
     if fleet_cfg.get("label"):

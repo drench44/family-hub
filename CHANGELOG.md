@@ -10,6 +10,25 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-11-15
+
+### Added
+- The 3D printer has its own card under Fleet: a progress ring, when the
+  print will be done, the layer count, nozzle, bed and chamber temperatures,
+  what the printer is busy with (changing filament, heating the bed ...),
+  any error code, the speed mode, and every AMS spool drawn in its real
+  filament color with the one feeding the nozzle lit. It has its own switch
+  in Settings. The Fleet card now shows just the servers and the internet.
+- The printer card works with an older fleet console too: it then shows the
+  state, job, progress and temperatures, and leaves out what isn't sent.
+- A print that pauses on an error turns the card red but keeps its time
+  left, layer count and loaded spool, and any error code the printer sends
+  is shown (an unfamiliar one as sent), never dropped.
+- "No error" from the printer, in any spelling, never shows as an error.
+- While the printer is getting ready, or when the card is showing stale
+  data, it makes no live claims: no progress ring, time left, "heating to"
+  or lit spool from numbers that may belong to the last job.
+
 ## [1.13.5] — 2026-11-14
 
 ### Fixed

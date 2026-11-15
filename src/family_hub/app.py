@@ -688,7 +688,8 @@ def _available_only():
         return memo
     items = fintegrations.available_integrations(
         cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
-    demo_ids = {"cameras", "weather", "climate", "laundry", "fleet"} if DEMO else set()
+    demo_ids = ({"cameras", "weather", "climate", "laundry", "fleet", "printer"}
+                if DEMO else set())
     return [dict(i, available=True) if (i["id"] in demo_ids and not i["available"])
             else i
             for i in items
@@ -1011,7 +1012,8 @@ async def health_full():
 
     weather_on = "weather" in on and not DEMO
     climate_on = "climate" in on and not DEMO
-    fleet_on = "fleet" in on and not DEMO
+    # the printer card shows the same rollup, so it keeps the source checked
+    fleet_on = ("fleet" in on or "printer" in on) and not DEMO
     cams_on = "cameras" in on and not DEMO and bool(_fetch_cfg.go2rtc_base)
     results = await asyncio.gather(
         tiles.weather_tile(_http, cfg) if weather_on else _skip(),
@@ -1058,7 +1060,8 @@ async def health_full():
             state=tiles.SOURCE_STATE.get("climate"), available=climate.get("available"),
             now=now, max_age_s=deep_health.CLIMATE_MAX_AGE_S),
         "fleet": deep_health.tile_source(
-            "fleet", configured="fleet" in avail, enabled=fleet_on,
+            "fleet", configured="fleet" in avail or "printer" in avail,
+            enabled=fleet_on,
             state=tiles.SOURCE_STATE.get("fleet"), available=fleet.get("available"),
             now=now, max_age_s=deep_health.FLEET_MAX_AGE_S),
         "cameras": deep_health.cameras_source(
