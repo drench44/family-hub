@@ -384,6 +384,12 @@ def demo_laundry() -> dict:
     }
 
 
+def _demo_tray(slot, ftype, color, name=None, remain=None, active=False) -> dict:
+    """One loaded AMS slot in the fleet tile's trimmed shape."""
+    return {"slot": slot, "loaded": True, "type": ftype, "color": color,
+            "name": name, "remainPercent": remain, "active": active}
+
+
 def demo_fleet() -> dict:
     """A live-shaped fleet tile (matches tiles.fleet_tile's trimmed contract):
     a fully healthy fleet with real-looking vitals (CPU/RAM/storage/hottest
@@ -413,13 +419,36 @@ def demo_fleet() -> dict:
         },
         "printer": {
             "health": "ok",
-            "state": "printing",
-            "job": "Bracket_v3.gcode",
-            "progressPercent": 42,
+            "state": "RUNNING",
+            "job": "Holiday_ornaments_4_colors.3mf",
+            "progressPercent": 45,
             "remainingMinutes": 96,
-            "nozzleF": 410.0,
-            "bedF": 140.0,
+            "nozzleF": 428,
+            "bedF": 149,
             "online": True,
+            "nozzleTargetF": 428,
+            "bedTargetF": 149,
+            "chamberF": 88,
+            "layerCurrent": 187,
+            "layerTotal": 412,
+            "speed": "Standard",
+            "stage": None,
+            "errorCode": None,
+            "ams": [
+                {"id": 0, "humidityPercent": 21, "trays": [
+                    _demo_tray(0, "PLA", "#1F8A5B"),
+                    _demo_tray(1, "PLA", "#F4F1EA", "PLA Basic", 62, active=True),
+                    _demo_tray(2, "PLA", "#D6372E"),
+                    _demo_tray(3, "PETG", "#2C6BD1", "PETG HF", 88),
+                ]},
+                {"id": 1, "humidityPercent": 34, "trays": [
+                    _demo_tray(0, "PLA", "#1B1B1F"),
+                    {"slot": 1, "loaded": False, "type": None, "color": None,
+                     "name": None, "remainPercent": None, "active": False},
+                    _demo_tray(2, "PLA", "#F2B33D", "PLA Matte", 35),
+                    _demo_tray(3, "TPU", "#8E5BD0"),
+                ]},
+            ],
         },
     }
 

@@ -2235,7 +2235,8 @@ function updateTabVisibility(list) {
   // configurable integration (absent = legitimately unconfigured).
   const visible = (tab) => !(tab in TAB_FEATURES) ? true
     : TAB_FEATURES[tab].some(featureOn)
-      || (tab === 'weather' && (customPanelExists() || on.has('fleet')));
+      || (tab === 'weather' && (customPanelExists() || on.has('fleet')
+        || on.has('printer')));
   const btns = [...document.querySelectorAll('.tab-btn')];
   let any = false;
   btns.forEach((b) => {
@@ -2277,7 +2278,8 @@ function applyWallLayout(list) {
   // buildPanels renders those via panelHtml, and they have no toggle of
   // their own, so the column must survive even with weather+climate both
   // off or an operator's custom panel would silently lose its column).
-  const dash = has('weather', 'climate', 'laundry', 'fleet') || customPanelExists();
+  const dash = has('weather', 'climate', 'laundry', 'fleet', 'printer')
+    || customPanelExists();
   const setDisp = (sel, show) => {
     const el = document.querySelector(sel);
     if (el) el.style.display = show ? '' : 'none';
@@ -2741,12 +2743,13 @@ function buildPanels() {
       // covers its native card, appended once regardless of this entry.
       if (p.id === 'fleet') return '';
       return panelHtml(p);
-    }).join('') + laundrySlotHtml() + fleetSlotHtml();
+    }).join('') + laundrySlotHtml() + fleetSlotHtml() + printerSlotHtml();
   panelsBuilt = true;
   renderWeather();   // fill the just-built weather slot from cached data (if any)
   renderClimate();   // fill the just-built climate slot from cached data (if any)
   renderLaundry();   // fill the just-built laundry slot from cached data (if any)
   renderFleet();     // fill the just-built fleet slot from cached data (if any)
+  renderPrinter();   // ...and the printer card under it, from the same data
 }
 
 function wirePanels() {
@@ -3977,45 +3980,6 @@ function fleetInternetHtml(inet) {
     + `</div>`;
 }
 
-/* The printer half: state word, job name, a width-updated progress bar (no
-   animation loop — the plan is explicit that this card doesn't move), and
-   the F temps the rollup already carries pre-converted. offline/unreachable
-   (online:false, online missing/unknown, or no state at all) never
-   fabricates a 0%/0° reading — it renders a quiet muted note instead, same
-   discipline as the fleet half. `online` must be the LITERAL boolean
-   `true` to read as "shown online" — a missing/undefined/null `online`
-   (a partial or wrong-shaped upstream payload) is unknown, not online, and
-   must never be shown as an active reading. */
-function fleetPrinterHtml(p) {
-  if (!p || p.online !== true || !p.state) {
-    return `<div class="fleet-printer fleet-printer-offline">Printer unavailable</div>`;
-  }
-  const state = escapeHtml(String(p.state).replace(/_/g, ' '));
-  const job = p.job ? `<div class="fleet-job">${escapeHtml(String(p.job))}</div>` : '';
-  // Never-fabricate: a finite-but-out-of-range percent (a flaky upstream
-  // sending -5 or 5000) is treated as unknown, NOT silently clamped to
-  // 0/100 — a clamp-to-100 would read as "finished" for a value that was
-  // never actually a valid reading.
-  const raw = p.progressPercent;
-  const pctOk = Number.isFinite(raw) && raw >= 0 && raw <= 100;
-  const pct = pctOk ? raw : null;
-  const bar = pctOk
-    ? `<div class="fleet-bar"><div class="fleet-bar-fill" style="width:${pct}%"></div></div>`
-      + `<div class="fleet-pct num">${Math.round(pct)}%</div>`
-    : '';
-  const remain = Number.isFinite(p.remainingMinutes)
-    ? `<span class="fleet-remain">${fleetRemainStr(p.remainingMinutes)}</span>` : '';
-  const nozzle = Number.isFinite(p.nozzleF) ? `${Math.round(p.nozzleF)}°F nozzle` : '';
-  const bed = Number.isFinite(p.bedF) ? `${Math.round(p.bedF)}°F bed` : '';
-  const temps = [nozzle, bed].filter(Boolean).join(' · ');
-  return `<div class="fleet-printer${fleetHealthCls(p.health)}">`
-    + `<div class="fleet-pr-head"><span class="fleet-pr-state">${state}</span>${remain}</div>`
-    + job
-    + bar
-    + (temps ? `<div class="fleet-temps">${temps}</div>` : '')
-    + `</div>`;
-}
-
 /* The whole fleet card, for a fleet admin at a glance:
      - a system-health line: dot + "N of M hosts up", plus a small "N alerts"
        badge when the rollup reports open alerts;
@@ -4024,14 +3988,13 @@ function fleetPrinterHtml(p) {
        footnote;
      - a compact vitals grid (CPU / RAM / storage / hottest temp), each null
        vital shown as "n/a", never a fabricated 0;
-     - an internet line (up + link capacity, or a red "Internet DOWN");
-     - the printer half unchanged.
+     - an internet line (up + link capacity, or a red "Internet DOWN").
+   The printer has its own card below this one (printerCardHtml).
    `stale` (see fetchFleet) paints a quiet "stale" badge next to the hosts
    line and dims the whole card — this is a health monitor, so a last-good
    card riding out a failed poll must never look as pristine as a live one. */
 function fleetCardHtml(fl, stale = false) {
   const f = fl.fleet || {};
-  const p = fl.printer || {};
   const up = Number.isFinite(f.hostsUp) ? f.hostsUp : null;
   const total = Number.isFinite(f.hostsTotal) ? f.hostsTotal : null;
   const hostsLine = (up !== null && total !== null)
@@ -4055,7 +4018,6 @@ function fleetCardHtml(fl, stale = false) {
     + problem
     + fleetVitalsHtml(f)
     + fleetInternetHtml(fl.internet)
-    + fleetPrinterHtml(p)
     + `</article>`;
 }
 
@@ -4108,6 +4070,283 @@ async function fetchFleet() {
     if (!fleetData || fleetFails >= TILE_FAIL_LIMIT) fleetData = { available: false };
   }
   renderFleet();
+  renderPrinter();
+}
+
+/* ---------------------------------------------------- native printer card */
+
+/* The 3D printer gets its own card under Fleet (owner's pick, 2026-11-15):
+   a progress ring, when it will be done, layers, the three temperatures,
+   and every AMS spool drawn in its real filament color with the one feeding
+   the nozzle lit. It reads the same /api/tiles/fleet payload as the fleet
+   card (fleetData), so there is no second fetch, but it has its own toggle
+   ('printer') so the family can keep it and drop the server card, or the
+   other way round. No animation loop: the ring is a plain dash update.
+
+   Never-fabricate, as on the fleet card: every reading is shown only when
+   it is a finite number (a missing nozzle temp is no cell, never 0°), and
+   `online` must be the literal boolean true. */
+
+/* Raw printer state (Bambu gcode_state, or the demo's lower-case word) ->
+   the word the wall shows and a tone for the ring and the state word. */
+/* Each state carries a word, a tone (the color) and a phase (what the card
+   shows). They are separate on purpose: an error code turns the card red,
+   but a print that paused on an error is still a paused print, so its time
+   left, layers and loaded spool stay on the card. */
+const PRINTER_STATES = {
+  running: ['Printing', 'run', 'printing'], printing: ['Printing', 'run', 'printing'],
+  prepare: ['Getting ready', 'run', 'prep'], slicing: ['Getting ready', 'run', 'prep'],
+  init: ['Getting ready', 'run', 'prep'],
+  pause: ['Paused', 'warn', 'paused'], paused: ['Paused', 'warn', 'paused'],
+  failed: ['Failed', 'crit', 'failed'],
+  finish: ['Finished', 'good', 'done'], finished: ['Finished', 'good', 'done'],
+  idle: ['Idle', 'idle', 'idle'],
+};
+function printerState(p) {
+  // a non-string state (a flaky upstream's number or object) is unknown
+  const raw = typeof p.state === 'string' ? p.state.trim().toLowerCase() : '';
+  // own keys only: "constructor" must not find Object.prototype's
+  const known = Object.prototype.hasOwnProperty.call(PRINTER_STATES, raw)
+    ? PRINTER_STATES[raw] : null;
+  const pretty = raw.replace(/_/g, ' ').trim();
+  const word = known ? known[0]
+    : pretty ? pretty.replace(/^./, (c) => c.toUpperCase()) : 'Unknown';
+  // an error code turns any state red: it is the one thing to act on
+  const tone = p.errorCode ? 'crit' : (known ? known[1] : 'idle');
+  return { raw, word, tone, phase: known ? known[2] : 'unknown' };
+}
+
+/* "holiday-ornaments_4_colors.gcode.3mf" -> "holiday ornaments 4 colors".
+   Slicer file names are the only name a print has; this just makes them
+   read like words. */
+function printerJobName(job) {
+  if (typeof job !== 'string') return '';
+  return job.replace(/(\.gcode)?(\.3mf|\.gcode)$/i, '')
+    .replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/* "#RRGGBB" -> a plain color word for the "Printing with ..." line, or ''
+   when it isn't a color. Bambu sends only the hex; the AMS knows no names. */
+function printerColorName(hex) {
+  if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return '';
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const l = (max + min) / 2;
+  if (l < 0.16) return 'Black';
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  if (s < 0.15 || d < 0.08) return l > 0.86 ? 'White' : l > 0.62 ? 'Light gray' : 'Gray';
+  if (l > 0.9) return 'White';
+  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h = (h * 60 + 360) % 360;
+  if (h < 15 || h >= 345) return l < 0.3 ? 'Dark red' : 'Red';
+  if (h < 40) return l < 0.38 ? 'Brown' : 'Orange';
+  if (h < 66) return l < 0.32 ? 'Olive' : 'Yellow';
+  if (h < 165) return 'Green';
+  if (h < 196) return 'Teal';
+  if (h < 255) return 'Blue';
+  if (h < 290) return 'Purple';
+  return 'Pink';
+}
+
+/* The progress ring: track + a dash for the percent, the number in the
+   middle. pct null (idle, or an out-of-range upstream value) draws the
+   track alone with a quiet dash, never a fabricated 0%. */
+const PR_RING_R = 34;
+const PR_RING_C = 2 * Math.PI * PR_RING_R;
+function printerRingHtml(pct, tone) {
+  const ok = Number.isFinite(pct) && pct >= 0 && pct <= 100;
+  // a 0% arc would still paint its round cap as a dot
+  const arc = ok && pct > 0
+    ? `<circle class="pr-ring-arc" cx="42" cy="42" r="${PR_RING_R}"`
+      + ` stroke-dasharray="${(PR_RING_C * pct / 100).toFixed(2)} ${PR_RING_C.toFixed(2)}"`
+      + ` transform="rotate(-90 42 42)"/>`
+    : '';
+  const mid = ok
+    ? `<span class="pr-ring-pct num"><span>${Math.round(pct)}<small>%</small></span></span>`
+    : `<span class="pr-ring-pct pr-ring-none">–</span>`;
+  return `<div class="pr-ring tone-${tone}">`
+    + `<svg viewBox="0 0 84 84" width="84" height="84" aria-hidden="true">`
+    + `<circle class="pr-ring-track" cx="42" cy="42" r="${PR_RING_R}"/>${arc}</svg>`
+    + mid + `</div>`;
+}
+
+/* One temperature cell. Shows "heating to N°" under the reading while a
+   heater is still climbing toward its target (more than ~5°F short). */
+function printerTempHtml(label, now, target, warming = true) {
+  if (!Number.isFinite(now)) return '';
+  // only while a print is under way: a finished print's leftover target is
+  // not "heating"
+  const heating = warming && Number.isFinite(target) && target - now > 9;
+  return `<div class="pr-temp"><span class="pr-temp-k">${label}</span>`
+    + `<span class="pr-temp-v num">${Math.round(now)}°<small>F</small></span>`
+    + (heating ? `<span class="pr-temp-sub">heating to ${Math.round(target)}°</span>` : '')
+    + `</div>`;
+}
+
+/* One AMS slot drawn as a spool seen from above: the filament color with a
+   hub hole, a thin ring for what is left on a tagged Bambu spool, and the
+   filament type under it. An empty slot is a dashed outline. The color is
+   re-checked here (the server already allows only #RRGGBB) because it goes
+   into an inline style. */
+function printerSpoolHtml(t, feeding = true) {
+  if (!t || t.loaded !== true) {
+    return `<div class="pr-spool is-empty"><svg viewBox="0 0 40 40" aria-hidden="true">`
+      + `<circle class="pr-spool-empty" cx="20" cy="20" r="15"/></svg>`
+      + `<span class="pr-spool-k">empty</span></div>`;
+  }
+  const color = (typeof t.color === 'string' && /^#[0-9a-f]{6}$/i.test(t.color))
+    ? t.color : null;
+  const remain = (Number.isFinite(t.remainPercent) && t.remainPercent >= 0
+    && t.remainPercent <= 100) ? t.remainPercent : null;
+  const rc = 2 * Math.PI * 18.5;
+  const ring = remain === null ? ''
+    : `<circle class="pr-spool-left" cx="20" cy="20" r="18.5"`
+      + ` stroke-dasharray="${(rc * remain / 100).toFixed(2)} ${rc.toFixed(2)}"`
+      + ` transform="rotate(-90 20 20)"/>`;
+  const fill = color ? ` style="fill:${color}"` : '';
+  const type = t.type ? escapeHtml(String(t.type)) : '?';
+  // lit only while a print is under way: Bambu keeps the last tray "loaded"
+  // after a print ends, and a glow then would claim it is still feeding
+  const lit = (feeding && t.active === true) ? ' is-active' : '';
+  return `<div class="pr-spool${lit}${color ? '' : ' no-color'}">`
+    + `<svg viewBox="0 0 40 40" aria-hidden="true">${ring}`
+    + `<circle class="pr-spool-body" cx="20" cy="20" r="15"${fill}/>`
+    + `<circle class="pr-spool-hub" cx="20" cy="20" r="4.5"/></svg>`
+    + `<span class="pr-spool-k">${type}${remain === null ? '' : ` <b class="num">${Math.round(remain)}%</b>`}</span>`
+    + `</div>`;
+}
+
+/* The AMS rows: "AMS 1" (numbered in order; an id of 128+ is an AMS HT,
+   the one-spool dryer box), its spools, and its humidity. */
+function printerAmsHtml(ams, feeding = true) {
+  if (!Array.isArray(ams) || !ams.length) return '';
+  const rows = ams.filter((u) => u && Array.isArray(u.trays) && u.trays.length
+    && Number.isInteger(u.id) && u.id >= 0).map((u) => {
+    // named from the printer's own unit id (0 -> AMS 1), so a unit that
+    // failed to report never renumbers the ones after it
+    const label = u.id >= 128 ? `AMS HT${u.id > 128 ? ` ${u.id - 127}` : ''}` : `AMS ${u.id + 1}`;
+    const rh = (Number.isFinite(u.humidityPercent) && u.humidityPercent >= 0
+      && u.humidityPercent <= 100)
+      ? `<span class="pr-ams-rh num">${Math.round(u.humidityPercent)}% RH</span>` : '';
+    return `<div class="pr-ams-row"><span class="pr-ams-k">${label}</span>`
+      + `<div class="pr-spools">${u.trays.map((t) => printerSpoolHtml(t, feeding)).join('')}</div>${rh}</div>`;
+  });
+  return rows.length ? `<div class="pr-ams">${rows.join('')}</div>` : '';
+}
+
+/* The spool feeding the active nozzle, in words: "White PLA Basic". */
+function printerActiveFilament(ams) {
+  for (const u of Array.isArray(ams) ? ams : []) {
+    for (const t of (u && Array.isArray(u.trays)) ? u.trays : []) {
+      if (t && t.loaded === true && t.active === true) {
+        const what = t.name ? String(t.name)
+          : (t.type ? String(t.type) : 'filament');
+        const color = printerColorName(t.color);
+        // "PLA Basic" already says PLA; "White PLA Basic", not "White PLA PLA Basic"
+        return color ? `${color} ${what}` : what;
+      }
+    }
+  }
+  return '';
+}
+
+/* "03008001" -> "0300-8001", the way Bambu's own app and wiki write it. */
+function printerErrorStr(code) {
+  const c = String(code).trim();
+  // anything else is shown as sent: an odd code is still an error to read
+  return /^[0-9a-f]{8}$/i.test(c) ? `${c.slice(0, 4)}-${c.slice(4)}`.toUpperCase() : c;
+}
+
+// A time left past two weeks is a bad reading, not a print (and would push
+// the finish Date out of range).
+const PR_MAX_MINUTES = 14 * 24 * 60;
+
+function printerCardHtml(fl, stale = false, now = Date.now()) {
+  const p = (fl && fl.printer) || {};
+  if (p.online === false) return `<div class="wx-offline">Printer offline</div>`;
+  // online missing/not literally true, or no state: unknown, not "offline"
+  if (p.online !== true || !p.state) {
+    return `<div class="wx-offline">Printer status unknown</div>`;
+  }
+  const st = printerState(p);
+  const underway = st.phase === 'printing' || st.phase === 'paused';
+  // the ring only for a print under way or ended; getting ready can still
+  // carry the last job's numbers, and idle or unknown has no progress
+  const pct = ['printing', 'paused', 'failed', 'done'].includes(st.phase)
+    ? p.progressPercent : null;
+  const lines = [];
+  // Time left only on fresh data for a print under way: a stale card would
+  // show a number that no longer counts down. The finish clock time only
+  // while it is actually printing (a pause slides it every minute).
+  const left = !stale && underway
+    && Number.isFinite(p.remainingMinutes) && p.remainingMinutes > 0
+    && p.remainingMinutes <= PR_MAX_MINUTES
+    ? fleetRemainStr(p.remainingMinutes).replace(/^~/, '') : '';
+  if (left && st.phase === 'printing') {
+    const when = lnWhen(new Date(now + p.remainingMinutes * 60000).toISOString(), now);
+    lines.push(`done ${when} · ${left}`);
+  } else if (left) {
+    lines.push(left);
+  }
+  // layers for a print under way, or where a failed one stopped
+  if ((underway || st.phase === 'failed')
+      && Number.isInteger(p.layerCurrent) && Number.isInteger(p.layerTotal)
+      && p.layerTotal > 0 && p.layerCurrent >= 0 && p.layerCurrent <= p.layerTotal) {
+    lines.push(`Layer ${p.layerCurrent} of ${p.layerTotal}`);
+  }
+  const job = printerJobName(p.job);
+  const jobHtml = job
+    ? `<div class="pr-job">${st.phase === 'done' ? '<span>Last print · </span>' : ''}${escapeHtml(job)}</div>`
+    : '';
+  const stage = (typeof p.stage === 'string' && p.stage && st.phase !== 'idle')
+    ? `<div class="pr-stage">${escapeHtml(p.stage)}</div>` : '';
+  const err = p.errorCode
+    ? `<div class="pr-error">Error ${escapeHtml(printerErrorStr(p.errorCode))} · check the printer</div>`
+    : '';
+  // live claims ("heating to", the lit spool, "Printing with") only on
+  // fresh data: a stale card shows what was last seen, not what is happening
+  const warming = !stale && (st.phase === 'printing' || st.phase === 'prep');
+  const feeding = underway && !stale;
+  const temps = printerTempHtml('Nozzle', p.nozzleF, p.nozzleTargetF, warming)
+    + printerTempHtml('Bed', p.bedF, p.bedTargetF, warming)
+    + printerTempHtml('Chamber', p.chamberF, null);
+  // a spool is "feeding" only mid-print or paused: while getting ready, or
+  // after a print ends, the printer can still report the last job's spool
+  const filament = feeding ? printerActiveFilament(p.ams) : '';
+  const foot = [
+    filament ? `${st.phase === 'printing' ? 'Printing with' : 'Paused on'} ${escapeHtml(filament)}` : '',
+    (typeof p.speed === 'string' && p.speed && underway) ? `${escapeHtml(p.speed)} speed` : '',
+  ].filter(Boolean).join(' · ');
+  const staleTag = stale ? '<span class="fleet-stale">stale</span>' : '';
+  return `<article class="card printer tone-${st.tone}${stale ? ' is-stale' : ''}">`
+    + `<div class="pr-hero">${printerRingHtml(pct, st.tone)}`
+    + `<div class="pr-hero-txt"><div class="pr-state">${escapeHtml(st.word)}${staleTag}</div>`
+    + lines.map((l) => `<div class="pr-line num">${escapeHtml(l)}</div>`).join('')
+    + `</div></div>`
+    + stage + err + jobHtml
+    + (temps ? `<div class="pr-temps">${temps}</div>` : '')
+    + printerAmsHtml(p.ams, feeding)
+    + (foot ? `<div class="pr-foot">${foot}</div>` : '')
+    + `</article>`;
+}
+
+/* The printer slot rides the panels column right under Fleet, built
+   unconditionally like the fleet slot (an outage never freezes it away). */
+function printerSlotHtml() {
+  return `<div class="printer-slot" id="printer-slot"></div>`;
+}
+
+function renderPrinter(fl = fleetData) {
+  const host = document.getElementById('printer-slot');
+  if (!host) return;   // panels not built yet
+  const stale = fleetFails > 0 && !!(fl && fl.available);
+  const head = sectionHead('3D Printer');
+  const body = fl == null
+    ? `<div class="card wx-loading" aria-hidden="true"></div>`
+    : fl.available
+      ? printerCardHtml(fl, stale)
+      : `<div class="wx-offline">Printer unavailable</div>`;
+  host.innerHTML = head + body;
 }
 
 let fitDebounce = null;

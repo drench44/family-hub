@@ -423,7 +423,7 @@ def test_demo_laundry_tile_is_canned_and_live_shaped(demo_client):
 
 def test_demo_fleet_tile_is_canned_and_live_shaped(demo_client):
     """DEMO serves a canned fleet rollup with no fleet console hit: a fully
-    healthy fleet plus a printer mid-print (42%%), both signature card states
+    healthy fleet plus a printer mid-print, both signature card states
     for a screenshot. The integration is also forced available so the wall
     card and settings row show even though no ``fleet`` config block exists."""
     t = demo_client.get("/api/tiles/fleet").json()
@@ -434,7 +434,10 @@ def test_demo_fleet_tile_is_canned_and_live_shaped(demo_client):
                                "hottestTempF"}
     assert set(t["internet"]) == {"up", "downMbps", "upMbps"}
     assert set(t["printer"]) == {"health", "state", "job", "progressPercent",
-                                  "remainingMinutes", "nozzleF", "bedF", "online"}
+                                  "remainingMinutes", "nozzleF", "bedF", "online",
+                                  "nozzleTargetF", "bedTargetF", "chamberF",
+                                  "layerCurrent", "layerTotal", "speed", "stage",
+                                  "errorCode", "ams"}
     assert t["fleet"]["health"] == "ok"
     assert t["fleet"]["hostsUp"] == t["fleet"]["hostsTotal"] == 3
     assert t["fleet"]["worstProblem"] is None
@@ -445,12 +448,22 @@ def test_demo_fleet_tile_is_canned_and_live_shaped(demo_client):
     assert t["fleet"]["hottestTempF"] > 0
     assert t["internet"]["up"] is True
     assert t["internet"]["downMbps"] > 0 and t["internet"]["upMbps"] > 0
-    assert t["printer"]["state"] == "printing"
+    # the console's raw Bambu state word, as the live rollup sends it
+    assert t["printer"]["state"] == "RUNNING"
+    # the printer card's showpiece: AMS spools in real colors, one feeding
+    ams = t["printer"]["ams"]
+    assert len(ams) == 2 and all(len(u["trays"]) == 4 for u in ams)
+    trays = [tr for u in ams for tr in u["trays"]]
+    assert sum(tr["active"] for tr in trays) == 1
+    assert any(not tr["loaded"] for tr in trays)
+    assert all(tr["color"].startswith("#") for tr in trays if tr["loaded"])
+    assert 0 < t["printer"]["layerCurrent"] < t["printer"]["layerTotal"]
     assert 0 < t["printer"]["progressPercent"] < 100
     assert t["printer"]["online"] is True
     ids = {i["id"]: i for i in
            demo_client.get("/api/hub").json()["integrations"]}
     assert "fleet" in ids and ids["fleet"]["enabled"] is True
+    assert "printer" in ids and ids["printer"]["enabled"] is True
 
 
 def test_demo_laundry_log_is_canned_and_live_shaped(demo_client):
