@@ -8095,14 +8095,102 @@ test('printerCardHtml: finished and idle never claim heating, a finish time or a
   assert.doesNotMatch(idle, /0<small>%|heating to|pr-job/);
 });
 
-test('printerCardHtml: offline, missing `online`, or no state is a quiet note, never a reading', () => {
+test('printerCardHtml: offline says offline; missing `online` or no state is unknown, never a reading', () => {
   const { sandbox } = newHub();
-  for (const over of [{ online: false, state: 'offline' }, { online: undefined },
-    { online: 'true' }, { state: null }]) {
+  const off = sandbox.printerCardHtml(prWith({ online: false, state: 'offline' }));
+  assert.match(off, /Printer offline/);
+  for (const over of [{ online: undefined }, { online: 'true' }, { state: null }]) {
     const html = sandbox.printerCardHtml(prWith(over));
-    assert.match(html, /Printer offline/, JSON.stringify(over));
-    assert.doesNotMatch(html, /pr-temp|pr-ring/);
+    assert.match(html, /Printer status unknown/, JSON.stringify(over));
+    assert.doesNotMatch(html, /pr-temp|pr-ring|Printer offline/);
   }
+});
+
+test('printerCardHtml: a finish after midnight names the day; a stale card drops the clock time', () => {
+  const { sandbox } = newHub();
+  const now = new Date(2026, 10, 15, 23, 30).getTime();   // Sun 11:30pm local
+  const html = sandbox.printerCardHtml(prWith({ remainingMinutes: 120 }), false, now);
+  assert.match(html, /done Mon 1:30am · 2h 0m left/);
+  const stale = sandbox.printerCardHtml(prWith({ remainingMinutes: 120 }), true, now);
+  assert.doesNotMatch(stale, /done /, 'now + left would slide on every failed poll');
+  assert.match(stale, /2h 0m left/);
+});
+
+test('printerCardHtml: an absurd time left is ignored, never a crash or a far-future date', () => {
+  const { sandbox } = newHub();
+  for (const mins of [2e11, 1e300, 14 * 24 * 60 + 1]) {
+    let html;
+    assert.doesNotThrow(() => { html = sandbox.printerCardHtml(prWith({ remainingMinutes: mins })); });
+    assert.doesNotMatch(html, /done |m left/, String(mins));
+  }
+});
+
+test('printerCardHtml: unknown, non-string and prototype-named states read as words, never undefined', () => {
+  const { sandbox } = newHub();
+  const odd = sandbox.printerCardHtml(prWith({ state: 'SOMETHING_NEW' }));
+  assert.match(odd, /<div class="pr-state">Something new</);
+  assert.match(odd, /tone-idle/);
+  for (const state of ['constructor', 'toString', '__proto__']) {
+    const html = sandbox.printerCardHtml(prWith({ state }));
+    assert.doesNotMatch(html, /undefined/, state);
+  }
+  assert.match(sandbox.printerCardHtml(prWith({ state: 5 })), /pr-state">Unknown</);
+  assert.match(sandbox.printerCardHtml(prWith({ state: ' Running ' })), /pr-state">Printing</);
+});
+
+test('printerCardHtml: the loaded spool glows only while a print is under way', () => {
+  const { sandbox } = newHub();
+  assert.match(sandbox.printerCardHtml(PRINTER_LIVE), /pr-spool is-active/);
+  assert.match(sandbox.printerCardHtml(prWith({ state: 'PAUSE' })), /pr-spool is-active/);
+  for (const state of ['FINISH', 'IDLE', 'FAILED']) {
+    assert.doesNotMatch(sandbox.printerCardHtml(prWith({ state })), /is-active/, state);
+  }
+});
+
+test('printerCardHtml: an impossible layer count is left out', () => {
+  const { sandbox } = newHub();
+  for (const over of [{ layerCurrent: 500, layerTotal: 100 }, { layerCurrent: -3 },
+    { layerCurrent: 1.5 }, { layerTotal: 0 }]) {
+    assert.doesNotMatch(sandbox.printerCardHtml(prWith(over)), /Layer/, JSON.stringify(over));
+  }
+});
+
+test('printerAmsHtml: units are named from their own id, so a bad one never renumbers the rest', () => {
+  const { sandbox } = newHub();
+  const html = sandbox.printerAmsHtml([
+    { id: 0, humidityPercent: 20, trays: [] },            // no trays: not drawn
+    { id: 'x', humidityPercent: 20, trays: [PR_TRAY(0, 'PLA', '#FFFFFF')] },
+    { id: 1, humidityPercent: 20, trays: [PR_TRAY(0, 'PLA', '#FFFFFF')] },
+  ]);
+  assert.match(html, /AMS 2<\/span>/);
+  assert.doesNotMatch(html, /AMS 1</);
+});
+
+test('toggle: printer alone keeps the panels column and Weather tab; off hides only its slot; back on returns', () => {
+  const { sandbox, document } = newHub();
+  seedTabbar(document);
+  seedWallGrid(document);
+  const byTab = (t) => document.querySelectorAll('.tab-btn').find((b) => b.dataset.tab === t);
+  const grid = document.querySelector('.hub-grid');
+  const set = (fleet, printer) => sandbox.renderIntegrations({ integrations: [
+    { id: 'chores', enabled: true, group: 'feature' },
+    { id: 'fleet', enabled: fleet, group: 'integration' },
+    { id: 'printer', enabled: printer, group: 'integration' },
+  ] });
+  set(false, true);
+  assert.equal(byTab('weather').hidden, false, 'printer alone keeps the Weather tab');
+  assert.match(grid.style.gridTemplateAreas || '', /panels/, 'printer alone keeps the panels column');
+  assert.equal(document.body.classList.contains('integ-off-printer'), false);
+  set(true, false);
+  assert.equal(document.body.classList.contains('integ-off-printer'), true);
+  assert.equal(document.body.classList.contains('integ-off-fleet'), false);
+  assert.equal(byTab('weather').hidden, false);
+  set(false, false);
+  assert.equal(byTab('weather').hidden, true, 'nothing left on the Weather tab: it reflows away');
+  assert.doesNotMatch(grid.style.gridTemplateAreas || '', /panels/);
+  set(false, true);
+  assert.equal(document.body.classList.contains('integ-off-printer'), false, 'instant return');
+  assert.equal(byTab('weather').hidden, false);
 });
 
 test('printerCardHtml: missing readings are left out, never shown as 0', () => {
@@ -8161,6 +8249,9 @@ test('renderPrinter: header, loading placeholder, unavailable note, and the stal
   await sandbox.fetchFleet();
   assert.match(slot.innerHTML, /class="card printer tone-run is-stale"/);
   assert.match(slot.innerHTML, /fleet-stale">stale</);
+  await sandbox.fetchFleet();
+  await sandbox.fetchFleet();   // past the failure limit: gives up honestly
+  assert.match(slot.innerHTML, /Printer unavailable/);
 });
 
 // ---------------------------------------------------------------------------

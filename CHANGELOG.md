@@ -17,10 +17,8 @@ rolls that section to a dated version via `python scripts/release.py`.
   any error code, the speed mode, and every AMS spool drawn in its real
   filament color with the one feeding the nozzle lit. It has its own switch
   in Settings. The Fleet card now shows just the servers and the internet.
-
-### Fixed
-- The printer's nozzle temperature now comes from the nozzle that is
-  printing (the fleet console reads both nozzles of a two-nozzle printer).
+- The printer card works with an older fleet console too: it then shows the
+  state, job, progress and temperatures, and leaves out what isn't sent.
 
 ## [1.13.5] — 2026-11-14
 

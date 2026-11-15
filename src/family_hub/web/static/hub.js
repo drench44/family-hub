@@ -4099,10 +4099,13 @@ const PRINTER_STATES = {
   idle: ['Idle', 'idle'],
 };
 function printerState(p) {
-  const raw = String(p.state).toLowerCase();
-  const known = PRINTER_STATES[raw];
+  // a non-string state (a flaky upstream's number or object) is unknown
+  const raw = typeof p.state === 'string' ? p.state.trim().toLowerCase() : '';
+  // own keys only: "constructor" must not find Object.prototype's
+  const known = Object.prototype.hasOwnProperty.call(PRINTER_STATES, raw)
+    ? PRINTER_STATES[raw] : null;
   const word = known ? known[0]
-    : raw.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+    : raw ? raw.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Unknown';
   // an error code turns any state red: it is the one thing to act on
   const tone = p.errorCode ? 'crit' : (known ? known[1] : 'idle');
   return { raw, word, tone };
@@ -4180,7 +4183,7 @@ function printerTempHtml(label, now, target, warming = true) {
    filament type under it. An empty slot is a dashed outline. The color is
    re-checked here (the server already allows only #RRGGBB) because it goes
    into an inline style. */
-function printerSpoolHtml(t) {
+function printerSpoolHtml(t, feeding = true) {
   if (!t || t.loaded !== true) {
     return `<div class="pr-spool is-empty"><svg viewBox="0 0 40 40" aria-hidden="true">`
       + `<circle class="pr-spool-empty" cx="20" cy="20" r="15"/></svg>`
@@ -4197,7 +4200,9 @@ function printerSpoolHtml(t) {
       + ` transform="rotate(-90 20 20)"/>`;
   const fill = color ? ` style="fill:${color}"` : '';
   const type = t.type ? escapeHtml(String(t.type)) : '?';
-  const lit = t.active === true ? ' is-active' : '';
+  // lit only while a print is under way: Bambu keeps the last tray "loaded"
+  // after a print ends, and a glow then would claim it is still feeding
+  const lit = (feeding && t.active === true) ? ' is-active' : '';
   return `<div class="pr-spool${lit}${color ? '' : ' no-color'}">`
     + `<svg viewBox="0 0 40 40" aria-hidden="true">${ring}`
     + `<circle class="pr-spool-body" cx="20" cy="20" r="15"${fill}/>`
@@ -4208,16 +4213,18 @@ function printerSpoolHtml(t) {
 
 /* The AMS rows: "AMS 1" (numbered in order; an id of 128+ is an AMS HT,
    the one-spool dryer box), its spools, and its humidity. */
-function printerAmsHtml(ams) {
+function printerAmsHtml(ams, feeding = true) {
   if (!Array.isArray(ams) || !ams.length) return '';
-  let n = 0;
-  const rows = ams.filter((u) => u && Array.isArray(u.trays) && u.trays.length).map((u) => {
-    const label = u.id >= 128 ? 'AMS HT' : `AMS ${++n}`;
+  const rows = ams.filter((u) => u && Array.isArray(u.trays) && u.trays.length
+    && Number.isInteger(u.id) && u.id >= 0).map((u) => {
+    // named from the printer's own unit id (0 -> AMS 1), so a unit that
+    // failed to report never renumbers the ones after it
+    const label = u.id >= 128 ? 'AMS HT' : `AMS ${u.id + 1}`;
     const rh = (Number.isFinite(u.humidityPercent) && u.humidityPercent >= 0
       && u.humidityPercent <= 100)
       ? `<span class="pr-ams-rh num">${Math.round(u.humidityPercent)}% RH</span>` : '';
     return `<div class="pr-ams-row"><span class="pr-ams-k">${label}</span>`
-      + `<div class="pr-spools">${u.trays.map(printerSpoolHtml).join('')}</div>${rh}</div>`;
+      + `<div class="pr-spools">${u.trays.map((t) => printerSpoolHtml(t, feeding)).join('')}</div>${rh}</div>`;
   });
   return rows.length ? `<div class="pr-ams">${rows.join('')}</div>` : '';
 }
@@ -4244,10 +4251,16 @@ function printerErrorStr(code) {
   return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c;
 }
 
+// A time left past two weeks is a bad reading, not a print (and would push
+// the finish Date out of range).
+const PR_MAX_MINUTES = 14 * 24 * 60;
+
 function printerCardHtml(fl, stale = false, now = Date.now()) {
   const p = (fl && fl.printer) || {};
+  if (p.online === false) return `<div class="wx-offline">Printer offline</div>`;
+  // online missing/not literally true, or no state: unknown, not "offline"
   if (p.online !== true || !p.state) {
-    return `<div class="wx-offline">Printer offline</div>`;
+    return `<div class="wx-offline">Printer status unknown</div>`;
   }
   const st = printerState(p);
   const active = st.tone === 'run' || st.tone === 'warn' || st.raw === 'failed';
@@ -4255,17 +4268,19 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
   const pct = st.raw === 'idle' ? null : raw;
   const lines = [];
   const left = Number.isFinite(p.remainingMinutes) && p.remainingMinutes > 0
+    && p.remainingMinutes <= PR_MAX_MINUTES
     ? fleetRemainStr(p.remainingMinutes).replace(/^~/, '') : '';
-  // A finish clock time only while it is really printing: a paused print's
-  // finish slides with every minute of the pause, and a failed one has none.
-  if (left && st.tone === 'run') {
+  // A finish clock time only while it is really printing on fresh data: a
+  // paused print's finish slides with every minute of the pause, a failed
+  // one has none, and a stale card's "now + left" would slide every poll.
+  if (left && st.tone === 'run' && !stale) {
     const when = lnWhen(new Date(now + p.remainingMinutes * 60000).toISOString(), now);
     lines.push(`done ${when} · ${left}`);
-  } else if (left && st.tone === 'warn') {
+  } else if (left && (st.tone === 'warn' || st.tone === 'run')) {
     lines.push(left);
   }
-  if (active && Number.isFinite(p.layerCurrent) && Number.isFinite(p.layerTotal)
-      && p.layerTotal > 0) {
+  if (active && Number.isInteger(p.layerCurrent) && Number.isInteger(p.layerTotal)
+      && p.layerTotal > 0 && p.layerCurrent >= 0 && p.layerCurrent <= p.layerTotal) {
     lines.push(`Layer ${Math.round(p.layerCurrent)} of ${Math.round(p.layerTotal)}`);
   }
   const job = printerJobName(p.job);
@@ -4296,7 +4311,7 @@ function printerCardHtml(fl, stale = false, now = Date.now()) {
     + `</div></div>`
     + stage + err + jobHtml
     + (temps ? `<div class="pr-temps">${temps}</div>` : '')
-    + printerAmsHtml(p.ams)
+    + printerAmsHtml(p.ams, st.tone === 'run' || st.tone === 'warn')
     + (foot ? `<div class="pr-foot">${foot}</div>` : '')
     + `</article>`;
 }
