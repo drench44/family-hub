@@ -105,6 +105,9 @@ def available_integrations(cfg, env: dict | None = None,
         bool(getattr(cfg, "climate_base", "")))
     add("laundry", "laundry", "Laundry", laundry_configured(cfg, env))
     add("fleet", "fleet", "Fleet status", bool(getattr(cfg, "fleet", None)))
+    # The printer card reads the same fleet rollup, so it exists exactly when
+    # fleet is configured, with its own switch (keep one card, drop the other).
+    add("printer", "printer", "3D printer", bool(getattr(cfg, "fleet", None)))
     return out
 
 

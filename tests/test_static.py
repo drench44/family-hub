@@ -1378,15 +1378,52 @@ def test_fleet_card_static_guards():
     assert rf and re.search(r"links\.panels\.some\(\(p\) => p && p\.id === 'fleet'\)",
                             hub[rf.start():rf.start() + 1200]), \
         "renderFleet must gate the Console button on a configured 'fleet' panel"
-    # no animation loop on this card by design (plain width-update progress
-    # bar) — confirm no stray keyframes/transition slipped in unguarded
-    assert "fleet-bar-fill { height: 100%; border-radius: 999px; background:" in CSS
+    # the printer moved to its own card (2026-11-15): the fleet card must
+    # not grow a second printer readout back
+    fc = re.search(r"function fleetCardHtml\(", hub)
+    assert fc and "printer" not in hub[fc.start():hub.index("\n}\n", fc.start())].replace(
+        "printerCardHtml", ""), "fleetCardHtml must not render printer data"
     # the wall places fleet directly under laundry in the panels column
     # (owner's placement intent); the phone rides the Weather tab since it
     # has no tab of its own ("no new tab" per the mobile gate) — the fleet
     # slot must NOT be excluded from the Weather tab the way laundry is.
     assert not re.search(r'body\[data-tab="weather"\] \.fleet-slot[^{]*\{[^}]*display:\s*none',
                          CSS), "the fleet card must stay on the Weather tab"
+
+
+def test_printer_card_static_guards():
+    """The printer card (its own card under fleet, 2026-11-15): its own
+    off-toggle hides it, its slot is built unconditionally right after the
+    fleet slot, it repaints on every fleet poll, it keeps the panels column
+    and the phone Weather tab alive on its own, and it never animates."""
+    hub = (STATIC / "hub.js").read_text()
+    assert re.search(r"body\.integ-off-printer[^\{]*#printer-slot[^\{]*\{[^}]*display:\s*none",
+                     CSS), "printer-off must hide the printer slot"
+    assert "laundrySlotHtml() + fleetSlotHtml() + printerSlotHtml()" in hub, \
+        "the printer slot must be built unconditionally, right under fleet"
+    fetch = hub[hub.index("async function fetchFleet()"):]
+    fetch = fetch[:fetch.index("\n}\n")]
+    assert "renderPrinter();" in fetch, "every fleet poll must repaint the printer card"
+    bp = hub[hub.index("function buildPanels()"):]
+    assert "renderPrinter();" in bp[:bp.index("\n}\n")], \
+        "buildPanels must fill the printer slot from cached data"
+    assert re.search(r"has\('weather', 'climate', 'laundry', 'fleet', 'printer'\)", hub), \
+        "the printer toggle alone must keep the panels column on the wall"
+    assert "on.has('printer')" in hub, \
+        "the printer toggle alone must keep the phone Weather tab visible"
+    assert not re.search(r'body\[data-tab="weather"\] \.printer-slot[^{]*\{[^}]*display:\s*none',
+                         CSS), "the printer card must stay on the Weather tab"
+    # static by design: no animation or transition on any printer rule
+    block = CSS[CSS.index("native printer card"):]
+    block = block[:block.index("/* ===")] if "/* ===" in block else block
+    assert "animation" not in block and "transition" not in block, \
+        "the printer card must not animate (the wall's Firefox repaints it)"
+    # spool colors land in an inline style: the renderer re-checks them
+    assert "/^#[0-9a-f]{6}$/i.test(t.color)" in hub
+    # a data color needs an edge: a black spool vanished on the dark themes
+    # until the spool circle got a firm ink stroke
+    assert re.search(r"\.pr-spool-body \{[^}]*stroke: color-mix\(in srgb, var\(--ink\) \d+%", CSS), \
+        "spool circles need an ink edge so black/white filament shows on every theme"
 
 
 def test_css_braces_balanced():

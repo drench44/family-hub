@@ -1158,7 +1158,14 @@ FLEET_KEYS = {"health", "hostsUp", "hostsTotal", "worstProblem", "alerts",
               "cpuPercent", "memPercent", "storageUsedBytes",
               "storageTotalBytes", "hottestTempF"}
 PRINTER_KEYS = {"health", "state", "job", "progressPercent",
-                "remainingMinutes", "nozzleF", "bedF", "online"}
+                "remainingMinutes", "nozzleF", "bedF", "online",
+                "nozzleTargetF", "bedTargetF", "chamberF", "layerCurrent",
+                "layerTotal", "speed", "stage", "errorCode", "ams"}
+# what an older console (before the printer detail) leaves the new keys as
+PRINTER_DETAIL_NONE = {"nozzleTargetF": None, "bedTargetF": None,
+                       "chamberF": None, "layerCurrent": None,
+                       "layerTotal": None, "speed": None, "stage": None,
+                       "errorCode": None, "ams": []}
 INTERNET_KEYS = {"up", "downMbps", "upMbps"}
 
 
@@ -1189,9 +1196,83 @@ def test_fleet_happy_trims_to_contract_fields():
         "internet": {"up": True, "downMbps": 2358.0, "upMbps": 2086.0},
         "printer": {"health": "ok", "state": "printing", "job": "benchy.gcode",
                     "progressPercent": 42, "remainingMinutes": 18,
-                    "nozzleF": 410.0, "bedF": 140.0, "online": True},
+                    "nozzleF": 410.0, "bedF": 140.0, "online": True,
+                    **PRINTER_DETAIL_NONE},
     }
     assert "generatedAt" not in t   # not part of the tile contract
+
+
+PRINTER_DETAIL = {
+    "nozzleTargetF": 410, "bedTargetF": 149, "chamberF": 88,
+    "layerCurrent": 187, "layerTotal": 412, "speed": "Standard",
+    "stage": "Changing filament", "errorCode": None,
+    "ams": [
+        {"id": 0, "humidityPercent": 42, "trays": [
+            {"slot": 0, "loaded": True, "type": "PLA", "color": "#057748",
+             "name": None, "remainPercent": None, "active": False},
+            {"slot": 1, "loaded": True, "type": "PETG", "color": "#688197",
+             "name": "PETG Basic", "remainPercent": 75, "active": True},
+            {"slot": 2, "loaded": False, "type": None, "color": None,
+             "name": None, "remainPercent": None, "active": False},
+        ]},
+    ],
+}
+
+
+def test_fleet_printer_detail_passes_through_when_well_formed():
+    tiles.reset_caches()
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], **PRINTER_DETAIL))
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    for key, value in PRINTER_DETAIL.items():
+        assert t["printer"][key] == value, key
+
+
+def test_fleet_printer_ams_is_checked_field_by_field():
+    """The AMS colors land in an inline style, so only a literal #RRGGBB
+    survives; a bad unit or slot is dropped on its own; nothing raises."""
+    tiles.reset_caches()
+    tray = {"slot": 0, "loaded": True, "type": "PLA", "color": "#057748",
+            "name": None, "remainPercent": 40, "active": True}
+    ams = [
+        {"id": 0, "humidityPercent": 250, "trays": [
+            dict(tray, color="red;background:url(x)"),     # not a hex color
+            dict(tray, slot=1, color="#12345"),               # too short
+            dict(tray, slot=2, remainPercent=140),            # out of range
+            dict(tray, slot=3, loaded="yes"),                 # not literal True
+            dict(tray, slot=-1),                              # bad slot: dropped
+            "junk",                                           # dropped
+        ]},
+        {"id": "x", "trays": []},                             # bad id: dropped
+        {"id": 1},                                            # no trays: dropped
+        "junk",                                               # dropped
+        {"id": 2, "humidityPercent": 30, "trays": [
+            dict(tray, type="P" * 40, name=12345, active="true")]},
+    ]
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams=ams,
+                                        speed=3, stage={"x": 1}, errorCode=""))
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    p = t["printer"]
+    assert p["speed"] is None and p["stage"] is None and p["errorCode"] is None
+    assert [u["id"] for u in p["ams"]] == [0, 2]
+    u0 = p["ams"][0]
+    assert u0["humidityPercent"] is None
+    # slots 0-3 kept (the 4-slot cap stops before the bad ones anyway)
+    assert [tr["slot"] for tr in u0["trays"]] == [0, 1, 2, 3]
+    assert u0["trays"][0]["color"] is None
+    assert u0["trays"][1]["color"] is None
+    assert u0["trays"][2]["remainPercent"] is None
+    assert u0["trays"][3] == {"slot": 3, "loaded": False, "type": None,
+                              "color": None, "name": None,
+                              "remainPercent": None, "active": False}
+    t2 = p["ams"][1]["trays"][0]
+    assert len(t2["type"]) == 12 and t2["name"] is None and t2["active"] is False
+
+
+def test_fleet_printer_ams_non_list_is_empty_and_tile_stays_available():
+    tiles.reset_caches()
+    body = dict(ROLLUP_OK, printer=dict(ROLLUP_OK["printer"], ams={"x": 1}))
+    t = run_fleet(lambda req: httpx.Response(200, json=body))
+    assert t["available"] is True and t["printer"]["ams"] == []
 
 
 def test_fleet_extra_upstream_keys_dropped():

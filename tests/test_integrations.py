@@ -138,6 +138,18 @@ def test_fleet_available_reflects_config():
     assert avail["fleet"]["available"] is True
 
 
+def test_printer_card_rides_the_fleet_config_with_its_own_switch():
+    # the printer card reads the same rollup, so it exists exactly when fleet
+    # does, but as its own row so either card can be switched off alone
+    avail = {i["id"]: i for i in fi.available_integrations(_cfg(fleet=None), {})}
+    assert avail["printer"]["available"] is False
+    avail = {i["id"]: i for i in
+             fi.available_integrations(_cfg(fleet={"base": "http://fleet"}), {})}
+    assert avail["printer"]["available"] is True
+    assert avail["printer"]["kind"] == "printer"
+    assert avail["printer"]["group"] == "integration"
+
+
 def test_fleet_config_cleaning():
     from family_hub.config import _clean_fleet
     assert _clean_fleet(None) is None
