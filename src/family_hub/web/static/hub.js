@@ -4488,7 +4488,7 @@ async function poll() {
   // but never mid-interaction (defer to a later poll once the wall is idle).
   if (data.build) {
     if (loadedBuild === null) loadedBuild = data.build;
-    else if (data.build !== loadedBuild && !wallBusy()) { location.reload(); return; }
+    else if (data.build !== loadedBuild && !wallBusy()) { reloadIfHubAnswers('new build'); return; }
   }
   data_date = data.date;
   links = data.links || {};
@@ -6256,10 +6256,37 @@ function closeThemePop() {
 // The ↻ button. Asks the hub to pull fresh calendars BEFORE the reload, so the
 // page that comes back shows current data instead of whatever the 5-minute
 // background sync last fetched. The reload happens whatever the sync does (a
-// slow Google, a down hub, an error answer): the button must never be dead.
+// slow Google, an error answer), as long as the hub itself answers; with the
+// hub down the wall stays as it is and says so. The button is never dead.
 // Taps while it works are ignored, and the button shows it is working.
 const WALL_SYNC_WAIT_MS = 10000;   // under j()'s 12 s: never leave the wall hanging
 const WALL_RELOAD_STUCK_MS = 3000; // a reload that hasn't torn the page down by now went nowhere
+
+// Reload the page only when the hub answers first. Every reload goes through
+// here: one fired while the hub is down (a power cut, a deploy restarting the
+// container) lands on the browser's own error page, and that page never
+// polls, so the wall stays blank until someone reloads it by hand. The
+// current page keeps polling and recovers on its own, so holding back is
+// always the safe side. Resolves true when it reloaded (or one is already
+// under way). `why` goes to the console so a held reload is findable from the
+// kiosk inspector.
+let hubReloading = false;
+async function reloadIfHubAnswers(why) {
+  if (hubReloading) return true;
+  try {
+    await j('/api/version', { cache: 'no-store' });
+  } catch (e) {
+    console.warn(`reload (${why}) held: the hub did not answer`, e);
+    return false;
+  }
+  if (hubReloading) return true;
+  hubReloading = true;
+  location.reload();
+  // A reload that went nowhere (a page restored from bfcache) must not block
+  // every later one; a real reload tears this timer down with the page.
+  setTimeout(() => { hubReloading = false; }, WALL_RELOAD_STUCK_MS);
+  return true;
+}
 let wallRefreshing = false;
 // What the hub said about a refresh-button sync that did not fully succeed, in
 // words. "error" can be a partial failure (one calendar failed, the others
@@ -6294,9 +6321,13 @@ async function refreshWall(btn) {
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
-  location.reload();
-  // A reload that goes nowhere (offline kiosk, a page restored from bfcache)
-  // would leave the button busy and dead. A real reload tears all this down.
+  // A reload while the hub is down swaps the wall for the browser's error page,
+  // which never comes back on its own (2026-11-22 power cut). Reload only once
+  // the hub answers; otherwise keep the current page, which keeps polling.
+  if (!(await reloadIfHubAnswers('refresh'))) showToast("The hub isn't answering, so the wall stayed as it was.");
+  // A reload that goes nowhere (offline kiosk, a page restored from bfcache),
+  // or one held back above, would leave the button busy and dead. A real
+  // reload tears all this down.
   setTimeout(() => {
     wallRefreshing = false;
     if (btn) { btn.classList.remove('is-syncing'); btn.setAttribute('aria-busy', 'false'); }
@@ -6618,6 +6649,7 @@ function selfhealReport(diag, reason) {
 function selfhealEvaluate() {
   const diag = viewportDiag();
   let reason;
+  let undoTried = null;
   if (!diag.mobile) reason = 'skip:not-mobile';
   else if (diag.standalone) reason = 'skip:standalone';   // no toolbar exists to go stale
   else if (!diag.learnedMax) reason = 'skip:no-baseline';
@@ -6646,18 +6678,37 @@ function selfhealEvaluate() {
     else if (now - last < SELFHEAL_MIN_RELOAD_GAP_MS) reason = 'hold:too-soon';  // kills any tight loop
     else {
       reason = 'reload';
+      // Written now, so a second wake before the reload fires sees them (no
+      // double reload). Put back if the reload is held because the hub is
+      // down: a reload that never happened must not count as "tried at this
+      // height", or the next check would adopt the short height as normal.
+      const set = (k, v) => { if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); };
+      const before = {};
       try {
+        // fh-selfheal-last stays: it spaces out retries while the hub is down.
+        for (const k of ['fh-selfheal-tried', 'fh-selfheal-count']) before[k] = sessionStorage.getItem(k);
         sessionStorage.setItem('fh-selfheal-tried', String(bucket));
         sessionStorage.setItem('fh-selfheal-count', String(count + 1));
         sessionStorage.setItem('fh-selfheal-last', String(now));
       } catch (e) { /* no session storage — the reload still fires once */ }
+      undoTried = () => {
+        try { for (const k of Object.keys(before)) set(k, before[k]); } catch (e) { /* nothing to put back */ }
+      };
     }
   }
   // Steady healthy outcomes are the common case on every scroll-driven wake;
   // reporting them would flood the box's bounded buffer and bury the real
   // events. Report everything else (reload + every hold + no-baseline).
   if (!SELFHEAL_STEADY.has(reason)) selfhealReport(diag, reason);
-  if (reason === 'reload') location.reload();
+  if (reason === 'reload') {
+    // Only once the hub answers; a held reload puts the guards back and is
+    // reported so the box sees it.
+    reloadIfHubAnswers('self-heal').then((reloaded) => {
+      if (reloaded) return;
+      if (undoTried) undoTried();
+      selfhealReport(diag, 'hold:hub-down');
+    });
+  }
   return reason;
 }
 

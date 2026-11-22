@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The wall no longer reloads onto the browser's error page while the hub is down. The Refresh button, the reload after a deploy and the phone's self-heal now check that the hub answers first; with the hub down the page stays up and keeps polling, and the Refresh button says the hub isn't answering.
+
 ## [1.14.1] — 2026-11-15
 
 ### Changed
