@@ -1969,6 +1969,8 @@ const SAMPLE_ADMIN = {
 };
 
 const flush = () => new Promise((r) => setImmediate(r));
+// Long enough for a reload's hub check (j() on /api/version) to answer.
+const settleReload = async () => { for (let i = 0; i < 6; i++) await flush(); };
 
 // Fake fetch responses in the exact shape j() reads: a non-2xx `failResp` makes
 // j() throw `new Error(detail)` (its `.json().detail` branch), which is what the
@@ -6477,12 +6479,15 @@ test('the wall auto-reloads on a build-token change, but not mid-interaction, an
     url === '/api/hub' ? okResp(payload) : { ok: true, status: 200, json: async () => ({}) };
 
   await sandbox.poll();
+  await settleReload();
   assert.equal(reloads, 0, 'first poll records the build, no reload');
   await sandbox.poll();
+  await settleReload();
   assert.equal(reloads, 0, 'an UNCHANGED build never reloads (no reload loop)');
 
   payload = { ...payload, build: 'bbb' };
   await sandbox.poll();
+  await settleReload();
   assert.equal(reloads, 1, 'a changed build reloads the idle wall');
 
   // mid-interaction (overlay open) -> a further change does NOT yank it away
@@ -6491,6 +6496,7 @@ test('the wall auto-reloads on a build-token change, but not mid-interaction, an
   ov.classList.add('open');
   payload = { ...payload, build: 'ccc' };
   await sandbox.poll();
+  await settleReload();
   assert.equal(reloads, 1, 'a build change does not reload the wall mid-interaction');
 });
 
@@ -6519,6 +6525,7 @@ test('auto-reload defers for EVERY wallBusy condition (each modal + theme-pop), 
     setup(document);                          // now busy in exactly one way
     payload = { ...payload, build: 'bbb' };
     await sandbox.poll();
+    await settleReload();
     assert.equal(reloads, 0, `a build change must not reload while busy: ${name}`);
   }
 });
@@ -6535,9 +6542,11 @@ test('auto-reload defers briefly after a direct tap (bare-wall chore taps open n
   sandbox.noteInteraction();                   // a tap JUST happened, no overlay open
   payload = { ...payload, build: 'bbb' };
   await sandbox.poll();
+  await settleReload();
   assert.equal(reloads, 0, 'a deploy does not reload within the quiet window after a tap');
   sandbox.noteInteraction(Date.now() - 60000); // last tap was a minute ago -> wall is idle
   await sandbox.poll();
+  await settleReload();
   assert.equal(reloads, 1, 'once past the interaction quiet window, the deferred reload fires');
 });
 
@@ -8760,23 +8769,32 @@ test('month bars: a hostile color fails closed and a dark calendar color gets li
 // toolbar adds/removes on scroll. A phone portrait shell is innerWidth 390,
 // a healthy tall innerHeight ~780, screen.height ~852; the stuck state is
 // ~700 (≈80px short).
+// The hub answers its /api/version check (a reload goes ahead) unless the
+// test passes hubDown; every other fetch stays offline, as in newHub.
 function phone(opts = {}) {
-  return newHub({ mobile: true, innerWidth: 390, innerHeight: 780,
+  const h = newHub({ mobile: true, innerWidth: 390, innerHeight: 780,
     screenHeight: 852, ...opts });
+  h.sandbox.fetch = async (url) => {
+    if (url === '/api/version' && !opts.hubDown) return okResp({ version: 'test' });
+    throw new Error('offline in test');
+  };
+  return h;
 }
 
-test('self-heal: healthy phone learns the tall baseline and does NOT reload', () => {
+test('self-heal: healthy phone learns the tall baseline and does NOT reload', async () => {
   const { sandbox, reloadCalls } = phone({ innerHeight: 780 });
   sandbox.selfhealLearnMax('portrait', 780);
   assert.equal(sandbox.selfhealEvaluate(), 'ok:height-normal');
+  await settleReload();
   assert.equal(reloadCalls.length, 0);
   assert.equal(sandbox.localStorage.getItem('fh-vh-max:portrait'), '780');
 });
 
-test('self-heal: a stuck-short wake (≈80px gap) reloads exactly once', () => {
+test('self-heal: a stuck-short wake (≈80px gap) reloads exactly once', async () => {
   const { sandbox, reloadCalls, beacons } = phone({
     innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
   assert.equal(reloadCalls.length, 1);
   assert.equal(sandbox.sessionStorage.getItem('fh-selfheal-tried'), '700');
   // The interesting event is reported to the box.
@@ -8785,51 +8803,59 @@ test('self-heal: a stuck-short wake (≈80px gap) reloads exactly once', () => {
   assert.equal(last.shortfall, 80);
 });
 
-test('self-heal: one-shot — a second short wake at the same height does NOT reload again', () => {
-  const { sandbox, reloadCalls } = phone({
+test('self-heal: one-shot, a second short wake at the same height does NOT reload again', async () => {
+  const { sandbox, reloadCalls, runTimers } = phone({
     innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();   // the reload fired (in a real browser the page is gone)
+  runTimers((t) => t.ms === 20000);
   assert.equal(sandbox.selfhealEvaluate(), 'hold:already-tried');
+  await settleReload();
   assert.equal(reloadCalls.length, 1, 'no reload loop: at most one reload per stuck height');
 });
 
-test('self-heal: a normal ~40px toolbar show/hide never triggers a reload', () => {
+test('self-heal: a normal ~40px toolbar show/hide never triggers a reload', async () => {
   const { sandbox, reloadCalls } = phone({
     innerHeight: 740, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(sandbox.selfhealEvaluate(), 'ok:height-normal');
+  await settleReload();
   assert.equal(reloadCalls.length, 0);
 });
 
-test('self-heal: never reloads while a field is focused', () => {
+test('self-heal: never reloads while a field is focused', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   h.document.activeElement = { tagName: 'INPUT', isContentEditable: false };
   assert.equal(h.sandbox.selfhealEvaluate(), 'hold:input-active');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 0);
 });
 
-test('self-heal: standalone (home-screen app) is left alone — no toolbar to go stale', () => {
+test('self-heal: standalone (home-screen app) is left alone (no toolbar to go stale)', async () => {
   const { sandbox, reloadCalls } = phone({
     innerHeight: 700, standalone: true, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(sandbox.selfhealEvaluate(), 'skip:standalone');
+  await settleReload();
   assert.equal(reloadCalls.length, 0);
 });
 
-test('self-heal: the wall / desktop layout never reloads', () => {
+test('self-heal: the wall / desktop layout never reloads', async () => {
   const { sandbox, reloadCalls } = newHub({ mobile: false, innerWidth: 1280,
     innerHeight: 700, store: { 'fh-vh-max:landscape': '900' } });
   assert.equal(sandbox.selfhealEvaluate(), 'skip:not-mobile');
+  await settleReload();
   assert.equal(reloadCalls.length, 0);
 });
 
-test('self-heal: the kill switch disables the reload without a deploy', () => {
+test('self-heal: the kill switch disables the reload without a deploy', async () => {
   const { sandbox, reloadCalls } = phone({
     innerHeight: 700,
     store: { 'fh-vh-max:portrait': '780', 'fh-selfheal-off': '1' } });
   assert.equal(sandbox.selfhealEvaluate(), 'hold:disabled');
+  await settleReload();
   assert.equal(reloadCalls.length, 0);
 });
 
-test('self-heal: learnMax only grows and is capped at screen.height', () => {
+test('self-heal: learnMax only grows and is capped at screen.height', async () => {
   const { sandbox } = phone({ innerHeight: 780 });
   sandbox.selfhealLearnMax('portrait', 780);
   sandbox.selfhealLearnMax('portrait', 700);   // a stuck reading must not lower it
@@ -8838,7 +8864,7 @@ test('self-heal: learnMax only grows and is capped at screen.height', () => {
   assert.equal(sandbox.localStorage.getItem('fh-vh-max:portrait'), '852');
 });
 
-test('self-heal: notable outcomes report to the box, steady healthy ones stay quiet', () => {
+test('self-heal: notable outcomes report to the box, steady healthy ones stay quiet', async () => {
   // A notable hold (kill switch) IS reported so the box can see it.
   const held = phone({ innerHeight: 700,
     store: { 'fh-vh-max:portrait': '780', 'fh-selfheal-off': '1' } });
@@ -8855,16 +8881,19 @@ test('self-heal: notable outcomes report to the box, steady healthy ones stay qu
   assert.equal(ok.beacons.length, beforeOk, 'ok:height-normal must not report');
 });
 
-test('self-heal: two reloads cannot fire within the minimum gap (kills a tight loop)', () => {
+test('self-heal: two reloads cannot fire within the minimum gap (kills a tight loop)', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(h.sandbox.selfhealEvaluate(), 'reload');   // count 1, timestamp set
+  await settleReload();
+  h.runTimers((t) => t.ms === 20000);
   // a DIFFERENT stuck height (jitter across a 5px bucket) must still not loop
   h.sandbox.window.innerHeight = 690;
   assert.equal(h.sandbox.selfhealEvaluate(), 'hold:too-soon');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 1);
 });
 
-test('self-heal: a hard per-session cap stops even a slow flap', () => {
+test('self-heal: a hard per-session cap stops even a slow flap', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   // simulate many spaced-out stuck episodes (reset the time gap + one-shot each)
   let reason;
@@ -8874,23 +8903,29 @@ test('self-heal: a hard per-session cap stops even a slow flap', () => {
     h.sandbox.window.innerHeight = 700 - i;                 // vary it so one-shot never matches
     h.sandbox.localStorage.setItem('fh-vh-max:portrait', '820');
     reason = h.sandbox.selfhealEvaluate();
+    await settleReload();
+    h.runTimers((t) => t.ms === 20000);   // each reload is a new page in real life
   }
   assert.equal(reason, 'hold:reload-cap');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 8, 'reloads are capped at SELFHEAL_MAX_RELOADS');
 });
 
-test('self-heal: when a reload does not cure the height, it adopts the new normal', () => {
+test('self-heal: when a reload does not cure the height, it adopts the new normal', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(h.sandbox.selfhealEvaluate(), 'reload');            // still 780 baseline
+  await settleReload();
+  h.runTimers((t) => t.ms === 20000);
   assert.equal(h.sandbox.selfhealEvaluate(), 'hold:already-tried'); // same height, reload didn't help
   // the baseline is lowered to the real glass, so a FRESH session reads it as normal
   assert.equal(h.sandbox.localStorage.getItem('fh-vh-max:portrait'), '700');
   const fresh = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '700' } });
   assert.equal(fresh.sandbox.selfhealEvaluate(), 'ok:height-normal');
+  await settleReload();
   assert.equal(fresh.reloadCalls.length, 0);
 });
 
-test('self-heal: a report falls back to fetch when sendBeacon refuses (returns false)', () => {
+test('self-heal: a report falls back to fetch when sendBeacon refuses (returns false)', async () => {
   const h = phone({ innerHeight: 700,
     store: { 'fh-vh-max:portrait': '780', 'fh-selfheal-off': '1' } });
   h.sandbox.navigator.sendBeacon = () => false;   // queue full
@@ -8901,13 +8936,14 @@ test('self-heal: a report falls back to fetch when sendBeacon refuses (returns f
   assert.equal(fetches[0].url, '/api/diag/viewport');
 });
 
-test('self-heal: with no baseline yet, it holds (never reloads on first-ever load)', () => {
+test('self-heal: with no baseline yet, it holds (never reloads on first-ever load)', async () => {
   const { sandbox, reloadCalls } = phone({ innerHeight: 700 });
   assert.equal(sandbox.selfhealEvaluate(), 'skip:no-baseline');
+  await settleReload();
   assert.equal(reloadCalls.length, 0);
 });
 
-test('self-heal: viewportDiag reports the numbers the readout and box need', () => {
+test('self-heal: viewportDiag reports the numbers the readout and box need', async () => {
   const { sandbox } = phone({ innerHeight: 700, vvHeight: 700,
     store: { 'fh-vh-max:portrait': '780' } });
   const d = sandbox.viewportDiag();
@@ -8919,7 +8955,7 @@ test('self-heal: viewportDiag reports the numbers the readout and box need', () 
   assert.equal(d.standalone, false);
 });
 
-test('self-heal: a pre-filled date/checkbox does NOT block the reload (only text does)', () => {
+test('self-heal: a pre-filled date/checkbox does NOT block the reload (only text does)', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   // the away admin's date picker defaults to today — a non-text value that must
   // not wedge the self-heal permanently off
@@ -8928,42 +8964,47 @@ test('self-heal: a pre-filled date/checkbox does NOT block the reload (only text
     { tagName: 'INPUT', type: 'checkbox', value: 'on' },
   ];
   assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 1);
 });
 
-test('self-heal: unsaved text in a real text field DOES block the reload', () => {
+test('self-heal: unsaved text in a real text field DOES block the reload', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   h.document.querySelectorAll = () => [{ tagName: 'INPUT', type: 'text', value: 'buy milk' }];
   assert.equal(h.sandbox.selfhealEvaluate(), 'hold:input-active');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 0);
 });
 
-test('self-heal: shortfall exactly at the threshold reloads; one px below holds', () => {
+test('self-heal: shortfall exactly at the threshold reloads; one px below holds', async () => {
   const at = phone({ innerHeight: 720, store: { 'fh-vh-max:portrait': '780' } });   // 60 short
   assert.equal(at.sandbox.selfhealEvaluate(), 'reload');
   const below = phone({ innerHeight: 721, store: { 'fh-vh-max:portrait': '780' } }); // 59 short
   assert.equal(below.sandbox.selfhealEvaluate(), 'ok:height-normal');
 });
 
-test('self-heal: a landscape wake never reloads off a portrait baseline (per-orientation)', () => {
+test('self-heal: a landscape wake never reloads off a portrait baseline (per-orientation)', async () => {
   const h = newHub({ mobile: true, innerWidth: 780, innerHeight: 390,
     screenHeight: 852, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(h.sandbox.selfhealEvaluate(), 'skip:no-baseline');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 0);
 });
 
-test('self-heal: data-layout=desktop is treated as the wall even at phone width', () => {
+test('self-heal: data-layout=desktop is treated as the wall even at phone width', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   h.document.documentElement.setAttribute('data-layout', 'desktop');
   assert.equal(h.sandbox.selfhealEvaluate(), 'skip:not-mobile');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 0);
 });
 
-test('self-heal: heals once per EPISODE — a later healthy wake re-arms the one-shot', () => {
+test('self-heal: heals once per EPISODE: a later healthy wake re-arms the one-shot', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   h.timers.forEach((t) => { t.done = true; });   // drop the load-time settle timer
   // episode 1: stuck short -> reload once, one-shot marker set
   assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 1);
   assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), '700');
   // a healthy tall wake settles (after the 1.5s timer) and clears the one-shot
@@ -8972,16 +9013,18 @@ test('self-heal: heals once per EPISODE — a later healthy wake re-arms the one
   h.runTimers();
   assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), null,
     'a tall wake must clear the one-shot so a new episode can heal');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 1, 'the tall settle must not itself reload');
   // episode 2 happens later (the reload time-gap has elapsed): stuck again ->
   // heals again (not wedged once-per-tab-lifetime)
   h.sessionStore.setItem('fh-selfheal-last', '0');
   h.sandbox.window.innerHeight = 700;
   assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
   assert.equal(h.reloadCalls.length, 2);
 });
 
-test('self-heal: the settle timer, not the wake instant, drives the decision', () => {
+test('self-heal: the settle timer, not the wake instant, drives the decision', async () => {
   // kill switch on + stuck, so the settle produces a REPORTED hold (a healthy
   // ok would be steady and stay quiet)
   const h = phone({ innerHeight: 700,
@@ -11917,6 +11960,14 @@ test('to-do grip: a press whose end never came stops holding the board after a w
 
 // --- the wall's ↻ button syncs the calendars before it reloads ---
 
+// The reload's hub check (/api/version) answers, without passing through the
+// test's own fetch stub, so the stub's call counts stay about the sync.
+function withHubUp(sandbox) {
+  const inner = sandbox.fetch;
+  sandbox.fetch = (url, opts) => (url === '/api/version'
+    ? Promise.resolve(okResp({ version: 'test' })) : inner(url, opts));
+}
+
 function seedRefresh(document) {
   const btn = document.createElement('button'); btn._id = 'wall-refresh'; document.body.appendChild(btn);
   return btn;
@@ -11940,22 +11991,71 @@ test('refresh button: asks the hub to sync, THEN reloads the page', async () => 
     calls.push({ url, method: opts && opts.method, reloadsSoFar: reloadCalls.length });
     return { ok: true, status: 200, json: async () => ({ synced: true }) };
   };
+  withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
   await settle();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/calendar/sync');
   assert.equal(calls[0].method, 'POST');
   assert.equal(calls[0].reloadsSoFar, 0, 'the sync was asked for before the page reloaded');
+  await settleReload();
   assert.equal(reloadCalls.length, 1, 'then the page reloaded');
 });
 
-test('refresh button: a failed sync still reloads the page', async () => {
+test('refresh button: a failed sync still reloads the page while the hub answers', async () => {
   const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
   const btn = seedRefresh(document);
-  sandbox.fetch = async () => { throw new Error('hub unreachable'); };
+  sandbox.fetch = async (url) => {
+    if (url === '/api/version') return okResp({ version: 'test' });
+    throw new Error('sync failed');
+  };
   tapRefresh(fire, btn);
-  await settle();
+  await settleReload();
+  await settleReload();
   assert.equal(reloadCalls.length, 1, 'the refresh button must never be dead');
+});
+
+test('refresh button: with the hub down it keeps the wall, says so, and comes back to life', async () => {
+  // 2026-11-22: a reload during a power cut swapped the wall for the browser's
+  // error page, which never polls, so the wall stayed blank until a hand reload.
+  const { document, sandbox, fire, reloadCalls, runTimers } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  const asked = [];
+  sandbox.fetch = async (url) => { asked.push(url); throw new Error('hub unreachable'); };
+  const warned = [];
+  sandbox.console = { ...console, warn: (...a) => warned.push(a) };
+  tapRefresh(fire, btn);
+  await settleReload();
+  await settleReload();
+  assert.equal(reloadCalls.length, 0, 'no reload onto the error page');
+  assert.ok(asked.includes('/api/version'), 'it asked the hub before deciding');
+  const toast = document.getElementById('toast');
+  assert.ok(toast && /hub isn't answering/.test(toast.textContent), 'the wall says why nothing happened');
+  assert.ok(warned.some((a) => /reload \(refresh\) held/.test(String(a[0]))), 'the console says the reload was held');
+  runTimers((t) => t.ms === 3000);
+  assert.ok(!btn.classList.contains('is-syncing'), 'the button comes back');
+  // the hub is back: the next tap reloads
+  sandbox.fetch = async () => okResp({ synced: true });
+  tapRefresh(fire, btn);
+  await settleReload();
+  await settleReload();
+  assert.equal(reloadCalls.length, 1, 'a tap once the hub is back reloads');
+});
+
+test('refresh button: the reload waits for the hub check to answer', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  let answerVersion;
+  sandbox.fetch = (url) => url === '/api/version'
+    ? new Promise((res) => { answerVersion = () => res(okResp({ version: 'test' })); })
+    : Promise.resolve(okResp({ synced: true }));
+  tapRefresh(fire, btn);
+  await settleReload();
+  assert.ok(answerVersion, 'the hub check was asked');
+  assert.equal(reloadCalls.length, 0, 'no reload before the hub answers');
+  answerVersion();
+  await settleReload();
+  assert.equal(reloadCalls.length, 1);
 });
 
 test('refresh button: taps while a sync is in flight do not start another', async () => {
@@ -11964,6 +12064,7 @@ test('refresh button: taps while a sync is in flight do not start another', asyn
   let release;
   let fetches = 0;
   sandbox.fetch = () => { fetches++; return new Promise((res) => { release = () => res({ ok: true, status: 200, json: async () => ({}) }); }); };
+  withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
   tapRefresh(fire, btn);
   tapRefresh(fire, btn);
@@ -11971,7 +12072,8 @@ test('refresh button: taps while a sync is in flight do not start another', asyn
   assert.equal(fetches, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'the button shows it is working');
   release();
-  await settle();
+  await settleReload();
+  await settleReload();
   assert.equal(reloadCalls.length, 1);
 });
 
@@ -11984,15 +12086,18 @@ test('refresh button: a hub that never answers is cut off at 10 s and the page r
     seenSignal = opts.signal;
     opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
   });
+  withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
   await settle();
   assert.ok(seenSignal, 'the sync request carries an abort signal');
+  await settleReload();
   assert.equal(reloadCalls.length, 0, 'still waiting on the hub');
   const cutoff = timers.find((t) => !t.done && t.ms === 10000);
   assert.ok(cutoff, 'a 10 s cutoff is armed');
   cutoff.done = true; cutoff.fn();
   await settle();
   assert.equal(seenSignal.aborted, true);
+  await settleReload();
   assert.equal(reloadCalls.length, 1, 'the page reloaded without waiting for the hub');
 });
 
@@ -12013,11 +12118,13 @@ test('refresh button: an error answer from the hub still reloads the page', asyn
   const warned = [];
   sandbox.console = { ...console, warn: (...a) => warned.push(a) };
   sandbox.fetch = async () => ({ ok: false, status: 500, json: async () => ({ detail: 'boom' }) });
+  withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
   await settle();
   assert.equal(warned.length, 1, 'the failure is left in the console');
   assert.match(String(warned[0][0]), /calendar sync failed; reloading anyway/);
   assert.match(String(warned[0][1] && warned[0][1].message), /boom/);
+  await settleReload();
   assert.equal(reloadCalls.length, 1);
 });
 
@@ -12027,15 +12134,17 @@ test('refresh button: if the reload does not navigate, the button comes back to 
   const ariaBusy = recordAttr(btn, 'aria-busy');
   sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ synced: true }) });
   tapRefresh(fire, btn);
-  await settle();
+  await settleReload();
+  await settleReload();
   assert.equal(reloadCalls.length, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'dimmed while the reload is under way');
   assert.equal(ariaBusy.at(-1), 'true');
-  runTimers((t) => t.ms === 3000);   // the page is still here: the reload went nowhere (offline, bfcache)
+  runTimers((t) => t.ms === 3000);   // the page is still here: the reload went nowhere (offline, bfcache); the 20 s guard has not run
   assert.ok(!btn.classList.contains('is-syncing'), 'no longer dimmed');
   assert.equal(ariaBusy.at(-1), 'false', 'no longer announced as busy');
   tapRefresh(fire, btn);
-  await settle();
+  await settleReload();
+  await settleReload();
   assert.equal(reloadCalls.length, 2, 'a second tap works');
 });
 
@@ -12053,6 +12162,7 @@ test('refresh button: a sync that ran with an error says so in the console (not 
   assert.match(warned[0][0], /Google sign-in has expired/);
   assert.equal(warned[0][1].reason, 'error');
   assert.equal(warned[0][1].needs_auth, true);
+  await settleReload();
   assert.equal(reloadCalls.length, 1);
 });
 
@@ -12066,6 +12176,7 @@ test('refresh button: says it is busy while it works, and taps during the 10 s w
     fetches++;
     opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
   });
+  withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
   await settle();
   assert.deepEqual(busy, ['true']);
@@ -12074,7 +12185,8 @@ test('refresh button: says it is busy while it works, and taps during the 10 s w
   assert.equal(fetches, 1, 'the second tap was ignored');
   const cutoff = timers.find((t) => !t.done && t.ms === 10000);
   cutoff.done = true; cutoff.fn();
-  await settle();
+  await settleReload();
+  await settleReload();
   assert.equal(reloadCalls.length, 1, 'one reload, not two');
 });
 
@@ -12090,6 +12202,7 @@ test('refresh button: the console says why a sync was skipped, in words', async 
     await settle();
     assert.match(warned[0][0], words, reason);
     assert.doesNotMatch(warned[0][0], /sign-in/, reason);
+    await settleReload();
     assert.equal(reloadCalls.length, 1, reason);
   }
 });
@@ -12109,9 +12222,170 @@ test('refresh button: a tap that lands on the arrow glyph inside the button stil
   };
   let calls = 0;
   sandbox.fetch = async () => { calls++; return { ok: true, status: 200, json: async () => ({ synced: true }) }; };
+  withHubUp(sandbox);   // the reload's /api/version check answers
   fire('click', { target: glyph });
   await settle();
   assert.equal(calls, 1, 'the sync was asked for');
+  await settleReload();
   assert.equal(reloadCalls.length, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'the button itself shows it is working');
+});
+
+// ---- Reloads wait for the hub (2026-11-22) ------------------------------
+//
+// A reload while the hub is down lands on the browser's own error page, which
+// never polls, so the wall stays blank until someone reloads it by hand. Every
+// reload asks /api/version first (reloadIfHubAnswers) and holds when it fails.
+
+test('self-heal: with the hub down it holds, records nothing as tried, and heals once the hub is back', async () => {
+  const h = phone({ hubDown: true, innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 0, 'no reload onto the error page');
+  assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), null, 'a held reload is not "tried"');
+  assert.equal(h.sessionStore.getItem('fh-selfheal-count'), null, 'nor counted against the cap');
+  const reasons = h.beacons.map((b) => JSON.parse(b.blob.parts[0]).reason);
+  assert.ok(reasons.includes('hold:hub-down'), 'the hold is reported');
+  assert.ok(!reasons.includes('reload'), 'never reported as a reload that did not happen');
+  assert.equal(h.localStore.getItem('fh-vh-max:portrait'), '780', 'the short height was not adopted');
+  // The hub comes back: the next wake at the same height heals.
+  h.sandbox.fetch = async (url) => okResp({ version: 'test' });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 1);
+  assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), '700');
+});
+
+test('self-heal: a wake while the hub check is out holds, and never adopts the short height', async () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  let answer;
+  h.sandbox.fetch = (url) => (url === '/api/version'
+    ? new Promise((res) => { answer = () => res(okResp({ version: 'test' })); })
+    : Promise.reject(new Error('offline in test')));
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await flush();
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:checking-hub');
+  assert.equal(h.localStore.getItem('fh-vh-max:portrait'), '780', 'the short height is not the new normal');
+  answer();
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 1, 'exactly one reload');
+});
+
+test('two reloads asked at once share one hub check and reload once', async () => {
+  const { sandbox, reloadCalls } = newHub({ mobile: false });
+  let checks = 0;
+  sandbox.fetch = async (url) => { if (url === '/api/version') checks++; return okResp({ version: 'test' }); };
+  const [a, b] = await Promise.all([sandbox.reloadIfHubAnswers('one'), sandbox.reloadIfHubAnswers('two')]);
+  assert.deepEqual([a, b].sort(), ['reloaded', 'reloading']);
+  assert.equal(checks, 1, 'one hub check');
+  assert.equal(reloadCalls.length, 1, 'one reload');
+});
+
+test('a new build with the hub not answering keeps the wall rendering, and a later poll reloads', async () => {
+  const { document, sandbox } = newHub();
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  sandbox.noteInteraction(0);
+  let reloads = 0;
+  sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  let versionUp = false;
+  sandbox.fetch = async (url) => {
+    if (url === '/api/hub') return okResp(payload);
+    if (url === '/api/version' && !versionUp) throw new Error('hub flapping');
+    return okResp({});
+  };
+  await sandbox.poll();
+  payload = { ...payload, date: '2026-08-16', build: 'bbb' };
+  await sandbox.poll();
+  await settleReload();
+  assert.equal(reloads, 0, 'held while the hub check fails');
+  assert.equal(vm.runInContext('data_date', sandbox), '2026-08-16', 'the poll still rendered its good data');
+  versionUp = true;
+  await sandbox.poll();
+  await settleReload();
+  assert.equal(reloads, 1, 'a later poll reloads once the hub answers');
+});
+
+test('a new build does not reload if the wall became busy while the hub was checked', async () => {
+  const { document, sandbox } = newHub();
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  sandbox.noteInteraction(0);
+  let reloads = 0;
+  sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  let answer;
+  sandbox.fetch = (url) => (url === '/api/version'
+    ? new Promise((res) => { answer = () => res(okResp({ version: 'test' })); })
+    : Promise.resolve(okResp(url === '/api/hub' ? payload : {})));
+  await sandbox.poll();
+  payload = { ...payload, build: 'bbb' };
+  await sandbox.poll();
+  assert.ok(answer, 'the hub check is out');
+  sandbox.noteInteraction();   // someone taps the wall during the check
+  answer();
+  await settleReload();
+  assert.equal(reloads, 0, 'the reload is held, not fired under a tap');
+});
+
+test('refresh button: a tap during a deploy reload check still reloads (its own answer, not the poll\'s)', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  sandbox.noteInteraction(0);
+  const btn = seedRefresh(document);
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  let answer;
+  sandbox.fetch = (url) => (url === '/api/version'
+    ? new Promise((res) => { answer = () => res(okResp({ version: 'test' })); })
+    : Promise.resolve(okResp(url === '/api/hub' ? payload : { synced: true })));
+  await sandbox.poll();
+  payload = { ...payload, build: 'bbb' };
+  await sandbox.poll();                 // the deploy reload's hub check is now out
+  assert.ok(answer, 'the check is out');
+  sandbox.noteInteraction();            // the tap below makes the wall busy for the poll
+  tapRefresh(fire, btn);
+  await settleReload();
+  answer();
+  await settleReload();
+  assert.equal(reloadCalls.length, 1, 'the tap reloads; the poll held for busy');
+  const toast = document.getElementById('toast');
+  assert.ok(!toast || !/hub isn't answering/.test(toast.textContent), 'no false "hub is down" message');
+  assert.equal(document.getElementById('toast'), null, 'no toast at all');
+});
+
+test('a hub that hangs is cut off by j()\'s timeout and the reload is held, then heals later', async () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  h.sandbox.AbortController = AbortController;   // as in a browser, so j() arms its timeout
+  h.sandbox.fetch = (url, opts) => new Promise((_, reject) => {
+    if (opts && opts.signal) opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:checking-hub', 'still checking while the hub hangs');
+  const cut = h.timers.find((t) => !t.done && t.ms === vm.runInContext('J_TIMEOUT_MS', h.sandbox));
+  assert.ok(cut, "j() armed its timeout on the hub check");
+  cut.done = true; cut.fn();
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 0, 'no reload onto the error page');
+  const reasons = h.beacons.map((b) => JSON.parse(b.blob.parts[0]).reason);
+  assert.ok(reasons.includes('hold:hub-down'));
+  h.sandbox.fetch = async () => okResp({ version: 'test' });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload', 'the check is no longer out');
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 1);
+});
+
+test('a hub that answers 502 (a proxy while the container restarts) holds the reload', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.fetch = async (url) => (url === '/api/version'
+    ? { ok: false, status: 502, json: async () => ({}) }
+    : okResp({ synced: true }));
+  tapRefresh(fire, btn);
+  await settleReload();
+  await settleReload();
+  assert.equal(reloadCalls.length, 0, 'a 502 is not an answer');
+  assert.match(document.getElementById('toast').textContent, /hub isn't answering/);
 });
