@@ -12352,4 +12352,40 @@ test('refresh button: a tap during a deploy reload check still reloads (its own 
   assert.equal(reloadCalls.length, 1, 'the tap reloads; the poll held for busy');
   const toast = document.getElementById('toast');
   assert.ok(!toast || !/hub isn't answering/.test(toast.textContent), 'no false "hub is down" message');
+  assert.equal(document.getElementById('toast'), null, 'no toast at all');
+});
+
+test('a hub that hangs is cut off by j()\'s timeout and the reload is held, then heals later', async () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  h.sandbox.AbortController = AbortController;   // as in a browser, so j() arms its timeout
+  h.sandbox.fetch = (url, opts) => new Promise((_, reject) => {
+    if (opts && opts.signal) opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:checking-hub', 'still checking while the hub hangs');
+  const cut = h.timers.find((t) => !t.done && t.ms === vm.runInContext('J_TIMEOUT_MS', h.sandbox));
+  assert.ok(cut, "j() armed its timeout on the hub check");
+  cut.done = true; cut.fn();
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 0, 'no reload onto the error page');
+  const reasons = h.beacons.map((b) => JSON.parse(b.blob.parts[0]).reason);
+  assert.ok(reasons.includes('hold:hub-down'));
+  h.sandbox.fetch = async () => okResp({ version: 'test' });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload', 'the check is no longer out');
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 1);
+});
+
+test('a hub that answers 502 (a proxy while the container restarts) holds the reload', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  const btn = seedRefresh(document);
+  sandbox.fetch = async (url) => (url === '/api/version'
+    ? { ok: false, status: 502, json: async () => ({}) }
+    : okResp({ synced: true }));
+  tapRefresh(fire, btn);
+  await settleReload();
+  await settleReload();
+  assert.equal(reloadCalls.length, 0, 'a 502 is not an answer');
+  assert.match(document.getElementById('toast').textContent, /hub isn't answering/);
 });

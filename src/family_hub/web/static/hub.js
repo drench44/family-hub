@@ -6297,7 +6297,7 @@ async function reloadIfHubAnswers(why, { stillOk, beforeReload } = {}) {
     return 'busy';
   }
   hubReloading = true;
-  if (beforeReload) beforeReload();
+  try { if (beforeReload) beforeReload(); } catch (e) { console.warn(`reload (${why}): a step before it failed`, e); }
   location.reload();
   // A reload that went nowhere (a page restored from bfcache) must not block
   // every later one; a real reload tears this timer down with the page.
