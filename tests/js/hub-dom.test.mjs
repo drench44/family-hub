@@ -8804,9 +8804,11 @@ test('self-heal: a stuck-short wake (≈80px gap) reloads exactly once', async (
 });
 
 test('self-heal: one-shot, a second short wake at the same height does NOT reload again', async () => {
-  const { sandbox, reloadCalls } = phone({
+  const { sandbox, reloadCalls, runTimers } = phone({
     innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();   // the reload fired (in a real browser the page is gone)
+  runTimers((t) => t.ms === 20000);
   assert.equal(sandbox.selfhealEvaluate(), 'hold:already-tried');
   await settleReload();
   assert.equal(reloadCalls.length, 1, 'no reload loop: at most one reload per stuck height');
@@ -8882,6 +8884,8 @@ test('self-heal: notable outcomes report to the box, steady healthy ones stay qu
 test('self-heal: two reloads cannot fire within the minimum gap (kills a tight loop)', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(h.sandbox.selfhealEvaluate(), 'reload');   // count 1, timestamp set
+  await settleReload();
+  h.runTimers((t) => t.ms === 20000);
   // a DIFFERENT stuck height (jitter across a 5px bucket) must still not loop
   h.sandbox.window.innerHeight = 690;
   assert.equal(h.sandbox.selfhealEvaluate(), 'hold:too-soon');
@@ -8900,7 +8904,7 @@ test('self-heal: a hard per-session cap stops even a slow flap', async () => {
     h.sandbox.localStorage.setItem('fh-vh-max:portrait', '820');
     reason = h.sandbox.selfhealEvaluate();
     await settleReload();
-    h.runTimers((t) => t.ms === 3000);   // each reload is a new page in real life
+    h.runTimers((t) => t.ms === 20000);   // each reload is a new page in real life
   }
   assert.equal(reason, 'hold:reload-cap');
   await settleReload();
@@ -8910,6 +8914,8 @@ test('self-heal: a hard per-session cap stops even a slow flap', async () => {
 test('self-heal: when a reload does not cure the height, it adopts the new normal', async () => {
   const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
   assert.equal(h.sandbox.selfhealEvaluate(), 'reload');            // still 780 baseline
+  await settleReload();
+  h.runTimers((t) => t.ms === 20000);
   assert.equal(h.sandbox.selfhealEvaluate(), 'hold:already-tried'); // same height, reload didn't help
   // the baseline is lowered to the real glass, so a FRESH session reads it as normal
   assert.equal(h.sandbox.localStorage.getItem('fh-vh-max:portrait'), '700');
@@ -9264,7 +9270,7 @@ test('nothing to look at means nothing moves: no look painted, or a hidden tab',
     const { el, moves } = spiderStage(sandbox, document, opts);
     sandbox.spiderWalk();
     sandbox.spiderDrop();
-    await settleReload();
+    await settle();
     assert.equal(moves.length, 0, `nothing moves for ${JSON.stringify(opts)}`);
     assert.ok(!el.classList.contains('walking'), 'and no legs cycle');
     assert.match(el.style.transform || 'translate3d(-120px, -120px, 0) rotate(0deg)',
@@ -11370,7 +11376,7 @@ test('snPhotoSize forgets a failed load, so the next call fetches again', async 
   sandbox.Image = class { set src(v) { made++; setTimeout(() => (fail ? this.onerror && this.onerror() : (this.naturalWidth = 10, this.naturalHeight = 5, this.onload && this.onload())), 0); } };
   vm.runInContext('snPhotoSizes.clear();', sandbox);
   await assert.rejects(sandbox.snPhotoSize('x.webp'));
-  await settleReload();
+  await settle();
   fail = false;
   const size = await sandbox.snPhotoSize('x.webp');
   assert.equal(JSON.stringify(size), '[10,5]');
@@ -11987,7 +11993,7 @@ test('refresh button: asks the hub to sync, THEN reloads the page', async () => 
   };
   withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
-  await settleReload();
+  await settle();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/calendar/sync');
   assert.equal(calls[0].method, 'POST');
@@ -12062,7 +12068,7 @@ test('refresh button: taps while a sync is in flight do not start another', asyn
   tapRefresh(fire, btn);
   tapRefresh(fire, btn);
   tapRefresh(fire, btn);
-  await settleReload();
+  await settle();
   assert.equal(fetches, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'the button shows it is working');
   release();
@@ -12082,14 +12088,14 @@ test('refresh button: a hub that never answers is cut off at 10 s and the page r
   });
   withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
-  await settleReload();
+  await settle();
   assert.ok(seenSignal, 'the sync request carries an abort signal');
   await settleReload();
   assert.equal(reloadCalls.length, 0, 'still waiting on the hub');
   const cutoff = timers.find((t) => !t.done && t.ms === 10000);
   assert.ok(cutoff, 'a 10 s cutoff is armed');
   cutoff.done = true; cutoff.fn();
-  await settleReload();
+  await settle();
   assert.equal(seenSignal.aborted, true);
   await settleReload();
   assert.equal(reloadCalls.length, 1, 'the page reloaded without waiting for the hub');
@@ -12101,7 +12107,7 @@ test('refresh button: the cutoff timer is cleared once the sync answers', async 
   sandbox.AbortController = AbortController;
   sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ synced: true }) });
   tapRefresh(fire, btn);
-  await settleReload();
+  await settle();
   const cutoff = timers.find((t) => t.ms === 10000);
   assert.ok(cutoff && cutoff.done, 'the 10 s cutoff was cleared, not left to fire after the reload');
 });
@@ -12114,7 +12120,7 @@ test('refresh button: an error answer from the hub still reloads the page', asyn
   sandbox.fetch = async () => ({ ok: false, status: 500, json: async () => ({ detail: 'boom' }) });
   withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
-  await settleReload();
+  await settle();
   assert.equal(warned.length, 1, 'the failure is left in the console');
   assert.match(String(warned[0][0]), /calendar sync failed; reloading anyway/);
   assert.match(String(warned[0][1] && warned[0][1].message), /boom/);
@@ -12133,7 +12139,7 @@ test('refresh button: if the reload does not navigate, the button comes back to 
   assert.equal(reloadCalls.length, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'dimmed while the reload is under way');
   assert.equal(ariaBusy.at(-1), 'true');
-  runTimers((t) => t.ms === 3000);   // the page is still here: the reload went nowhere (offline, bfcache)
+  runTimers((t) => t.ms === 3000 || t.ms === 20000);   // the page is still here: the reload went nowhere (offline, bfcache)
   assert.ok(!btn.classList.contains('is-syncing'), 'no longer dimmed');
   assert.equal(ariaBusy.at(-1), 'false', 'no longer announced as busy');
   tapRefresh(fire, btn);
@@ -12150,7 +12156,7 @@ test('refresh button: a sync that ran with an error says so in the console (not 
   sandbox.fetch = async () => ({ ok: true, status: 200,
     json: async () => ({ synced: false, reason: 'error', needs_auth: true }) });
   tapRefresh(fire, btn);
-  await settleReload();
+  await settle();
   assert.equal(warned.length, 1);
   assert.match(warned[0][0], /ran with an error/, 'a partial failure must not read as "did not run"');
   assert.match(warned[0][0], /Google sign-in has expired/);
@@ -12172,10 +12178,10 @@ test('refresh button: says it is busy while it works, and taps during the 10 s w
   });
   withHubUp(sandbox);   // the reload's /api/version check answers
   tapRefresh(fire, btn);
-  await settleReload();
+  await settle();
   assert.deepEqual(busy, ['true']);
   tapRefresh(fire, btn);   // a second tap while the hub is still syncing
-  await settleReload();
+  await settle();
   assert.equal(fetches, 1, 'the second tap was ignored');
   const cutoff = timers.find((t) => !t.done && t.ms === 10000);
   cutoff.done = true; cutoff.fn();
@@ -12193,7 +12199,7 @@ test('refresh button: the console says why a sync was skipped, in words', async 
     sandbox.console = { ...console, warn: (...a) => warned.push(a) };
     sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => ({ synced: false, reason }) });
     tapRefresh(fire, btn);
-    await settleReload();
+    await settle();
     assert.match(warned[0][0], words, reason);
     assert.doesNotMatch(warned[0][0], /sign-in/, reason);
     await settleReload();
@@ -12218,9 +12224,107 @@ test('refresh button: a tap that lands on the arrow glyph inside the button stil
   sandbox.fetch = async () => { calls++; return { ok: true, status: 200, json: async () => ({ synced: true }) }; };
   withHubUp(sandbox);   // the reload's /api/version check answers
   fire('click', { target: glyph });
-  await settleReload();
+  await settle();
   assert.equal(calls, 1, 'the sync was asked for');
   await settleReload();
   assert.equal(reloadCalls.length, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'the button itself shows it is working');
+});
+
+// ---- Reloads wait for the hub (2026-11-22) ------------------------------
+//
+// A reload while the hub is down lands on the browser's own error page, which
+// never polls, so the wall stays blank until someone reloads it by hand. Every
+// reload asks /api/version first (reloadIfHubAnswers) and holds when it fails.
+
+test('self-heal: with the hub down it holds, records nothing as tried, and heals once the hub is back', async () => {
+  const h = phone({ hubDown: true, innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 0, 'no reload onto the error page');
+  assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), null, 'a held reload is not "tried"');
+  assert.equal(h.sessionStore.getItem('fh-selfheal-count'), null, 'nor counted against the cap');
+  const reasons = h.beacons.map((b) => JSON.parse(b.blob.parts[0]).reason);
+  assert.ok(reasons.includes('hold:hub-down'), 'the hold is reported');
+  assert.ok(!reasons.includes('reload'), 'never reported as a reload that did not happen');
+  assert.equal(h.localStore.getItem('fh-vh-max:portrait'), '780', 'the short height was not adopted');
+  // The hub comes back: the next wake at the same height heals.
+  h.sandbox.fetch = async (url) => okResp({ version: 'test' });
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 1);
+  assert.equal(h.sessionStore.getItem('fh-selfheal-tried'), '700');
+});
+
+test('self-heal: a wake while the hub check is out holds, and never adopts the short height', async () => {
+  const h = phone({ innerHeight: 700, store: { 'fh-vh-max:portrait': '780' } });
+  let answer;
+  h.sandbox.fetch = (url) => (url === '/api/version'
+    ? new Promise((res) => { answer = () => res(okResp({ version: 'test' })); })
+    : Promise.reject(new Error('offline in test')));
+  assert.equal(h.sandbox.selfhealEvaluate(), 'reload');
+  await flush();
+  assert.equal(h.sandbox.selfhealEvaluate(), 'hold:checking-hub');
+  assert.equal(h.localStore.getItem('fh-vh-max:portrait'), '780', 'the short height is not the new normal');
+  answer();
+  await settleReload();
+  assert.equal(h.reloadCalls.length, 1, 'exactly one reload');
+});
+
+test('two reloads asked at once share one hub check and reload once', async () => {
+  const { sandbox, reloadCalls } = newHub({ mobile: false });
+  let checks = 0;
+  sandbox.fetch = async (url) => { if (url === '/api/version') checks++; return okResp({ version: 'test' }); };
+  const [a, b] = await Promise.all([sandbox.reloadIfHubAnswers('one'), sandbox.reloadIfHubAnswers('two')]);
+  assert.equal(a, true); assert.equal(b, true);
+  assert.equal(checks, 1, 'one hub check');
+  assert.equal(reloadCalls.length, 1, 'one reload');
+});
+
+test('a new build with the hub not answering keeps the wall rendering, and a later poll reloads', async () => {
+  const { document, sandbox } = newHub();
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  sandbox.noteInteraction(0);
+  let reloads = 0;
+  sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  let versionUp = false;
+  sandbox.fetch = async (url) => {
+    if (url === '/api/hub') return okResp(payload);
+    if (url === '/api/version' && !versionUp) throw new Error('hub flapping');
+    return okResp({});
+  };
+  await sandbox.poll();
+  payload = { ...payload, date: '2026-08-16', build: 'bbb' };
+  await sandbox.poll();
+  await settleReload();
+  assert.equal(reloads, 0, 'held while the hub check fails');
+  assert.equal(vm.runInContext('data_date', sandbox), '2026-08-16', 'the poll still rendered its good data');
+  versionUp = true;
+  await sandbox.poll();
+  await settleReload();
+  assert.equal(reloads, 1, 'a later poll reloads once the hub answers');
+});
+
+test('a new build does not reload if the wall became busy while the hub was checked', async () => {
+  const { document, sandbox } = newHub();
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  sandbox.noteInteraction(0);
+  let reloads = 0;
+  sandbox.location = { reload: () => { reloads++; }, host: 'hub.example:8138', protocol: 'http:' };
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  let answer;
+  sandbox.fetch = (url) => (url === '/api/version'
+    ? new Promise((res) => { answer = () => res(okResp({ version: 'test' })); })
+    : Promise.resolve(okResp(url === '/api/hub' ? payload : {})));
+  await sandbox.poll();
+  payload = { ...payload, build: 'bbb' };
+  await sandbox.poll();
+  assert.ok(answer, 'the hub check is out');
+  sandbox.noteInteraction();   // someone taps the wall during the check
+  answer();
+  await settleReload();
+  assert.equal(reloads, 0, 'the reload is held, not fired under a tap');
 });

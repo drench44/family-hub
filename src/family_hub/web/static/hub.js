@@ -4488,7 +4488,11 @@ async function poll() {
   // but never mid-interaction (defer to a later poll once the wall is idle).
   if (data.build) {
     if (loadedBuild === null) loadedBuild = data.build;
-    else if (data.build !== loadedBuild && !wallBusy()) { reloadIfHubAnswers('new build'); return; }
+    else if (data.build !== loadedBuild && !wallBusy()) {
+      // Not awaited: this poll's data is good, so it still renders; a later
+      // poll asks again if the reload was held.
+      reloadIfHubAnswers('new build', { stillOk: () => !wallBusy() });
+    }
   }
   data_date = data.date;
   links = data.links || {};
@@ -6269,23 +6273,36 @@ const WALL_RELOAD_STUCK_MS = 3000; // a reload that hasn't torn the page down by
 // current page keeps polling and recovers on its own, so holding back is
 // always the safe side. Resolves true when it reloaded (or one is already
 // under way). `why` goes to the console so a held reload is findable from the
-// kiosk inspector.
+// kiosk inspector. `stillOk` is asked again once the hub answers (the check
+// can take up to 12 s, and the wall may have become busy meanwhile);
+// `beforeReload` runs only when the reload really fires. Callers that arrive
+// while a check is out share it, so two can never both reload.
+const HUB_RELOAD_GUARD_MS = 20000;  // a reload that has not torn the page down by now went nowhere
 let hubReloading = false;
-async function reloadIfHubAnswers(why) {
-  if (hubReloading) return true;
-  try {
-    await j('/api/version', { cache: 'no-store' });
-  } catch (e) {
-    console.warn(`reload (${why}) held: the hub did not answer`, e);
-    return false;
-  }
-  if (hubReloading) return true;
-  hubReloading = true;
-  location.reload();
-  // A reload that went nowhere (a page restored from bfcache) must not block
-  // every later one; a real reload tears this timer down with the page.
-  setTimeout(() => { hubReloading = false; }, WALL_RELOAD_STUCK_MS);
-  return true;
+let hubProbe = null;
+function reloadIfHubAnswers(why, { stillOk, beforeReload } = {}) {
+  if (hubReloading) return Promise.resolve(true);
+  if (hubProbe) return hubProbe;
+  hubProbe = (async () => {
+    try {
+      await j('/api/version', { cache: 'no-store' });
+    } catch (e) {
+      console.warn(`reload (${why}) held: the hub did not answer`, e);
+      return false;
+    }
+    if (stillOk && !stillOk()) {
+      console.warn(`reload (${why}) held: the wall became busy while the hub was checked`);
+      return false;
+    }
+    hubReloading = true;
+    if (beforeReload) beforeReload();
+    location.reload();
+    // A reload that went nowhere (a page restored from bfcache) must not block
+    // every later one; a real reload tears this timer down with the page.
+    setTimeout(() => { hubReloading = false; }, HUB_RELOAD_GUARD_MS);
+    return true;
+  })().finally(() => { hubProbe = null; });
+  return hubProbe;
 }
 let wallRefreshing = false;
 // What the hub said about a refresh-button sync that did not fully succeed, in
@@ -6649,7 +6666,7 @@ function selfhealReport(diag, reason) {
 function selfhealEvaluate() {
   const diag = viewportDiag();
   let reason;
-  let undoTried = null;
+  let markTried = null;
   if (!diag.mobile) reason = 'skip:not-mobile';
   else if (diag.standalone) reason = 'skip:standalone';   // no toolbar exists to go stale
   else if (!diag.learnedMax) reason = 'skip:no-baseline';
@@ -6666,6 +6683,7 @@ function selfhealEvaluate() {
     const now = Date.now();
     if (off) reason = 'hold:disabled';
     else if (selfhealHasUnsavedInput()) reason = 'hold:input-active';
+    else if (hubProbe) reason = 'hold:checking-hub';   // a reload's hub check is out
     else if (tried === String(bucket)) {
       // We already reloaded at this height and it is STILL short — the reload
       // did not cure it, so this shorter height is the real glass now. Accept
@@ -6678,35 +6696,33 @@ function selfhealEvaluate() {
     else if (now - last < SELFHEAL_MIN_RELOAD_GAP_MS) reason = 'hold:too-soon';  // kills any tight loop
     else {
       reason = 'reload';
-      // Written now, so a second wake before the reload fires sees them (no
-      // double reload). Put back if the reload is held because the hub is
-      // down: a reload that never happened must not count as "tried at this
-      // height", or the next check would adopt the short height as normal.
-      const set = (k, v) => { if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); };
-      const before = {};
-      try {
-        // fh-selfheal-last stays: it spaces out retries while the hub is down.
-        for (const k of ['fh-selfheal-tried', 'fh-selfheal-count']) before[k] = sessionStorage.getItem(k);
-        sessionStorage.setItem('fh-selfheal-tried', String(bucket));
-        sessionStorage.setItem('fh-selfheal-count', String(count + 1));
-        sessionStorage.setItem('fh-selfheal-last', String(now));
-      } catch (e) { /* no session storage — the reload still fires once */ }
-      undoTried = () => {
-        try { for (const k of Object.keys(before)) set(k, before[k]); } catch (e) { /* nothing to put back */ }
+      // Written only when the reload really fires (reloadIfHubAnswers runs
+      // this just before it). A reload held because the hub is down never
+      // counts as "tried at this height", or the next check would adopt the
+      // short height as normal. A wake while the check is out holds below
+      // (hold:checking-hub), so two wakes cannot both reload.
+      markTried = () => {
+        try {
+          sessionStorage.setItem('fh-selfheal-tried', String(bucket));
+          sessionStorage.setItem('fh-selfheal-count', String(count + 1));
+          sessionStorage.setItem('fh-selfheal-last', String(now));
+        } catch (e) { /* no session storage: the reload still fires once */ }
       };
     }
   }
   // Steady healthy outcomes are the common case on every scroll-driven wake;
   // reporting them would flood the box's bounded buffer and bury the real
   // events. Report everything else (reload + every hold + no-baseline).
-  if (!SELFHEAL_STEADY.has(reason)) selfhealReport(diag, reason);
+  // A reload is reported once its outcome is known (just before the page
+  // goes, by beacon), never as a reload that then did not happen.
+  if (!SELFHEAL_STEADY.has(reason) && reason !== 'reload') selfhealReport(diag, reason);
   if (reason === 'reload') {
-    // Only once the hub answers; a held reload puts the guards back and is
-    // reported so the box sees it.
-    reloadIfHubAnswers('self-heal').then((reloaded) => {
-      if (reloaded) return;
-      if (undoTried) undoTried();
-      selfhealReport(diag, 'hold:hub-down');
+    reloadIfHubAnswers('self-heal', {
+      beforeReload: () => { if (markTried) markTried(); selfhealReport(diag, 'reload'); },
+    }).then((reloaded) => {
+      // Sent to a hub that just failed to answer, so it lands only if the hub
+      // is back by then; it still says so when it does.
+      if (!reloaded) selfhealReport(diag, 'hold:hub-down');
     });
   }
   return reason;
