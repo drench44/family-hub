@@ -4491,7 +4491,8 @@ async function poll() {
     else if (data.build !== loadedBuild && !wallBusy()) {
       // Not awaited: this poll's data is good, so it still renders; a later
       // poll asks again if the reload was held.
-      reloadIfHubAnswers('new build', { stillOk: () => !wallBusy() });
+      reloadIfHubAnswers('new build', { stillOk: () => !wallBusy() })
+        .catch((e) => console.warn('reload (new build) failed', e));
     }
   }
   data_date = data.date;
@@ -6344,8 +6345,12 @@ async function refreshWall(btn) {
   // A tap is a person asking for a reload now: a guard left by an earlier
   // reload that went nowhere must not swallow it.
   hubReloading = false;
-  if ((await reloadIfHubAnswers('refresh')) === 'hub-down') {
-    showToast("The hub isn't answering, so the wall stayed as it was.");
+  try {
+    if ((await reloadIfHubAnswers('refresh')) === 'hub-down') {
+      showToast("The hub isn't answering, so the wall stayed as it was.");
+    }
+  } catch (e) {
+    console.warn('refresh: the reload step failed', e);
   }
   // A reload that goes nowhere (offline kiosk, a page restored from bfcache),
   // or one held back above, would leave the button busy and dead. A real
@@ -6729,7 +6734,7 @@ function selfhealEvaluate() {
       // Sent to a hub that just failed to answer, so it lands only if the hub
       // is back by then (a known limit of a fire-and-forget diagnostic).
       if (outcome === 'hub-down') selfhealReport(diag, 'hold:hub-down');
-    });
+    }).catch((e) => console.warn('reload (self-heal) failed', e));
   }
   return reason;
 }
