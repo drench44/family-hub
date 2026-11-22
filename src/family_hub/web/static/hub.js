@@ -6273,36 +6273,36 @@ const WALL_RELOAD_STUCK_MS = 3000; // a reload that hasn't torn the page down by
 // current page keeps polling and recovers on its own, so holding back is
 // always the safe side. Resolves true when it reloaded (or one is already
 // under way). `why` goes to the console so a held reload is findable from the
-// kiosk inspector. `stillOk` is asked again once the hub answers (the check
-// can take up to 12 s, and the wall may have become busy meanwhile);
-// `beforeReload` runs only when the reload really fires. Callers that arrive
-// while a check is out share it, so two can never both reload.
+// kiosk inspector. Callers that arrive while a check is out share the CHECK
+// only; each then applies its own `stillOk` (asked once the hub answers: the
+// check can take up to 12 s and the wall may have become busy meanwhile), and
+// `beforeReload` runs only when the reload really fires. Resolves to what
+// happened: 'reloaded', 'reloading' (one is already under way), 'hub-down' or
+// 'busy'.
 const HUB_RELOAD_GUARD_MS = 20000;  // a reload that has not torn the page down by now went nowhere
 let hubReloading = false;
 let hubProbe = null;
-function reloadIfHubAnswers(why, { stillOk, beforeReload } = {}) {
-  if (hubReloading) return Promise.resolve(true);
-  if (hubProbe) return hubProbe;
-  hubProbe = (async () => {
-    try {
-      await j('/api/version', { cache: 'no-store' });
-    } catch (e) {
+async function reloadIfHubAnswers(why, { stillOk, beforeReload } = {}) {
+  if (hubReloading) return 'reloading';
+  if (!hubProbe) {
+    hubProbe = j('/api/version', { cache: 'no-store' }).then(() => true, (e) => {
       console.warn(`reload (${why}) held: the hub did not answer`, e);
       return false;
-    }
-    if (stillOk && !stillOk()) {
-      console.warn(`reload (${why}) held: the wall became busy while the hub was checked`);
-      return false;
-    }
-    hubReloading = true;
-    if (beforeReload) beforeReload();
-    location.reload();
-    // A reload that went nowhere (a page restored from bfcache) must not block
-    // every later one; a real reload tears this timer down with the page.
-    setTimeout(() => { hubReloading = false; }, HUB_RELOAD_GUARD_MS);
-    return true;
-  })().finally(() => { hubProbe = null; });
-  return hubProbe;
+    }).finally(() => { hubProbe = null; });
+  }
+  if (!(await hubProbe)) return 'hub-down';
+  if (hubReloading) return 'reloading';
+  if (stillOk && !stillOk()) {
+    console.warn(`reload (${why}) held: the wall became busy while the hub was checked`);
+    return 'busy';
+  }
+  hubReloading = true;
+  if (beforeReload) beforeReload();
+  location.reload();
+  // A reload that went nowhere (a page restored from bfcache) must not block
+  // every later one; a real reload tears this timer down with the page.
+  setTimeout(() => { hubReloading = false; }, HUB_RELOAD_GUARD_MS);
+  return 'reloaded';
 }
 let wallRefreshing = false;
 // What the hub said about a refresh-button sync that did not fully succeed, in
@@ -6341,7 +6341,12 @@ async function refreshWall(btn) {
   // A reload while the hub is down swaps the wall for the browser's error page,
   // which never comes back on its own (2026-11-22 power cut). Reload only once
   // the hub answers; otherwise keep the current page, which keeps polling.
-  if (!(await reloadIfHubAnswers('refresh'))) showToast("The hub isn't answering, so the wall stayed as it was.");
+  // A tap is a person asking for a reload now: a guard left by an earlier
+  // reload that went nowhere must not swallow it.
+  hubReloading = false;
+  if ((await reloadIfHubAnswers('refresh')) === 'hub-down') {
+    showToast("The hub isn't answering, so the wall stayed as it was.");
+  }
   // A reload that goes nowhere (offline kiosk, a page restored from bfcache),
   // or one held back above, would leave the button busy and dead. A real
   // reload tears all this down.
@@ -6661,8 +6666,9 @@ function selfhealReport(diag, reason) {
 }
 
 // The decision. Returns the reason string (also what we log). Only 'reload'
-// actually reloads; every other path is a no-op that still gets reported so the
-// box sees why we held off.
+// asks for a reload, and even that waits for the hub to answer
+// (reloadIfHubAnswers; a held one is reported as hold:hub-down). Every other
+// path is a no-op that still gets reported so the box sees why we held off.
 function selfhealEvaluate() {
   const diag = viewportDiag();
   let reason;
@@ -6719,10 +6725,10 @@ function selfhealEvaluate() {
   if (reason === 'reload') {
     reloadIfHubAnswers('self-heal', {
       beforeReload: () => { if (markTried) markTried(); selfhealReport(diag, 'reload'); },
-    }).then((reloaded) => {
+    }).then((outcome) => {
       // Sent to a hub that just failed to answer, so it lands only if the hub
-      // is back by then; it still says so when it does.
-      if (!reloaded) selfhealReport(diag, 'hold:hub-down');
+      // is back by then (a known limit of a fire-and-forget diagnostic).
+      if (outcome === 'hub-down') selfhealReport(diag, 'hold:hub-down');
     });
   }
   return reason;

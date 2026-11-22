@@ -12139,7 +12139,7 @@ test('refresh button: if the reload does not navigate, the button comes back to 
   assert.equal(reloadCalls.length, 1);
   assert.ok(btn.classList.contains('is-syncing'), 'dimmed while the reload is under way');
   assert.equal(ariaBusy.at(-1), 'true');
-  runTimers((t) => t.ms === 3000 || t.ms === 20000);   // the page is still here: the reload went nowhere (offline, bfcache)
+  runTimers((t) => t.ms === 3000);   // the page is still here: the reload went nowhere (offline, bfcache); the 20 s guard has not run
   assert.ok(!btn.classList.contains('is-syncing'), 'no longer dimmed');
   assert.equal(ariaBusy.at(-1), 'false', 'no longer announced as busy');
   tapRefresh(fire, btn);
@@ -12276,7 +12276,7 @@ test('two reloads asked at once share one hub check and reload once', async () =
   let checks = 0;
   sandbox.fetch = async (url) => { if (url === '/api/version') checks++; return okResp({ version: 'test' }); };
   const [a, b] = await Promise.all([sandbox.reloadIfHubAnswers('one'), sandbox.reloadIfHubAnswers('two')]);
-  assert.equal(a, true); assert.equal(b, true);
+  assert.deepEqual([a, b].sort(), ['reloaded', 'reloading']);
   assert.equal(checks, 1, 'one hub check');
   assert.equal(reloadCalls.length, 1, 'one reload');
 });
@@ -12327,4 +12327,29 @@ test('a new build does not reload if the wall became busy while the hub was chec
   answer();
   await settleReload();
   assert.equal(reloads, 0, 'the reload is held, not fired under a tap');
+});
+
+test('refresh button: a tap during a deploy reload check still reloads (its own answer, not the poll\'s)', async () => {
+  const { document, sandbox, fire, reloadCalls } = newHub({ mobile: false });
+  ['ev-modal', 'chore-modal', 'confirm-modal'].forEach((id) => document.getElementById(id).classList.add('hidden'));
+  sandbox.noteInteraction(0);
+  const btn = seedRefresh(document);
+  let payload = { date: '2026-08-15', people: [], todos: {},
+    calendar: { status: 'ok', events: [] }, links: {}, build: 'aaa' };
+  let answer;
+  sandbox.fetch = (url) => (url === '/api/version'
+    ? new Promise((res) => { answer = () => res(okResp({ version: 'test' })); })
+    : Promise.resolve(okResp(url === '/api/hub' ? payload : { synced: true })));
+  await sandbox.poll();
+  payload = { ...payload, build: 'bbb' };
+  await sandbox.poll();                 // the deploy reload's hub check is now out
+  assert.ok(answer, 'the check is out');
+  sandbox.noteInteraction();            // the tap below makes the wall busy for the poll
+  tapRefresh(fire, btn);
+  await settleReload();
+  answer();
+  await settleReload();
+  assert.equal(reloadCalls.length, 1, 'the tap reloads; the poll held for busy');
+  const toast = document.getElementById('toast');
+  assert.ok(!toast || !/hub isn't answering/.test(toast.textContent), 'no false "hub is down" message');
 });
