@@ -10,6 +10,16 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.14.2] — 2026-11-22
+
+### Fixed
+
+- The wall no longer reloads onto the browser's error page while the hub is down. The Refresh button, the reload after a deploy and the phone's self-heal now check that the hub answers first; with the hub down the page stays up and keeps polling, and the Refresh button says the hub isn't answering.
+- On a phone, a wake while that check is out no longer takes the short screen height as the new normal, and a deploy's reload is held if someone touches the wall during the check.
+- A Refresh tap while a deploy's reload is waiting on the hub reloads as asked, and a second tap after a reload that went nowhere works.
+- A hub that hangs or answers with an error (such as 502 while it restarts) counts as not answering, so the wall stays put.
+- The Refresh button always comes back, even if a step after the hub check fails.
+
 ## [1.14.1] — 2026-11-15
 
 ### Changed
