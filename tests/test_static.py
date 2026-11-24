@@ -2772,8 +2772,19 @@ def test_help_is_wired_from_the_gear_and_settings():
     i_help = HUB.index("closest('[data-open-help]')")
     i_settings = HUB.index("closest('[data-open-settings]')")
     assert i_help < i_settings, "the help link must be routed before open-settings"
-    assert 'id="help-card"' in HUB
-    assert "helpHtml(helpTopics(helpContext()))" in HUB
+    assert 'id="help-card"' in HUB and 'id="help-list"' in HUB
+    assert "helpHtml(helpTopics(ctx), openIds)" in HUB
+    # the list repaints with the data, not once: every poll/switch and a source switch
+    ri = HUB[HUB.index("function renderIntegrations("):]
+    assert "renderHelpList();" in ri[:ri.index("\n}\n")], "renderIntegrations must repaint the help"
+    sts = HUB[HUB.index("async function setTodoSource("):]
+    assert "renderHelpList();" in sts[:sts.index("\n}\n")], "a To-Do source switch must repaint the help"
+    # chores/to-dos fail open in the help, the same as everywhere else
+    hc = HUB[HUB.index("function helpContext("):]
+    assert "featureEnabled(id)" in hc[:hc.index("\n}\n")]
+    assert "todoSourceOf(hubData)" in hc[:hc.index("\n}\n")]
     assert "function helpTopics" in COMMON and "function helpHtml" in COMMON
+    # the link's scroll target clears the overlay's Home pill
+    assert re.search(r"#help-card \{[^}]*scroll-margin-top", CSS)
     # a disclosure title is a full-size tap target
     assert re.search(r"\.help-item > summary \{[^}]*min-height: 44px", CSS)

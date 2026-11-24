@@ -7098,6 +7098,59 @@ test('renderSettingsFull: How it works lists only the features this wall has on'
   assert.match(html, /<details class="help-item"/, 'native tap-to-open rows');
 });
 
+test('help: the To-Do topic follows the source the card really uses', () => {
+  const { sandbox } = newHub();
+  // iCloud chosen, but the iCloud integration is switched off: the card is
+  // local (todoSourceOf), so the help must not talk about Reminders.
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'todos', enabled: true },"
+    + " { id: 'icloud_caldav', enabled: false }], todo_source: 'icloud' };", sandbox);
+  const html = sandbox.helpListHtml(new Set());
+  assert.match(html, /Now, Soon or Later/);
+  assert.ok(!/iCloud Reminders/.test(html));
+  // switched on, still 1-way (readonly not false): view-only wording
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'todos', enabled: true },"
+    + " { id: 'icloud_caldav', enabled: true }], todo_source: 'icloud' };", sandbox);
+  assert.match(sandbox.helpListHtml(new Set()), /view-only/);
+});
+
+test('help: before the first poll, the always-on topics show with a loading line, then repaint', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext('hubData = null; lastIntegrations = [];', sandbox);
+  let html = sandbox.helpListHtml(new Set());
+  assert.match(html, /Loading what this wall has on/);
+  for (const id of ['chores', 'trips', 'editing', 'todos']) {
+    assert.match(html, new RegExp(`data-help="${id}"`), `${id} fails open`);
+  }
+  // the first payload lands: renderIntegrations repaints the open list
+  const host = document.createElement('div');
+  host._id = 'help-list';
+  document.body.appendChild(host);
+  vm.runInContext(
+    "hubData = { integrations: [{ id: 'chores', enabled: true }, { id: 'todos', enabled: false },"
+    + " { id: 'laundry', enabled: true, status: 'needs_auth' }] };", sandbox);
+  sandbox.renderIntegrations(vm.runInContext('hubData', sandbox));
+  html = host.innerHTML;
+  assert.ok(!/Loading what this wall has on/.test(html), 'the loading line goes once data lands');
+  assert.ok(!html.includes('data-help="todos"'), 'a switched-off to-do list drops its topic');
+  assert.match(html, /data-help="laundry"/);
+  assert.match(html, /not connecting right now/, 'a failing card says so');
+});
+
+test('help: a repaint keeps open topics open', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("hubData = { integrations: [{ id: 'chores', enabled: true }] };", sandbox);
+  const host = document.createElement('div');
+  host._id = 'help-list';
+  document.body.appendChild(host);
+  host.querySelectorAll = (sel) => (sel === 'details[open]'
+    ? [{ dataset: { help: 'trips' } }] : []);
+  sandbox.renderHelpList();
+  assert.match(host.innerHTML, /data-help="trips" open>/);
+  assert.ok(!/data-help="chores" open/.test(host.innerHTML));
+});
+
 test('the gear popover "How it works" link opens Settings at the help card', () => {
   const { document, sandbox } = newHub();
   let scrolled = 0;
