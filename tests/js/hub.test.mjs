@@ -1471,25 +1471,33 @@ const ctxOf = (ids, extra = {}) => ({ enabled: new Set(ids), status: {}, todoSou
   todoReadonly: true, backup: null, ...extra });
 const topic = (ctx, id) => sandbox.helpTopics(ctx).find((t) => t.id === id);
 const plain = (v) => JSON.parse(JSON.stringify(v));
+const BROKEN = /not connecting right now/;
 
 test('helpTopics: each topic follows its feature switch; phone, screen and backups always show', () => {
   assert.deepEqual(plain(helpIds(ctxOf([]))), ['phone', 'screen', 'backup']);
   assert.deepEqual(plain(helpIds(ctxOf(['chores']))),
     ['chores', 'trips', 'editing', 'phone', 'screen', 'backup']);
   assert.ok(helpIds(ctxOf(['ics_calendar'])).includes('calendar'), 'any calendar source shows Calendar');
+  assert.ok(!helpIds(ctxOf(['ics_calendar'], { calendarOn: false })).includes('calendar'),
+    'the wall\'s calendar rule wins when given');
 });
 
-test('helpTopics: the trips line says a tick means going', () => {
+test('helpTopics: the trips line says a tick means going, and who starts unticked', () => {
   const text = topic(ctxOf(['chores']), 'trips').paras.join(' ');
-  assert.match(text, /Everyone starts ticked\. Untick anyone who is staying home\./);
+  assert.match(text, /Everyone starts ticked, except anyone who is already away\. Untick anyone who is staying home\./);
   assert.ok(!/Everyone at home starts ticked/.test(text), 'the old, wrong wording is gone');
 });
 
-test('helpTopics: half-on cards name only what is on', () => {
+test('helpTopics: half-on cards name only what is on; weather and climate together', () => {
   const w = topic(ctxOf(['climate']), 'weather');
   assert.equal(w.title, 'House climate');
   assert.equal(w.paras.length, 1);
   assert.ok(!/Full forecast/.test(w.paras[0]), 'no weather text when only climate is on');
+  const both = topic(ctxOf(['weather', 'climate']), 'weather');
+  assert.equal(both.title, 'Weather and house climate');
+  assert.equal(both.paras.length, 2);
+  assert.match(both.paras[0], /Full forecast/);
+  assert.match(both.paras[1], /Full climate/);
   const p = topic(ctxOf(['fleet']), 'printer');
   assert.equal(p.title, 'Servers');
   assert.ok(!/printer/i.test(p.paras.join(' ')));
@@ -1507,26 +1515,52 @@ test('helpTopics: the To-Do topic matches the list and whether it can be changed
   assert.ok(!/view-only/.test(rw));
 });
 
-test('helpTopics: a switched-on card that is failing says so first', () => {
-  for (const [id, status] of [['laundry', 'needs_auth'], ['google_calendar', 'error']]) {
-    const t = sandbox.helpTopics(ctxOf([id], { status: { [id]: status } }))
-      .find((x) => x.id === (id === 'laundry' ? 'laundry' : 'calendar'));
-    assert.match(t.paras[0], /not connecting right now/, `${id} ${status}`);
+test('helpTopics: "not connecting" only for cards that report a status, and only when on', () => {
+  assert.match(topic(ctxOf(['laundry'], { status: { laundry: 'needs_auth' } }), 'laundry').paras[0], BROKEN);
+  assert.match(topic(ctxOf(['google_calendar'], { status: { google_calendar: 'error' } }), 'calendar').paras[0], BROKEN);
+  assert.ok(!BROKEN.test(topic(ctxOf(['laundry'], { status: { laundry: 'ok' } }), 'laundry').paras[0]));
+  // switched off: no topic, and so no warning
+  assert.ok(!helpIds(ctxOf([], { status: { laundry: 'needs_auth' } })).includes('laundry'));
+  // cards that never report a status never claim one, whatever the payload says
+  for (const id of ['weather', 'climate', 'cameras', 'printer', 'fleet']) {
+    const all = sandbox.helpTopics(ctxOf([id], { status: { [id]: 'error' } }));
+    assert.ok(!all.some((t) => t.paras.some((x) => BROKEN.test(x))), `${id} never says not connecting`);
   }
-  assert.ok(!/not connecting/.test(topic(ctxOf(['laundry'], { status: { laundry: 'ok' } }), 'laundry').paras[0]));
 });
 
-test('helpTopics: the Backups topic starts with the live backup state', () => {
-  const first = (backup) => topic(ctxOf([], { backup }), 'backup').paras[0];
-  assert.equal(first(null), 'No backup has reported yet. If this stays so, check the hub.');
-  assert.equal(first({ known: false }), 'No backup has reported yet. If this stays so, check the hub.');
-  assert.equal(first({ known: true, stale: true, age_s: 3 * 86400 }),
-    'The last backup was 3 days ago, which is too old.');
-  assert.equal(first({ known: true, stale: false, age_s: 7200, remote: { failing: true } }),
-    'The copy off the box is failing. The copy on the hub is fine.');
-  assert.equal(first({ known: true, stale: false, age_s: 3600, remote: { failing: false, stale: false } }),
-    'Last backup 1 hour ago.');
-  assert.equal(first({ known: true, stale: false, age_s: 600 }), 'Last backup less than an hour ago.');
+test('helpTopics: a broken iCloud never claims the to-do card or calendar is down outright', () => {
+  const todoErr = topic(ctxOf(['todos'], { todoSource: 'icloud', status: { icloud_caldav: 'error' },
+    enabled: new Set(['todos', 'icloud_caldav']) }), 'todos').paras[0];
+  assert.match(todoErr, /may only be the copy of chores into Reminders/);
+  assert.ok(!BROKEN.test(todoErr));
+  const todoAuth = topic(ctxOf([], { todoSource: 'icloud', status: { icloud_caldav: 'needs_auth' },
+    enabled: new Set(['todos', 'icloud_caldav']) }), 'todos').paras[0];
+  assert.match(todoAuth, /iCloud sign-in is not working/);
+  const cal = topic(ctxOf(['icloud_caldav'], { status: { icloud_caldav: 'error' } }), 'calendar').paras[0];
+  assert.match(cal, /may only be the copy of chores into Reminders/);
+});
+
+test('helpBackupLine: every state and the age boundaries', () => {
+  const L = (b) => sandbox.helpBackupLine(b);
+  const ok = (age_s, remote) => ({ known: true, stale: false, age_s, remote });
+  const cases = [
+    [null, 'No backup has reported yet. If this stays so, check the hub.'],
+    [{ known: false, age_s: 10 }, 'No backup has reported yet. If this stays so, check the hub.'],
+    [{ known: true, age_s: null }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, age_s: -5 }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, age_s: NaN }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, age_s: '3600' }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, stale: true, age_s: 3 * 86400, remote: { failing: true } },
+      'The last backup was 3 days ago, which is too old.'],          // local stale beats remote failing
+    [ok(7200, { failing: true, stale: true }), 'The copy off the box is failing. The copy on the hub is fine.'],
+    [ok(7200, { failing: false, stale: true }), 'The copy off the box is too old. The copy on the hub is fine.'],
+    [ok(600), 'Last backup less than an hour ago.'],
+    [ok(1800), 'Last backup 1 hour ago.'],
+    [ok(47 * 3600), 'Last backup 47 hours ago.'],
+    [ok(48 * 3600), 'Last backup 2 days ago.'],
+  ];
+  for (const [b, want] of cases) assert.equal(L(b), want, JSON.stringify(b));
 });
 
 test('helpTopics: the screen topic reads its times from idleReturnMs', () => {
@@ -1534,26 +1568,38 @@ test('helpTopics: the screen topic reads its times from idleReturnMs', () => {
   assert.match(t, /a minute and a half on most pages, three minutes on the calendar, five minutes on a camera and five minutes in Settings/);
 });
 
-test('helpTopics text: no em dashes, and no names beyond the demo family', () => {
-  const all = sandbox.helpTopics(ctxOf(['chores', 'todos', 'google_calendar', 'cameras', 'weather',
-    'climate', 'laundry', 'printer', 'fleet'], { backup: { known: true, age_s: 60 } }));
-  assert.equal(all.length, 12, 'every topic renders');
-  const text = all.map((t) => t.title + ' ' + t.paras.join(' ')).join(' ');
+test('help text: no em or en dashes, and no names, in every string the help can show', () => {
+  const ctxs = [
+    ctxOf(['chores', 'todos', 'google_calendar', 'cameras', 'weather', 'climate', 'laundry', 'printer',
+      'fleet'], { backup: { known: true, age_s: 60 }, status: { laundry: 'error' } }),
+    ctxOf(['todos', 'icloud_caldav'], { todoSource: 'icloud', todoReadonly: true, status: { icloud_caldav: 'error' } }),
+    ctxOf(['todos', 'icloud_caldav'], { todoSource: 'icloud', todoReadonly: false, status: { icloud_caldav: 'needs_auth' } }),
+  ];
+  const strings = ctxs.flatMap((c) => sandbox.helpTopics(c).flatMap((t) => [t.title, ...t.paras]));
+  // top-level consts live in the script scope, not on the sandbox object
+  for (const k of ['HELP_LOADING', 'HELP_UNREACHABLE', 'HELP_BROKEN', 'HELP_ICLOUD_AUTH', 'HELP_ICLOUD_ERROR']) {
+    strings.push(vm.runInContext(k, sandbox));
+  }
+  for (const b of [null, { known: true, age_s: -1 }, { known: true, stale: true, age_s: 9e5 },
+    { known: true, age_s: 60, remote: { failing: true } }, { known: true, age_s: 60, remote: { stale: true } }]) {
+    strings.push(sandbox.helpBackupLine(b));
+  }
+  assert.ok(strings.every((x) => typeof x === 'string' && x.length), 'every string is real text');
+  const text = strings.join(' ');
+  assert.ok(text.includes('view-only') && text.includes('Tap an item to check it off'), 'both iCloud texts scanned');
   assert.ok(!text.includes(String.fromCharCode(0x2014)), 'no em dashes');
+  assert.ok(!text.includes(String.fromCharCode(0x2013)), 'no en dashes');
   // The help speaks about "each person", never a named one: any capitalized
   // word that is not ordinary sentence text, a feature or a UI label would be
   // a name, and this repo is public.
-  const allowed = new Set(['Each', 'Tap', 'The', 'A', 'Green', 'Finish', 'Use', 'Only', 'All', 'Pick',
-    'Everyone', 'Untick', 'Chores', 'If', 'Away', 'While', 'Back', 'Edit', 'You', 'Trip', 'Open', 'This',
-    'New', 'Changes', 'Past', 'Scroll', 'People', 'Deactivate', 'Delete', 'One', 'Anyone', 'Items', 'Now',
-    'Soon', 'Later', 'After', 'In', 'Calendar', 'Month', 'Camera', 'Weather', 'UV', 'Full', 'House',
-    'When', 'Waiting', 'Fleet', 'On', 'From', 'It', 'Each', 'Auto-return', 'Settings', 'Share', 'Add',
-    'Home', 'Screen', 'Safari', 'iPhone', 'Last', 'Everyone’s', 'Laundry', 'To-dos', 'Cameras',
-    'Backups', 'Going', 'Changing', 'How', 'Streaks', 'Servers', 'D', 'Right', 'To', 'Sync', 'Reminders',
-    'Fix', 'Features', 'Later', 'Room', 'Most', 'Ava', 'Milo', 'Ruby', 'Day', 'Days', 'Next', 'Done',
-    'Edit', 'Nobody', 'Recently', 'Off', 'Gray', 'Red', 'Amber', 'Other', 'Mon', 'Tue', 'Wed', 'Thu',
-    'Fri', 'Sat', 'Sun', 'Air', 'Temperature', 'Humidity', 'Climate', 'Printer', 'Spool', 'Big', 'View',
-    'That']);
+  const allowed = new Set(['A', 'Add', 'After', 'All', 'Anyone', 'Auto-return', 'Away', 'Back', 'Backups',
+    'Calendar', 'Camera', 'Cameras', 'Changes', 'Changing', 'Check', 'Chores', 'D', 'Deactivate', 'Delete',
+    'Each', 'Edit', 'Everyone', 'Everyone’s', 'Features', 'Finish', 'Fix', 'Fleet', 'From', 'Full', 'Going',
+    'Green', 'Home', 'House', 'How', 'If', 'In', 'Items', 'It', 'Last', 'Later', 'Laundry', 'Loading', 'Month',
+    'New', 'No', 'Now', 'On', 'One', 'Only', 'Open', 'Past', 'People', 'Pick', 'Reminders', 'Right', 'Safari',
+    'Screen', 'Scroll', 'Servers', 'Settings', 'Share', 'Soon', 'Sync', 'Tap', 'That', 'The', 'This',
+    'To', 'To-Do', 'To-dos', 'Trip', 'UV', 'Untick', 'Use', 'Waiting', 'Weather', 'When', 'While', 'You', 'iCloud',
+    'iPhone']);
   const words = text.match(/\b[A-Z][\w’-]*/g) || [];
   const odd = [...new Set(words)].filter((w) => !allowed.has(w));
   assert.deepEqual(odd, [], `capitalized words that could be names: ${odd.join(', ')}`);

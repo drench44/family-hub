@@ -2154,21 +2154,42 @@ function buildTripForm(host, model, people, onsubmit) {
    ctx: {
      enabled: Set of feature ids that are on (chores/todos fail open, see
               hub.js helpContext),
-     status: {id: 'ok' | 'needs_auth' | 'error' | null}, the integration rows,
+     calendarOn: bool, the calendar card shows (the wall's own rule,
+              TAB_FEATURES.cal); falls back to any calendar source on,
+     status: {id: 'ok' | 'needs_auth' | 'error' | null}, the integration rows.
+              Only laundry, google_calendar and icloud_caldav report a status
+              today (app.py _integ_status); every other card has none, so
+              the help never claims to know whether it is connecting,
      todoSource: 'local' | 'icloud' (todoSourceOf, never the raw setting),
      todoReadonly: bool, iCloud to-dos are view-only until 2-way sync is on,
      backup: the hub's backup block, or null when it hasn't said,
    }. Pure. */
 const HELP_BROKEN = 'This card is not connecting right now. Fix it under Features & integrations below.';
+// iCloud's status also goes to "error" when only the copy of chores into
+// Reminders fails (app.py _integ_status), so it never claims the card is down.
+const HELP_ICLOUD_AUTH = 'The iCloud sign-in is not working right now, so this may be out of date. Fix it under iCloud below.';
+const HELP_ICLOUD_ERROR = 'iCloud is reporting a problem. It may only be the copy of chores into Reminders. Check iCloud below.';
+// The help list's status lines (hub.js helpListHtml), kept here so the house-
+// style test reads every string the help can show.
+const HELP_LOADING = 'Loading what this wall has on.';
+const HELP_UNREACHABLE = 'The hub could not be reached, so this list may be missing some cards.';
+// The integrations that report a health status (app.py _integ_status).
+const HELP_STATUS_IDS = new Set(['laundry', 'google_calendar', 'icloud_caldav']);
 
 function helpTopics(ctx) {
   const c = ctx || {};
   const on = (id) => !!(c.enabled && c.enabled.has(id));
   // A switched-on card can still be failing (a rejected sign-in, a dead feed).
-  // Say so first, so the help never describes a card that isn't working.
-  const broken = (...ids) => ids.some((id) => on(id) && c.status
-    && (c.status[id] === 'needs_auth' || c.status[id] === 'error'));
-  const withStatus = (ids, paras) => (broken(...ids) ? [HELP_BROKEN, ...paras] : paras);
+  // Say so first, but only for the cards that report a status at all.
+  const st = (id) => (on(id) && HELP_STATUS_IDS.has(id) && c.status ? c.status[id] : null);
+  const bad = (id) => st(id) === 'needs_auth' || st(id) === 'error';
+  const withStatus = (ids, paras) => {
+    if (ids.some((id) => id !== 'icloud_caldav' && bad(id))) return [HELP_BROKEN, ...paras];
+    if (ids.includes('icloud_caldav') && bad('icloud_caldav')) {
+      return [st('icloud_caldav') === 'needs_auth' ? HELP_ICLOUD_AUTH : HELP_ICLOUD_ERROR, ...paras];
+    }
+    return paras;
+  };
   const topics = [];
   if (on('chores')) {
     topics.push({
@@ -2184,7 +2205,7 @@ function helpTopics(ctx) {
     topics.push({
       id: 'trips', title: 'Going out of town',
       paras: [
-        'Tap ✈ Trip on the Chores card. Pick who is going, the day you leave, and the day chores resume. Everyone starts ticked. Untick anyone who is staying home.',
+        'Tap ✈ Trip on the Chores card. Pick who is going, the day you leave, and the day chores resume. Everyone starts ticked, except anyone who is already away. Untick anyone who is staying home.',
         'Chores pause for the trip and come back on their own on the day chores resume. If you get home in the evening and still want that day’s chores, pick that day. If not, pick the next day.',
         'Away days count as rest, so nobody loses a streak. A chore that takes turns passes to whoever is home. If someone stays home, you can make them the backup for the away people’s own chores.',
         'While a trip is on, the Chores card says who is away and when chores resume. Back early ends it now. Edit changes the dates or who is going. You can plan a trip ahead, and a planned trip can be canceled.',
@@ -2221,7 +2242,7 @@ function helpTopics(ctx) {
     topics.push({ id: 'todos', title: 'To-dos', paras });
   }
   const calIds = ['google_calendar', 'ics_calendar', 'icloud_caldav'];
-  if (calIds.some(on)) {
+  if (c.calendarOn !== undefined ? c.calendarOn : calIds.some(on)) {
     topics.push({
       id: 'calendar', title: 'Calendar',
       paras: withStatus(calIds, [
@@ -2234,7 +2255,7 @@ function helpTopics(ctx) {
   if (on('cameras')) {
     topics.push({
       id: 'cameras', title: 'Cameras',
-      paras: withStatus(['cameras'], ['Tap a camera to see it full size. Camera page shows them all.']),
+      paras: ['Tap a camera to see it full size. Camera page shows them all.'],
     });
   }
   if (on('weather') || on('climate')) {
@@ -2246,7 +2267,7 @@ function helpTopics(ctx) {
       paras.push('House climate shows each room’s temperature and humidity. A room turns amber or red when it runs hot or its sensor stops reporting. Tap Full climate for more.');
     }
     topics.push({ id: 'weather', title: on('weather') && on('climate') ? 'Weather and house climate'
-      : (on('weather') ? 'Weather' : 'House climate'), paras: withStatus(['weather', 'climate'], paras) });
+      : (on('weather') ? 'Weather' : 'House climate'), paras });
   }
   if (on('laundry')) {
     topics.push({
@@ -2264,7 +2285,7 @@ function helpTopics(ctx) {
     }
     if (on('fleet')) paras.push('The Fleet card shows whether the home servers and the internet are up.');
     topics.push({ id: 'printer', title: on('printer') && on('fleet') ? '3D printer and servers'
-      : (on('printer') ? '3D printer' : 'Servers'), paras: withStatus(['printer', 'fleet'], paras) });
+      : (on('printer') ? '3D printer' : 'Servers'), paras });
   }
   topics.push({
     id: 'phone', title: 'On a phone',
@@ -2304,17 +2325,22 @@ function helpIdleWords() {
    ({known, age_s, stale, remote: {failing, stale}}). Pure. */
 function helpBackupLine(b) {
   const ago = (s) => {
-    const h = Math.round((Number(s) || 0) / 3600);
+    const h = Math.round(s / 3600);
     if (h < 1) return 'less than an hour';
     if (h < 48) return `${h} hour${h === 1 ? '' : 's'}`;
     return `${Math.round(h / 24)} days`;
   };
   if (!b || !b.known) return 'No backup has reported yet. If this stays so, check the hub.';
-  if (b.stale) return `The last backup was ${ago(b.age_s)} ago, which is too old.`;
-  if (b.remote && (b.remote.failing || b.remote.stale)) {
-    return 'The copy off the box is failing. The copy on the hub is fine.';
+  // a missing, negative or non-number age is a clock or payload problem
+  const age = b.age_s;
+  if (typeof age !== 'number' || !Number.isFinite(age) || age < 0) {
+    return 'The last backup time looks wrong. Check the hub.';
   }
-  return `Last backup ${ago(b.age_s)} ago.`;
+  if (b.stale) return `The last backup was ${ago(age)} ago, which is too old.`;
+  // same split as backupBadge: failing vs merely too old
+  if (b.remote && b.remote.failing) return 'The copy off the box is failing. The copy on the hub is fine.';
+  if (b.remote && b.remote.stale) return 'The copy off the box is too old. The copy on the hub is fine.';
+  return `Last backup ${ago(age)} ago.`;
 }
 
 /* The topics as a list of native disclosure rows: tap a title to open it.

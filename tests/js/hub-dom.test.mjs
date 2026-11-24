@@ -7151,6 +7151,128 @@ test('help: a repaint keeps open topics open', () => {
   assert.ok(!/data-help="chores" open/.test(host.innerHTML));
 });
 
+test('help: Settings (and the gear\'s How it works) give five minutes before auto-return', () => {
+  for (const open of [(sb) => sb.openOverlay('settings'), (sb) => sb.openHelp()]) {
+    const { sandbox, timers } = newHub();
+    open(sandbox);
+    assert.ok(nextTimer(timers, 300000), 'a 5-minute idle return is armed');
+    assert.ok(!nextTimer(timers, 90000), 'not the default minute and a half');
+  }
+  const { sandbox, timers } = newHub();
+  sandbox.openOverlay('calendar');
+  assert.ok(nextTimer(timers, 180000), 'calendar keeps its three minutes');
+});
+
+test('help: helpContext fails open for chores and to-dos, and follows their switch', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("hubData = { integrations: [{ id: 'weather', enabled: true }] };", sandbox);
+  let html = sandbox.helpListHtml(new Set());
+  for (const id of ['chores', 'trips', 'editing', 'todos']) {
+    assert.match(html, new RegExp(`data-help="${id}"`), `${id} shows though absent from the list`);
+  }
+  assert.ok(!/Loading what this wall has on/.test(html), 'a known list shows no loading line');
+  vm.runInContext("hubData = { integrations: [{ id: 'weather', enabled: true },"
+    + " { id: 'chores', enabled: false }] };", sandbox);
+  html = sandbox.helpListHtml(new Set());
+  for (const id of ['chores', 'trips', 'editing']) {
+    assert.ok(!html.includes(`data-help="${id}"`), `${id} goes when chores are switched off`);
+  }
+});
+
+test('help: two-way and one-way iCloud to-dos, through helpContext', () => {
+  const { sandbox } = newHub();
+  const at = (readonly) => {
+    vm.runInContext(`hubData = { todo_source: 'icloud', integrations: [{ id: 'todos', enabled: true },`
+      + ` { id: 'icloud_caldav', enabled: true, readonly: ${readonly} }] };`, sandbox);
+    return sandbox.helpListHtml(new Set());
+  };
+  const rw = at(false);
+  assert.match(rw, /Tap an item to check it off/);
+  assert.ok(!/view-only/.test(rw));
+  const ro = at(true);
+  assert.match(ro, /view-only/);
+  assert.ok(!/Tap an item to check it off/.test(ro));
+});
+
+test('help: a switched-off laundry with a bad status shows nothing about laundry', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("hubData = { integrations: [{ id: 'laundry', enabled: false, status: 'needs_auth' }] };", sandbox);
+  const html = sandbox.helpListHtml(new Set());
+  assert.ok(!html.includes('data-help="laundry"'));
+  assert.ok(!/not connecting/.test(html));
+});
+
+test('help: the gear link runs openHelp, not the plain open-settings path', () => {
+  const { sandbox, docListeners } = newHub();
+  vm.runInContext(`globalThis.__n = { help: 0, close: 0, open: 0 };
+    const __realHelp = openHelp;
+    openHelp = () => { __n.help++; __realHelp(); };
+    closeThemePop = () => { __n.close++; };
+    openOverlay = () => { __n.open++; };`, sandbox);
+  const node = { closest: (s) => (s === '[data-open-help]' ? node : null) };
+  (docListeners.click || []).forEach((fn) => fn({ target: node }));
+  const n = vm.runInContext('__n', sandbox);
+  assert.equal(n.help, 1, 'openHelp ran');
+  assert.equal(n.close, 1, 'the popover closed once');
+  assert.equal(n.open, 1, 'Settings opened once (the open-settings branch did not run too)');
+});
+
+test('help: renderHelpList survives a missing host, reads open rows by attribute, and skips unchanged writes', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("hubData = { integrations: [{ id: 'chores', enabled: true }] };", sandbox);
+  assert.doesNotThrow(() => sandbox.renderHelpList(), 'no #help-list: a quiet no-op');
+  const host = document.createElement('div');
+  host._id = 'help-list';
+  document.body.appendChild(host);
+  host.querySelectorAll = (sel) => (sel === 'details[open]'
+    ? [{ getAttribute: (k) => (k === 'data-help' ? 'editing' : null) }] : []);
+  sandbox.renderHelpList();
+  assert.match(host.innerHTML, /data-help="editing" open>/, 'open read through getAttribute');
+  // an identical repaint writes nothing (the 60s poll must not steal a tap)
+  host.innerHTML = 'UNTOUCHED';
+  sandbox.renderHelpList();
+  assert.equal(host.innerHTML, 'UNTOUCHED');
+  // a real change does write
+  vm.runInContext("hubData = { integrations: [{ id: 'chores', enabled: true }, { id: 'laundry', enabled: true }] };", sandbox);
+  sandbox.renderHelpList();
+  assert.match(host.innerHTML, /data-help="laundry"/);
+});
+
+test('help: switching the To-Do source repaints the help', async () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext(`hubData = { todo_source: 'local', integrations: [{ id: 'todos', enabled: true },
+    { id: 'icloud_caldav', enabled: true, readonly: false }] };
+    attemptTodo = async () => ({ ok: true });
+    poll = async () => { hubData = { ...hubData, todo_source: 'icloud' }; };
+    renderTodoSourcePicker = () => {};`, sandbox);
+  const host = document.createElement('div');
+  host._id = 'help-list';
+  document.body.appendChild(host);
+  sandbox.renderHelpList();
+  assert.match(host.innerHTML, /Now, Soon or Later/);
+  await sandbox.setTodoSource('icloud');
+  assert.match(host.innerHTML, /iCloud Reminders/, 'the To-Do topic follows the new source');
+});
+
+test('help: Settings opened before the first poll says Loading; a failed poll says unreachable', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.getAttribute = () => null;
+  vm.runInContext('hubData = null; lastIntegrations = [];', sandbox);
+  sandbox.renderSettingsFull();
+  assert.match(host.innerHTML, /Loading what this wall has on\./);
+  // the hub never answers: the same list now says so plainly
+  const list = document.createElement('div');
+  list._id = 'help-list';
+  document.body.appendChild(list);
+  sandbox.fetch = async () => { throw new Error('offline'); };
+  await sandbox.poll();
+  assert.match(list.innerHTML, /The hub could not be reached/);
+  assert.ok(!/Loading what this wall has on/.test(list.innerHTML));
+});
+
 test('the gear popover "How it works" link opens Settings at the help card', () => {
   const { document, sandbox } = newHub();
   let scrolled = 0;

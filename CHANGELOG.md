@@ -12,7 +12,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Added
 
-- A "How it works" guide in Settings: one tap-to-open topic per feature, in plain words (chores and streaks, trips, changing chores and people, to-dos, calendar, cameras, weather and climate, laundry, the printer and server cards, using it on a phone, how the screen behaves, and backups). A topic only shows when its feature is on, a card that is not connecting says so, the to-do topic says whether an iCloud list is view-only, and the backup topic starts with when the last backup ran. It updates as things change. The gear menu has a "How it works" link that opens it.
+- A "How it works" guide in Settings: one tap-to-open topic per feature, in plain words (chores and streaks, trips, changing chores and people, to-dos, calendar, cameras, weather and climate, laundry, the printer and server cards, using it on a phone, how the screen behaves, and backups). A topic only shows when its feature is on. A card that reports its own health (laundry, Google calendar, iCloud) says when it is not connecting, the to-do topic says whether an iCloud list is view-only, and the backup topic starts with when the last backup ran, or says plainly when something looks wrong. It updates as things change without stealing a tap, and says so if the hub can't be reached. The gear menu has a "How it works" link that opens it.
 
 ### Changed
 
