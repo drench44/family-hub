@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-11-24
+
 ### Added
 
 - Out-of-town mode is now one tap away: a ✈ Trip button on the Chores card (on the wall and the phone's Chores tab). Pick who's going, the day you leave and the day chores resume, and an optional backup for anyone staying home. Chores pause for the trip and come back on their own that day.
