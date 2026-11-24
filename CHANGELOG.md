@@ -10,6 +10,25 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-11-24
+
+### Added
+
+- Out-of-town mode is now one tap away: a ✈ Trip button on the Chores card (on the wall and the phone's Chores tab). Pick who's going, the day you leave and the day chores resume, and an optional backup for anyone staying home. Chores pause for the trip and come back on their own that day.
+- While a trip is on, a banner on the Chores card shows who's away and the day chores resume, with Back early and Edit. A trip can be planned ahead, and a planned trip shows with Edit and Cancel trip.
+
+### Changed
+
+- "Pause everyone" in the People editor is replaced by "Plan a trip", which opens the same trip sheet.
+- On a phone, the buttons in each card's header (All chores, Month view and the rest) are now a full thumb-sized 44px tall.
+
+### Fixed
+
+- A trip planned for a later date can now be cancelled from the wall; the old "I'm back" button refused it with an error.
+- A planned trip no longer shows under "Away now" before it starts; it's listed under "Planned".
+- A dated trip counts as away everywhere, so "Going away" can't stack a second period on top of it and nobody on a trip is offered as a backup.
+- A backup is always checked against the days they cover: moving an away period's dates onto the backup's own trip is refused instead of quietly pausing the chores they were covering.
+
 ## [1.14.2] — 2026-11-22
 
 ### Fixed

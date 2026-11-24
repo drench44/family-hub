@@ -1946,3 +1946,197 @@ function caldavPanelHtml(integ, ui) {
     + `${caldavCollectionsHtml(st.collections, { error: st.collectionsError })}</div>`
     + `</div>`;
 }
+
+/* ------------------------------------------------ trips (out of town) */
+
+/* A trip is stored as away periods whose end_date is the LAST away day. The
+   family thinks in "the day we're back", when chores come back, so the sheet
+   and banner both show end_date + 1 and the save sends back - 1. */
+function tripBackDay(endDate) {
+  return endDate ? addDays(endDate, 1) : '';
+}
+
+function tripDay(dateStr) {
+  const d = parseISODate(dateStr);
+  return d ? shortDate(d) : '';
+}
+
+/* "Everyone" when the trip takes every person on the wall, else the names in
+   wall order: "Ava", "Ava and Milo", "Ava, Milo and Ruby". Pure. */
+function tripWhoLabel(personIds, people) {
+  const going = new Set((personIds || []).map(Number));
+  const all = people || [];
+  if (all.length > 1 && all.every((p) => going.has(p.id))) return 'Everyone';
+  const names = all.filter((p) => going.has(p.id)).map((p) => p.name);
+  // someone on the trip who has since left the wall still counts
+  const known = new Set(all.map((p) => p.id));
+  const extra = [...going].filter((id) => !known.has(id)).length;
+  if (extra) names.push(extra === 1 ? '1 more' : `${extra} more`);
+  if (names.length <= 1) return names[0] || '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/* The wall's people plus any traveller not on it (deactivated since the trip
+   was set), so a trip always names, and the sheet always shows, everyone on
+   it. Pure. */
+function tripPeopleWith(people, trip) {
+  const out = (people || []).slice();
+  const have = new Set(out.map((p) => p.id));
+  ((trip && trip.people) || []).forEach((p) => {
+    if (!have.has(p.id)) {
+      out.push({ id: p.id, name: p.name, color: p.color, active: p.active !== false });
+      have.add(p.id);
+    }
+  });
+  return out;
+}
+
+/* The Chores card banner: one line per live trip, running ones first. Every
+   string goes through escapeHtml; the trip's period ids ride on the buttons
+   so a tap acts on exactly the trip that was drawn. Pure. */
+function tripBannerHtml(trips, people) {
+  return (trips || []).map((t) => {
+    const ids = (t.ids || []).map(Number).join(',');
+    const who = tripWhoLabel(t.person_ids, tripPeopleWith(people, t));
+    const back = tripBackDay(t.end_date);
+    let line;
+    let buttons;
+    if (t.state === 'now') {
+      line = back ? `Away, chores resume ${tripDay(back)}` : 'Away, no back day set';
+      buttons = `<button class="padmin-btn" type="button" data-trip-end="${ids}">Back early</button>`
+        + `<button class="padmin-btn" type="button" data-trip-edit="${ids}">Edit</button>`;
+    } else {
+      line = `Trip ${tripDay(t.start_date)}`
+        + (back ? `, chores resume ${tripDay(back)}` : ', no back day set');
+      buttons = `<button class="padmin-btn" type="button" data-trip-edit="${ids}">Edit</button>`
+        + `<button class="padmin-btn" type="button" data-trip-end="${ids}">Cancel trip</button>`;
+    }
+    return `<div class="card trip-banner${t.state === 'now' ? ' now' : ''}">`
+      + `<span class="trip-banner-icon" aria-hidden="true">✈</span>`
+      + `<span class="trip-banner-text"><span class="trip-banner-line">${escapeHtml(line)}</span>`
+      + (who ? `<span class="trip-banner-who">${escapeHtml(who)}</span>` : '')
+      + `</span><span class="trip-banner-acts">${buttons}</span></div>`;
+  }).join('');
+}
+
+/* What the sheet is about to save, in plain words, from the same model the
+   payload comes from. Pure. */
+function tripSummary(model, people) {
+  const who = tripWhoLabel([...model.going], people);
+  if (!who) return 'Pick who is going.';
+  if (!model.start) return 'Pick the day you leave.';
+  if (!model.back) return 'Pick the day chores resume.';
+  if (model.back <= model.start) return 'Chores have to resume after the leaving day.';
+  const last = addDays(model.back, -1);
+  const span = last === model.start ? `on ${tripDay(model.start)}`
+    : `${tripDay(model.start)} to ${tripDay(last)}`;
+  const verb = who !== 'Everyone' && model.going.size > 1 ? 'are' : 'is';
+  return `${who} ${verb} away ${span}. Chores resume ${tripDay(model.back)}.`;
+}
+
+/* The request body for POST /api/trip, or a reason it can't be sent. Pure. */
+function tripPayload(model) {
+  if (!model.going.size) return { error: 'Pick who is going.' };
+  if (!model.start) return { error: 'Pick the day you leave.' };
+  if (!model.back) return { error: 'Pick the day chores resume.' };
+  if (model.back <= model.start) return { error: 'Chores have to resume after the leaving day.' };
+  const body = {
+    person_ids: [...model.going],
+    start_date: model.start,
+    end_date: addDays(model.back, -1),
+  };
+  // 'keep' (an edit of a trip whose travellers have different backups) sends
+  // no backup at all, which the server reads as "leave each one as it is".
+  // Anything else is sent, null included, so "No backup" really clears it.
+  if (model.backup !== 'keep') body.backup_person_id = model.backup ? Number(model.backup) : null;
+  if (model.ids && model.ids.length) body.ids = model.ids.slice();
+  return { body };
+}
+
+/* The trip sheet, built into the shared editor shell. model: {going: Set of
+   person ids, start, back ('YYYY-MM-DD' or ''), backup (id, '' or 'keep'),
+   mixed (the trip's travellers have different backups), ids (the trip being
+   edited, or [])}. people: [{id, name, color}], the wall plus any traveller
+   not on it. */
+function buildTripForm(host, model, people, onsubmit) {
+  const editing = !!(model.ids && model.ids.length);
+  host.innerHTML = `
+    <div class="trip-title">${editing ? 'Edit trip' : 'Going out of town'}</div>
+    <div class="field"><label>Who’s going</label>
+      <div class="person-chips" role="group" aria-label="Who is going" data-trip-people></div></div>
+    <div class="trip-dates">
+      <div class="field"><label>Leaving</label>
+        <input class="txt-input" type="date" data-trip-start></div>
+      <div class="field"><label>Chores resume</label>
+        <input class="txt-input" type="date" data-trip-back></div>
+    </div>
+    <div class="field" data-trip-backup-field><label>Backup for their chores</label>
+      <select class="txt-input" data-trip-backup></select>
+      <div class="hint">Chores that take turns pass to whoever is home on their own.</div></div>
+    <div class="trip-summary" data-trip-summary></div>
+    <div class="form-error hidden" data-trip-error></div>
+    <button class="btn-primary" type="button" data-trip-submit>${editing ? 'Save trip' : 'Start trip'}</button>`;
+  const $ = (sel) => host.querySelector(sel);
+  const startEl = $('[data-trip-start]');
+  const backEl = $('[data-trip-back]');
+  startEl.value = model.start || '';
+  backEl.value = model.back || '';
+
+  const paint = () => {
+    $('[data-trip-people]').innerHTML = people.map((p) => {
+      const on = model.going.has(p.id);
+      return `<button class="person-chip${on ? ' selected' : ''}" type="button" data-trip-person="${p.id}"`
+        + ` aria-pressed="${on ? 'true' : 'false'}" style="--pc:${safeColor(p.color)}">`
+        + `<span class="pc-dot" aria-hidden="true"></span>${escapeHtml(p.name)}</button>`;
+    }).join('');
+    // the backup has to be someone staying home; with everyone going there
+    // is nobody to pick, so the field goes away and no backup is sent
+    // a deactivated traveller taken off the trip can't cover anyone
+    const staying = people.filter((p) => !model.going.has(p.id) && p.active !== false);
+    if (model.backup !== 'keep' && !staying.some((p) => String(p.id) === String(model.backup))) {
+      model.backup = '';
+    }
+    $('[data-trip-backup-field]').classList.toggle('hidden', !staying.length && !model.mixed);
+    $('[data-trip-backup]').innerHTML
+      = (model.mixed ? `<option value="keep">Keep each person’s backup</option>` : '')
+      + `<option value="">No backup</option>`
+      + staying.map((p) => `<option value="${p.id}"${String(p.id) === String(model.backup) ? ' selected' : ''}>`
+        + `${escapeHtml(p.name)}</option>`).join('');
+    $('[data-trip-backup]').value = model.backup ? String(model.backup) : '';
+    $('[data-trip-summary]').textContent = tripSummary(model, people);
+  };
+  paint();
+
+  $('[data-trip-people]').onclick = (e) => {
+    const chip = e.target.closest('[data-trip-person]');
+    if (!chip) return;
+    const id = Number(chip.dataset.tripPerson);
+    if (model.going.has(id)) model.going.delete(id); else model.going.add(id);
+    paint();
+  };
+  const onDate = () => {
+    model.start = startEl.value;
+    model.back = backEl.value;
+    paint();
+  };
+  startEl.onchange = onDate;
+  startEl.oninput = onDate;
+  backEl.onchange = onDate;
+  backEl.oninput = onDate;
+  $('[data-trip-backup]').onchange = () => { model.backup = $('[data-trip-backup]').value; };
+
+  const submit = $('[data-trip-submit]');
+  submit.onclick = oneSaveAtATime(submit, () => {
+    const errEl = $('[data-trip-error]');
+    model.start = startEl.value;
+    model.back = backEl.value;
+    const { body, error } = tripPayload(model);
+    if (error) {
+      errEl.textContent = error;
+      errEl.classList.remove('hidden');
+      return undefined;
+    }
+    errEl.classList.add('hidden');
+    return onsubmit(body, errEl);
+  });
+}

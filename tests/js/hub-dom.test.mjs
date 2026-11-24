@@ -1849,7 +1849,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   const completeCalls = [];
   const adminChoreCalls = [];   // POST/PATCH /api/admin/chores writes from the editor
   const adminPeopleCalls = [];  // POST/PATCH/DELETE /api/admin/people from the people editor
-  const adminAwayCalls = [];    // POST /api/admin/away(/{id}/back|/everyone) from away controls
+  const adminAwayCalls = [];    // POST /api/admin/away(/{id}/back) and /api/trip(/end) from away + trip controls
   const okJson = (v) => ({ ok: true, status: 200, json: async () => v });
   const sandbox = {
     document,
@@ -1894,7 +1894,8 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
           });
           return okJson({ id: 99 });
         }
-        if (/\/api\/admin\/away(\/\d+)?(\/back|\/everyone)?$/.test(url)) {
+        if (/\/api\/admin\/away(\/\d+)?(\/back|\/everyone)?$/.test(url)
+            || /^\/api\/trip(\/end)?$/.test(url)) {
           adminAwayCalls.push({
             url,
             method: (opts && opts.method) || 'GET',
@@ -1940,7 +1941,7 @@ function mountChoresFull(people, adminState = SAMPLE_ADMIN) {
   };
   return {
     sandbox, document, registry, choresFull, completeCalls, adminChoreCalls,
-    adminPeopleCalls, adminAwayCalls, tap, tapConfirm, read,
+    adminPeopleCalls, adminAwayCalls, tap, tapConfirm, read, fire: fireClick,
   };
 }
 
@@ -2758,14 +2759,272 @@ test('people admin: the backup picker offers only people who can actually cover'
     'an OPEN period keeps its "I\'m back" control so it can always be closed');
 });
 
-test('people admin: "Pause everyone" POSTs /api/admin/away/everyone with an empty body', async () => {
-  const ctx = mountChoresFull(SAMPLE_PEOPLE);
-  await enterEditWithPeople(ctx);
-  ctx.tap('[data-paway-all="1"]');
+// --- trips: the ✈ Trip button, banner and sheet ------------------------------
+
+const TRIP_PEOPLE = [
+  { person: { id: 1, name: 'Sam Rivera', color: '#5BC9F0' }, chores: [], streak: 0, week: [], total: 0, done_count: 0 },
+  { person: { id: 2, name: 'Alex Kim', color: '#8AE0AD' }, chores: [], streak: 0, week: [], total: 0, done_count: 0 },
+];
+
+function mountTrips(trips, tripsOk = true) {
+  const ctx = mountChoresFull(TRIP_PEOPLE);
+  ctx.sandbox._trips = trips;
+  ctx.sandbox._tripsOk = tripsOk;
+  ctx.read('hubData = { people: _people, trips: _trips, trips_ok: _tripsOk };');
+  ctx.sandbox.renderChoresFull(TRIP_PEOPLE);
+  return ctx;
+}
+
+const tripEditor = (ctx) => ctx.registry['chore-editor'];
+const tapIn = (root, sel) => {
+  const node = root.querySelector(sel);
+  assert.ok(node, `a node matching ${sel} exists in the sheet`);
+  node.closest = (s) => (selectorMatches(node, s) ? node : null);
+  return node;
+};
+
+test('trips: the chores view shows a ✈ Trip button on today, none on a browsed day', async () => {
+  const ctx = mountTrips([]);
+  assert.ok(ctx.choresFull.querySelector('[data-trip-open]'), 'Trip button on today');
+  assert.ok(!ctx.choresFull.innerHTML.includes('trip-banner'), 'no banner without a trip');
+});
+
+test('trips: a running trip shows its back day, who, Back early and Edit', async () => {
+  const ctx = mountTrips([{ ids: [6, 7], person_ids: [1, 2], start_date: '2026-08-14',
+    end_date: '2026-08-19', backup_person_id: null, state: 'now' }]);
+  const html = ctx.choresFull.innerHTML;
+  assert.match(html, /Away, chores resume Thu Aug 20/, 'back day is the day after the last away day');
+  assert.match(html, /Everyone/, 'every person on the wall reads as Everyone');
+  assert.ok(ctx.choresFull.querySelector('[data-trip-end="6,7"]'), 'Back early carries the ids');
+  assert.ok(ctx.choresFull.querySelector('[data-trip-edit="6,7"]'), 'Edit carries the ids');
+  ctx.tap('[data-trip-end="6,7"]');
   await flush();
-  const post = ctx.adminAwayCalls.find((c) => c.method === 'POST' && c.url === '/api/admin/away/everyone');
-  assert.ok(post, 'POST /api/admin/away/everyone fired');
-  assert.deepEqual(post.body, {}, 'sent as {} — the endpoint requires SOME JSON body');
+  const end = ctx.adminAwayCalls.find((c) => c.url === '/api/trip/end');
+  assert.deepEqual(end.body, { ids: [6, 7] }, 'Back early POSTs exactly the trip drawn');
+});
+
+test('trips: a planned trip offers Cancel trip; an open-ended one says no back day', async () => {
+  const ctx = mountTrips([
+    { ids: [8], person_ids: [1], start_date: '2026-08-14', end_date: null, backup_person_id: null, state: 'now' },
+    { ids: [9], person_ids: [2], start_date: '2026-09-01', end_date: '2026-09-04', backup_person_id: 1, state: 'planned' },
+  ]);
+  const html = ctx.choresFull.innerHTML;
+  assert.match(html, /Away, no back day set/);
+  assert.match(html, /Trip Tue Sep 1, chores resume Sat Sep 5/);
+  assert.match(html, /Cancel trip/);
+  assert.match(html, /Alex Kim/, 'a one-person trip names them');
+});
+
+test('trips: trips_ok false shows a note instead of hiding a trip', async () => {
+  const ctx = mountTrips([], false);
+  assert.match(ctx.choresFull.innerHTML, /trip status unavailable/);
+});
+
+test('trips: the sheet starts with everyone going from today and needs a back day', async () => {
+  const ctx = mountTrips([]);
+  ctx.tap('[data-trip-open]');
+  const ed = tripEditor(ctx);
+  assert.match(ed.innerHTML, /Going out of town/);
+  assert.equal(ed.querySelector('[data-trip-start]').value, '2026-08-14');
+  assert.equal(ed.querySelectorAll('[data-trip-person]').length, 2);
+  assert.ok(!ed.querySelector('[data-trip-people]').innerHTML.includes('aria-pressed="false"'),
+    'everyone starts ticked');
+  // everyone going: nobody is left to be a backup
+  assert.ok(ed.querySelector('[data-trip-backup-field]').classList.contains('hidden'));
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush();
+  assert.match(ed.querySelector('[data-trip-error]').textContent, /resume/i);
+  assert.ok(!ctx.adminAwayCalls.some((c) => c.url === '/api/trip'), 'nothing sent without a back day');
+  ed.querySelector('[data-trip-back]').value = '2026-08-18';
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.url === '/api/trip');
+  assert.deepEqual(post.body, { person_ids: [1, 2], start_date: '2026-08-14', end_date: '2026-08-17', backup_person_id: null },
+    'the back day is sent as the last away day');
+});
+
+test('trips: a new trip leaves anyone already away unticked', async () => {
+  const ctx = mountTrips([{ ids: [6], person_ids: [2], start_date: '2026-08-12',
+    end_date: '2026-08-19', backup_person_id: null, state: 'now' }]);
+  ctx.tap('[data-trip-open]');
+  const chips = tripEditor(ctx).querySelector('[data-trip-people]').innerHTML;
+  assert.match(chips, /data-trip-person="1"\s+aria-pressed="true"/, 'Sam is home: ticked');
+  assert.match(chips, /data-trip-person="2"\s+aria-pressed="false"/, 'Alex is away: not ticked');
+});
+
+test('trips: taking someone off the trip offers them as the backup', async () => {
+  const ctx = mountTrips([]);
+  ctx.tap('[data-trip-open]');
+  const ed = tripEditor(ctx);
+  const alex = tapIn(ed, '[data-trip-person="2"]');
+  ed.querySelector('[data-trip-people]').onclick({ target: alex });
+  assert.ok(!ed.querySelector('[data-trip-backup-field]').classList.contains('hidden'));
+  assert.match(ed.querySelector('[data-trip-backup]').innerHTML, /Alex Kim/);
+  assert.ok(!ed.querySelector('[data-trip-backup]').innerHTML.includes('Sam Rivera'),
+    'someone going is never their own backup');
+});
+
+test('trips: Edit opens the sheet seeded from the trip and saves with its ids', async () => {
+  const ctx = mountTrips([{ ids: [6], person_ids: [1], start_date: '2026-08-14',
+    end_date: '2026-08-19', backup_person_id: 2, state: 'now' }]);
+  ctx.tap('[data-trip-edit="6"]');
+  const ed = tripEditor(ctx);
+  assert.match(ed.innerHTML, /Edit trip/);
+  assert.equal(ed.querySelector('[data-trip-back]').value, '2026-08-20');
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.url === '/api/trip');
+  assert.deepEqual(post.body, { person_ids: [1], start_date: '2026-08-14',
+    end_date: '2026-08-19', backup_person_id: 2, ids: [6] });
+});
+
+test('trips: a refused save keeps the sheet open with the reason', async () => {
+  const ctx = mountTrips([]);
+  ctx.tap('[data-trip-open]');
+  const ed = tripEditor(ctx);
+  ctx.sandbox.fetch = async (url) => {
+    if (url === '/api/trip') return failResp(409, 'Alex Kim is already away then');
+    throw new Error('offline in test');
+  };
+  ed.querySelector('[data-trip-back]').value = '2026-08-18';
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush();
+  assert.match(ed.querySelector('[data-trip-error]').textContent, /already away/);
+  assert.ok(!ctx.registry['chore-modal'].classList.contains('hidden'), 'sheet still open');
+});
+
+test('trips: a FAILED Back early shows a toast', async () => {
+  const ctx = mountTrips([{ ids: [6], person_ids: [1], start_date: '2026-08-14',
+    end_date: '2026-08-19', backup_person_id: null, state: 'now' }]);
+  ctx.sandbox.fetch = async (url) => {
+    if (url === '/api/trip/end') return failResp(500, 'Disk full (test)');
+    throw new Error('offline in test');
+  };
+  ctx.tap('[data-trip-end="6"]');
+  await flush();
+  assert.match(readToast(ctx), /disk full/i);
+});
+
+test('trips: a browsed day shows no Trip button and no banner', async () => {
+  const ctx = mountTrips([{ ids: [6], person_ids: [1], start_date: '2026-08-12',
+    end_date: '2026-08-19', backup_person_id: null, state: 'now' }]);
+  ctx.read('choreState.day = "2026-08-13";');
+  ctx.sandbox.fetch = async (url) => {
+    if (/\/api\/chores\/day\?date=2026-08-13/.test(url)) {
+      return { ok: true, status: 200, json: async () => ({ date: '2026-08-13', people: TRIP_PEOPLE, away_ok: true }) };
+    }
+    throw new Error('offline in test');
+  };
+  await ctx.sandbox.renderChoresFull();
+  assert.ok(!ctx.choresFull.querySelector('[data-trip-open]'), 'no Trip button on another day');
+  assert.ok(!ctx.choresFull.innerHTML.includes('trip-banner'), 'no banner on another day');
+});
+
+test('trips: the wall card header carries the Trip button before All chores, and a tap opens the sheet', async () => {
+  const ctx = mountTrips([{ ids: [6], person_ids: [1], start_date: '2026-08-12',
+    end_date: '2026-08-19', backup_person_id: null, state: 'now' }]);
+  const people = new FakeEl(ctx.registry);
+  people._id = 'people';
+  ctx.registry.people = people;
+  ctx.read('openView = null;');
+  ctx.sandbox.renderPeople({ date: '2026-08-14', people: TRIP_PEOPLE,
+    trips: ctx.read('hubData.trips'), trips_ok: true });
+  const html = people.innerHTML;
+  assert.ok(html.indexOf('data-trip-open') > -1, 'Trip button on the wall card');
+  assert.ok(html.indexOf('data-trip-open') < html.indexOf('data-overlay="chores"'),
+    'it sits before the All chores button');
+  assert.match(html, /Away, chores resume Thu Aug 20/, 'the banner shows on the wall card');
+  // the Trip button also wears .expand: the tap must open the sheet, not an overlay
+  const btn = people.querySelector('[data-trip-open]');
+  btn.closest = (sel) => (selectorMatches(btn, sel) ? btn : null);
+  ctx.read('globalThis.__ov = 0; openOverlay = () => { globalThis.__ov += 1; };');
+  ctx.fire(btn);
+  assert.equal(ctx.read('globalThis.__ov'), 0, 'no overlay opened');
+  assert.ok(!ctx.registry['chore-modal'].classList.contains('hidden'), 'the trip sheet opened');
+  assert.match(ctx.registry['chore-editor'].innerHTML, /Going out of town/);
+});
+
+test('trips: Edit on a trip no longer on the card toasts and refreshes', async () => {
+  const ctx = mountTrips([{ ids: [6], person_ids: [1], start_date: '2026-08-12',
+    end_date: '2026-08-19', backup_person_id: null, state: 'now' }]);
+  ctx.read('hubData.trips = [];');   // a poll dropped it after the banner was drawn
+  ctx.tap('[data-trip-edit="6"]');
+  await flush();
+  assert.match(readToast(ctx), /That trip changed/);
+});
+
+test('trips: a good save closes the sheet and refreshes', async () => {
+  const ctx = mountTrips([]);
+  ctx.tap('[data-trip-open]');
+  const ed = tripEditor(ctx);
+  ed.querySelector('[data-trip-back]').value = '2026-08-18';
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush(); await flush();
+  assert.ok(ctx.registry['chore-modal'].classList.contains('hidden'), 'sheet closed');
+});
+
+test('trips: a save with no answer says it may have saved', async () => {
+  const ctx = mountTrips([]);
+  ctx.tap('[data-trip-open]');
+  const ed = tripEditor(ctx);
+  ctx.sandbox.fetch = async () => { throw new Error('signal is aborted without reason'); };
+  ed.querySelector('[data-trip-back]').value = '2026-08-18';
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush(); await flush();
+  assert.match(ed.querySelector('[data-trip-error]').textContent, /may or may not have saved/);
+});
+
+test('trips: editing a trip with different backups keeps them unless changed', async () => {
+  const ctx = mountTrips([{ ids: [6, 7], person_ids: [1, 2], start_date: '2026-08-12',
+    end_date: '2026-08-19', backup_person_id: null, backup_mixed: true, state: 'now' }]);
+  ctx.tap('[data-trip-edit="6,7"]');
+  const ed = tripEditor(ctx);
+  assert.match(ed.querySelector('[data-trip-backup]').innerHTML, /Keep each person/);
+  assert.ok(!ed.querySelector('[data-trip-backup-field]').classList.contains('hidden'));
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.url === '/api/trip');
+  assert.ok(!('backup_person_id' in post.body), 'backups left alone');
+});
+
+test('trips: a traveller who has left the wall still shows in the sheet and can be unticked', async () => {
+  const ctx = mountTrips([{ ids: [6, 7], person_ids: [1, 9], start_date: '2026-08-12',
+    end_date: '2026-08-19', backup_person_id: null, state: 'now',
+    people: [{ id: 1, name: 'Sam Rivera', color: '#5BC9F0', active: true },
+      { id: 9, name: 'Pat Old', color: '#999999', active: false }] }]);
+  assert.match(ctx.choresFull.innerHTML, /Pat Old/, 'the banner names them');
+  ctx.tap('[data-trip-edit="6,7"]');
+  const ed = tripEditor(ctx);
+  const chip = tapIn(ed, '[data-trip-person="9"]');
+  ed.querySelector('[data-trip-people]').onclick({ target: chip });
+  assert.ok(!ed.querySelector('[data-trip-backup]').innerHTML.includes('Pat Old'),
+    'a deactivated traveller taken off the trip is not offered as a backup');
+  tapIn(ed, '[data-trip-submit]').onclick();
+  await flush();
+  const post = ctx.adminAwayCalls.find((c) => c.url === '/api/trip');
+  assert.deepEqual(post.body.person_ids, [1], 'they came off the trip');
+});
+
+test('people admin: a planned trip is listed as Planned with Cancel trip, not Away now', async () => {
+  const adminState = {
+    people: SAMPLE_ADMIN.people, chores: SAMPLE_ADMIN.chores,
+    away_periods: [
+      { id: 80, person_id: 1, start_date: '2026-09-01', end_date: '2026-09-04', backup_person_id: null },
+      { id: 81, person_id: 2, start_date: '2026-08-10', end_date: '2026-08-20', backup_person_id: null },
+    ],
+  };
+  const ctx = mountChoresFull(SAMPLE_PEOPLE, adminState);
+  await enterEditWithPeople(ctx);
+  const html = ctx.choresFull.innerHTML;
+  assert.match(html, /Planned/);
+  assert.match(html, /leaves Tue Sep 1, chores resume Sat Sep 5/);
+  assert.ok(ctx.choresFull.querySelector('[data-trip-end="80"]'), 'Cancel trip on the planned one');
+  assert.match(ctx.choresFull.innerHTML, /Cancel trip/, 'a one-person planned trip is cancelled whole');
+  assert.ok(ctx.choresFull.querySelector('[data-pback="81"]'),
+    'a DATED trip still running counts as away (I\'m back), not only open-ended ones');
+  assert.ok(!ctx.choresFull.querySelector('[data-paway="2"]'), 'no second Going away while on a trip');
+  assert.ok(ctx.choresFull.querySelector('[data-trip-open]'), 'Plan a trip replaces Pause everyone');
+  assert.ok(!html.includes('data-paway-all'), 'Pause everyone is gone');
 });
 
 test('people admin: a FAILED away-open shows a toast and runs no refresh', async () => {

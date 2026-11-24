@@ -640,6 +640,46 @@ def delete_away_period(conn, period_id: int) -> bool:
         return True
 
 
+def apply_away_changes(conn, *, inserts=(), updates=(), deletes=()) -> list[int]:
+    """Apply a whole trip edit in ONE transaction: new periods, field updates
+    and removals land together or not at all. A trip touches several people;
+    a half-written one (some marked away, some not) would leave the wall
+    showing a trip nobody planned. Returns the new period ids, in order.
+
+    inserts: dicts with person_id, start_date, end_date, backup_person_id.
+    updates: (period_id, {field: value}) pairs, fields from _AWAY_FIELDS.
+    deletes: period ids.
+
+    Strict on purpose: an unknown field or a period id that no longer exists
+    raises ValueError and rolls the whole change back, rather than writing
+    the rest and reporting success for a trip that is only partly saved."""
+    new_ids = []
+    with conn:
+        for pid in deletes:
+            cur = conn.execute("DELETE FROM away_periods WHERE id = ?", (pid,))
+            if cur.rowcount != 1:
+                raise ValueError(f"no away period {pid} to delete")
+        for period_id, fields in updates:
+            unknown = set(fields) - _AWAY_FIELDS
+            if unknown:
+                raise ValueError(f"not an away period field: {sorted(unknown)}")
+            if not fields:
+                continue
+            assignments = ", ".join(f"{k} = ?" for k in fields)
+            cur = conn.execute(f"UPDATE away_periods SET {assignments} WHERE id = ?",
+                               (*fields.values(), period_id))
+            if cur.rowcount != 1:
+                raise ValueError(f"no away period {period_id} to update")
+        for r in inserts:
+            cur = conn.execute(
+                "INSERT INTO away_periods(person_id, start_date, end_date, "
+                "backup_person_id, created_at) VALUES(?, ?, ?, ?, ?)",
+                (r["person_id"], r["start_date"], r.get("end_date"),
+                 r.get("backup_person_id"), _now_iso()))
+            new_ids.append(int(cur.lastrowid))
+    return new_ids
+
+
 def list_away_periods(conn, include_closed: bool = True) -> list[dict]:
     sql = "SELECT * FROM away_periods"
     if not include_closed:
