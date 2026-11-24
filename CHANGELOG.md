@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- A "How it works" guide in Settings: one tap-to-open topic per feature, in plain words (chores and streaks, trips, changing chores and people, to-dos, calendar, cameras, weather and climate, laundry, the printer and server cards, using it on a phone, how the screen behaves, and backups). A topic only shows when its feature is on. The gear menu has a "How it works" link that opens it.
+
 ## [1.15.0] — 2026-11-24
 
 ### Added

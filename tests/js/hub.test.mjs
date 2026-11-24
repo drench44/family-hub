@@ -1460,3 +1460,52 @@ test('tripPeopleWith adds a traveller who has left the wall, once', () => {
     end_date: null, state: 'now', people: [{ id: 9, name: 'Jo' }] }], TP);
   assert.match(html, /Jo/, 'the banner names them instead of "1 more"');
 });
+
+
+// --- How it works (help) --------------------------------------------------------
+
+const helpIds = (ctx) => sandbox.helpTopics(ctx).map((t) => t.id);
+const ctxOf = (ids, extra = {}) => ({ enabled: new Set(ids), todoSource: 'local', backupKnown: false, ...extra });
+
+test('helpTopics: each topic follows its feature switch', () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(helpIds(ctxOf([])))), ['phone', 'screen'],
+    'with nothing on, only the always-true topics show');
+  assert.deepEqual(JSON.parse(JSON.stringify(helpIds(ctxOf(['chores'])))),
+    ['chores', 'trips', 'editing', 'phone', 'screen']);
+  assert.ok(helpIds(ctxOf(['ics_calendar'])).includes('calendar'), 'any calendar source shows Calendar');
+  assert.ok(helpIds(ctxOf([], { backupKnown: true })).includes('backup'));
+  assert.ok(!helpIds(ctxOf([])).includes('backup'), 'no backup topic when backups never report');
+});
+
+test('helpTopics: half-on cards name only what is on', () => {
+  const w = sandbox.helpTopics(ctxOf(['climate'])).find((t) => t.id === 'weather');
+  assert.equal(w.title, 'House climate');
+  assert.equal(w.paras.length, 1);
+  assert.ok(!/Full forecast/.test(w.paras[0]), 'no weather text when only climate is on');
+  const p = sandbox.helpTopics(ctxOf(['fleet'])).find((t) => t.id === 'printer');
+  assert.equal(p.title, 'Servers');
+  assert.ok(!/printer/i.test(p.paras.join(' ')));
+});
+
+test('helpTopics: the To-Do topic matches where the list comes from', () => {
+  const local = sandbox.helpTopics(ctxOf(['todos'])).find((t) => t.id === 'todos');
+  const cloud = sandbox.helpTopics(ctxOf(['todos'], { todoSource: 'icloud' })).find((t) => t.id === 'todos');
+  assert.match(local.paras.join(' '), /Now, Soon or Later/);
+  assert.match(cloud.paras.join(' '), /iCloud Reminders/);
+});
+
+test('helpTopics text follows the house style: no em dashes, no house names', () => {
+  const all = sandbox.helpTopics(ctxOf(['chores', 'todos', 'google_calendar', 'cameras', 'weather',
+    'climate', 'laundry', 'printer', 'fleet'], { backupKnown: true }));
+  const text = all.map((t) => t.title + ' ' + t.paras.join(' ')).join(' ');
+  assert.ok(!text.includes(String.fromCharCode(0x2014)), 'no em dashes');
+  assert.ok(all.length === 12, `every topic renders (${all.length})`);
+});
+
+test('helpHtml escapes every string and keeps one details row per topic', () => {
+  const html = sandbox.helpHtml([{ id: 'x"y', title: '<b>T</b>', paras: ['a & b'] }, { id: 'z', title: 'Z', paras: [] }]);
+  assert.ok(html.includes('&lt;b&gt;T&lt;/b&gt;') && !html.includes('<b>T'));
+  assert.ok(html.includes('a &amp; b'));
+  assert.equal((html.match(/<details /g) || []).length, 2);
+  assert.equal((html.match(/<\/details>/g) || []).length, 2, 'balanced');
+});

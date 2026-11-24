@@ -6151,6 +6151,14 @@ function renderSettingsFull() {
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
     + `</div>`
+    // How it works: plain-words help, one tap-to-open row per feature this
+    // wall has on (helpTopics in common.js). The gear popover's "How it works"
+    // link opens Settings scrolled here.
+    + `<div class="card pad settings-card" id="help-card">`
+    + `<div class="shead"><span class="tick"></span><h2>How it works</h2></div>`
+    + `<div class="settings-sub">Tap a topic to read about it.</div>`
+    + `<div class="help-list">${helpHtml(helpTopics(helpContext()))}</div>`
+    + `</div>`
     // A quiet deployed-version line for debugging ("what's actually running?").
     // Filled from /api/version by paintVersion(); blank until it resolves.
     + `<div class="settings-version" id="settings-version"></div>`
@@ -6164,6 +6172,26 @@ function renderSettingsFull() {
   renderTodoSourcePicker();
   renderCaldavPanel();
   fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
+}
+
+/* What the help needs to know about this wall: which features are on, where
+   the To-Do list comes from, and whether backups report in. Read from the last
+   hub payload; before the first one lands, the always-on topics still show. */
+function helpContext() {
+  const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  return {
+    enabled: new Set(list.filter((i) => i.enabled).map((i) => i.id)),
+    todoSource: (hubData && hubData.todo_source) || 'local',
+    backupKnown: !!(hubData && hubData.backup && hubData.backup.known),
+  };
+}
+
+/* Open Settings at the How it works card (the gear popover's link). */
+function openHelp() {
+  closeThemePop();
+  openOverlay('settings');
+  const card = document.getElementById('help-card');
+  if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start' });
 }
 
 /* The To-Do source picker inside the Integrations card: choose whether the
@@ -6490,6 +6518,7 @@ document.addEventListener('click', (e) => {
   // the quick popover first — it sits at a higher z-index than the full-screen
   // overlay and would otherwise float over it) AND the all-off empty-state's
   // "Open Settings" button (no popover open there, closeThemePop is a no-op).
+  if (e.target.closest('[data-open-help]')) { openHelp(); return; }
   if (e.target.closest('[data-open-settings]')) {
     closeThemePop();
     openOverlay('settings');

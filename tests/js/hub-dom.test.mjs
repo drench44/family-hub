@@ -7073,6 +7073,43 @@ test('renderSettingsFull: paints Display + Integrations, with the live theme ref
     'reflectThemeControls marks the live theme on the overlay\'s own copy of the controls');
 });
 
+test('renderSettingsFull: How it works lists only the features this wall has on', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.getAttribute = () => null;
+  vm.runInContext(
+    "hubData = { integrations: ["
+    + "{ id: 'chores', enabled: true }, { id: 'todos', enabled: true },"
+    + "{ id: 'weather', enabled: true }, { id: 'laundry', enabled: false }],"
+    + " todo_source: 'local', backup: { known: true } };",
+    sandbox);
+  sandbox.renderSettingsFull();
+  const html = document.getElementById('settings-full').innerHTML;
+  assert.match(html, /id="help-card"/);
+  assert.match(html, /<h2>How it works<\/h2>/);
+  for (const id of ['chores', 'trips', 'editing', 'todos', 'weather', 'phone', 'screen', 'backup']) {
+    assert.match(html, new RegExp(`data-help="${id}"`), `${id} topic shows`);
+  }
+  for (const id of ['laundry', 'cameras', 'calendar', 'printer']) {
+    assert.ok(!html.includes(`data-help="${id}"`), `${id} topic hidden: off or not on this wall`);
+  }
+  assert.match(html, /<details class="help-item"/, 'native tap-to-open rows');
+});
+
+test('the gear popover "How it works" link opens Settings at the help card', () => {
+  const { document, sandbox } = newHub();
+  let scrolled = 0;
+  const realGet = document.getElementById.bind(document);
+  vm.runInContext('openOverlay = (v) => { globalThis.__opened = v; };', sandbox);
+  document.getElementById = (id) => (id === 'help-card'
+    ? { scrollIntoView: () => { scrolled++; } } : realGet(id));
+  sandbox.openHelp();
+  assert.equal(vm.runInContext('globalThis.__opened', sandbox), 'settings');
+  assert.equal(scrolled, 1, 'scrolled to the help card');
+});
+
 test('reflectThemeControls updates every matching control on the page, not just one surface', () => {
   // Pins the generalization from a single #theme-pop-scoped query to a
   // .theme-ctl-scoped one: both the gear popover's controls AND the Settings

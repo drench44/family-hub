@@ -142,6 +142,9 @@ at one URL.
   does it?"), shows who does the chore on the next few days before you save,
   and can add the same chore for several people at once; the page lists
   every chore, including the ones not on today.
+- **How it works:** a plain-words guide in Settings (gear → **How it works**),
+  one tap-to-open topic per feature that is turned on, so anyone in the house
+  can find out what a card does without asking.
 
 ## Architecture & trust model
 
