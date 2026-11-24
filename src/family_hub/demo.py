@@ -143,14 +143,16 @@ def seed_demo(conn, today: dt.date) -> None:
     people = fdb.list_people(conn)
     chores = fdb.list_chores(conn)
 
-    # Milo is away the last 2 days, still ongoing (open-ended): Ava backs him
-    # up. Seeded here, before the history freeze below, so both the frozen
+    # Milo is on a trip: away since 2 days ago, back the day after tomorrow
+    # (his last away day is tomorrow), with Ava as his backup. The dated end is
+    # what makes the Chores card's trip banner show "Away until ...". Seeded here, before the history freeze below, so both the frozen
     # past days AND the live 'today' render (app.py resolves 'today' itself,
     # straight from this same away_periods row) agree: Milo's away badge, his
     # paused-not-broken streak, and Ava's "covering for Milo" tag on Feed the
     # fish are all visible the moment someone loads the demo wall.
     away_start = (today - dt.timedelta(days=2)).isoformat()
-    fdb.add_away_period(conn, milo, away_start, None, backup_person_id=ava)
+    away_end = (today + dt.timedelta(days=1)).isoformat()
+    fdb.add_away_period(conn, milo, away_start, away_end, backup_person_id=ava)
     amap = fdb.away_map(conn, (today - dt.timedelta(days=6)).isoformat(),
                         today.isoformat())
 

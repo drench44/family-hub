@@ -821,7 +821,9 @@ def test_admin_has_away_controls():
     assert "/api/admin/away" in ALL_JS
     assert "data-paway" in ALL_JS       # per-person "Going away" button hook
     assert "data-pback" in ALL_JS       # "I'm back" (closes an open period)
-    assert "data-paway-all" in ALL_JS   # "Pause everyone" header button
+    assert "data-trip-open" in ALL_JS   # Trip / Plan a trip (replaced Pause everyone)
+    assert "/api/trip" in ALL_JS
+    assert "data-paway-all" not in ALL_JS, "Pause everyone came back next to Plan a trip"
 
 
 def test_admin_html_is_retired():
