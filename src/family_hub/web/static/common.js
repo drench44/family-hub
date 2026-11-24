@@ -2140,3 +2140,143 @@ function buildTripForm(host, model, people, onsubmit) {
     return onsubmit(body, errEl);
   });
 }
+
+/* ------------------------------------------------ how it works (help) */
+
+/* The "How it works" topics in Settings, in plain words, one per feature.
+   Every line describes what the code does today (checked against hub.js,
+   chores.py and app.py when written); change a behavior, change its line
+   here. A topic shows only when its feature is on, so the help never
+   explains a card this wall doesn't have.
+   ctx: {enabled: Set of integration ids that are on, todoSource: 'local' |
+   'icloud', backupKnown: bool}. Pure. */
+function helpTopics(ctx) {
+  const on = (id) => !!(ctx && ctx.enabled && ctx.enabled.has(id));
+  const topics = [];
+  if (on('chores')) {
+    topics.push({
+      id: 'chores', title: 'Chores and streaks',
+      paras: [
+        'Each person has a card in their own color. Tap a chore to check it off. Tap it again to undo.',
+        'The 🔥 number is a streak. It counts days in a row where every chore got done. A day with nothing due is skipped, and today does not count against you until it is over.',
+        'The little squares show the last seven days, with today outlined. Green means all done, amber means some, red means none, gray means nothing was due, and the accent color means away.',
+        'Finish everything for the day and you get confetti.',
+        'Tap All chores (or a name) for the big view. Use ‹ and › there to look at other days. Only today can be checked off.',
+      ],
+    });
+    topics.push({
+      id: 'trips', title: 'Going out of town',
+      paras: [
+        'Tap ✈ Trip on the Chores card. Pick who is going, the day you leave, and the day chores resume. Everyone at home starts ticked.',
+        'Chores pause for the trip and come back on their own on the day chores resume. If you get home in the evening and still want that day’s chores, pick that day. If not, pick the next day.',
+        'Away days count as rest, so nobody loses a streak. A chore that takes turns passes to whoever is home. If someone stays home, you can make them the backup for the away people’s own chores.',
+        'While a trip is on, the Chores card says who is away and when chores resume. Back early ends it now. Edit changes the dates or who is going. You can plan a trip ahead, and a planned trip can be canceled.',
+      ],
+    });
+    topics.push({
+      id: 'editing', title: 'Changing chores and people',
+      paras: [
+        'Open All chores and tap Edit chores. This only works on today.',
+        'Tap + New chore to add one, the pencil to change one, or the trash can to delete one. The form asks how often and who does it, and shows who has it on the next few days before you save.',
+        'Changes only affect today and later. Past days stay the way they were, so nobody’s streak changes.',
+        'Scroll down to People to add someone, rename or recolor them, or set them away. Deactivate takes someone off the chores but keeps them, and Delete removes them for good.',
+      ],
+    });
+  }
+  if (on('todos')) {
+    topics.push({
+      id: 'todos', title: 'To-dos',
+      paras: ctx.todoSource === 'icloud'
+        ? [
+          'The To-Do card shows your iCloud Reminders list, so the same items show on your phone in Reminders.',
+          'Tap an item to check it off. Changes go both ways when writing to iCloud is turned on in Settings.',
+        ]
+        : [
+          'One shared list for things that are not a set chore. Anyone can add an item and anyone can check it off.',
+          'Items sit under Now, Soon or Later and stay until they are done.',
+          'A checked item stays crossed out for five minutes, so a wrong tap can be undone. After that it moves to recently done for 30 days, where it can be put back.',
+          'In the full list, drag an item by its handle to move it, or tap it to rename, move or delete it.',
+        ],
+    });
+  }
+  if (on('google_calendar') || on('ics_calendar') || on('icloud_caldav')) {
+    topics.push({
+      id: 'calendar', title: 'Calendar',
+      paras: [
+        'The Calendar card shows the next few days. Tap any event for its details.',
+        'Month view shows the whole month, a week list and single days.',
+        'The calendars update every five minutes. The ↻ button at the top updates them right away and reloads the page.',
+      ],
+    });
+  }
+  if (on('cameras')) {
+    topics.push({
+      id: 'cameras', title: 'Cameras',
+      paras: ['Tap a camera to see it full size. Camera page shows them all.'],
+    });
+  }
+  if (on('weather') || on('climate')) {
+    const paras = [];
+    if (on('weather')) {
+      paras.push('Weather shows the temperature now, a curve for the next day, UV, air quality, humidity and the next five days. Tap Full forecast for more.');
+    }
+    if (on('climate')) {
+      paras.push('House climate shows each room’s temperature and humidity. A room turns amber or red when it runs hot or its sensor stops reporting. Tap Full climate for more.');
+    }
+    topics.push({ id: 'weather', title: on('weather') && on('climate') ? 'Weather and house climate'
+      : (on('weather') ? 'Weather' : 'House climate'), paras });
+  }
+  if (on('laundry')) {
+    topics.push({
+      id: 'laundry', title: 'Laundry',
+      paras: [
+        'The ring around each door shows how much of the cycle is left, and the words say what the machine is doing.',
+        'When a load finishes it shows a check and the time it finished. Later a finished wash turns amber and says Waiting, until the dryer starts or the washer runs again.',
+      ],
+    });
+  }
+  if (on('printer') || on('fleet')) {
+    const paras = [];
+    if (on('printer')) {
+      paras.push('The 3D printer card shows how far along a print is, when it will be done, the temperatures, and each spool in its real color.');
+    }
+    if (on('fleet')) paras.push('The Fleet card shows whether the home servers and the internet are up.');
+    topics.push({ id: 'printer', title: on('printer') && on('fleet') ? '3D printer and servers'
+      : (on('printer') ? '3D printer' : 'Servers'), paras });
+  }
+  topics.push({
+    id: 'phone', title: 'On a phone',
+    paras: [
+      'On a phone the same page uses tabs along the bottom.',
+      'On an iPhone, open the hub in Safari, tap Share, then Add to Home Screen. It then opens full screen like an app.',
+    ],
+  });
+  topics.push({
+    id: 'screen', title: 'How the screen behaves',
+    paras: [
+      'From 10pm to 6am the screen dims, and the seasonal look stops moving.',
+      'If nobody taps for a while, the screen goes back to the main page on its own. That takes a minute and a half, three minutes on the calendar, and five on a camera. Each screen can turn this off under This screen, Auto-return.',
+      'The ⚙ button sets the theme and accent color and turns the seasonal look on or off. All settings, at the bottom of it, has the rest. Each screen remembers its own choices.',
+    ],
+  });
+  if (ctx && ctx.backupKnown) {
+    topics.push({
+      id: 'backup', title: 'Backups',
+      paras: [
+        'The hub saves a copy of all the chores, streaks, to-dos and history on its own. Everyone’s progress can be put back from a copy if something goes wrong.',
+        'If a copy fails or gets too old, a ⚠ backup warning shows at the top of the screen.',
+      ],
+    });
+  }
+  return topics;
+}
+
+/* The topics as a list of native disclosure rows: tap a title to open it.
+   No script state, so it works the same on the wall, a phone and with a
+   keyboard or screen reader. Every string is escaped. Pure. */
+function helpHtml(topics) {
+  return (topics || []).map((t) => `<details class="help-item" data-help="${escapeHtml(t.id)}">`
+    + `<summary>${escapeHtml(t.title)}</summary>`
+    + `<div class="help-body">${(t.paras || []).map((p) => `<p>${escapeHtml(p)}</p>`).join('')}</div>`
+    + `</details>`).join('');
+}

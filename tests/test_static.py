@@ -2761,3 +2761,19 @@ def test_refresh_glyph_sits_inside_the_refresh_button():
     so it must sit inside button#wall-refresh for closest() to find the button."""
     assert re.search(r'<button[^>]*id="wall-refresh"[^>]*>\s*<span class="wall-refresh-glyph"[^>]*>[^<]*</span>\s*</button>',
                      ALL_HTML)
+
+
+def test_help_is_wired_from_the_gear_and_settings():
+    """How it works: the gear popover links to it, the click listener routes
+    that link BEFORE the generic open-settings handler (both close the popover,
+    but only openHelp scrolls to the card), and Settings renders the card from
+    the shared helpTopics/helpHtml."""
+    assert "data-open-help" in ALL_HTML, "the gear popover lost its How it works link"
+    i_help = HUB.index("closest('[data-open-help]')")
+    i_settings = HUB.index("closest('[data-open-settings]')")
+    assert i_help < i_settings, "the help link must be routed before open-settings"
+    assert 'id="help-card"' in HUB
+    assert "helpHtml(helpTopics(helpContext()))" in HUB
+    assert "function helpTopics" in COMMON and "function helpHtml" in COMMON
+    # a disclosure title is a full-size tap target
+    assert re.search(r"\.help-item > summary \{[^}]*min-height: 44px", CSS)
