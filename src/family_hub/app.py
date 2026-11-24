@@ -1438,6 +1438,13 @@ def _hub_payload() -> dict:
     reminders_block = (remlogic.group(_visible_reminders(c), today, TZ)
                        if caldav_on else {b: [] for b in remlogic.BUCKETS})
     people, away_ok = _people_day(c, today)
+    # Live trips for the Chores card banner. Fail-soft like the blocks above:
+    # trips_ok False makes the wall say so instead of hiding a trip.
+    try:
+        trips, trips_ok = _trip_rows(c, today), True
+    except Exception:
+        log.error("trip list failed; serving none", exc_info=True)
+        trips, trips_ok = [], False
     # Backup health for the header badge — fails-soft like the todos block above:
     # a read error must not 500 the whole wall over a status indicator.
     try:
@@ -1452,6 +1459,8 @@ def _hub_payload() -> dict:
         # is rendering with nobody marked away, so it can show a small note
         # instead of silently presenting a genuinely-away person as present.
         "away_ok": away_ok,
+        "trips": trips,
+        "trips_ok": trips_ok,
         "todos": todos_block,
         "todos_ok": todos_ok,
         "reminders": reminders_block,
@@ -2045,6 +2054,22 @@ class AwayBackIn(BaseModel):
     end_date: str | None = None
 
 
+class TripIn(BaseModel):
+    """Save a trip: who is going, the first away day, and the LAST away day
+    (end_date; chores come back the day after). `ids` names the periods of an
+    existing trip being edited; omit it to start a new one. The backup covers
+    the fixed chores of everyone going and must be someone staying home."""
+    person_ids: list[int]
+    start_date: str | None = None
+    end_date: str | None = None
+    backup_person_id: int | None = None
+    ids: list[int] | None = None
+
+
+class TripEndIn(BaseModel):
+    ids: list[int]
+
+
 class ChoreIn(BaseModel):
     title: str
     icon: str = ""
@@ -2531,20 +2556,27 @@ _AWAY_NONNULL_PATCH = {"start_date"}
 
 
 def _validate_backup(c, backup_id: int, away_person_id: int,
+                     span: tuple[str, str | None],
                      ignore_period_id: int | None = None) -> None:
     """A backup must be someone who can actually do the chores: a real person,
     not the away person, ACTIVE, and not themselves away. Picking someone who
     is inactive or away is accepted by the DB but then silently pauses every
     covered chore at resolve time — the family sees the chore vanish with no
     explanation. Reject it at the source instead. (A backup who goes away
-    LATER is still handled by that resolve-time pause.)"""
+    LATER is still handled by that resolve-time pause.)
+
+    "Away themselves" means away on a day the backup must cover: ``span`` is
+    the (start, end) of the period being covered, end None for open-ended. So
+    a dated period that ends before the backup's own planned trip is fine,
+    while an open-ended one runs into that trip and is refused."""
     if backup_id == away_person_id:
         raise HTTPException(422, "backup cannot be the same person")
     row = _person_row(c, backup_id)                 # 404 if unknown
     if not row["active"]:
         raise HTTPException(422, "backup must be an active person")
     if any(r["person_id"] == backup_id and r["id"] != ignore_period_id
-           for r in fdb.list_away_periods(c, include_closed=False)):
+           and _spans_overlap(span[0], span[1], r["start_date"], r["end_date"])
+           for r in fdb.list_away_periods(c)):
         raise HTTPException(422, "backup is away themselves")
 
 
@@ -2557,27 +2589,30 @@ def admin_away_list():
 def admin_away_open(a: AwayIn):
     c = _db()
     _person_row(c, a.person_id)                     # 404 if unknown
-    if a.backup_person_id is not None:
-        _validate_backup(c, a.backup_person_id, a.person_id)
-    # One open period per person: a second "going away" while the first is still
-    # open would create overlapping rows for the same person (the wall would
-    # resolve them nondeterministically without the away_map ORDER BY, and the
-    # UI has no way to show two). Mirror /everyone's skip behavior with a clear
-    # 409 for the single-person API.
-    if any(r["person_id"] == a.person_id
-           for r in fdb.list_away_periods(c, include_closed=False)):
-        raise HTTPException(409, "person already has an open away period")
     start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
+    if a.backup_person_id is not None:
+        _validate_backup(c, a.backup_person_id, a.person_id, (start, None))
+    # No overlapping periods per person: a second "going away" that overlaps one
+    # already set would create overlapping rows for the same person (the wall
+    # would resolve them nondeterministically without the away_map ORDER BY,
+    # and the UI has no way to show two). This open-ended period runs from
+    # `start` on, so it overlaps any period that hasn't ended before `start`.
+    if any(r["person_id"] == a.person_id
+           and _spans_overlap(start, None, r["start_date"], r["end_date"])
+           for r in fdb.list_away_periods(c)):
+        raise HTTPException(409, "person is already away or has a trip then")
     pid = fdb.add_away_period(c, a.person_id, start, None, a.backup_person_id)
     return next(r for r in _away_rows(c) if r["id"] == pid)
 
 
 @app.post("/api/admin/away/everyone")
 def admin_away_everyone(a: AwayEveryoneIn):
+    """API only since the wall's "Pause everyone" became the Trip sheet (which
+    posts /api/trip). Kept for scripts and existing clients."""
     c = _db()
     start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
-    open_pids = {r["person_id"] for r in fdb.list_away_periods(c,
-                 include_closed=False)}
+    open_pids = {r["person_id"] for r in fdb.list_away_periods(c)
+                 if _spans_overlap(start, None, r["start_date"], r["end_date"])}
     created = []
     for p in fdb.list_people(c):                    # active only
         if p["id"] in open_pids:
@@ -2601,8 +2636,14 @@ def admin_away_patch(pid: int, a: AwayPatch):
     # away person themselves, active and not away. (None clears the backup and
     # is always allowed.) This row's own period is excluded from the away check
     # — it is the away person's, never the backup's.
-    if fields.get("backup_person_id") is not None:
-        _validate_backup(c, fields["backup_person_id"], row["person_id"],
+    # Re-checked on a date change too: moving the dates onto the backup's own
+    # trip would otherwise leave their covered chores paused with no word.
+    backup = fields.get("backup_person_id", row["backup_person_id"])
+    if backup is not None and ({"backup_person_id", "start_date", "end_date"}
+                               & set(fields)):
+        _validate_backup(c, backup, row["person_id"],
+                         (fields.get("start_date", row["start_date"]),
+                          fields.get("end_date", row["end_date"])),
                          ignore_period_id=pid)
     # The effective end_date must not precede the effective start_date, else
     # away_map silently voids the whole period (its a>b skip). "Effective"
@@ -2647,6 +2688,188 @@ def admin_away_delete(pid: int):
     if not fdb.delete_away_period(_db(), pid):
         raise HTTPException(404, "unknown away period")
     return {"ok": True}
+
+
+# --- trips ------------------------------------------------------------------
+# A trip is the household-facing face of away periods: one or more people away
+# over the same dates, set from the ✈ Trip button on the Chores card. It is
+# stored as one away_periods row per person (the overlay every chore path
+# already reads), so nothing downstream changes. Rows that share a start and
+# end date and are still live (not yet over) are shown as one trip.
+
+def _period_live(r, today_s: str) -> bool:
+    """Still matters: running now or planned for later (not already over)."""
+    return r["end_date"] is None or r["end_date"] >= today_s
+
+
+def _spans_overlap(a_start, a_end, b_start, b_end) -> bool:
+    """Inclusive date-string spans; a None end runs forever."""
+    return ((b_end is None or a_start <= b_end)
+            and (a_end is None or b_start <= a_end))
+
+
+def _trip_rows(c, today: dt.date) -> list[dict]:
+    """Every live trip, soonest first: {ids, person_ids, people, start_date,
+    end_date, backup_person_id, backup_mixed, state}. state is "now" once it
+    has started, else "planned". backup_person_id is the shared backup;
+    when the travellers have different backups it is None and backup_mixed is
+    True, so an edit can keep them instead of wiping them. `people` names
+    every traveller, including one deactivated since, so the sheet can show
+    (and untick) them."""
+    today_s = today.isoformat()
+    everyone = {p["id"]: p for p in fdb.list_people(c, include_inactive=True)}
+    groups: dict[tuple, list[dict]] = {}
+    for r in fdb.list_away_periods(c):
+        if _period_live(r, today_s):
+            groups.setdefault((r["start_date"], r["end_date"]), []).append(r)
+    trips = []
+    for (start, end), rows in groups.items():
+        backups = {r["backup_person_id"] for r in rows}
+        mixed = len(backups) > 1
+        trips.append({
+            "ids": [r["id"] for r in rows],
+            "person_ids": [r["person_id"] for r in rows],
+            "people": [{"id": r["person_id"],
+                        "name": everyone.get(r["person_id"], {}).get("name") or "?",
+                        "color": everyone.get(r["person_id"], {}).get("color") or "",
+                        "active": bool(everyone.get(r["person_id"], {}).get("active"))}
+                       for r in rows],
+            "start_date": start,
+            "end_date": end,
+            "backup_person_id": None if mixed else backups.pop(),
+            "backup_mixed": mixed,
+            "state": "now" if start <= today_s else "planned",
+        })
+    trips.sort(key=lambda t: (t["start_date"], t["end_date"] or "9999"))
+    return trips
+
+
+def _end_period_change(r, today: dt.date):
+    """How "back home" ends one period: a period that has not started yet (or
+    started today, so never took effect) is removed; one already running ends
+    yesterday, so today's chores come back; one already over is left alone.
+    Returns ("delete", id), ("update", (id, fields)) or None."""
+    today_s = today.isoformat()
+    if r["start_date"] >= today_s:
+        return ("delete", r["id"])
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
+    if r["end_date"] is not None and r["end_date"] <= yesterday:
+        return None
+    return ("update", (r["id"], {"end_date": yesterday}))
+
+
+def _periods_by_id(c, ids: list[int]) -> dict[int, dict]:
+    rows = {}
+    for i in ids:
+        r = fdb.get_away_period(c, i)
+        if r is None:
+            raise HTTPException(404, "unknown away period")
+        rows[i] = r
+    return rows
+
+
+@app.post("/api/trip")
+def trip_save(t: TripIn):
+    """Start, plan or edit a trip in one transaction. Editing (ids given)
+    keeps each staying traveller's row (history intact), ends the rows of
+    anyone taken off the trip the way "back home" does, and adds rows for
+    anyone added. Leaving backup_person_id out of an edit keeps each
+    traveller's own backup (an explicit null clears it)."""
+    c = _db()
+    today = _today()
+    if not t.person_ids:
+        raise HTTPException(422, "pick at least one person")
+    if len(set(t.person_ids)) != len(t.person_ids):
+        raise HTTPException(422, "a person is listed twice")
+    start = _valid_date(t.start_date) if t.start_date else today.isoformat()
+    end = _valid_date(t.end_date) if t.end_date else None
+    if end is not None and end < start:
+        raise HTTPException(422, "the back date must be after the leaving date")
+    # A trip whose last away day is already past would be saved, never shown
+    # (only live trips are), and quietly rewrite old days. Ending a trip now
+    # is Back early's job.
+    if end is not None and end < today.isoformat():
+        raise HTTPException(
+            422, "that trip is already over; use Back early to end a trip now")
+    existing = _periods_by_id(c, t.ids or [])
+    if len({r["person_id"] for r in existing.values()}) != len(existing):
+        raise HTTPException(422, "those trip ids list a person twice")
+    keep_backup = t.ids and "backup_person_id" not in t.model_fields_set
+    names = {p["id"]: p["name"]
+             for p in fdb.list_people(c, include_inactive=True)}
+    kept = {r["person_id"]: r for r in existing.values()}
+    for pid in t.person_ids:
+        row = _person_row(c, pid)                   # 404 if unknown
+        # Someone already on this trip may stay on it while inactive (their
+        # row is history); nobody inactive is newly added to one.
+        if not row["active"] and pid not in kept:
+            raise HTTPException(422, f"{row['name']} is not active")
+    # The backups this save will leave in place: the one given, or (keeping)
+    # each staying traveller's own. Every one must be home for the whole trip,
+    # whichever way it got there, or their covered chores pause silently.
+    if keep_backup:
+        backups = {r["backup_person_id"] for r in existing.values()
+                   if r["person_id"] in t.person_ids} - {None}
+    else:
+        backups = {t.backup_person_id} - {None}
+        if t.backup_person_id is not None:
+            b = _person_row(c, t.backup_person_id)  # 404 if unknown
+            if not b["active"]:
+                raise HTTPException(422, "backup must be an active person")
+    for b in backups:
+        if b in t.person_ids:
+            raise HTTPException(
+                422, f"{names.get(b, 'the backup')} is a backup on this trip, "
+                     "so they have to stay home")
+    others = [r for r in fdb.list_away_periods(c) if r["id"] not in existing]
+    for r in others:
+        if (r["person_id"] in t.person_ids
+                and _spans_overlap(start, end, r["start_date"], r["end_date"])):
+            raise HTTPException(
+                409, f"{names.get(r['person_id'], 'someone')} is already away then")
+        if (r["person_id"] in backups
+                and _spans_overlap(start, end, r["start_date"], r["end_date"])):
+            raise HTTPException(
+                422, f"the backup, {names.get(r['person_id'], 'someone')}, "
+                     "is away during this trip")
+    inserts, updates, deletes = [], [], []
+    for pid in t.person_ids:
+        fields = {"start_date": start, "end_date": end}
+        if not keep_backup:
+            fields["backup_person_id"] = t.backup_person_id
+        if pid in kept:
+            updates.append((kept[pid]["id"], fields))
+        else:
+            inserts.append({"person_id": pid, **fields})
+    for pid, r in kept.items():
+        if pid in t.person_ids:
+            continue
+        change = _end_period_change(r, today)
+        if change and change[0] == "delete":
+            deletes.append(change[1])
+        elif change:
+            updates.append(change[1])
+    fdb.apply_away_changes(c, inserts=inserts, updates=updates, deletes=deletes)
+    return {"trips": _trip_rows(c, today)}
+
+
+@app.post("/api/trip/end")
+def trip_end(t: TripEndIn):
+    """Back early, or cancel a planned trip: every named period ends the way
+    "back home" does (see _end_period_change), all in one transaction."""
+    c = _db()
+    today = _today()
+    if not t.ids:
+        raise HTTPException(422, "no trip given")
+    updates, deletes = [], []
+    for r in _periods_by_id(c, t.ids).values():
+        change = _end_period_change(r, today)
+        if change and change[0] == "delete":
+            deletes.append(change[1])
+        elif change:
+            updates.append(change[1])
+    fdb.apply_away_changes(c, updates=updates, deletes=deletes)
+    return {"trips": _trip_rows(c, today)}
 
 
 # --- calendar + tiles -----------------------------------------------------

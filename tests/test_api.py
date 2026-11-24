@@ -2289,11 +2289,16 @@ def test_away_open_twice_conflicts(client, app_mod, monkeypatch):
     reach the wall."""
     monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 8, 17))
     p1 = _make_person(client, "Ben")
-    assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 200
+    assert client.post("/api/admin/away", json={"person_id": p1,
+                       "start_date": "2026-08-10"}).status_code == 200
     assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 409
-    # after they're back, opening a fresh period is allowed again
     pid = client.get("/api/admin/away").json()["away_periods"][0]["id"]
+    # back TODAY means today is still an away day: a new period from today
+    # would overlap it, so it is refused
     client.post(f"/api/admin/away/{pid}/back", json={"end_date": "2026-08-17"})
+    assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 409
+    # back as of yesterday: today is free, a fresh period is allowed again
+    client.patch(f"/api/admin/away/{pid}", json={"end_date": "2026-08-16"})
     assert client.post("/api/admin/away", json={"person_id": p1}).status_code == 200
 
 
@@ -6720,3 +6725,422 @@ def test_sync_all_returns_the_status_and_reconnects_on_failure(app_mod, monkeypa
     assert fresh is not conn
     assert status == {"ok": False, "error": "db went away"}
     assert not app_mod._google_sync_lock.locked(), "the lock is released on failure"
+
+
+# --- trips (the ✈ Trip button on the Chores card) ----------------------------
+
+def _trip(client, **body):
+    return client.post("/api/trip", json=body)
+
+
+def test_trip_start_with_back_date_marks_everyone_away_then_returns(
+        client, app_mod, monkeypatch):
+    """The whole point of a trip: a back date, so chores come back on their own
+    with nobody remembering to tap anything."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    r = _trip(client, person_ids=[a, b], end_date="2026-11-29")
+    assert r.status_code == 200
+    (trip,) = r.json()["trips"]
+    assert trip["start_date"] == "2026-11-24" and trip["end_date"] == "2026-11-29"
+    assert sorted(trip["person_ids"]) == sorted([a, b])
+    assert trip["state"] == "now"
+    hub = client.get("/api/hub").json()
+    assert hub["trips_ok"] is True and len(hub["trips"]) == 1
+    assert all(p["away"] for p in hub["people"])
+    # the day after the last away day, nobody is away and the trip is gone
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 30))
+    hub = client.get("/api/hub").json()
+    assert not any(p["away"] for p in hub["people"])
+    assert hub["trips"] == []
+
+
+def test_trip_planned_ahead_is_planned_not_now(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    (trip,) = _trip(client, person_ids=[a], start_date="2026-12-20",
+                    end_date="2026-12-27").json()["trips"]
+    assert trip["state"] == "planned"
+    hub = client.get("/api/hub").json()
+    assert not hub["people"][0]["away"]
+
+
+def test_trip_end_cancels_a_planned_trip(client, app_mod, monkeypatch):
+    """The old per-person "I'm back" 422'd on a planned trip, so it could not
+    be cancelled from the wall at all."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    trip = _trip(client, person_ids=[a, b], start_date="2026-12-20",
+                 end_date="2026-12-27").json()["trips"][0]
+    r = client.post("/api/trip/end", json={"ids": trip["ids"]})
+    assert r.status_code == 200 and r.json()["trips"] == []
+    assert client.get("/api/admin/away").json()["away_periods"] == []
+
+
+def test_trip_back_early_keeps_past_days_away(client, app_mod, monkeypatch):
+    """Back early ends a running trip yesterday: today's chores return, the
+    days already away stay away (streaks keep their rest days)."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 20))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    trip = _trip(client, person_ids=[a, b],
+                 end_date="2026-11-30").json()["trips"][0]
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    r = client.post("/api/trip/end", json={"ids": trip["ids"]})
+    assert r.status_code == 200 and r.json()["trips"] == []
+    rows = client.get("/api/admin/away").json()["away_periods"]
+    assert {(x["start_date"], x["end_date"]) for x in rows} == {
+        ("2026-11-20", "2026-11-23")}
+    assert not any(p["away"] for p in client.get("/api/hub").json()["people"])
+
+
+def test_trip_end_started_today_removes_it(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    trip = _trip(client, person_ids=[a]).json()["trips"][0]
+    assert trip["end_date"] is None       # a trip with no back date is allowed
+    client.post("/api/trip/end", json={"ids": trip["ids"]})
+    assert client.get("/api/admin/away").json()["away_periods"] == []
+
+
+def test_trip_edit_changes_dates_adds_and_drops_people(client, app_mod,
+                                                      monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 20))
+    a, b, c3 = (_make_person(client, n) for n in ("Ben", "Sam", "Nan"))
+    trip = _trip(client, person_ids=[a, b],
+                 end_date="2026-11-25").json()["trips"][0]
+    a_period = next(i for i, p in zip(trip["ids"], trip["person_ids"]) if p == a)
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    # keep Ben (same row, new back date), drop Sam (ends yesterday), add Nan
+    r = _trip(client, ids=trip["ids"], person_ids=[a, c3],
+              start_date="2026-11-20", end_date="2026-11-28")
+    assert r.status_code == 200
+    rows = {x["person_id"]: x for x in
+            client.get("/api/admin/away").json()["away_periods"]}
+    assert rows[a]["id"] == a_period and rows[a]["end_date"] == "2026-11-28"
+    assert rows[b]["end_date"] == "2026-11-23"
+    assert rows[c3]["start_date"] == "2026-11-20"
+    (live,) = r.json()["trips"]
+    assert sorted(live["person_ids"]) == sorted([a, c3])
+
+
+def test_trip_backup_covers_fixed_chores(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    _fixed_chore(client, a)
+    assert _trip(client, person_ids=[a], backup_person_id=b,
+                 end_date="2026-11-26").status_code == 200
+    hub = client.get("/api/hub").json()
+    sam = next(p for p in hub["people"] if p["person"]["id"] == b)
+    assert [ch["title"] for ch in sam["chores"]] == ["Dishes"]
+
+
+def test_trip_validation(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    assert _trip(client, person_ids=[]).status_code == 422
+    assert _trip(client, person_ids=[a, a]).status_code == 422
+    assert _trip(client, person_ids=[9999]).status_code == 404
+    assert _trip(client, person_ids=[a], start_date="2026-11-28",
+                 end_date="2026-11-27").status_code == 422
+    assert _trip(client, person_ids=[a], start_date="nope").status_code == 422
+    assert _trip(client, person_ids=[a], backup_person_id=a).status_code == 422
+    client.patch(f"/api/admin/people/{b}", json={"active": 0})
+    assert _trip(client, person_ids=[b]).status_code == 422
+    assert _trip(client, person_ids=[a], backup_person_id=b).status_code == 422
+    assert client.post("/api/trip/end", json={"ids": []}).status_code == 422
+    assert client.post("/api/trip/end", json={"ids": [9999]}).status_code == 404
+    assert _trip(client, ids=[9999], person_ids=[a]).status_code == 404
+    # nothing half-written by any refusal
+    assert client.get("/api/admin/away").json()["away_periods"] == []
+
+
+def test_trip_overlap_conflicts_and_writes_nothing(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    _trip(client, person_ids=[b], start_date="2026-12-01", end_date="2026-12-05")
+    r = _trip(client, person_ids=[a, b], start_date="2026-12-04",
+              end_date="2026-12-10")
+    assert r.status_code == 409 and "Sam" in r.json()["detail"]
+    assert len(client.get("/api/admin/away").json()["away_periods"]) == 1
+    # a backup who is away during the trip is refused
+    r = _trip(client, person_ids=[a], backup_person_id=b,
+              start_date="2026-12-02", end_date="2026-12-03")
+    assert r.status_code == 422
+    # back-to-back trips do not overlap
+    assert _trip(client, person_ids=[b], start_date="2026-12-06",
+                 end_date="2026-12-08").status_code == 200
+
+
+def test_dated_trip_blocks_a_second_going_away(client, app_mod, monkeypatch):
+    """A trip with a back date is still live. The old checks only looked at
+    open-ended periods, so per-person "Going away" or "Pause everyone" would
+    stack a second, overlapping period on top of it."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    _trip(client, person_ids=[a], end_date="2026-11-28")
+    assert client.post("/api/admin/away", json={"person_id": a}).status_code == 409
+    created = client.post("/api/admin/away/everyone", json={}).json()["created"]
+    assert len(created) == 1          # only Sam
+    assert created == [max(p["id"] for p in
+                           client.get("/api/admin/away").json()["away_periods"])]
+    sam_row = next(p for p in client.get("/api/admin/away").json()["away_periods"]
+                   if p["id"] == created[0])
+    assert sam_row["person_id"] == b
+    client.delete(f"/api/admin/away/{created[0]}")
+    # Ben is away on the trip, so he can't back Sam up
+    r = client.post("/api/admin/away", json={"person_id": b, "backup_person_id": a})
+    assert r.status_code == 422
+
+
+def test_trips_block_fails_soft(client, app_mod, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("db gone")
+    monkeypatch.setattr(app_mod, "_trip_rows", boom)
+    hub = client.get("/api/hub")
+    assert hub.status_code == 200
+    assert hub.json()["trips"] == [] and hub.json()["trips_ok"] is False
+
+
+
+def test_planned_trip_next_month_does_not_block_today(client, app_mod, monkeypatch):
+    """Review: a trip planned for later used to count as "away" everywhere, so
+    that person could not be a backup or go away this week."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    _trip(client, person_ids=[b], start_date="2026-12-20", end_date="2026-12-27")
+    r = client.post("/api/admin/away", json={"person_id": a, "backup_person_id": b,
+                                              "start_date": "2026-11-24"})
+    # Ben's period is open-ended, so it runs into Sam's trip: Sam can't cover it
+    assert r.status_code == 422
+    r = _trip(client, person_ids=[a], backup_person_id=b, end_date="2026-11-30")
+    assert r.status_code == 200, "a dated trip before Sam leaves is fine"
+
+
+def test_planned_trip_does_not_block_a_trip_before_it(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    _trip(client, person_ids=[a], start_date="2026-12-20", end_date="2026-12-27")
+    assert _trip(client, person_ids=[a], end_date="2026-11-30").status_code == 200
+    # but an open-ended single "Going away" would run into it
+    assert client.post("/api/admin/away", json={"person_id": a,
+                       "start_date": "2026-12-01"}).status_code == 409
+
+
+def test_trip_last_day_is_still_away(client, app_mod, monkeypatch):
+    """end_date is the LAST away day: away through it, home the day after."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    _trip(client, person_ids=[a], end_date="2026-11-28")
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 28))
+    hub = client.get("/api/hub").json()
+    assert hub["people"][0]["away"] is True and hub["trips"][0]["state"] == "now"
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 29))
+    hub = client.get("/api/hub").json()
+    assert hub["people"][0]["away"] is False and hub["trips"] == []
+
+
+def test_trip_starting_tomorrow_is_planned_today_is_now(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    _trip(client, person_ids=[a], start_date="2026-11-24", end_date="2026-11-26")
+    trips = _trip(client, person_ids=[b], start_date="2026-11-25",
+                  end_date="2026-11-26").json()["trips"]
+    assert [t["state"] for t in trips] == ["now", "planned"]
+
+
+def test_trip_in_the_past_is_refused(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    r = _trip(client, person_ids=[a], start_date="2026-11-10", end_date="2026-11-12")
+    assert r.status_code == 422 and "Back early" in r.json()["detail"]
+    assert client.get("/api/admin/away").json()["away_periods"] == []
+    # a trip that started in the past and runs on is fine
+    assert _trip(client, person_ids=[a], start_date="2026-11-20",
+                 end_date="2026-11-26").status_code == 200
+
+
+def test_trip_edit_drops_planned_traveller_and_leaves_ended_ones(client, app_mod,
+                                                                monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    trip = _trip(client, person_ids=[a, b], start_date="2026-12-01",
+                 end_date="2026-12-05").json()["trips"][0]
+    r = _trip(client, ids=trip["ids"], person_ids=[a],
+              start_date="2026-12-01", end_date="2026-12-05")
+    assert r.status_code == 200
+    rows = client.get("/api/admin/away").json()["away_periods"]
+    assert [x["person_id"] for x in rows] == [a], "a planned traveller is removed, not ended"
+
+
+def test_trip_edit_onto_another_trip_conflicts(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    first = _trip(client, person_ids=[a], start_date="2026-12-01",
+                  end_date="2026-12-03").json()["trips"][0]
+    _trip(client, person_ids=[a], start_date="2026-12-10", end_date="2026-12-12")
+    r = _trip(client, ids=first["ids"], person_ids=[a],
+              start_date="2026-12-02", end_date="2026-12-11")
+    assert r.status_code == 409
+    rows = client.get("/api/admin/away").json()["away_periods"]
+    assert sorted((x["start_date"], x["end_date"]) for x in rows) == [
+        ("2026-12-01", "2026-12-03"), ("2026-12-10", "2026-12-12")]
+
+
+def test_trip_edit_can_clear_the_back_day(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    trip = _trip(client, person_ids=[a], end_date="2026-11-28").json()["trips"][0]
+    (t,) = _trip(client, ids=trip["ids"], person_ids=[a],
+                 start_date="2026-11-24").json()["trips"]
+    assert t["end_date"] is None
+
+
+def test_trip_edit_keeps_mixed_backups_unless_given(client, app_mod, monkeypatch):
+    """Review: editing a trip whose travellers have different backups used to
+    write the sheet's "No backup" over all of them."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b, c3, d = (_make_person(client, n) for n in ("Ben", "Sam", "Nan", "Dad"))
+    pa = client.post("/api/admin/away", json={"person_id": a, "backup_person_id": c3}).json()["id"]
+    pb = client.post("/api/admin/away", json={"person_id": b, "backup_person_id": d}).json()["id"]
+    client.patch(f"/api/admin/away/{pa}", json={"end_date": "2026-11-28"})
+    client.patch(f"/api/admin/away/{pb}", json={"end_date": "2026-11-28"})
+    (trip,) = client.get("/api/hub").json()["trips"]
+    assert trip["backup_mixed"] is True and trip["backup_person_id"] is None
+    _trip(client, ids=trip["ids"], person_ids=[a, b], start_date="2026-11-24",
+          end_date="2026-11-29")
+    rows = {x["person_id"]: x for x in client.get("/api/admin/away").json()["away_periods"]}
+    assert rows[a]["backup_person_id"] == c3 and rows[b]["backup_person_id"] == d
+    assert rows[a]["end_date"] == "2026-11-29"
+    # an explicit null clears them
+    _trip(client, ids=trip["ids"], person_ids=[a, b], start_date="2026-11-24",
+          end_date="2026-11-29", backup_person_id=None)
+    rows = client.get("/api/admin/away").json()["away_periods"]
+    assert all(x["backup_person_id"] is None for x in rows)
+
+
+def test_trip_edit_keeps_an_inactive_traveller(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    trip = _trip(client, person_ids=[a, b], end_date="2026-11-28").json()["trips"][0]
+    client.patch(f"/api/admin/people/{b}", json={"active": 0})
+    (t,) = client.get("/api/hub").json()["trips"]
+    assert {p["name"] for p in t["people"]} == {"Ben", "Sam"}
+    assert _trip(client, ids=trip["ids"], person_ids=[a, b],
+                 start_date="2026-11-24", end_date="2026-11-29").status_code == 200
+
+
+def test_trip_edit_refuses_ids_naming_a_person_twice(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    p1 = fdb.add_away_period(app_mod._db(), a, "2026-11-24", "2026-11-25")
+    p2 = fdb.add_away_period(app_mod._db(), a, "2026-12-01", "2026-12-02")
+    r = _trip(client, ids=[p1, p2], person_ids=[a], end_date="2026-11-30")
+    assert r.status_code == 422
+
+
+def test_trip_unknown_backup_is_404(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a = _make_person(client, "Ben")
+    assert _trip(client, person_ids=[a], backup_person_id=9999).status_code == 404
+
+
+def test_trip_end_mixed_running_planned_and_over(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b, c3 = (_make_person(client, n) for n in ("Ben", "Sam", "Nan"))
+    db = app_mod._db()
+    running = fdb.add_away_period(db, a, "2026-11-20", "2026-11-30")
+    planned = fdb.add_away_period(db, b, "2026-12-01", "2026-12-03")
+    over = fdb.add_away_period(db, c3, "2026-11-01", "2026-11-05")
+    r = client.post("/api/trip/end", json={"ids": [running, planned, over]})
+    assert r.status_code == 200
+    assert fdb.get_away_period(db, running)["end_date"] == "2026-11-23"
+    assert fdb.get_away_period(db, planned) is None
+    assert fdb.get_away_period(db, over)["end_date"] == "2026-11-05"
+
+
+def test_trip_rows_group_order_and_skip_past(client, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b, c3 = (_make_person(client, n) for n in ("Ben", "Sam", "Nan"))
+    db = app_mod._db()
+    fdb.add_away_period(db, a, "2026-12-01", None)              # open-ended, later
+    fdb.add_away_period(db, b, "2026-11-25", "2026-11-26")
+    fdb.add_away_period(db, c3, "2026-11-25", "2026-11-26")     # same dates: same trip
+    fdb.add_away_period(db, c3, "2026-11-01", "2026-11-03")     # over: not shown
+    trips = client.get("/api/hub").json()["trips"]
+    assert [(t["start_date"], sorted(t["person_ids"])) for t in trips] == [
+        ("2026-11-25", sorted([b, c3])), ("2026-12-01", [a])]
+
+
+def test_apply_away_changes_is_all_or_nothing(client, app_mod):
+    a = _make_person(client, "Ben")
+    db = app_mod._db()
+    keep = fdb.add_away_period(db, a, "2026-11-01", "2026-11-02")
+    gone = fdb.add_away_period(db, a, "2026-11-10", "2026-11-11")
+    with pytest.raises(ValueError):
+        fdb.apply_away_changes(db, deletes=[gone],
+                               updates=[(keep, {"end_date": "2026-11-05"}),
+                                        (9999, {"end_date": "2026-11-05"})])
+    assert fdb.get_away_period(db, gone) is not None, "the delete rolled back"
+    assert fdb.get_away_period(db, keep)["end_date"] == "2026-11-02"
+    with pytest.raises(ValueError):
+        fdb.apply_away_changes(db, updates=[(keep, {"person_id": 5})])
+    with pytest.raises(ValueError):
+        fdb.apply_away_changes(db, deletes=[9999])
+    fdb.apply_away_changes(db, updates=[(keep, {"end_date": None})])
+    assert fdb.get_away_period(db, keep)["end_date"] is None
+
+
+def test_trip_keep_backup_edit_still_checks_the_kept_backups(client, app_mod,
+                                                            monkeypatch):
+    """Second review: keeping each traveller's backup skipped every backup
+    check, so a kept backup could be added to the trip or end up away."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b, c3, d = (_make_person(client, n) for n in ("Ben", "Sam", "Nan", "Dad"))
+    pa = client.post("/api/admin/away", json={"person_id": a, "backup_person_id": c3}).json()["id"]
+    pb = client.post("/api/admin/away", json={"person_id": b, "backup_person_id": d}).json()["id"]
+    client.patch(f"/api/admin/away/{pa}", json={"end_date": "2026-11-28"})
+    client.patch(f"/api/admin/away/{pb}", json={"end_date": "2026-11-28"})
+    ids = [pa, pb]
+    # adding Nan, who is Ben's backup, is refused
+    r = _trip(client, ids=ids, person_ids=[a, b, c3], start_date="2026-11-24",
+              end_date="2026-11-28")
+    assert r.status_code == 422 and "Nan" in r.json()["detail"]
+    # moving the dates onto Dad's own trip is refused
+    _trip(client, person_ids=[d], start_date="2026-12-01", end_date="2026-12-03")
+    r = _trip(client, ids=ids, person_ids=[a, b], start_date="2026-11-24",
+              end_date="2026-12-02")
+    assert r.status_code == 422 and "Dad" in r.json()["detail"]
+    # nothing changed by either refusal
+    rows = {x["id"]: x for x in client.get("/api/admin/away").json()["away_periods"]}
+    assert rows[pa]["end_date"] == rows[pb]["end_date"] == "2026-11-28"
+
+
+def test_trip_keep_backup_edit_adds_a_traveller_with_no_backup(client, app_mod,
+                                                              monkeypatch):
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b, c3 = (_make_person(client, n) for n in ("Ben", "Sam", "Nan"))
+    trip = _trip(client, person_ids=[a], backup_person_id=c3,
+                 end_date="2026-11-28").json()["trips"][0]
+    assert _trip(client, ids=trip["ids"], person_ids=[a, b], start_date="2026-11-24",
+                 end_date="2026-11-28").status_code == 200
+    rows = {x["person_id"]: x for x in client.get("/api/admin/away").json()["away_periods"]}
+    assert rows[a]["backup_person_id"] == c3, "Ben keeps his backup"
+    assert rows[b]["backup_person_id"] is None, "Sam is added with none"
+
+
+def test_away_patch_checks_the_backup_against_the_periods_own_dates(
+        client, app_mod, monkeypatch):
+    """_validate_backup uses the covered span: a dated period that ends before
+    the backup's planned trip is fine; one that runs into it is refused, and a
+    date change alone re-checks the backup already set."""
+    monkeypatch.setattr(app_mod, "_today", lambda: dt.date(2026, 11, 24))
+    a, b = _make_person(client, "Ben"), _make_person(client, "Sam")
+    _trip(client, person_ids=[b], start_date="2026-12-20", end_date="2026-12-27")
+    pid = client.post("/api/admin/away", json={"person_id": a,
+                      "start_date": "2026-11-24"}).json()["id"]
+    client.patch(f"/api/admin/away/{pid}", json={"end_date": "2026-11-30"})
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"backup_person_id": b}).status_code == 200
+    assert client.patch(f"/api/admin/away/{pid}",
+                        json={"end_date": "2026-12-21"}).status_code == 422
+    assert fdb.get_away_period(app_mod._db(), pid)["end_date"] == "2026-11-30"

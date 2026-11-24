@@ -1846,6 +1846,40 @@ body.overlay-open { overflow: hidden; }
 .padmin-away-item { font-size: 15px; color: var(--ink); padding: 2px 0; }
 .padmin-away-backup-name { color: var(--dim); font-size: 13px; }
 
+/* Trips (out of town). The ✈ Trip button rides in the Chores header next to
+   All chores (it wears .expand for the look); the banner sits over the person
+   cards while a trip is running or planned. Static: no animation, nothing for
+   reduced motion to guard. */
+.shead .act { display: inline-flex; align-items: center; gap: 8px; }
+/* .trip-banner is also a .card, so it takes the one card box and, on a
+   seasonal look, the same glass as the person cards below it. */
+.trip-banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 2px 0 10px; padding: 10px 12px;
+}
+.trip-banner.now { border-color: color-mix(in srgb, var(--accent) 45%, var(--edge)); }
+.trip-banner-icon { font-size: 20px; line-height: 1; color: var(--accent); }
+/* the line keeps a full row when there's room for it; the buttons drop below
+   rather than squeeze it into a narrow wrapped column (phone width) */
+.trip-banner-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 240px; min-width: 0; }
+.trip-banner-line { font-size: 16px; font-weight: 700; color: var(--ink); }
+.trip-banner-who { font-size: 13px; color: var(--dim); }
+.trip-banner-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.ch-trip {
+  font-family: var(--mono); font-size: 13px; letter-spacing: 0.08em;
+  text-transform: uppercase; padding: 0 16px; margin-right: 8px;
+}
+/* the trip sheet, in the shared editor shell */
+.trip-title { font-size: 20px; font-weight: 700; color: var(--ink); }
+.trip-dates { display: flex; gap: 12px; flex-wrap: wrap; }
+.trip-dates .field { flex: 1 1 150px; min-width: 0; }
+.trip-summary { font-size: 15px; color: var(--dim); line-height: 1.4; }
+@media (max-width: 1000px) {
+  /* phone: thumb-sized targets for the trip controls */
+  /* both header buttons match, so Trip doesn't stand taller than All chores */
+  .shead .act .expand, .trip-banner .padmin-btn { min-height: 44px; }
+}
+
 /* ================== full calendar (overlay) ================== */
 .cal-ev { cursor: pointer; }
 .cal-ev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }

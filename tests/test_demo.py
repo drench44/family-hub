@@ -380,7 +380,8 @@ def test_demo_away_state_is_coherent_for_today(tmp_path):
     periods = db.list_away_periods(c)
     away_period = next(p for p in periods if p["person_id"] == milo_id)
     assert away_period["backup_person_id"] == ava_id
-    assert away_period["end_date"] is None    # still away today and onward
+    # a dated trip still running today: the banner's "Away until" state
+    assert away_period["start_date"] < today.isoformat() <= away_period["end_date"]
 
     today_str = today.isoformat()
     amap = db.away_map(c, today_str, today_str)
