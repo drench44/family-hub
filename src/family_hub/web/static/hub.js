@@ -6026,6 +6026,7 @@ function seasonalCardHtml() {
 function renderIntegrations(data) {
   const list = (data && data.integrations) || [];
   lastIntegrations = list;
+  renderHelpList();   // the help follows the switches and the card health
   list.forEach((it) =>
     document.body.classList.toggle('integ-off-' + it.id, !it.enabled));
   updateTabVisibility(list);
@@ -6157,7 +6158,7 @@ function renderSettingsFull() {
     + `<div class="card pad settings-card" id="help-card">`
     + `<div class="shead"><span class="tick"></span><h2>How it works</h2></div>`
     + `<div class="settings-sub">Tap a topic to read about it.</div>`
-    + `<div class="help-list">${helpHtml(helpTopics(helpContext()))}</div>`
+    + `<div class="help-list" id="help-list">${helpListHtml(new Set())}</div>`
     + `</div>`
     // A quiet deployed-version line for debugging ("what's actually running?").
     // Filled from /api/version by paintVersion(); blank until it resolves.
@@ -6174,16 +6175,46 @@ function renderSettingsFull() {
   fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
 }
 
-/* What the help needs to know about this wall: which features are on, where
-   the To-Do list comes from, and whether backups report in. Read from the last
-   hub payload; before the first one lands, the always-on topics still show. */
+/* What the help needs to know about this wall, from the last hub payload:
+   which features are on (chores and to-dos fail open through featureEnabled,
+   so a slow first poll never hides them), each integration's health, where
+   the To-Do list really comes from (todoSourceOf, as the card decides), and
+   the backup block. `known` is false until a payload with integrations lands. */
 function helpContext() {
   const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  const enabled = new Set(list.filter((i) => i.enabled).map((i) => i.id));
+  ALWAYS_ON_FEATURES.forEach((id) => { if (featureEnabled(id)) enabled.add(id); });
+  const status = {};
+  list.forEach((i) => { status[i.id] = i.status || null; });
+  const ic = list.find((i) => i.id === 'icloud_caldav');
   return {
-    enabled: new Set(list.filter((i) => i.enabled).map((i) => i.id)),
-    todoSource: (hubData && hubData.todo_source) || 'local',
-    backupKnown: !!(hubData && hubData.backup && hubData.backup.known),
+    known: list.length > 0,
+    enabled,
+    status,
+    todoSource: todoSourceOf(hubData),
+    todoReadonly: !ic || ic.readonly !== false,
+    backup: (hubData && hubData.backup) || null,
   };
+}
+
+/* The help list's markup: the topics, with a short line while this wall's
+   feature list hasn't arrived yet (the always-on topics still show). */
+function helpListHtml(openIds) {
+  const ctx = helpContext();
+  return (ctx.known ? '' : `<div class="settings-sub">Loading what this wall has on.</div>`)
+    + helpHtml(helpTopics(ctx), openIds);
+}
+
+/* Repaint the help list in place when the hub's data changes (every poll,
+   a feature switch, a To-Do source switch), keeping open topics open. A
+   no-op when Settings isn't showing. */
+function renderHelpList() {
+  const host = document.getElementById('help-list');
+  if (!host) return;
+  const openIds = new Set((host.querySelectorAll ? Array.from(host.querySelectorAll('details[open]')) : [])
+    .map((d) => (d.dataset && d.dataset.help) || (d.getAttribute && d.getAttribute('data-help')))
+    .filter(Boolean));
+  host.innerHTML = helpListHtml(openIds);
 }
 
 /* Open Settings at the How it works card (the gear popover's link). */
@@ -6225,6 +6256,7 @@ async function setTodoSource(source) {
   if (!r.ok) { showToast('Couldn’t switch the To-Do list — check the hub and tap again.'); return; }
   await poll();                 // hubData.todo_source updates; the home card repaints
   renderTodoSourcePicker();     // reflect the new selection + read-only hint
+  renderHelpList();             // the To-Do topic follows the source
   if (todosViewActive()) await renderTodosFull();   // repaint the open full view for the new source
 }
 

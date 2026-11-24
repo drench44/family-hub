@@ -12,7 +12,11 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Added
 
-- A "How it works" guide in Settings: one tap-to-open topic per feature, in plain words (chores and streaks, trips, changing chores and people, to-dos, calendar, cameras, weather and climate, laundry, the printer and server cards, using it on a phone, how the screen behaves, and backups). A topic only shows when its feature is on. The gear menu has a "How it works" link that opens it.
+- A "How it works" guide in Settings: one tap-to-open topic per feature, in plain words (chores and streaks, trips, changing chores and people, to-dos, calendar, cameras, weather and climate, laundry, the printer and server cards, using it on a phone, how the screen behaves, and backups). A topic only shows when its feature is on, a card that is not connecting says so, the to-do topic says whether an iCloud list is view-only, and the backup topic starts with when the last backup ran. It updates as things change. The gear menu has a "How it works" link that opens it.
+
+### Changed
+
+- Settings now waits five minutes, not a minute and a half, before the screen goes back to the main page on its own, so there is time to read the guide.
 
 ## [1.15.0] — 2026-11-24
 

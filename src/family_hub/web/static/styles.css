@@ -4061,6 +4061,9 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 /* How it works: native disclosure rows (tap a title to open it). Static, no
    transition, so there is nothing for reduced motion to guard. Each title is
    a full-width 44px tap target with its own open/closed mark. */
+/* the gear's How it works link scrolls here: leave room for the overlay's
+   Home pill, which would otherwise sit over the heading */
+#help-card { scroll-margin-top: 72px; }
 .help-list { display: flex; flex-direction: column; margin-top: 4px; }
 .help-item { border-top: 1px solid var(--edge); }
 .help-item:last-child { border-bottom: 1px solid var(--edge); }

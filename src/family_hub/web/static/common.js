@@ -179,6 +179,9 @@ function dayHeadHtml(dateStr, todayStr) {
 function idleReturnMs(view) {
   if (view && view.indexOf('camera') === 0) return 300000;  // camera, camera:<src>
   if (view === 'calendar') return 180000;
+  // Settings holds the How it works guide: long enough to read a topic
+  // without the page closing under you.
+  if (view === 'settings') return 300000;
   return 90000;
 }
 
@@ -2148,10 +2151,24 @@ function buildTripForm(host, model, people, onsubmit) {
    chores.py and app.py when written); change a behavior, change its line
    here. A topic shows only when its feature is on, so the help never
    explains a card this wall doesn't have.
-   ctx: {enabled: Set of integration ids that are on, todoSource: 'local' |
-   'icloud', backupKnown: bool}. Pure. */
+   ctx: {
+     enabled: Set of feature ids that are on (chores/todos fail open, see
+              hub.js helpContext),
+     status: {id: 'ok' | 'needs_auth' | 'error' | null}, the integration rows,
+     todoSource: 'local' | 'icloud' (todoSourceOf, never the raw setting),
+     todoReadonly: bool, iCloud to-dos are view-only until 2-way sync is on,
+     backup: the hub's backup block, or null when it hasn't said,
+   }. Pure. */
+const HELP_BROKEN = 'This card is not connecting right now. Fix it under Features & integrations below.';
+
 function helpTopics(ctx) {
-  const on = (id) => !!(ctx && ctx.enabled && ctx.enabled.has(id));
+  const c = ctx || {};
+  const on = (id) => !!(c.enabled && c.enabled.has(id));
+  // A switched-on card can still be failing (a rejected sign-in, a dead feed).
+  // Say so first, so the help never describes a card that isn't working.
+  const broken = (...ids) => ids.some((id) => on(id) && c.status
+    && (c.status[id] === 'needs_auth' || c.status[id] === 'error'));
+  const withStatus = (ids, paras) => (broken(...ids) ? [HELP_BROKEN, ...paras] : paras);
   const topics = [];
   if (on('chores')) {
     topics.push({
@@ -2167,7 +2184,7 @@ function helpTopics(ctx) {
     topics.push({
       id: 'trips', title: 'Going out of town',
       paras: [
-        'Tap ✈ Trip on the Chores card. Pick who is going, the day you leave, and the day chores resume. Everyone at home starts ticked.',
+        'Tap ✈ Trip on the Chores card. Pick who is going, the day you leave, and the day chores resume. Everyone starts ticked. Untick anyone who is staying home.',
         'Chores pause for the trip and come back on their own on the day chores resume. If you get home in the evening and still want that day’s chores, pick that day. If not, pick the next day.',
         'Away days count as rest, so nobody loses a streak. A chore that takes turns passes to whoever is home. If someone stays home, you can make them the backup for the away people’s own chores.',
         'While a trip is on, the Chores card says who is away and when chores resume. Back early ends it now. Edit changes the dates or who is going. You can plan a trip ahead, and a planned trip can be canceled.',
@@ -2184,35 +2201,40 @@ function helpTopics(ctx) {
     });
   }
   if (on('todos')) {
-    topics.push({
-      id: 'todos', title: 'To-dos',
-      paras: ctx.todoSource === 'icloud'
-        ? [
-          'The To-Do card shows your iCloud Reminders list, so the same items show on your phone in Reminders.',
-          'Tap an item to check it off. Changes go both ways when writing to iCloud is turned on in Settings.',
-        ]
-        : [
-          'One shared list for things that are not a set chore. Anyone can add an item and anyone can check it off.',
-          'Items sit under Now, Soon or Later and stay until they are done.',
-          'A checked item stays crossed out for five minutes, so a wrong tap can be undone. After that it moves to recently done for 30 days, where it can be put back.',
-          'In the full list, drag an item by its handle to move it, or tap it to rename, move or delete it.',
-        ],
-    });
+    let paras;
+    if (c.todoSource === 'icloud') {
+      paras = withStatus(['icloud_caldav'], [
+        'The To-Do card shows your iCloud Reminders, so the same items show on your phone in Reminders.',
+        'The card shows what is overdue or due today, up to five. Full list shows everything.',
+        c.todoReadonly
+          ? 'Right now the list is view-only. To check items off here, set Sync direction to 2-way in Settings, under iCloud.'
+          : 'Tap an item to check it off. The change shows up in Reminders too.',
+      ]);
+    } else {
+      paras = [
+        'One shared list for things that are not a set chore. Anyone can add an item and anyone can check it off.',
+        'Items sit under Now, Soon or Later and stay until they are done.',
+        'A checked item stays crossed out for five minutes, so a wrong tap can be undone. After that it moves to recently done for 30 days, where it can be put back.',
+        'In the full list, drag an item by its handle to move it, or tap it to rename, move or delete it.',
+      ];
+    }
+    topics.push({ id: 'todos', title: 'To-dos', paras });
   }
-  if (on('google_calendar') || on('ics_calendar') || on('icloud_caldav')) {
+  const calIds = ['google_calendar', 'ics_calendar', 'icloud_caldav'];
+  if (calIds.some(on)) {
     topics.push({
       id: 'calendar', title: 'Calendar',
-      paras: [
+      paras: withStatus(calIds, [
         'The Calendar card shows the next few days. Tap any event for its details.',
         'Month view shows the whole month, a week list and single days.',
         'The calendars update every five minutes. The ↻ button at the top updates them right away and reloads the page.',
-      ],
+      ]),
     });
   }
   if (on('cameras')) {
     topics.push({
       id: 'cameras', title: 'Cameras',
-      paras: ['Tap a camera to see it full size. Camera page shows them all.'],
+      paras: withStatus(['cameras'], ['Tap a camera to see it full size. Camera page shows them all.']),
     });
   }
   if (on('weather') || on('climate')) {
@@ -2224,15 +2246,15 @@ function helpTopics(ctx) {
       paras.push('House climate shows each room’s temperature and humidity. A room turns amber or red when it runs hot or its sensor stops reporting. Tap Full climate for more.');
     }
     topics.push({ id: 'weather', title: on('weather') && on('climate') ? 'Weather and house climate'
-      : (on('weather') ? 'Weather' : 'House climate'), paras });
+      : (on('weather') ? 'Weather' : 'House climate'), paras: withStatus(['weather', 'climate'], paras) });
   }
   if (on('laundry')) {
     topics.push({
       id: 'laundry', title: 'Laundry',
-      paras: [
+      paras: withStatus(['laundry'], [
         'The ring around each door shows how much of the cycle is left, and the words say what the machine is doing.',
         'When a load finishes it shows a check and the time it finished. Later a finished wash turns amber and says Waiting, until the dryer starts or the washer runs again.',
-      ],
+      ]),
     });
   }
   if (on('printer') || on('fleet')) {
@@ -2242,7 +2264,7 @@ function helpTopics(ctx) {
     }
     if (on('fleet')) paras.push('The Fleet card shows whether the home servers and the internet are up.');
     topics.push({ id: 'printer', title: on('printer') && on('fleet') ? '3D printer and servers'
-      : (on('printer') ? '3D printer' : 'Servers'), paras });
+      : (on('printer') ? '3D printer' : 'Servers'), paras: withStatus(['printer', 'fleet'], paras) });
   }
   topics.push({
     id: 'phone', title: 'On a phone',
@@ -2255,27 +2277,53 @@ function helpTopics(ctx) {
     id: 'screen', title: 'How the screen behaves',
     paras: [
       'From 10pm to 6am the screen dims, and the seasonal look stops moving.',
-      'If nobody taps for a while, the screen goes back to the main page on its own. That takes a minute and a half, three minutes on the calendar, and five on a camera. Each screen can turn this off under This screen, Auto-return.',
+      `If nobody taps for a while, the screen goes back to the main page on its own. That takes ${helpIdleWords()}. Each screen can turn this off under This screen, Auto-return.`,
       'The ⚙ button sets the theme and accent color and turns the seasonal look on or off. All settings, at the bottom of it, has the rest. Each screen remembers its own choices.',
     ],
   });
-  if (ctx && ctx.backupKnown) {
-    topics.push({
-      id: 'backup', title: 'Backups',
-      paras: [
-        'The hub saves a copy of all the chores, streaks, to-dos and history on its own. Everyone’s progress can be put back from a copy if something goes wrong.',
-        'If a copy fails or gets too old, a ⚠ backup warning shows at the top of the screen.',
-      ],
-    });
-  }
+  topics.push({ id: 'backup', title: 'Backups', paras: [helpBackupLine(c.backup),
+    'The hub saves a copy of all the chores, streaks, to-dos and history on its own. Everyone’s progress can be put back from a copy if something goes wrong.',
+    'If a copy fails or gets too old, a ⚠ backup warning shows at the top of the screen.'] });
   return topics;
+}
+
+/* The auto-return times in words, read from idleReturnMs so the help can
+   never disagree with what the screen does. Pure. */
+function helpIdleWords() {
+  const mins = (v) => {
+    const m = idleReturnMs(v) / 60000;
+    if (m === 1.5) return 'a minute and a half';
+    const words = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    return `${words[m] || m} minute${m === 1 ? '' : 's'}`;
+  };
+  return `${mins('home')} on most pages, ${mins('calendar')} on the calendar, `
+    + `${mins('camera')} on a camera and ${mins('settings')} in Settings`;
+}
+
+/* The live first line of the Backups topic, from the hub's backup block
+   ({known, age_s, stale, remote: {failing, stale}}). Pure. */
+function helpBackupLine(b) {
+  const ago = (s) => {
+    const h = Math.round((Number(s) || 0) / 3600);
+    if (h < 1) return 'less than an hour';
+    if (h < 48) return `${h} hour${h === 1 ? '' : 's'}`;
+    return `${Math.round(h / 24)} days`;
+  };
+  if (!b || !b.known) return 'No backup has reported yet. If this stays so, check the hub.';
+  if (b.stale) return `The last backup was ${ago(b.age_s)} ago, which is too old.`;
+  if (b.remote && (b.remote.failing || b.remote.stale)) {
+    return 'The copy off the box is failing. The copy on the hub is fine.';
+  }
+  return `Last backup ${ago(b.age_s)} ago.`;
 }
 
 /* The topics as a list of native disclosure rows: tap a title to open it.
    No script state, so it works the same on the wall, a phone and with a
-   keyboard or screen reader. Every string is escaped. Pure. */
-function helpHtml(topics) {
-  return (topics || []).map((t) => `<details class="help-item" data-help="${escapeHtml(t.id)}">`
+   keyboard or screen reader. `openIds` keeps rows open across a repaint.
+   Every string is escaped. Pure. */
+function helpHtml(topics, openIds) {
+  const open = openIds || new Set();
+  return (topics || []).map((t) => `<details class="help-item" data-help="${escapeHtml(t.id)}"${open.has(t.id) ? ' open' : ''}>`
     + `<summary>${escapeHtml(t.title)}</summary>`
     + `<div class="help-body">${(t.paras || []).map((p) => `<p>${escapeHtml(p)}</p>`).join('')}</div>`
     + `</details>`).join('');
