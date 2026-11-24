@@ -4516,6 +4516,7 @@ async function poll() {
     document.body.dataset.conn = 'down';
     document.getElementById('conn-word').textContent = 'offline';
     document.getElementById('conn-word').title = '';
+    renderHelpList();   // a never-answered hub turns "Loading" into "couldn't reach"
     return;
   }
   if (seq < pollApplied) return;
@@ -6042,7 +6043,7 @@ function renderIntegrations(data) {
     renderLaundry();
   }
   const host = document.getElementById('integrations-ctl');
-  if (!host) return;
+  if (!host) { renderHelpList(); return; }
   const row = (it) => {
     // Auth-failure / error is a first-class state: a revoked or expired login
     // shows "reconnect" so the family knows to fix it (the cached view stays).
@@ -6067,6 +6068,9 @@ function renderIntegrations(data) {
   const services = list.filter((it) => it.group !== 'feature');
   const html = group('Features', features) + group('Integrations', services);
   host.innerHTML = html || `<div class="integ-empty">none configured</div>`;
+  // Last, so nothing above can be skipped by it (renderHelpList never throws):
+  // the help follows the switches and the card health.
+  renderHelpList();
 }
 
 async function toggleIntegration(id) {
@@ -6151,6 +6155,14 @@ function renderSettingsFull() {
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
     + `</div>`
+    // How it works: plain-words help, one tap-to-open row per feature this
+    // wall has on (helpTopics in common.js). The gear popover's "How it works"
+    // link opens Settings scrolled here.
+    + `<div class="card pad settings-card" id="help-card">`
+    + `<div class="shead"><span class="tick"></span><h2>How it works</h2></div>`
+    + `<div class="settings-sub">Tap a topic to read about it.</div>`
+    + `<div class="help-list" id="help-list">${safeHelpListHtml()}</div>`
+    + `</div>`
     // A quiet deployed-version line for debugging ("what's actually running?").
     // Filled from /api/version by paintVersion(); blank until it resolves.
     + `<div class="settings-version" id="settings-version"></div>`
@@ -6164,6 +6176,82 @@ function renderSettingsFull() {
   renderTodoSourcePicker();
   renderCaldavPanel();
   fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
+}
+
+/* What the help needs to know about this wall, from the last hub payload:
+   which features are on (chores and to-dos fail open through featureEnabled,
+   so a slow first poll never hides them), each integration's health, where
+   the To-Do list really comes from (todoSourceOf, as the card decides), and
+   the backup block. `known` is false until a payload with integrations lands. */
+function helpContext() {
+  const list = (hubData && hubData.integrations) || lastIntegrations || [];
+  const enabled = new Set(list.filter((i) => i.enabled).map((i) => i.id));
+  ALWAYS_ON_FEATURES.forEach((id) => { if (featureEnabled(id)) enabled.add(id); });
+  const status = {};
+  list.forEach((i) => { status[i.id] = i.status || null; });
+  const ic = list.find((i) => i.id === 'icloud_caldav');
+  return {
+    known: list.length > 0,
+    enabled,
+    // the calendar card's own rule (any calendar source on), so the help's
+    // Calendar topic and the card can't disagree
+    calendarOn: TAB_FEATURES.cal.some((id) => enabled.has(id)),
+    status,
+    todoSource: todoSourceOf(hubData),
+    todoReadonly: !ic || ic.readonly !== false,
+    backup: (hubData && hubData.backup) || null,
+  };
+}
+
+/* The help list's markup: the topics, with a short line while this wall's
+   feature list hasn't arrived (the always-on topics still show), or a plain
+   one when the first poll failed and the hub can't be reached. */
+function helpListHtml(openIds) {
+  const ctx = helpContext();
+  let note = '';
+  if (!ctx.known) {
+    const down = document.body && document.body.dataset && document.body.dataset.conn === 'down';
+    note = `<div class="settings-sub">${escapeHtml(down ? HELP_UNREACHABLE : HELP_LOADING)}</div>`;
+  }
+  return note + helpHtml(helpTopics(ctx), openIds);
+}
+
+/* The first Settings paint's help markup; a throw leaves an empty list
+   (renderHelpList fills it on the next poll) instead of blanking Settings. */
+function safeHelpListHtml() {
+  try { return helpListHtml(new Set()); } catch (e) {
+    console.error('help list paint failed', e);
+    return '';
+  }
+}
+
+/* Repaint the help list in place when the hub's data changes (every poll,
+   a feature switch, a To-Do source switch, a failed first poll), keeping
+   open topics open. Skips the write when nothing changed, so the 60s poll
+   never steals focus or a tap. A no-op when Settings isn't showing. Never
+   throws: the help is not worth breaking the caller over. */
+function renderHelpList() {
+  try {
+    const host = document.getElementById('help-list');
+    if (!host) return;
+    const openIds = new Set((host.querySelectorAll ? Array.from(host.querySelectorAll('details[open]')) : [])
+      .map((d) => (d.dataset && d.dataset.help) || (d.getAttribute && d.getAttribute('data-help')))
+      .filter(Boolean));
+    const html = helpListHtml(openIds);
+    if (host.dataset && host.dataset.helpMarkup === html) return;
+    host.innerHTML = html;
+    if (host.dataset) host.dataset.helpMarkup = html;
+  } catch (e) {
+    console.error('help list repaint failed', e);
+  }
+}
+
+/* Open Settings at the How it works card (the gear popover's link). */
+function openHelp() {
+  closeThemePop();
+  openOverlay('settings');
+  const card = document.getElementById('help-card');
+  if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start' });
 }
 
 /* The To-Do source picker inside the Integrations card: choose whether the
@@ -6197,6 +6285,7 @@ async function setTodoSource(source) {
   if (!r.ok) { showToast('Couldn’t switch the To-Do list — check the hub and tap again.'); return; }
   await poll();                 // hubData.todo_source updates; the home card repaints
   renderTodoSourcePicker();     // reflect the new selection + read-only hint
+  renderHelpList();             // the To-Do topic follows the source
   if (todosViewActive()) await renderTodosFull();   // repaint the open full view for the new source
 }
 
@@ -6490,6 +6579,7 @@ document.addEventListener('click', (e) => {
   // the quick popover first — it sits at a higher z-index than the full-screen
   // overlay and would otherwise float over it) AND the all-off empty-state's
   // "Open Settings" button (no popover open there, closeThemePop is a no-op).
+  if (e.target.closest('[data-open-help]')) { openHelp(); return; }
   if (e.target.closest('[data-open-settings]')) {
     closeThemePop();
     openOverlay('settings');
