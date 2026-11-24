@@ -1402,3 +1402,61 @@ test('todoFailMessage: a name the server refuses says so instead of "tap again"'
 test('todoFailMessage: an item checked off elsewhere mid-move says so', () => {
   assert.match(sandbox.todoFailMessage("a checked-off item can't be moved"), /checked that item off/);
 });
+
+// --- trips (out of town) ------------------------------------------------------
+
+const TP = [{ id: 1, name: 'Ava' }, { id: 2, name: 'Milo' }, { id: 3, name: 'Ruby' }];
+
+test('tripWhoLabel: Everyone, one name, a list, and someone no longer on the wall', () => {
+  assert.equal(sandbox.tripWhoLabel([1, 2, 3], TP), 'Everyone');
+  assert.equal(sandbox.tripWhoLabel([2], TP), 'Milo');
+  assert.equal(sandbox.tripWhoLabel([1, 3], TP), 'Ava and Ruby');
+  assert.equal(sandbox.tripWhoLabel([3, 1, 2], TP.slice(0, 2).concat([{ id: 4, name: 'Jo' }])),
+    'Ava, Milo and 1 more');
+  assert.equal(sandbox.tripWhoLabel([1], [{ id: 1, name: 'Ava' }]), 'Ava',
+    'a one-person household is a name, not "Everyone"');
+});
+
+test('tripSummary + tripPayload: the back day is the day chores return', () => {
+  const m = { going: new Set([1, 2, 3]), start: '2026-11-24', back: '2026-11-29', backup: '', ids: [] };
+  assert.equal(sandbox.tripSummary(m, TP),
+    'Everyone is away Tue Nov 24 to Sat Nov 28. Chores resume Sun Nov 29.');
+  assert.match(sandbox.tripSummary({ ...m, going: new Set([1, 3]) }, TP), /^Ava and Ruby are away/);
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.tripPayload(m))),
+    { body: { person_ids: [1, 2, 3], start_date: '2026-11-24', end_date: '2026-11-28', backup_person_id: null } });
+  const one = { going: new Set([2]), start: '2026-11-24', back: '2026-11-25', backup: '1', ids: [7] };
+  assert.equal(sandbox.tripSummary(one, TP), 'Milo is away on Tue Nov 24. Chores resume Wed Nov 25.');
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.tripPayload(one))).body,
+    { person_ids: [2], start_date: '2026-11-24', end_date: '2026-11-24', backup_person_id: 1, ids: [7] });
+});
+
+test('tripPayload refuses an empty, undated or backwards trip', () => {
+  const base = { going: new Set([1]), start: '2026-11-24', back: '2026-11-26', backup: '', ids: [] };
+  assert.match(sandbox.tripPayload({ ...base, going: new Set() }).error, /who/);
+  assert.match(sandbox.tripPayload({ ...base, back: '' }).error, /resume/);
+  assert.match(sandbox.tripPayload({ ...base, start: '' }).error, /leave/);
+  assert.match(sandbox.tripPayload({ ...base, back: '2026-11-24' }).error, /after/);
+});
+
+test('tripBannerHtml escapes names and carries the trip ids', () => {
+  const html = sandbox.tripBannerHtml([{ ids: [5, 6], person_ids: [9], start_date: '2026-11-24',
+    end_date: '2026-11-25', state: 'now' }], [{ id: 9, name: '<b>x</b>' }]);
+  assert.ok(html.includes('&lt;b&gt;x&lt;/b&gt;') && !html.includes('<b>x'));
+  assert.ok(html.includes('data-trip-end="5,6"'));
+  assert.match(html, /Away, chores resume Thu Nov 26/);
+});
+
+test('tripPayload: "keep" sends no backup so an edit leaves each one alone', () => {
+  const m = { going: new Set([1]), start: '2026-11-24', back: '2026-11-26', backup: 'keep', ids: [4, 5] };
+  const { body } = JSON.parse(JSON.stringify(sandbox.tripPayload(m)));
+  assert.ok(!('backup_person_id' in body), 'no backup key at all');
+  assert.deepEqual(body.ids, [4, 5]);
+});
+
+test('tripPeopleWith adds a traveller who has left the wall, once', () => {
+  const got = sandbox.tripPeopleWith(TP, { people: [{ id: 2, name: 'Milo' }, { id: 9, name: 'Jo', color: '#123456' }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(got.map((p) => p.id))), [1, 2, 3, 9]);
+  const html = sandbox.tripBannerHtml([{ ids: [1], person_ids: [9], start_date: '2026-11-24',
+    end_date: null, state: 'now', people: [{ id: 9, name: 'Jo' }] }], TP);
+  assert.match(html, /Jo/, 'the banner names them instead of "1 more"');
+});

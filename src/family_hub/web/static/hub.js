@@ -207,10 +207,12 @@ function calStatusNote(cal) {
    The ⛶ glyph is prepended here, so callers pass clean labels. Every
    config/user-derived value (label, expandLabel, overlay) is escaped — panelHtml
    feeds config-derived p.label / p.id through here. */
-function sectionHead(label, { overlay, expandLabel, chip } = {}) {
+function sectionHead(label, { overlay, expandLabel, chip, extra } = {}) {
   const chipHtml = chip ? `<span class="shead-chip">${escapeHtml(chip)}</span>` : '';
+  // `extra` is caller-built markup for buttons that sit before the expand
+  // button (the Chores card's ✈ Trip). Never pass data-derived text in it.
   const act = (overlay && expandLabel)
-    ? `<span class="act"><button class="expand" type="button"`
+    ? `<span class="act">${extra || ''}<button class="expand" type="button"`
       + ` data-overlay="${escapeHtml(overlay)}">⛶ ${escapeHtml(expandLabel)}</button></span>`
     : '';
   return `<div class="shead"><span class="tick"></span><h2>${escapeHtml(label)}</h2>${chipHtml}${act}</div>`;
@@ -528,7 +530,7 @@ function personCardHtml(p, opts = {}) {
   }
   // edit mode grows a per-person "+ Add chore" row (wired in Task 5); it's the
   // only way to reach the add editor for a person, so it shows even for someone
-  // with no chores yet — and even while they're away, or "Pause everyone" would
+  // with no chores yet, and even while they're away, or a whole-family trip would
   // lock the whole chore editor until the family got home.
   const addRow = editing
     ? `<button class="chore-row chore-add" type="button" data-add-chore="${p.person.id}">`
@@ -560,6 +562,7 @@ function choresNavHtml() {
     ? `<span class="spacer"></span>`
       // while editing, a chore for anyone (or for several people) starts here;
       // the per-person "+ Add chore" rows stay for "one more for Ava"
+      + `<button class="cal-nav-btn ch-trip" type="button" data-trip-open="1">✈ Trip</button>`
       + (choreState.editing
         ? `<button class="cal-nav-btn ch-new" type="button" data-add-chore="">+ New chore</button>` : '')
       + `<button class="cal-nav-btn ch-edit-toggle${choreState.editing ? ' active' : ''}"`
@@ -637,6 +640,7 @@ async function renderChoresFull(prefetched) {
   const awayNote = awayOk === false
     ? `<div class="cal-note">away status unavailable</div>` : '';
   host.innerHTML = choresNavHtml()
+    + (readonly ? '' : tripBlockHtml(hubData))
     + awayNote
     + (people.length
       ? people.map((p) => personCardHtml(p, { readonly, editing, nameById, day })).join('')
@@ -702,24 +706,34 @@ function peopleAdminHtml(people, awayPeriods) {
   const listBadge = (p) => (p.list_gone
     ? `<span class="padmin-badge padmin-badge-warn" title="This person’s iCloud list is gone; pick a new one">iCloud list gone</span>`
     : `<span class="padmin-badge" title="Mirrored to an iCloud list">iCloud ✓</span>`);
-  // At most one OPEN (end_date === null) period per person; that invariant is
-  // enforced by the away endpoints, so the last match wins if it's ever wrong.
+  // At most one LIVE period per person (running now, or planned): open-ended,
+  // or ending today or later. A trip carries a back date, so "end_date is
+  // null" alone no longer means away. The away endpoints keep it to one per
+  // person, so the last match wins if it's ever wrong.
+  const todayStr = data_date || todayISO();
+  const live = away.filter((r) => r.end_date == null || r.end_date >= todayStr);
   const openByPerson = new Map();
-  away.forEach((r) => { if (r.end_date == null) openByPerson.set(r.person_id, r); });
+  live.forEach((r) => { openByPerson.set(r.person_id, r); });
   const activePeople = (people || []).filter((p) => p.active);
   const nameOf = (pid) => {
     const p = (people || []).find((x) => x.id === pid);
     return p ? p.name : `#${pid}`;
   };
-  const todayStr = data_date || todayISO();
 
   const rows = (people || []).map((p) => {
     const open = openByPerson.get(p.id);
-    // "Going away" only for ACTIVE people (matching "Pause everyone", which
-    // skips inactive ones). An inactive person with a period still open keeps
+    // "Going away" only for ACTIVE people (matching a trip, which only takes
+    // people on the wall). An inactive person with a period still open keeps
     // "I'm back" — otherwise there'd be no way to close it from the wall.
+    // A trip that hasn't started yet is cancelled, not "back".
+    // On a planned trip with others on it, this takes just this person off.
+    const tripmates = open ? live.filter((r) => r.start_date === open.start_date
+      && r.end_date === open.end_date).length : 0;
     const awayBtn = open
-      ? `<button class="padmin-btn" type="button" data-pback="${open.id}">I’m back</button>`
+      ? (open.start_date > todayStr
+        ? `<button class="padmin-btn" type="button" data-trip-end="${open.id}">`
+          + `${tripmates > 1 ? 'Take off trip' : 'Cancel trip'}</button>`
+        : `<button class="padmin-btn" type="button" data-pback="${open.id}">I’m back</button>`)
       : (p.active
         ? `<button class="padmin-btn" type="button" data-paway="${p.id}">Going away</button>`
         : '');
@@ -748,22 +762,24 @@ function peopleAdminHtml(people, awayPeriods) {
       + subform;
   }).join('');
 
-  // "Away now" summary: every currently-open period, named (+ backup, if set).
-  const awayNow = away.filter((r) => r.end_date == null);
-  const awayNowHtml = awayNow.length
-    ? `<div class="padmin-away-now">`
-      + `<div class="padmin-away-now-label">Away now</div>`
-      + awayNow.map((r) => `<div class="padmin-away-item">${escapeHtml(nameOf(r.person_id))}`
-        + (r.backup_person_id
-          ? ` <span class="padmin-away-backup-name">(backup: ${escapeHtml(nameOf(r.backup_person_id))})</span>`
-          : '')
-        + `</div>`).join('')
-      + `</div>`
-    : '';
+  // "Away now" and "Planned" rosters: each live period, named, with its back
+  // day and backup. A planned trip is not "away now" until it starts.
+  const rosterItem = (r) => `<div class="padmin-away-item">${escapeHtml(nameOf(r.person_id))}`
+    + ` <span class="padmin-away-backup-name">(`
+    + (r.start_date > todayStr ? `leaves ${escapeHtml(tripDay(r.start_date))}, ` : '')
+    + (r.end_date ? `chores resume ${escapeHtml(tripDay(tripBackDay(r.end_date)))}` : 'no back day')
+    + (r.backup_person_id ? `, backup: ${escapeHtml(nameOf(r.backup_person_id))}` : '')
+    + `)</span></div>`;
+  const roster = (label, list) => (list.length
+    ? `<div class="padmin-away-now"><div class="padmin-away-now-label">${label}</div>`
+      + list.map(rosterItem).join('') + `</div>`
+    : '');
+  const awayNowHtml = roster('Away now', live.filter((r) => r.start_date <= todayStr))
+    + roster('Planned', live.filter((r) => r.start_date > todayStr));
 
   return `<div class="padmin">`
     + `<div class="padmin-head"><span class="padmin-head-label">People</span>`
-    + `<button class="padmin-btn" type="button" data-paway-all="1">Pause everyone</button>`
+    + `<button class="padmin-btn" type="button" data-trip-open="1">✈ Plan a trip</button>`
     + `</div>`
     + awayNowHtml
     + rows
@@ -772,6 +788,27 @@ function peopleAdminHtml(people, awayPeriods) {
     + `<span class="chore-body"><span class="chore-title">Add person</span></span>`
     + `</button>`
     + `</div>`;
+}
+
+/* ------------------------------------------------- trips (out of town) */
+
+/* The ✈ Trip button in the Chores card header. It wears .expand so it gets
+   the header-button look (and its glass pane on a seasonal look); the click
+   listener checks data-trip-open BEFORE the generic .expand handler. */
+const TRIP_BTN = `<button class="expand" type="button" data-trip-open="1">✈ Trip</button>`;
+
+/* The people a trip can take: everyone on the wall today, in wall order. */
+function tripPeople() {
+  return ((hubData && hubData.people) || []).map((p) => p.person);
+}
+
+/* The banner over the person cards while a trip is running or planned, or a
+   note when the hub could not read its trips (so a trip is never hidden
+   silently). Reads the hub payload, which is always today's. */
+function tripBlockHtml(data) {
+  if (!data) return '';
+  if (data.trips_ok === false) return `<div class="cal-note">trip status unavailable</div>`;
+  return tripBannerHtml(data.trips, tripPeople());
 }
 
 function renderPeople(data) {
@@ -792,7 +829,8 @@ function renderPeople(data) {
   const awayNote = data.away_ok === false
     ? `<div class="cal-note">away status unavailable</div>` : '';
   host.innerHTML =
-    sectionHead('Chores', { overlay: 'chores', expandLabel: 'All chores' })
+    sectionHead('Chores', { overlay: 'chores', expandLabel: 'All chores', extra: TRIP_BTN })
+    + tripBlockHtml(data)
     + awayNote
     + data.people.map((p) => personCardHtml(p, { readonly: false, editing: false, nameById, day: data.date })).join('');
   fireCelebrations(data.people);
@@ -4827,20 +4865,83 @@ async function submitAwayBack(periodId) {
   await refreshPeopleAdmin();
 }
 
-/* "Pause everyone" — opens an away period (starting today) for every active
-   person who doesn't already have one open. The body model is required even
-   though every field is optional, so send {} rather than nothing. */
-async function submitAwayEveryone() {
+/* ------------------------------------------------------- trip controls */
+
+/* Open the trip sheet: a new trip (everyone ticked, leaving today), or an
+   existing one by its period ids (as drawn on the banner). */
+function openTripEditor(ids) {
+  let people = tripPeople();
+  let model;
+  if (ids) {
+    if (hubData && hubData.trips_ok === false) {
+      showToast('The hub couldn’t read its trips just now. Try again in a moment.');
+      return;
+    }
+    const want = ids.join(',');
+    const t = ((hubData && hubData.trips) || []).find((x) => x.ids.join(',') === want);
+    if (!t) { showToast('That trip changed. Refreshing.'); refreshPeopleAdmin(); return; }
+    people = tripPeopleWith(people, t);
+    model = {
+      going: new Set(t.person_ids.map(Number)),
+      start: t.start_date, back: tripBackDay(t.end_date),
+      backup: t.backup_mixed ? 'keep' : (t.backup_person_id || ''),
+      mixed: !!t.backup_mixed, ids: t.ids.slice(),
+    };
+  } else {
+    // Everyone starts ticked except anyone already away on a running trip:
+    // ticking them would only earn a "already away then" refusal on save.
+    const awayNow = new Set(((hubData && hubData.trips) || [])
+      .filter((t) => t.state === 'now').flatMap((t) => t.person_ids.map(Number)));
+    model = {
+      going: new Set(people.map((p) => p.id).filter((id) => !awayNow.has(id))),
+      start: data_date || todayISO(), back: '', backup: '', mixed: false, ids: [],
+    };
+  }
+  buildTripForm(document.getElementById('chore-editor'), model, people, submitTrip);
+  document.getElementById('chore-modal').classList.remove('hidden');
+  dialogOpened('chore-modal', document.getElementById('chore-card').querySelector('.chore-close'));
+  armIdle();
+}
+
+/* Save the sheet. On failure the sheet stays open with the reason inline.
+   With no answer at all (a timeout or a dropped connection) the save may
+   still have landed, so say that plainly and refresh the card behind the
+   sheet rather than invite a second save that would be refused. */
+async function submitTrip(body, errEl) {
   try {
-    await j('/api/admin/away/everyone', {
+    await j('/api/trip', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     });
   } catch (e) {
-    showToast(e.message || 'Couldn’t pause everyone — check the hub and try again.');
+    const msg = e.status ? e.message
+      : 'The hub didn’t answer, so this may or may not have saved. Check the Chores card before trying again.';
+    if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+    if (!e.status) await poll();
+    return;
+  }
+  closeChoreEditor();
+  await refreshPeopleAdmin();
+}
+
+/* Back early (a running trip) or cancel (a planned one): the server ends
+   each period the right way for its dates. */
+async function endTrip(ids) {
+  try {
+    await j('/api/trip/end', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+  } catch (e) {
+    showToast(e.message || 'Couldn’t end the trip. Check the hub and try again.');
     return;
   }
   await refreshPeopleAdmin();
+}
+
+/* "6,7,8" -> [6, 7, 8] */
+function tripIds(attr) {
+  return String(attr || '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0);
 }
 
 /* POST/PATCH a person via the shared person form. On failure the editor stays
@@ -5026,6 +5127,14 @@ document.addEventListener('click', (e) => {
       || (e.target.closest('.ev-modal') && !e.target.closest('.ev-card'))) {
     closeEventDetail(); return;
   }
+  // trips: the ✈ Trip button (wall header, chores overlay, people admin), the
+  // banner's Back early / Cancel trip and Edit. Before the generic .expand
+  // handler, since the wall's Trip button wears .expand for its look.
+  if (e.target.closest('[data-trip-open]')) { openTripEditor(null); return; }
+  const tripEnd = e.target.closest('[data-trip-end]');
+  if (tripEnd) { endTrip(tripIds(tripEnd.dataset.tripEnd)); return; }
+  const tripEdit = e.target.closest('[data-trip-edit]');
+  if (tripEdit) { openTripEditor(tripIds(tripEdit.dataset.tripEdit)); return; }
   const evRow = e.target.closest('[data-eid]');
   if (evRow) { openEventDetail(evRow.dataset.eid); return; }
   // full-calendar controls
@@ -5089,9 +5198,8 @@ document.addEventListener('click', (e) => {
   if (ptoggle) { togglePersonActive(Number(ptoggle.dataset.ptoggle)); return; }
   const pdel = e.target.closest('[data-pdel]');
   if (pdel) { openPersonDeleteConfirm(Number(pdel.dataset.pdel)); return; }
-  // away controls: pause everyone, "I'm back" (closes an open period), the
+  // away controls: "I'm back" (closes an open period), the
   // per-person "Going away" sub-form's Confirm, then the toggle that opens it
-  if (e.target.closest('[data-paway-all]')) { submitAwayEveryone(); return; }
   const pback = e.target.closest('[data-pback]');
   if (pback) { submitAwayBack(Number(pback.dataset.pback)); return; }
   const pawaySubmit = e.target.closest('[data-paway-submit]');

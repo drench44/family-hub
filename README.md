@@ -133,8 +133,10 @@ at one URL.
   Settings, so either card can be turned off alone.
 - **Manage:** tap **Edit chores** on the wall's Chores page to add/edit chores
   and people (rename, recolor, deactivate, or delete) right on the touchscreen,
-  no phone needed. Mark someone **away** here too, with an optional backup to
-  cover their chores, and tap **I'm back** when they return. The same page works
+  no phone needed. Going out of town? Tap **✈ Trip** on the Chores card, pick
+  who's going, the day you leave and the day chores resume, and chores pause and
+  come back on their own. A banner on the card shows the trip with **Back
+  early** and **Edit**, and a trip can be planned ahead. The same page works
   from any browser on the LAN, so a phone or laptop manages everything too. No
   app to install. The chore form asks plain questions ("How often?", "Who
   does it?"), shows who does the chore on the next few days before you save,
@@ -470,8 +472,9 @@ deactivating, or even deleting a chore changes today and the future only.
 Nobody's streak is rewritten by an edit, and a deleted chore still shows on
 the days it was actually done. Streaks count consecutive completed days (rest
 days skip, an unfinished today is forgiven).
-**Away / pause:** mark someone away for a stretch — open-ended, so you set it
-when they leave and clear it when they're back — and those days read as rest,
+**Trips (away):** tap **✈ Trip** on the Chores card to mark one person or the
+whole family away from a leaving day until the day chores resume (or plan it
+ahead), and those days read as rest,
 so a trip never breaks their streak; on return they pick up where they left
 off, whatever day it is. While away, a rotation turn falls to whoever's home,
 and a fixed chore can pass to an optional **backup** who covers it (and gets
