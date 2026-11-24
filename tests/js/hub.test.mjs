@@ -236,6 +236,8 @@ test('idleReturnMs: camera views longest, calendar gets planning time', () => {
   assert.equal(idleReturnMs('camera:wyze'), 300000);
   assert.equal(idleReturnMs('climate'), 90000);
   assert.equal(idleReturnMs('calendar'), 180000);
+  // Settings holds How it works: long enough to read a topic
+  assert.equal(idleReturnMs('settings'), 300000);
 });
 
 test('nightClass covers 22:00–05:59', () => {
@@ -1459,4 +1461,157 @@ test('tripPeopleWith adds a traveller who has left the wall, once', () => {
   const html = sandbox.tripBannerHtml([{ ids: [1], person_ids: [9], start_date: '2026-11-24',
     end_date: null, state: 'now', people: [{ id: 9, name: 'Jo' }] }], TP);
   assert.match(html, /Jo/, 'the banner names them instead of "1 more"');
+});
+
+
+// --- How it works (help) --------------------------------------------------------
+
+const helpIds = (ctx) => sandbox.helpTopics(ctx).map((t) => t.id);
+const ctxOf = (ids, extra = {}) => ({ enabled: new Set(ids), status: {}, todoSource: 'local',
+  todoReadonly: true, backup: null, ...extra });
+const topic = (ctx, id) => sandbox.helpTopics(ctx).find((t) => t.id === id);
+const plain = (v) => JSON.parse(JSON.stringify(v));
+const BROKEN = /not connecting right now/;
+
+test('helpTopics: each topic follows its feature switch; phone, screen and backups always show', () => {
+  assert.deepEqual(plain(helpIds(ctxOf([]))), ['phone', 'screen', 'backup']);
+  assert.deepEqual(plain(helpIds(ctxOf(['chores']))),
+    ['chores', 'trips', 'editing', 'phone', 'screen', 'backup']);
+  assert.ok(helpIds(ctxOf(['ics_calendar'])).includes('calendar'), 'any calendar source shows Calendar');
+  assert.ok(!helpIds(ctxOf(['ics_calendar'], { calendarOn: false })).includes('calendar'),
+    'the wall\'s calendar rule wins when given');
+});
+
+test('helpTopics: the trips line says a tick means going, and who starts unticked', () => {
+  const text = topic(ctxOf(['chores']), 'trips').paras.join(' ');
+  assert.match(text, /Everyone starts ticked, except anyone who is already away\. Untick anyone who is staying home\./);
+  assert.ok(!/Everyone at home starts ticked/.test(text), 'the old, wrong wording is gone');
+});
+
+test('helpTopics: half-on cards name only what is on; weather and climate together', () => {
+  const w = topic(ctxOf(['climate']), 'weather');
+  assert.equal(w.title, 'House climate');
+  assert.equal(w.paras.length, 1);
+  assert.ok(!/Full forecast/.test(w.paras[0]), 'no weather text when only climate is on');
+  const both = topic(ctxOf(['weather', 'climate']), 'weather');
+  assert.equal(both.title, 'Weather and house climate');
+  assert.equal(both.paras.length, 2);
+  assert.match(both.paras[0], /Full forecast/);
+  assert.match(both.paras[1], /Full climate/);
+  const p = topic(ctxOf(['fleet']), 'printer');
+  assert.equal(p.title, 'Servers');
+  assert.ok(!/printer/i.test(p.paras.join(' ')));
+});
+
+test('helpTopics: the To-Do topic matches the list and whether it can be changed', () => {
+  assert.match(topic(ctxOf(['todos']), 'todos').paras.join(' '), /Now, Soon or Later/);
+  const ro = topic(ctxOf(['todos'], { todoSource: 'icloud', todoReadonly: true }), 'todos').paras.join(' ');
+  assert.match(ro, /iCloud Reminders/);
+  assert.match(ro, /view-only/);
+  assert.match(ro, /Sync direction to 2-way/);
+  assert.match(ro, /overdue or due today, up to five\. Full list shows everything/);
+  const rw = topic(ctxOf(['todos'], { todoSource: 'icloud', todoReadonly: false }), 'todos').paras.join(' ');
+  assert.match(rw, /Tap an item to check it off/);
+  assert.ok(!/view-only/.test(rw));
+});
+
+test('helpTopics: "not connecting" only for cards that report a status, and only when on', () => {
+  assert.match(topic(ctxOf(['laundry'], { status: { laundry: 'needs_auth' } }), 'laundry').paras[0], BROKEN);
+  assert.match(topic(ctxOf(['google_calendar'], { status: { google_calendar: 'error' } }), 'calendar').paras[0], BROKEN);
+  assert.ok(!BROKEN.test(topic(ctxOf(['laundry'], { status: { laundry: 'ok' } }), 'laundry').paras[0]));
+  // switched off: no topic, and so no warning
+  assert.ok(!helpIds(ctxOf([], { status: { laundry: 'needs_auth' } })).includes('laundry'));
+  // cards that never report a status never claim one, whatever the payload says
+  for (const id of ['weather', 'climate', 'cameras', 'printer', 'fleet']) {
+    const all = sandbox.helpTopics(ctxOf([id], { status: { [id]: 'error' } }));
+    assert.ok(!all.some((t) => t.paras.some((x) => BROKEN.test(x))), `${id} never says not connecting`);
+  }
+});
+
+test('helpTopics: a broken iCloud never claims the to-do card or calendar is down outright', () => {
+  const todoErr = topic(ctxOf(['todos'], { todoSource: 'icloud', status: { icloud_caldav: 'error' },
+    enabled: new Set(['todos', 'icloud_caldav']) }), 'todos').paras[0];
+  assert.match(todoErr, /may only be the copy of chores into Reminders/);
+  assert.ok(!BROKEN.test(todoErr));
+  const todoAuth = topic(ctxOf([], { todoSource: 'icloud', status: { icloud_caldav: 'needs_auth' },
+    enabled: new Set(['todos', 'icloud_caldav']) }), 'todos').paras[0];
+  assert.match(todoAuth, /iCloud sign-in is not working/);
+  const cal = topic(ctxOf(['icloud_caldav'], { status: { icloud_caldav: 'error' } }), 'calendar').paras[0];
+  assert.match(cal, /may only be the copy of chores into Reminders/);
+});
+
+test('helpBackupLine: every state and the age boundaries', () => {
+  const L = (b) => sandbox.helpBackupLine(b);
+  const ok = (age_s, remote) => ({ known: true, stale: false, age_s, remote });
+  const cases = [
+    [null, 'No backup has reported yet. If this stays so, check the hub.'],
+    [{ known: false, age_s: 10 }, 'No backup has reported yet. If this stays so, check the hub.'],
+    [{ known: true, age_s: null }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, age_s: -5 }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, age_s: NaN }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, age_s: '3600' }, 'The last backup time looks wrong. Check the hub.'],
+    [{ known: true, stale: true, age_s: 3 * 86400, remote: { failing: true } },
+      'The last backup was 3 days ago, which is too old.'],          // local stale beats remote failing
+    [ok(7200, { failing: true, stale: true }), 'The copy off the box is failing. The copy on the hub is fine.'],
+    [ok(7200, { failing: false, stale: true }), 'The copy off the box is too old. The copy on the hub is fine.'],
+    [ok(600), 'Last backup less than an hour ago.'],
+    [ok(1800), 'Last backup 1 hour ago.'],
+    [ok(47 * 3600), 'Last backup 47 hours ago.'],
+    [ok(48 * 3600), 'Last backup 2 days ago.'],
+  ];
+  for (const [b, want] of cases) assert.equal(L(b), want, JSON.stringify(b));
+});
+
+test('helpTopics: the screen topic reads its times from idleReturnMs', () => {
+  const t = topic(ctxOf([]), 'screen').paras.join(' ');
+  assert.match(t, /a minute and a half on most pages, three minutes on the calendar, five minutes on a camera and five minutes in Settings/);
+});
+
+test('help text: no em or en dashes, and no names, in every string the help can show', () => {
+  const ctxs = [
+    ctxOf(['chores', 'todos', 'google_calendar', 'cameras', 'weather', 'climate', 'laundry', 'printer',
+      'fleet'], { backup: { known: true, age_s: 60 }, status: { laundry: 'error' } }),
+    ctxOf(['todos', 'icloud_caldav'], { todoSource: 'icloud', todoReadonly: true, status: { icloud_caldav: 'error' } }),
+    ctxOf(['todos', 'icloud_caldav'], { todoSource: 'icloud', todoReadonly: false, status: { icloud_caldav: 'needs_auth' } }),
+  ];
+  const strings = ctxs.flatMap((c) => sandbox.helpTopics(c).flatMap((t) => [t.title, ...t.paras]));
+  // top-level consts live in the script scope, not on the sandbox object
+  for (const k of ['HELP_LOADING', 'HELP_UNREACHABLE', 'HELP_BROKEN', 'HELP_ICLOUD_AUTH', 'HELP_ICLOUD_ERROR']) {
+    strings.push(vm.runInContext(k, sandbox));
+  }
+  for (const b of [null, { known: true, age_s: -1 }, { known: true, stale: true, age_s: 9e5 },
+    { known: true, age_s: 60, remote: { failing: true } }, { known: true, age_s: 60, remote: { stale: true } }]) {
+    strings.push(sandbox.helpBackupLine(b));
+  }
+  assert.ok(strings.every((x) => typeof x === 'string' && x.length), 'every string is real text');
+  const text = strings.join(' ');
+  assert.ok(text.includes('view-only') && text.includes('Tap an item to check it off'), 'both iCloud texts scanned');
+  assert.ok(!text.includes(String.fromCharCode(0x2014)), 'no em dashes');
+  assert.ok(!text.includes(String.fromCharCode(0x2013)), 'no en dashes');
+  // The help speaks about "each person", never a named one: any capitalized
+  // word that is not ordinary sentence text, a feature or a UI label would be
+  // a name, and this repo is public.
+  const allowed = new Set(['A', 'Add', 'After', 'All', 'Anyone', 'Auto-return', 'Away', 'Back', 'Backups',
+    'Calendar', 'Camera', 'Cameras', 'Changes', 'Changing', 'Check', 'Chores', 'D', 'Deactivate', 'Delete',
+    'Each', 'Edit', 'Everyone', 'Everyone’s', 'Features', 'Finish', 'Fix', 'Fleet', 'From', 'Full', 'Going',
+    'Green', 'Home', 'House', 'How', 'If', 'In', 'Items', 'It', 'Last', 'Later', 'Laundry', 'Loading', 'Month',
+    'New', 'No', 'Now', 'On', 'One', 'Only', 'Open', 'Past', 'People', 'Pick', 'Reminders', 'Right', 'Safari',
+    'Screen', 'Scroll', 'Servers', 'Settings', 'Share', 'Soon', 'Sync', 'Tap', 'That', 'The', 'This',
+    'To', 'To-Do', 'To-dos', 'Trip', 'UV', 'Untick', 'Use', 'Waiting', 'Weather', 'When', 'While', 'You', 'iCloud',
+    'iPhone']);
+  const words = text.match(/\b[A-Z][\w’-]*/g) || [];
+  const odd = [...new Set(words)].filter((w) => !allowed.has(w));
+  assert.deepEqual(odd, [], `capitalized words that could be names: ${odd.join(', ')}`);
+});
+
+test('helpHtml escapes every string, keeps open rows open, one details row per topic', () => {
+  const html = sandbox.helpHtml([{ id: 'x"y', title: '<b>T</b>', paras: ['a & b'] }, { id: 'z', title: 'Z', paras: [] }],
+    new Set(['z']));
+  assert.ok(html.includes('&lt;b&gt;T&lt;/b&gt;') && !html.includes('<b>T'));
+  assert.ok(html.includes('a &amp; b'));
+  assert.equal((html.match(/<details /g) || []).length, 2);
+  assert.equal((html.match(/<\/details>/g) || []).length, 2, 'balanced');
+  assert.match(html, /data-help="z" open>/, 'a topic open before a repaint stays open');
+  assert.ok(!/data-help="x&quot;y" open/.test(html));
 });
