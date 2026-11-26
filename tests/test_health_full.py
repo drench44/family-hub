@@ -628,7 +628,7 @@ def test_a_success_clears_the_last_error():
     asyncio.run(_t())
 
 
-def test_climate_records_rooms_house_climate_calls_stale():
+def test_climate_records_rooms_the_climate_service_calls_stale():
     async def _t():
         rooms = {"rooms": [{"name": "Up", "age_s": 60, "stale": False},
                            {"name": "Garage", "age_s": 5000, "stale": True}]}

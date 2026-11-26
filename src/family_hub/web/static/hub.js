@@ -2740,9 +2740,9 @@ function weatherSlotHtml() {
 }
 
 /* The 'climate' panel mirrors 'weather': no always-on iframe embed — it renders
-   as a native house-climate summary card (climateSlotHtml + renderClimate). The
+   as a native climate summary card (climateSlotHtml + renderClimate). The
    'climate' entry STAYS in links.panels so panel:climate still resolves the full
-   house-climate dashboard URL for the "Full climate" overlay (openOverlay). */
+   climate dashboard URL for the "Full climate" overlay (openOverlay). */
 function climateSlotHtml() {
   return `<div class="rooms-slot" id="climate-slot"></div>`;
 }
@@ -3284,12 +3284,12 @@ async function fetchWeather() {
 
 /* ------------------------------------------------- native climate card */
 
-/* The outdoor-air sensor is EXCLUDED from the house-climate card — its
+/* The outdoor-air sensor is EXCLUDED from the climate card; its
    temperature already shows in the Weather section above, so listing it here is
    redundant. The backend /api/tiles/climate is a FAITHFUL passthrough (it
    includes every sensor); this frontend predicate is the sole filter.
    Predicate: a room is OUTDOOR when its NAME (case-insensitive, trimmed) is
-   "outside" or "outdoor". Channel is NOT used: house-climate labels legitimate
+   "outside" or "outdoor". Channel is NOT used: the climate service labels legitimate
    indoor rooms (e.g. a crawl space) with an "outdoor" channel, so filtering on
    channel would wrongly hide them. Everything not named outside/outdoor shows. */
 const OUTDOOR_KEYS = new Set(['outside', 'outdoor']);
@@ -3404,7 +3404,7 @@ function climateCardHtml(cl) {
 
 /* Paint the native climate card into its slot (built by buildPanels). The header
    sits OUTSIDE the card (sectionHead), like every other section; the "Full
-   climate" button opens the rich house-climate dashboard full-screen via
+   climate" button opens the rich climate dashboard full-screen via
    panel:climate. When the feed is unavailable (proxy off / fetch error) the
    column is never blanked — a slim offline note stands in for the card, header
    intact so the full dashboard stays one tap away. */

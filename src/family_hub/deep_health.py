@@ -40,7 +40,7 @@ log = logging.getLogger("family_hub.deep_health")
 # refresh periods of the thing that produces it, so one slow cycle is not a
 # failure but a stopped producer is.
 WEATHER_MAX_AGE_S = 600      # the weather adapter rewrites wx.json every ~20 s
-CLIMATE_MAX_AGE_S = 900      # house-climate polls its room sensors every 3 min
+CLIMATE_MAX_AGE_S = 900      # the climate service polls its room sensors every 3 min
 FLEET_MAX_AGE_S = 300        # the fleet rollup is computed per request
 LAUNDRY_MAX_AGE_S = 60       # the laundry watcher reads HA every 5 s
 CALENDAR_MAX_AGE_S = 900     # the calendar sync runs every 5 min

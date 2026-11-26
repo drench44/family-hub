@@ -27,7 +27,7 @@ CAMERA_TIMEOUT = 10.0
 WEATHER_TTL = 60.0
 _weather_cache: dict[str, tuple[float, dict]] = {}
 
-# Same short-cache discipline for the house-climate proxy, keyed by climate_base.
+# Same short-cache discipline for the climate service proxy, keyed by climate_base.
 CLIMATE_TTL = 60.0
 _climate_cache: dict[str, tuple[float, dict]] = {}
 
@@ -166,7 +166,7 @@ def reset_caches() -> None:
 
 
 async def climate_tile(client, cfg) -> dict:
-    """Proxy the house-climate service into a trimmed, fail-soft tile.
+    """Proxy the climate service into a trimmed, fail-soft tile.
 
     PRIMARY: ``{climate_base}/api/rooms`` -> ``{available, rooms:[{name, channel,
     temp_f, humidity, stale, battery_low, ...}]}``. Each room is trimmed to
@@ -206,7 +206,7 @@ async def climate_tile(client, cfg) -> dict:
             for rm in raw_rooms if isinstance(rm, dict)
         ]
         # The freshest room says when the sensors last reported (age_s is
-        # house-climate's own "seconds since this room's reading").
+        # the climate service's own "seconds since this room's reading").
         ages = [rm["age_s"] for rm in raw_rooms if isinstance(rm, dict)
                 and isinstance(rm.get("age_s"), (int, float))
                 and not isinstance(rm.get("age_s"), bool)]
@@ -235,7 +235,7 @@ async def climate_tile(client, cfg) -> dict:
         "indoor_rh": indoor_rh,
         "indoor_dp": indoor_dp,
     }
-    # One live sensor must not hide dead rooms: name the ones house-climate
+    # One live sensor must not hide dead rooms: name the ones the climate service
     # itself calls stale.
     _note_ok("climate", time.time() - min(ages) if ages else None,
              stale_items=sorted(str(r.get("name")) for r in mapped if r.get("stale") is True))
