@@ -1,6 +1,6 @@
 /* ================================================================
    FAMILY HUB — the kitchen wall.
-   Dual-theme design (light + dark, either default), extending house-climate's
+   Dual-theme design (light + dark, either default), extending the climate service's
    visual world. One expressive element beyond the neutral palette: PERSON
    COLOR. Every color resolves through a theme token so both themes stay
    legible; runs on a LAN wall display with no internet and no webfonts.
@@ -618,7 +618,7 @@ body {
    reserves its own rough height, not the weather card's */
 .rooms-slot .wx-loading { min-height: 220px; }
 
-/* ------- native house-climate summary card (replaces the climate embed) ----- */
+/* ------- native climate summary card (replaces the climate embed) ----- */
 /* header + card are one visual unit, like .weather-slot (the small gap keeps the
    .shead tight above its .card; the panels column's own gap separates sections) */
 .rooms-slot { display: flex; flex-direction: column; gap: 8px; }

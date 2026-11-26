@@ -2,7 +2,7 @@
 
 The wall page has a JS runner for its pure helpers (test_js.py); these pin the
 file-level conventions the design spec is built on: every referenced class is
-styled, the house-climate palette tokens are present, scripts load in order,
+styled, the climate palette tokens are present, scripts load in order,
 and — because the three full-screen iframe URLs come from the API at runtime —
 no literal http(s) URL appears anywhere in the committed frontend (a LAN wall
 display reaches nothing on the internet).

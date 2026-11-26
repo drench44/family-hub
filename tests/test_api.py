@@ -1247,7 +1247,7 @@ def test_weather_route_non_dict_body_never_500(client, monkeypatch):
 
 
 def test_climate_route_fail_soft_never_500(client, monkeypatch):
-    # A dead house-climate feed must yield 200 {"available": False}, never a 500 —
+    # A dead climate feed must yield 200 {"available": False}, never a 500;
     # the wall card just hides itself. Simulate the /api/rooms fetch raising.
     ftiles.reset_caches()   # a cached success from another test must not mask this
 

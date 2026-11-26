@@ -6500,7 +6500,7 @@ test('climate card FILTERS OUT the Outside sensor (its temp lives in Weather)', 
 });
 
 test('climate card KEEPS a real room whose CHANNEL is outdoor (only NAME filters)', () => {
-  // Regression: the live house-climate feed labels a legitimate indoor room (a
+  // Regression: the live climate feed labels a legitimate indoor room (a
   // crawl space) with an "outdoor" channel. It MUST still appear — channel is
   // not a reliable indoor/outdoor signal. Only a room NAMED outside/outdoor is
   // the redundant outdoor-air sensor (its temp lives in Weather) and is filtered.

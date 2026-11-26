@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+
+- Comments and test wording now name the climate service generically. No behavior change.
+
 ## [1.16.0] — 2026-11-24
 
 ### Added
@@ -316,7 +320,7 @@ rolls that section to a dated version via `python scripts/release.py`.
   running process; the settings they need (HA_TOKEN, the Google token) and
   whether `config.json` is the one the deploy shipped are checked too.
   `/health` is unchanged (liveness only).
-- `/health/full` names a room sensor house-climate calls stale, treats a
+- `/health/full` names a room sensor the climate service calls stale, treats a
   data stamp from the future as an error, and turns a check that crashes
   into a named problem instead of a 500.
 
