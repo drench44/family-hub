@@ -55,11 +55,11 @@ lives in the rules underneath.
 ```
  Ava                          🔥 47 / 100  🛡🛡
  ───────────────────────────────────────────
- ☑ Feed the dog                       +25¢
- ☐ Daily Trash Out                    +25¢
+ ☑ Feed the dog                       +30¢
+ ☐ Daily Trash Out                    +30¢
  ☐ Read 15 min             (personal goal)
  ───────────────────────────────────────────
- Wallet  $18.50        next bonus  $25 at 50
+ Wallet  $18.50        next bonus  $100 at 100
 ```
 
 Only two things are new to the child: the flame line (streak toward the next
@@ -108,17 +108,28 @@ a personal goal shows a quiet "personal goal" tag instead.
 
 ### Money
 
-- Every house chore pays a flat amount per completion, default **25¢**,
-  settable (owner, 2026-11-26, after a pay table: keep $100 at 100 and pay
-  25¢ a chore, "as long as it's easy for them to understand"). (One flat rate, not per-chore prices: simpler to read, and the
-  heavier load already earns more by count.)
+- Every house chore pays one rate for everyone (base plus any streak level),
+  not per-chore prices: simpler to read, and the heavier load already earns
+  more by count. It must stay "easy for them to understand" (owner).
 - The amount is frozen into the day's record when the day is served, the
   same way the occurrence log freezes assignments, so changing the rate never
-  rewrites the past.
+  rewrites the past. With higher pay per chore on, the level is the streak
+  as of the start of that day.
 - Undoing a tick takes its money back (same day or inside the fix window).
-- **Milestones**, defaults: **$10 at 25 days, $25 at 50, $65 at 100** ($100
-  total by 100). After 100 the cycle repeats from the current run (125, 150,
-  200, ...). Each milestone pays once per run, recorded as a ledger entry the
+- **The wallet replaces the chore money the house paid separately** (owner,
+  2026-11-26: "convert it to this, but make it fair so the ones that do more
+  chores get more", with the streak as "extra incentive"; a budget of "up to
+  $75 a month" for the hardest worker). Default base **30¢** per house chore.
+- **Streak reward style is a setting** (owner: "maybe that could be
+  configurable ... open to what you recommend"). Two styles, each on or off:
+  - **Bonus at milestones:** a list of (days, amount). Default **one
+    milestone, $100 at 100 days**, the deal the house already runs.
+  - **Higher pay per chore:** a list of (days, cents). Suggested
+    25 → 35¢, 50 → 40¢, 100 → 45¢; default **off**.
+  The defaults are the house's choice: flat 30¢ plus $100 at 100.
+  (This replaces the earlier $10/$25/$65 split.)
+- **Milestones repeat** every cycle of the largest milestone (with only 100:
+  200, 300, ...). Each milestone pays once per run, recorded as a ledger entry the
   moment the streak first reaches it. A milestone already paid stays paid
   even if a later fix changes history; the ledger is the source of truth for
   money, the record is the source of truth for the streak.
@@ -184,20 +195,28 @@ real money in the first week.
 run starts from the streak the wall shows on launch day under the old rules,
 stored once as a seed (`kv`: per child, seed count and seed date). From
 launch onward the new rules apply on top of the seed. Milestones the seed
-already passed are paid once at launch as bonus rows (a child at 71 gets
-$10 + $25), so $100 is still the total by 100. Shields start at 0 and are
+already passed are paid once at launch as bonus rows (with the default
+single $100-at-100 milestone, nobody below 100 is paid at launch; a child
+at 71 gets the $100 when the same run reaches 100). Shields start at 0 and are
 earned from launch-day kept days onward.
 
 ## Where it shows
 
 - **Wall card:** flame line with "N / next goal" and shields; per-chore
-  "+25¢" or "personal goal"; wallet line with next bonus. A tick floats a
-  small "+25¢". Reaching a milestone gets a bigger celebration than the
+  "+30¢" or "personal goal"; wallet line with next bonus. A tick floats a
+  small "+30¢". Reaching a milestone gets a bigger celebration than the
   existing all-done confetti, and the card says "+$25 bonus!" for the day.
 - **Week strip:** a "saved" state (shield) beside done, partial, none, rest, away.
 - **Phone:** the same two lines, sized for the phone card.
-- **Settings → Rewards:** PIN, rates, milestones, cutoff, shields, and per
-  child a history list (earnings by week, bonuses, payouts) with Paid.
+- **Settings → Rewards:** PIN, base rate, the two streak styles, cutoff,
+  shields, and per child a history list (earnings by week, bonuses,
+  payouts) with Paid.
+- **Projected cost** (owner: "you should be able to see projected costs per
+  month, per year"): live as amounts are edited, before saving. Per child and
+  family total, per week, month and year, in two rows. **Perfect streak**
+  (every chore done, top level reached, every milestone hit on its cycle) is
+  the most it can cost. **Usual pace** uses each child's last 8 weeks
+  (house chores assigned, share done, current streak).
 - **Feature toggle:** a "Rewards" entry in the integrations registry. Off
   means the wall shows today's plain streak chip and no money.
 - **DEMO payload:** realistic wallets, shields and a milestone day.
