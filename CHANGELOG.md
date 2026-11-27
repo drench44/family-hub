@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Changed
+
+- The README names every Settings section, and new tests fail when the GitHub page falls out of date: an integration or Settings section it does not mention, a picture link that is dead or orphaned, or gallery pictures more than 40 UI changes old.
+
 ## [1.25.0] — 2026-11-27
 
 ### Added
