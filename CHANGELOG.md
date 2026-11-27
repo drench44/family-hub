@@ -10,6 +10,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.21.1] — 2026-11-26
+
+### Fixed
+
+- The README gallery test skips on a staged deploy tree, where the house overlay's README replaces the engine's, so the deploy runs again.
+
 ## [1.21.0] — 2026-11-26
 
 ### Added
