@@ -10,6 +10,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.18.0] — 2026-11-26
+
+### Added
+
+- Settings has a menu: a row of section buttons (Display, Looks, This screen, Features, Chore wallet, How it works) stays at the top while you scroll, jumps to a section with one tap, and lights the section you are in, even after Settings refreshes while open. On a phone it scrolls sideways.
+
 ## [1.17.2] — 2026-11-26
 
 ### Changed

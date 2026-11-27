@@ -2805,3 +2805,35 @@ def test_money_float_stops_under_reduced_motion():
     assert "animation: money-float" in _css_rule(".money-float")
     reduce = CSS[CSS.index("==================== reduced motion"):]
     assert re.search(r"\.money-float\s*\{\s*display:\s*none", reduce)
+
+
+def test_settings_menu_sticks_and_stays_tappable():
+    """Settings menu (2026-11-26): a sticky row of section buttons inside the
+    Settings scroller, solid (no blur, which drops taps on iOS), 44px tap
+    targets, and every card's scroll target clears the menu."""
+    nav = _css_rule(".settings-nav")
+    assert "position: sticky" in nav and "margin: 0 -24px 0 80px" in nav
+    assert "backdrop-filter" not in nav
+    assert "background" in nav
+    assert re.search(r"\.settings-nav button \{[^}]*min-height: 44px", CSS)
+    assert re.search(r"\.settings-card \{[^}]*scroll-margin-top", CSS)
+    assert "function settingsNavActive(" in HUB
+    assert "closest('[data-settings-go]')" in HUB
+
+
+def test_settings_menu_survives_a_repaint_and_needs_no_negative_offsets():
+    """Review, 2026-11-26: renderSettingsFull replaces the menu on every
+    repaint, so the scroll painter must find the live menu each time, not a
+    copy captured once. And the menu sits at top: 0 in a Settings panel with
+    a small top padding, instead of negative offsets whose meaning may differ
+    in iOS Safari."""
+    w = HUB[HUB.index("function wireSettingsNav("):]
+    w = w[:w.index("\n}\n")]
+    paint = w[w.index("const paint = () => {"):]
+    assert "document.getElementById('settings-full')" in paint
+    assert "querySelector('.settings-nav')" in paint
+    assert "settingsGoAt = { id: '', t: 0 }" in w, "a tap from an earlier visit must not linger"
+    nav = _css_rule(".settings-nav")
+    assert "top: 0" in nav and "-60px" not in nav and "-56px" not in CSS
+    assert re.search(r"\.overlay-panel\.settings-panel \{[^}]*padding-top", CSS)
+    assert 'class="overlay-panel settings-panel"' in HUB

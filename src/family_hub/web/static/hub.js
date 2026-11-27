@@ -2570,7 +2570,7 @@ function openOverlay(view) {
     if (cache) renderTodosPaint();           // instant paint from cache
     renderTodosFull();                       // then refresh from the API
   } else if (view === 'settings') {
-    content.innerHTML = `<div class="overlay-panel"><div id="settings-full"></div></div>`;
+    content.innerHTML = `<div class="overlay-panel settings-panel"><div id="settings-full"></div></div>`;
     caldavUi.formError = '';   // a stale validation message shouldn't outlive a reopen
     caldavUi.user = '';        // nor a half-typed Apple ID from an earlier visit
     renderSettingsFull();      // instant paint from cache (hubData / lastIntegrations)
@@ -6413,8 +6413,9 @@ async function rewardsClick(e) {
 function renderSettingsFull() {
   const host = document.getElementById('settings-full');
   if (!host) return;
-  host.innerHTML = `<div class="overlay-title">Settings</div>`
-    + `<div class="card pad settings-card">`
+  host.innerHTML = settingsNavHtml()
+    + `<div class="overlay-title">Settings</div>`
+    + `<div class="card pad settings-card" id="settings-display">`
     + `<div class="shead"><span class="tick"></span><h2>Display</h2></div>`
     + `<div class="theme-ctl">`
     + `<div class="settings-row"><span class="settings-k">Theme</span>`
@@ -6440,13 +6441,13 @@ function renderSettingsFull() {
     + `</div></div>`
     + `</div></div>`
     // Seasonal looks: their own card, since the preview tiles need the room.
-    + `<div class="card pad settings-card">`
+    + `<div class="card pad settings-card" id="settings-looks">`
     + `<div class="shead"><span class="tick"></span><h2>Seasonal looks</h2></div>`
     + `<div class="theme-ctl stack">${seasonalCardHtml()}</div>`
     + `</div>`
     // Per-device behavior, apart from the look: these two answer "how does THIS
     // screen act", so a phone and the wall can differ.
-    + `<div class="card pad settings-card">`
+    + `<div class="card pad settings-card" id="settings-screen">`
     + `<div class="shead"><span class="tick"></span><h2>This screen</h2></div>`
     + `<div class="theme-ctl">`
     // Auto follows screen width; Desktop forces the full wall at any width
@@ -6464,7 +6465,7 @@ function renderSettingsFull() {
     + `<button type="button" data-idle-set="off">Off</button>`
     + `</div></div>`
     + `</div></div>`
-    + `<div class="card pad settings-card">`
+    + `<div class="card pad settings-card" id="settings-features">`
     + `<div class="shead"><span class="tick"></span><h2>Features &amp; integrations</h2></div>`
     + `<div class="integrations-ctl" id="integrations-ctl" role="group" aria-label="Integrations"></div>`
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
@@ -6502,6 +6503,101 @@ function renderSettingsFull() {
     rw.addEventListener('input', () => { rwDraftOn = true; refreshProjection(); });
   }
   paintRewards();
+  wireSettingsNav();
+}
+
+/* The Settings menu: a sticky row of section buttons at the top of the
+   Settings scroller (owner request, 2026-11-26: Settings was one long
+   scroll). A tap scrolls to that card (each card's scroll-margin-top
+   clears the menu); the button for the section in view is lit as you scroll. */
+const SETTINGS_SECTIONS = [
+  ['settings-display', 'Display'],
+  ['settings-looks', 'Looks'],
+  ['settings-screen', 'This screen'],
+  ['settings-features', 'Features'],
+  ['rewards-card', 'Chore wallet'],
+  ['help-card', 'How it works'],
+];
+
+function settingsNavHtml() {
+  return `<nav class="settings-nav" aria-label="Settings sections">`
+    + SETTINGS_SECTIONS.map(([id, label], i) =>
+      `<button type="button" data-settings-go="${id}"${i === 0 ? ' class="on" aria-current="true"' : ''}>${label}</button>`).join('')
+    + `</nav>`;
+}
+
+/* Which section is in view: the last card whose top (relative to the
+   scroller's top edge) has reached the bottom of the menu. Before the first
+   card passes it, the first is lit. */
+function settingsNavActive(tops, navBottom) {
+  let active = 0;
+  tops.forEach((t, i) => { if (t <= navBottom) active = i; });
+  return active;
+}
+
+// The button last tapped, and when: while its smooth scroll runs (and when the
+// last, short cards can't reach the menu) the tapped button stays lit.
+let settingsGoAt = { id: '', t: 0 };
+
+function settingsGo(id) {
+  const card = document.getElementById(id);
+  if (!card || !card.scrollIntoView) return;
+  settingsGoAt = { id, t: Date.now() };
+  const reduce = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  card.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+}
+
+function wireSettingsNav() {
+  // Each open (and each repaint) starts fresh: a tap from an earlier visit
+  // must not steer the highlight now (review, 2026-11-26).
+  settingsGoAt = { id: '', t: 0 };
+  const host = document.getElementById('settings-full');
+  const scroller = host && host.parentElement;
+  if (!scroller || !scroller.addEventListener) return;
+  // renderSettingsFull replaces the menu on every repaint, so the painter
+  // looks the live menu up each time instead of holding the first one.
+  const paint = () => {
+    scroller._settingsNavQueued = false;
+    const live = document.getElementById('settings-full');
+    const nav = live && live.querySelector && live.querySelector('.settings-nav');
+    if (!nav || !scroller.getBoundingClientRect) return;
+    const top = scroller.getBoundingClientRect().top;
+    const navBottom = nav.getBoundingClientRect().bottom - top;
+    const tops = SETTINGS_SECTIONS.map(([id]) => {
+      const el = document.getElementById(id);
+      return el ? el.getBoundingClientRect().top - top : Infinity;
+    });
+    // at the very bottom the last short cards can never reach the menu
+    const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+    const tapped = SETTINGS_SECTIONS.findIndex(([id]) => id === settingsGoAt.id);
+    let active = settingsNavActive(tops, navBottom + 8);
+    if (tapped >= 0 && Date.now() - settingsGoAt.t < 1500) active = tapped;
+    else if (atEnd) active = tapped > active ? tapped : SETTINGS_SECTIONS.length - 1;
+    nav.querySelectorAll('[data-settings-go]').forEach((btn, i) => {
+      btn.classList.toggle('on', i === active);
+      if (i === active) btn.setAttribute('aria-current', 'true');
+      else btn.removeAttribute('aria-current');
+    });
+    const lit = nav.querySelector('.on');
+    if (lit && nav.scrollWidth > nav.clientWidth) {
+      // the phone's menu scrolls sideways: keep the lit button in sight
+      const l = lit.offsetLeft, r = l + lit.offsetWidth;
+      if (l < nav.scrollLeft || r > nav.scrollLeft + nav.clientWidth) {
+        nav.scrollLeft = Math.max(0, l - 16);
+      }
+    }
+  };
+  if (!scroller._settingsNav) {
+    scroller._settingsNav = true;
+    scroller.addEventListener('scroll', () => {
+      if (scroller._settingsNavQueued) return;
+      scroller._settingsNavQueued = true;
+      requestAnimationFrame(() => scroller._settingsNavPaint());
+    }, { passive: true });
+  }
+  scroller._settingsNavPaint = paint;
+  paint();   // a repaint mid-scroll lights the right section straight away
 }
 
 /* What the help needs to know about this wall, from the last hub payload:
@@ -6907,6 +7003,8 @@ document.addEventListener('click', (e) => {
   // overlay and would otherwise float over it) AND the all-off empty-state's
   // "Open Settings" button (no popover open there, closeThemePop is a no-op).
   if (e.target.closest('[data-open-help]')) { openHelp(); return; }
+  const go = e.target.closest('[data-settings-go]');
+  if (go) { settingsGo(go.dataset.settingsGo); return; }
   if (e.target.closest('[data-open-settings]')) {
     closeThemePop();
     openOverlay('settings');

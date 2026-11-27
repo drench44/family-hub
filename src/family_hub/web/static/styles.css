@@ -2692,6 +2692,11 @@ body.integ-off-todos .todo-slot { display: none; }
   :root:not([data-layout="desktop"]) body[data-tab="todos"] .todos-page { display: block; padding: 12px; }
   /* full-screen views on a small screen */
   :root:not([data-layout="desktop"]) .overlay-panel { padding: 64px 12px 20px; }
+  /* the Settings menu keeps the Home pill's row on the phone's narrower panel */
+  :root:not([data-layout="desktop"]) .overlay-panel.settings-panel { padding-top: 8px; }
+  :root:not([data-layout="desktop"]) .settings-nav {
+    margin: 0 -12px 0 98px; padding: 8px 12px 10px 0;
+  }
   :root:not([data-layout="desktop"]) .cal-nav { flex-wrap: wrap; row-gap: 8px; }
   :root:not([data-layout="desktop"]) .cal-nav-title { font-size: 17px; }
   /* phone month: bars shrink to colored strips, timed events to dots —
@@ -4143,7 +4148,36 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    a full-width 44px tap target with its own open/closed mark. */
 /* the gear's How it works link scrolls here: leave room for the overlay's
    Home pill, which would otherwise sit over the heading */
-#help-card { scroll-margin-top: 72px; }
+#help-card { scroll-margin-top: 76px; }
+/* Settings menu: a sticky row of section buttons inside the Settings scroller
+   (.overlay-panel). It shares the top row with the overlay's Home pill (pulled
+   up into the panel's top padding, left room for the pill), stays put while
+   the cards scroll, and scrolls sideways on a phone. Solid ground, no blur:
+   a blurred sticky bar drops taps on iOS. */
+.settings-nav {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto;
+  scrollbar-width: none;
+  /* it starts beside the Home pill, so its sideways scroll never slides under it */
+  margin: 0 -24px 0 80px; padding: 8px 24px 10px 0;
+  background: var(--ground); border-bottom: 1px solid var(--edge);
+  /* paint the 8px strip above it too, so scrolled cards never peek over it */
+  box-shadow: 0 -8px 0 var(--ground), -120px 0 0 var(--ground), -120px -8px 0 var(--ground);
+}
+/* Settings drops the panel's tall top padding (it cleared the Home pill):
+   the menu takes that row itself, so a plain top: 0 holds it in place in
+   every browser, with no negative offsets to read differently on iOS. */
+.overlay-panel.settings-panel { padding-top: 8px; }
+.settings-nav::-webkit-scrollbar { display: none; }
+.settings-nav button {
+  flex: none; min-height: 44px; padding: 0 16px; border-radius: 999px;
+  border: 1px solid var(--edge); background: var(--surface); color: var(--dim);
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+}
+.settings-nav button.on { color: var(--ink); border-color: var(--accent); }
+.settings-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-card { scroll-margin-top: 76px; }
 .help-list { display: flex; flex-direction: column; margin-top: 4px; }
 .help-item { border-top: 1px solid var(--edge); }
 .help-item:last-child { border-bottom: 1px solid var(--edge); }

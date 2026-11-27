@@ -13036,3 +13036,49 @@ test('rewardsClick: Paid turns the button off while it saves, so a double tap pa
   release({ paid: { cents: 30 } });
   await first;
 });
+
+// --- Settings menu (2026-11-26: "settings needs a nav menu or something") ---
+
+test('settings menu: one button per Settings section, each pointing at a real card', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.getAttribute = () => null;
+  vm.runInContext("hubData = { integrations: [] };", sandbox);
+  sandbox.renderSettingsFull();
+  const html = document.getElementById('settings-full').innerHTML;
+  assert.ok(html.indexOf('class="settings-nav"') >= 0, 'the menu renders');
+  assert.ok(html.indexOf('class="settings-nav"') < html.indexOf('<h2>Display</h2>'),
+    'the menu sits above the first card');
+  const targets = [...html.matchAll(/data-settings-go="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(targets, ['settings-display', 'settings-looks', 'settings-screen',
+    'settings-features', 'rewards-card', 'help-card']);
+  for (const id of targets) assert.match(html, new RegExp(`id="${id}"`), `${id} card exists`);
+  const labels = [...html.matchAll(/data-settings-go="[^"]+"[^>]*>([^<]+)</g)].map((m) => m[1]);
+  assert.deepEqual(labels, ['Display', 'Looks', 'This screen', 'Features', 'Chore wallet', 'How it works']);
+});
+
+test('settings menu: the section in view is the last one whose top has passed the menu', () => {
+  const { sandbox } = newHub();
+  // card tops relative to the scroller's top edge, after scrolling; menu is 60px tall
+  assert.equal(sandbox.settingsNavActive([0, 400, 900], 60), 0);
+  assert.equal(sandbox.settingsNavActive([-500, 40, 600], 60), 1);
+  assert.equal(sandbox.settingsNavActive([-900, -400, 61], 60), 1);
+  assert.equal(sandbox.settingsNavActive([-900, -400, 10], 60), 2);
+  assert.equal(sandbox.settingsNavActive([200, 900], 60), 0, 'before the first card, the first is lit');
+});
+
+test('settings menu: a tap scrolls that card into view', () => {
+  const { document, sandbox, docListeners } = newHub();
+  const card = document.createElement('div');
+  card._id = 'rewards-card';
+  let scrolled = null;
+  card.scrollIntoView = (opts) => { scrolled = opts; };
+  document.body.appendChild(card);
+  const node = { dataset: { settingsGo: 'rewards-card' },
+    closest: (s) => (s === '[data-settings-go]' ? node : null) };
+  (docListeners.click || []).forEach((fn) => fn({ target: node }));
+  assert.ok(scrolled, 'the card was scrolled to');
+  assert.equal(scrolled.block, 'start');
+});
