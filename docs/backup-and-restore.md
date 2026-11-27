@@ -86,6 +86,48 @@ bundle is gone now (a deleted `.env`, a lost `pin.key`), no smaller bundle is
 written over the good one. The card names the file and the log says so once.
 Put it back, or set the backup password again to start fresh.
 
+### The monthly restore test
+
+A backup nobody has opened is a hope, not a backup. Once a month the hub
+proves its newest copy really restores, and the card says "Last restore test
+passed November 3" (or that it failed, and why).
+
+**What it checks.** It takes the newest database copy (the newest hourly one,
+or the newest in the next tier when the hourly folder is empty), copies it
+into a private temp folder (mode 0700, removed afterwards), and opens that
+copy read-only. Then:
+
+1. `PRAGMA integrity_check` answers `ok`.
+2. The tables a hub needs are there: `kv`, `people`, `chores`, `completions`,
+   `occurrence_log`, `ledger` and `todos`.
+3. The row counts of `people`, `chores`, `occurrence_log` (chore history) and
+   `ledger` (the wallet) hold up against the live database: a table with rows
+   live must have rows in the copy, and at least 90% as many. A copy far
+   behind fails as "old or cut short". A table may be one row short with no
+   failure, so a person added since the last hourly copy does not fail it.
+4. With a backup password set, the newest settings bundle is decrypted in
+   memory with the key in `data/backup.key` and must hold every file the last
+   backup recorded (`backups.in_app.settings.files`). Nothing decrypted is
+   written anywhere. A bundle made with an older password fails with that
+   reason; the next backup writes a new one. With no usable key the bundle
+   check is skipped, since the card already says the key needs setting again.
+
+It never touches `data/hub.db` or the files in the backup folder.
+
+**When.** From the hourly run, right after its copy, so it tests a copy
+minutes old: the first test a day after the first good backup
+(`backups.in_app.first_ok_at`), then again once the last passed test is 30
+days old. A failed test is tried again each day until it passes. **Test
+restore now** on the card runs it at once. It shares the backup lock, so it
+is refused while a backup runs, and it needs a backup to exist first.
+
+**What a failure does.** The result goes in kv `backups.restore_test`
+(`at`, `ok`, `snapshot`, `reason`, `settings_file`), and the card shows the
+reason in plain words. The log says so once for each new reason. It never
+moves the backup heartbeat (`backup_status`), so the wall's stale badge stays
+about whether copies are being made. `/health/full` lists the last result
+under `notes.backups_restore_test` (information only, never a failing status).
+
 ### The settings bundle and backup.key
 
 With a backup password set (Settings → Backups, at least 8 characters, and

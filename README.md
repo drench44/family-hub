@@ -546,6 +546,14 @@ last failure, and has a **Back up now** button. The wall's ⚠ backup warning
 shows when the last good copy is more than 36 hours old. The Backups switch
 under Features & integrations turns it off.
 
+**It proves the copies restore.** Once a month the hub opens its newest copy
+in a private temp folder, checks it is sound and holds about as many people,
+chores, chore history and wallet rows as the live hub, and (with a backup
+password set) opens the newest settings copy in memory. The card shows "Last
+restore test passed" with the date, or what went wrong. **Test restore now**
+runs it right away. It never changes the database or the backup folder. See
+[`docs/backup-and-restore.md`](docs/backup-and-restore.md).
+
 **Send it to a NAS.** `./backups` sits on the same disk as the hub, so it
 won't survive that disk dying. Mount a NAS share on the box (any way the box
 can mount it: SMB, NFS, a USB disk), then point the hub at it in `.env` and
