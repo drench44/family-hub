@@ -538,6 +538,14 @@ count like away days. The iPhone reminder sync records no tick older than the
 fix window (`wallet.edit_floor`), and deleting someone with money still owed
 needs the PIN.
 
+A done chore is settled. When today is re-priced, `app._price_rows` keeps a
+ticked row's `cents` from its frozen row and sets `earner` to whoever owned
+it when it was ticked. A same-day trip change still moves the row's
+`person_id`, so the streak follows the plan, but the pay stays with who did
+the work. A rate change after a payout cannot reprice what was paid. Unticking
+a chore unsettles it, and a re-tick pays the rate of that moment. Pay queries
+read `COALESCE(earner, person_id)`.
+
 ---
 
 ## 9. Widget Slot / Plugin Architecture (PRD §6, FR#8)

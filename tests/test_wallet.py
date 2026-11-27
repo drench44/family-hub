@@ -107,6 +107,20 @@ def test_balance_counts_only_house_non_once_after_launch(conn):
     assert wallet.balance_cents(conn, pid, LAUNCH.isoformat()) == 30
 
 
+def test_a_done_row_pays_its_earner_not_its_streak_owner(conn):
+    a = fdb.add_person(conn, "Ava", "#5BC9F0")
+    b = fdb.add_person(conn, "Ben", "#F05B5B")
+    _launch(conn, {a: 0, b: 0})
+    ds = _day(0)
+    fdb.replace_day_log(conn, ds, [{"chore_id": 1, "person_id": a, "title": "Dishes",
+                                    "icon": "", "rot": 0, "cents": 30, "earner": b}])
+    fdb.set_completion(conn, 1, ds, b)
+    assert wallet.balance_cents(conn, b, LAUNCH.isoformat()) == 30
+    assert wallet.balance_cents(conn, a, LAUNCH.isoformat()) == 0
+    weeks = wallet.history(conn, b, LAUNCH.isoformat())["weeks"]
+    assert sum(w["earned_cents"] for w in weeks) == 30
+
+
 def test_rate_change_does_not_rewrite_past(conn):
     pid = fdb.add_person(conn, "Ava", "#5BC9F0")
     _launch(conn, {pid: 0})

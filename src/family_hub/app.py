@@ -1234,7 +1234,7 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
         # kind and cents too: re-tagging a chore today must re-freeze today
         return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"],
                 r.get("covering_for"), r.get("kind") or "house",
-                int(r.get("cents") or 0))
+                int(r.get("cents") or 0), r.get("earner"))
     if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
             sorted(key(r) for r in rows):
         fdb.replace_day_log(c, d_str, rows)
@@ -1395,11 +1395,25 @@ def _price_rows(c, rows: list[dict], today: dt.date):
     try:
         settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
         away_by = _wallet_away(c, launch["day"], today)
+        d_str = today.isoformat()
+        done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
+        served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)} if done else {}
         rate: dict[int, int] = {}
         out = []
         for r in rows:
             r = dict(r)
-            if (r.get("kind") or "house") == "house" and not r.get("locked"):
+            was = served.get(r["chore_id"]) if r["chore_id"] in done else None
+            if was is not None and not r.get("locked") \
+                    and (was.get("kind") or "house") == "house" \
+                    and (r.get("kind") or "house") == "house":
+                # A done chore is SETTLED: it pays whoever owned it when it was
+                # ticked, at the rate it paid then. A later re-plan (an owner
+                # back from a trip the same day) or a rate change moves only
+                # its streak owner (person_id), never its pay; so a payout that
+                # counted it stays right (owner, 2026-11-27, wallet known limits).
+                r["cents"] = int(was.get("cents") or 0)
+                r["earner"] = was.get("earner") or was["person_id"]
+            elif (r.get("kind") or "house") == "house" and not r.get("locked"):
                 pid = r["person_id"]
                 if pid not in rate:
                     run = wallet.person_run(c, pid, today, settings, launch,

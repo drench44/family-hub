@@ -428,8 +428,9 @@ def _row(cid, pid, title="Dishes", icon="", rot=0, covering_for=None):
 def test_occurrence_log_replace_and_read(conn):
     fdb.replace_day_log(conn, "2026-08-14", [_row(1, 7), _row(2, 8, "Trash")])
     assert fdb.day_log(conn, "2026-08-14") == [
-        {"date": "2026-08-14", **_row(1, 7), "cents": 0, "kind": "house"},
-        {"date": "2026-08-14", **_row(2, 8, "Trash"), "cents": 0, "kind": "house"},
+        {"date": "2026-08-14", **_row(1, 7), "cents": 0, "kind": "house", "earner": None},
+        {"date": "2026-08-14", **_row(2, 8, "Trash"), "cents": 0, "kind": "house",
+         "earner": None},
     ]
     # replace fully supersedes the day's rows
     fdb.replace_day_log(conn, "2026-08-14", [_row(3, 7, "Cat")])
@@ -473,7 +474,8 @@ def test_covering_for_migration_is_idempotent_and_keeps_old_rows(tmp_path):
     fdb.ensure_schema(c)
     assert fdb.day_log(c, "2026-08-10") == [
         {"date": "2026-08-10", "chore_id": 1, "person_id": 7, "title": "Dishes",
-         "icon": "", "rot": 0, "covering_for": None, "cents": 0, "kind": "house"}]
+         "icon": "", "rot": 0, "covering_for": None, "cents": 0, "kind": "house",
+         "earner": None}]
     fdb.ensure_schema(c)                      # second boot: no-op, no crash
     fdb.replace_day_log(c, "2026-08-11", [_row(2, 8, covering_for=7)])
     assert fdb.day_log(c, "2026-08-11")[0]["covering_for"] == 7
@@ -1266,6 +1268,7 @@ def test_migration_adds_kind_cents_served_ledger(tmp_path):
         "2026-08-10", "2026-08-11"}
     chore_cols = {r["name"] for r in c.execute("PRAGMA table_info(chores)")}
     assert "kind" in chore_cols
+    assert [r["earner"] for r in rows] == [None, None]   # old rows pay their owner
     fdb.ensure_schema(c)                      # second boot: no-op, no crash
     assert fdb.served_between(c, "2026-08-01", "2026-08-31") == {
         "2026-08-10", "2026-08-11"}

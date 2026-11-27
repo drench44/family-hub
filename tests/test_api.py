@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from family_hub import db as fdb
 from family_hub import tiles as ftiles
 from family_hub import todos as tdlogic
+from family_hub import wallet
 
 
 def _write_cfg(tmp_path):
@@ -7730,3 +7731,61 @@ def test_past_days_show_no_old_streak_with_the_wallet_on(client, app_mod, monkey
     fdb.kv_set(c, "rewards.launch", None)            # wallet off: old chip back
     people = client.get(f"/api/chores/day?date={y}").json()["people"]
     assert [p["streak"] for p in people if p["person"]["id"] == pid] == [3]
+
+
+def _earned(app_mod, pid):
+    c = app_mod._db()
+    return wallet.earned_cents(c, pid, fdb.kv_get(c, "rewards.launch")["day"])
+
+
+def test_a_done_chore_pays_whoever_did_it_when_its_owner_returns_the_same_day(
+        client, app_mod, monkeypatch):
+    """Known limit closed 2026-11-27: the backup does the away owner's chore in
+    the morning, the owner comes back the same day, and the re-frozen row moves
+    to the owner (so their streak counts it). The pay must stay with the backup,
+    who did the work, at the rate it paid when ticked."""
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(8))
+    c = app_mod._db()
+    backup = _mk_person(client, "Ben")
+    today = _house_now(8).date()
+    period = fdb.add_away_period(c, pid, (today - dt.timedelta(days=2)).isoformat(),
+                                 None, backup)
+    client.get("/api/hub")                                  # today frozen onto the backup
+    assert fdb.log_row(c, cid, today.isoformat())["person_id"] == backup
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    paid = _earned(app_mod, backup)
+    assert paid > 0 and _earned(app_mod, pid) == 0
+    assert client.post(f"/api/admin/away/{period}/back").status_code == 200
+    client.get("/api/hub")                                  # re-frozen onto the owner
+    assert fdb.log_row(c, cid, today.isoformat())["person_id"] == pid   # streak follows the plan
+    assert _earned(app_mod, backup) == paid                 # pay stays with who did it
+    assert _earned(app_mod, pid) == 0
+
+
+def test_a_rate_change_after_a_payout_never_reprices_a_chore_already_done(
+        client, app_mod, monkeypatch):
+    """Known limit closed 2026-11-27: a payout counts today's done chores; a
+    later rate change used to reprice them, so the wallet showed money that
+    was already paid (or owed back). A ticked chore keeps the rate it was
+    ticked at; one not done yet takes the new rate."""
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    before = _earned(app_mod, pid)
+    assert before > 0
+    assert client.post(f"/api/rewards/payout/{pid}", headers=PIN).status_code == 200
+    r = client.put("/api/rewards/settings", json={"cents_per_chore": 75}, headers=PIN)
+    assert r.status_code == 200
+    client.get("/api/hub")                                  # today re-priced
+    assert _earned(app_mod, pid) == before
+    c = app_mod._db()
+    launch = fdb.kv_get(c, "rewards.launch")["day"]
+    assert wallet.balance_cents(c, pid, launch) == 0
+    # unticked, the chore is open again and takes today's rate when redone
+    assert client.delete(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert fdb.log_row(c, cid, _house_now(12).date().isoformat())["cents"] == 75
