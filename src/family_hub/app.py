@@ -1825,7 +1825,7 @@ def _guard_old_day(c, d: dt.date, request: Request) -> None:
     so it needs the parent PIN. Off, the old rules stand."""
     if (d < _today() and rewards_active(c) and not _edit_allowed(
             d, _now_local(), reward_settings(c)["fix_cutoff"])):
-        _pin_gate(c, request.headers.get(PIN_HEADER))
+        _pin_gate(c, request.headers.get(PIN_HEADER), _pin_source(request))
 
 
 def _guard_paid_today(c, cid: int, request: Request) -> None:
@@ -1878,7 +1878,7 @@ def _guard_away(c, request: Request, *, inserts=(), updates=(), deletes=()) -> N
             rows[i].update(fields)
     after = list(rows.values()) + [dict(r) for r in inserts]
     if _away_days(after, lo, hi) != before:
-        _pin_gate(c, request.headers.get(PIN_HEADER))
+        _pin_gate(c, request.headers.get(PIN_HEADER), _pin_source(request))
 
 
 # --- chore wallet: parent PIN ---------------------------------------------
@@ -1886,12 +1886,18 @@ def _guard_away(c, request: Request, *, inserts=(), updates=(), deletes=()) -> N
 PIN_HEADER = "X-Parent-Pin"
 
 
-def _pin_gate(c, pin) -> None:
+def _pin_source(request: Request | None) -> str:
+    """Which screen a PIN try came from, so a pause on one screen (the
+    kitchen wall) never locks another (a parent's phone)."""
+    return (request.client.host if request is not None and request.client else "")
+
+
+def _pin_gate(c, pin, source: str = "") -> None:
     """Raise the PIN refusal for ``pin`` unless it is right: 403 not_set,
     required (no PIN sent), wrong; 429 locked with the wait in seconds."""
     if not parent_pin.is_set(c):
         raise HTTPException(403, {"pin": "not_set"})
-    ok, wait = parent_pin.check(c, pin, _now_local())
+    ok, wait = parent_pin.check(c, pin, _now_local(), source=source)
     if wait:
         raise HTTPException(429, {"pin": "locked", "wait_s": wait})
     if ok:
@@ -1900,7 +1906,7 @@ def _pin_gate(c, pin) -> None:
 
 
 def require_parent(request: Request) -> None:
-    _pin_gate(_db(), request.headers.get(PIN_HEADER))
+    _pin_gate(_db(), request.headers.get(PIN_HEADER), _pin_source(request))
 
 
 class PinBody(BaseModel):
@@ -1909,10 +1915,10 @@ class PinBody(BaseModel):
 
 
 @app.post("/api/rewards/pin", status_code=204)
-def rewards_set_pin(body: PinBody):
+def rewards_set_pin(body: PinBody, request: Request):
     c = _db()
     if parent_pin.is_set(c):
-        _pin_gate(c, body.current)
+        _pin_gate(c, body.current, _pin_source(request))
     try:
         parent_pin.set_pin(c, body.pin, current=body.current)
     except ValueError as e:
@@ -2785,9 +2791,12 @@ def admin_patch_chore(cid: int, ch: ChorePatch, request: Request):
     if ("kind" in fields and fields["kind"] != row.get("kind", "house")
             and rewards_active(c)):
         require_parent(request)
-    # Turning it off, or into a one-time item, drops what it paid today.
-    if fields.get("active") == 0 or (fields.get("schedule_kind") == "once"
-                                     and row["schedule_kind"] != "once"):
+    # Turning it off, or into a one-time item, drops what it paid today;
+    # giving it to someone else moves that pay.
+    owner_change = any(k in fields and fields[k] != row.get(k) for k in (
+        "assign_kind", "fixed_person_id", "rotation_order", "rotate_every"))
+    if owner_change or fields.get("active") == 0 or (
+            fields.get("schedule_kind") == "once" and row["schedule_kind"] != "once"):
         _guard_paid_today(c, cid, request)
     merged = {**row, **fields}
     kind = merged["schedule_kind"]

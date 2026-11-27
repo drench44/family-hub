@@ -6,9 +6,9 @@ child from quietly changing money on the shared wall. It is 4 to 6 digits,
 stored as a salted PBKDF2 hash in kv ``rewards.pin``, and never logged. Five
 wrong tries inside five minutes pause PIN checks for 30 seconds; after that,
 each wrong try pauses them again until the right PIN goes in. Guessing runs
-at one try per 30 seconds at best (days for 4 digits). A child guessing on
-purpose can keep re-pausing it, 30 seconds at a time, so a parent may have
-to wait out one pause; the right PIN works as soon as it ends.
+at one try per 30 seconds at best (days for 4 digits). Pauses are kept
+per screen (the request's address): guessing on the kitchen wall pauses the
+wall, never a parent's own phone.
 """
 from __future__ import annotations
 
@@ -57,9 +57,26 @@ def set_pin(conn, pin, *, current) -> None:
     fdb.kv_set(conn, LOCK_KEY, None)
 
 
-def check(conn, pin, now: dt.datetime) -> tuple[bool, int]:
-    """(ok, seconds still locked). A locked PIN refuses even the right digits."""
-    lock = fdb.kv_get(conn, LOCK_KEY) or {}
+def _locks(conn, now: dt.datetime) -> dict:
+    """Per-screen pause records, dropping any that no longer matter (no
+    pause running and no wrong try inside the window)."""
+    raw = fdb.kv_get(conn, LOCK_KEY) or {}
+    if not isinstance(raw, dict) or "n" in raw or "until" in raw:
+        raw = {}                       # the old single-record shape: start fresh
+    keep = {}
+    for src, lk in raw.items():
+        stamp = lk.get("until") or lk.get("first")
+        if stamp and (now - dt.datetime.fromisoformat(stamp)).total_seconds() <= WINDOW_S:
+            keep[src] = lk
+    return keep
+
+
+def check(conn, pin, now: dt.datetime, source: str = "") -> tuple[bool, int]:
+    """(ok, seconds still paused) for a try from ``source`` (the screen's
+    address). A paused screen refuses even the right digits; other screens
+    are not affected."""
+    locks = _locks(conn, now)
+    lock = locks.get(source, {})
     until = lock.get("until")
     if until:
         left = (dt.datetime.fromisoformat(until) - now).total_seconds()
@@ -71,8 +88,9 @@ def check(conn, pin, now: dt.datetime) -> tuple[bool, int]:
     if not is_set(conn):
         return False, 0
     if _matches(conn, pin):
-        if lock:
-            fdb.kv_set(conn, LOCK_KEY, None)
+        if source in locks:
+            locks.pop(source)
+            fdb.kv_set(conn, LOCK_KEY, locks)
         return True, 0
     first = lock.get("first")
     if first and (now - dt.datetime.fromisoformat(first)).total_seconds() <= WINDOW_S:
@@ -82,5 +100,6 @@ def check(conn, pin, now: dt.datetime) -> tuple[bool, int]:
     if lock["n"] >= MAX_TRIES:
         lock = {"until": (now + dt.timedelta(seconds=LOCK_S)).isoformat(),
                 "first": lock["first"]}
-    fdb.kv_set(conn, LOCK_KEY, lock)
+    locks[source] = lock
+    fdb.kv_set(conn, LOCK_KEY, locks)
     return False, 0

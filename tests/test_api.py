@@ -7660,3 +7660,24 @@ def test_hub_wallet_rules_say_when_they_cannot_be_read(client, app_mod, monkeypa
         return real(c)
     monkeypatch.setattr(app_mod, "reward_settings", flaky)
     assert client.get("/api/hub").json()["wallet"] == {"error": True}
+
+
+
+def test_reassigning_a_paid_chore_done_today_needs_the_pin(client, app_mod):
+    """Moving a chore that was done and paid today to someone else moves
+    its pay, so with the wallet on it is a parent action."""
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    other = _mk_person(client, "Ben")
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    r = client.patch(f"/api/admin/chores/{cid}", json={"fixed_person_id": other})
+    assert r.status_code == 403
+    r = client.patch(f"/api/admin/chores/{cid}", json={
+        "assign_kind": "rotation", "rotation_order": [pid, other]})
+    assert r.status_code == 403
+    # a rename needs no PIN
+    assert client.patch(f"/api/admin/chores/{cid}", json={"title": "Dishes!"}
+                        ).status_code == 200
+    assert client.patch(f"/api/admin/chores/{cid}", json={"fixed_person_id": other},
+                        headers=PIN).status_code == 200
