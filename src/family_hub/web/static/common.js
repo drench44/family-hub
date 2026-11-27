@@ -1929,7 +1929,7 @@ const SETTING_TIPS = {
   'Settings files': 'With a backup password set, each backup also keeps a locked copy of the hub’s settings files, such as config.json and .env. A new copy is saved only when they change, and the last 14 are kept.',
   'Backup password': 'Locks the settings files inside each backup. You need it to restore them on a new box, so write it down.',
   'Set a backup password': 'Pick a password of at least 8 characters to lock the settings files into each backup. You need it to restore them on a new box, so write it down.',
-  'Change the backup password': 'Type a new password twice and save it. New backups use it, and copies made before still open only with the password they were made with.',
+  'Change the backup password': 'Type the new password twice and tap Save password. Backups made from then on use the new one.',
 };
 
 let infoTipOpen = '';    // the one open tip's key ('' none), kept across repaints
