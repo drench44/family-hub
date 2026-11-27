@@ -650,13 +650,25 @@ its wait sliced so flipping the switch is answered within seconds. A tick asks
 Home Assistant nothing while the switch is off or `HA_TOKEN` is empty. It reads
 `zone.home` (a state of `"0"` means nobody) or, with `presence.people`, each
 `person.*`: one person at home is enough to say someone is home, but nobody
-home needs every person read as away. The answer and its time are kept in
-memory, and a flip of the switch clears them. `dim.away` is
-`{enabled, state, home, dim}` with state off, needs_auth, checking,
-unreadable, home or away; `dim` is true only for a readable answer of nobody
-home under 210 s old, so any failure leaves the wall bright. The settings row
-shows needs_auth for a missing or refused token and error while Home Assistant
-can't be read; the log warns once per outage. DEMO lists the switch with a
+home needs every person read as away. A zero from `zone.home` is checked
+against every `person.*` in `/api/states` (and zone.home's `persons`
+attribute): a Home Assistant restart reads zero while trackers are unknown, so
+any unknown or unavailable person, or no person entities at all, makes the read
+unreadable. The wall dims on the second nobody-home read in a row
+(`_presence_zero_streak`; the first shows as `confirming`). The answer and its
+time are kept in memory. A flip of the switch clears them, re-arms the outage
+warning, resets the streak and bumps `_presence_gen`, so a read that was in
+flight is dropped. `dim.away` is `{enabled, state, home, dim}` with state off,
+needs_auth, stopped, checking, unreadable, home, confirming or away; `dim` is
+true only for a confirmed answer of nobody home under 210 s old, so any
+failure leaves the wall bright. `stopped` means the watcher task has exited,
+named as the hub's fault rather than Home Assistant's. The browser also stops
+trusting `dim.away` 210 s after the payload arrived (`hubDataAt`,
+`AWAY_FRESH_MS`), so a wall that loses the hub comes back up; the dim hours
+keep running from its own clock. The settings row shows needs_auth for a
+missing or refused token and error while Home Assistant can't be read or the
+watcher has stopped; the log warns once per outage, and once at startup for a
+`presence` block with no Home Assistant to ask. DEMO lists the switch with a
 canned two people home. The browser never talks to Home Assistant. The phone
 layout skips the away reason (a phone that sees an empty house is in someone's
 hand elsewhere) but keeps the dim hours. `/health/full` reports `presence`

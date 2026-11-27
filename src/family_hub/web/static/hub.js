@@ -81,7 +81,7 @@ function tickClock() {
   // wall while nobody is home (wallDimmed in common.js). One class for both,
   // so whatever night hides or calms, an empty house does the same.
   document.body.classList.toggle('is-night',
-    wallDimmed(d, hubData, phoneLayoutActive()));
+    wallDimmed(d, hubData, phoneLayoutActive(), hubDataAt));
   // A wall runs for weeks: re-derive the seasonal look when the date turns, so
   // fall arrives (and leaves) at midnight with no reload. Keyed on the FULL
   // date: a wall asleep from Aug 20 to Sep 20 has the same day-of-month.
@@ -2728,6 +2728,10 @@ function armIdle() {
 /* --------------------------------------------------------------- polling */
 
 let hubData = null;
+// When the last good /api/hub answer arrived (epoch ms, from new Date() so a
+// test clock drives it too). wallDimmed stops trusting its nobody-home flag
+// once it is old: a hub that can't be reached must not leave the wall dim.
+let hubDataAt = null;
 let loadedBuild = null;   // /api/hub build token at page load; a change => deploy or config change => reload
 let lastInteraction = 0;  // ms of the last user touch/keypress (see noteInteraction)
 const INTERACTION_QUIET_MS = 4000;
@@ -4579,6 +4583,7 @@ async function poll() {
   if (seq < pollApplied) return;
   pollApplied = seq;
   hubData = data;
+  hubDataAt = new Date().getTime();
   // Auto-reload when a deploy changes the baked frontend (the server's build
   // token changes), so the kiosk picks up updates without a manual refresh,
   // but never mid-interaction (defer to a later poll once the wall is idle).
@@ -6665,16 +6670,21 @@ function renderDimSettings(data) {
   host.innerHTML = dimCardHtml(data);
 }
 
+/* Save a change; true when the hub took it. Either way the next poll
+   repaints the rows from what the hub really holds. */
 async function saveDimHours(patch) {
+  let ok = true;
   try {
     await j('/api/dim-hours', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
   } catch (err) {
+    ok = false;
     showToast(err.message || 'Couldn’t save the dim hours.');
   }
   await poll();   // every screen follows the hub; this one repaints now
+  return ok;
 }
 
 async function dimClick(e) {
@@ -6684,8 +6694,15 @@ async function dimClick(e) {
 
 async function dimChange(e) {
   const t = e.target;
-  if (t.matches('[data-dim-start]')) await saveDimHours({ start: t.value });
-  else if (t.matches('[data-dim-end]')) await saveDimHours({ end: t.value });
+  const key = t.matches('[data-dim-start]') ? 'start' : (t.matches('[data-dim-end]') ? 'end' : '');
+  if (!key) return;
+  // Let go of focus first: renderDimSettings skips a repaint under a focused
+  // picker, so without this the summary line kept the old times.
+  if (t.blur) t.blur();
+  if (!(await saveDimHours({ [key]: t.value }))) {
+    // refused: show what is really saved, even if the repaint can't run
+    t.value = dimHoursOf(hubData)[key];
+  }
 }
 
 /* The Settings menu: a sticky row of section buttons at the top of the

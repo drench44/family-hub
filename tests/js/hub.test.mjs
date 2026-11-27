@@ -293,15 +293,27 @@ test('wallDimmed: night by the clock, or nobody home on the wall only', () => {
   const off = hub({ hours: { ...night, on: false }, away: null });
   assert.equal(wd(at(23), off, false), false, 'dim hours Off');
   const empty = hub({ hours: night, away: { enabled: true, state: 'away', home: 0, dim: true } });
-  assert.equal(wd(at(12), empty, false), true, 'nobody home dims the wall at noon');
-  assert.equal(wd(at(12), empty, true), false, 'a phone is in someone\'s hand away from home: no away dim');
-  assert.equal(wd(at(23), empty, true), true, 'the phone still dims at night');
+  assert.equal(wd(at(12), empty, false, at(12).getTime()), true, 'nobody home dims the wall at noon');
+  assert.equal(wd(at(12), empty, true, at(12).getTime()), false, 'a phone is in someone\'s hand away from home: no away dim');
+  assert.equal(wd(at(23), empty, true, at(23).getTime()), true, 'the phone still dims at night');
   const home = hub({ hours: night, away: { enabled: true, state: 'home', home: 2, dim: false } });
   assert.equal(wd(at(12), home, false), false);
   const unread = hub({ hours: night, away: { enabled: true, state: 'unreadable', home: null, dim: false } });
   assert.equal(wd(at(12), unread, false), false, 'Home Assistant unreadable never dims');
   const switchedOff = hub({ hours: night, away: { enabled: false, state: 'off', home: null, dim: true } });
-  assert.equal(wd(at(12), switchedOff, false), false, 'a stray dim flag with the switch off is ignored');
+  assert.equal(wd(at(12), switchedOff, false, at(12).getTime()), false, 'a stray dim flag with the switch off is ignored');
+});
+
+test('wallDimmed: an old nobody-home answer stops dimming; night still works offline', () => {
+  const at = (h, mm = 0, ss = 0) => new Date(2026, 10, 27, h, mm, ss);
+  const wd = sandbox.wallDimmed;
+  const empty = hub({ hours: night, away: { enabled: true, state: 'away', home: 0, dim: true } });
+  const got = at(12).getTime();
+  assert.equal(wd(at(12, 3, 30), empty, false, got), true, '210 s later it still counts');
+  assert.equal(wd(at(12, 3, 31), empty, false, got), false,
+    'older than the server\'s own 210 s: the hub may be gone, so the wall comes back up');
+  assert.equal(wd(at(12), empty, false, null), false, 'no arrival time: never trusted');
+  assert.equal(wd(at(23), empty, false, got), true, 'the dim hours run from the local clock');
 });
 
 test('dimHoursWords says the window in plain clock words', () => {
@@ -324,7 +336,11 @@ test('dimAwayLine: one plain sentence per state', () => {
   assert.match(l({ enabled: true, state: 'unreadable' }), /couldn.t be read/);
   assert.match(l({ enabled: true, state: 'unreadable' }), /won.t dim/);
   assert.match(l({ enabled: true, state: 'needs_auth' }), /HA_TOKEN/);
-  for (const st of ['off', 'checking', 'away', 'home', 'unreadable', 'needs_auth']) {
+  assert.match(l({ enabled: true, state: 'confirming', home: 0 }), /nobody is home.*once more/);
+  const stopped = l({ enabled: true, state: 'stopped' });
+  assert.match(stopped, /hub stopped checking/);
+  assert.doesNotMatch(stopped, /Home Assistant couldn/, 'never blames Home Assistant for the hub');
+  for (const st of ['off', 'checking', 'away', 'home', 'unreadable', 'needs_auth', 'confirming', 'stopped']) {
     const text = l({ enabled: st !== 'off', state: st, home: 0 });
     assert.ok(!text.includes(String.fromCharCode(0x2014)), `${st}: no long dash`);
   }

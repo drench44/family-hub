@@ -309,14 +309,22 @@ function dimHoursOf(data) {
   return h;
 }
 
+/* How long a nobody-home answer is trusted after it arrived: the server's own
+   limit (dimming.FRESH_S, 210 s). Past it the hub may be unreachable, and a
+   wall must not stay dim on an answer it can no longer refresh. */
+const AWAY_FRESH_MS = 210 * 1000;
+
 /* Should this screen be dim now? `phone` is true on the phone layout, which
    never dims for nobody home: a phone that sees an empty house is almost
    always in someone's hand away from it. Only the server's own dim flag,
-   with the switch on, dims for that; anything unclear leaves it bright. */
-function wallDimmed(d, data, phone) {
+   with the switch on, in a payload that arrived (`receivedAt`, epoch ms)
+   within AWAY_FRESH_MS, dims for that; anything unclear leaves it bright.
+   The dim hours need no hub at all: they run from this screen's clock. */
+function wallDimmed(d, data, phone, receivedAt) {
   if (nightClass(d.getHours(), d.getMinutes(), dimHoursOf(data)) === 'is-night') return true;
   const away = data && data.dim && data.dim.away;
-  return !phone && !!away && away.enabled === true && away.dim === true;
+  if (phone || !away || away.enabled !== true || away.dim !== true) return false;
+  return typeof receivedAt === 'number' && d.getTime() - receivedAt <= AWAY_FRESH_MS;
 }
 
 /* '22:00' -> '10pm', '21:30' -> '9:30pm', '00:00' -> 'midnight'. Pure. */
@@ -345,6 +353,8 @@ function dimAwayLine(away) {
   }
   switch (away.state) {
     case 'away': return 'Home Assistant says nobody is home, so the wall is dim.';
+    case 'confirming': return 'Home Assistant says nobody is home. The wall dims if it still says so when it asks once more, in a minute.';
+    case 'stopped': return 'The hub stopped checking who is home, so the wall won’t dim for this. Restarting the hub starts it again.';
     case 'home': {
       const n = Number(away.home) || 0;
       return `Home Assistant says ${n} ${n === 1 ? 'person is' : 'people are'} home, so the wall stays bright.`;
@@ -2898,7 +2908,7 @@ function dimHelpParas(dim) {
     : 'The screens don’t dim for the time of day. Settings, under Display, sets dim hours.'];
   const away = dim && dim.away;
   if (away && away.enabled === true) {
-    out.push('While nobody is home the wall dims too. The hub asks Home Assistant who is home once a minute. If it can’t tell, the wall stays bright. Phones don’t dim for this.');
+    out.push('While nobody is home the wall dims too. The hub asks Home Assistant who is home once a minute and dims after it hears nobody is home twice in a row. If it can’t tell, or the hub can’t be reached, the wall stays bright. Phones don’t dim for this.');
   } else if (away) {
     out.push('The wall can also dim while nobody is home. Turn on Dim when nobody is home under Features & integrations.');
   }

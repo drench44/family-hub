@@ -72,8 +72,10 @@ at one URL.
   house, so every wall and phone follows it. With Home Assistant connected, the
   **Dim when nobody is home** switch (off until you turn it on) also dims the
   wall while the house is empty: the hub asks Home Assistant once a minute
-  (`zone.home`, or the people you list), and if it can't get an answer the wall
-  stays bright and Settings says so. Phones never dim for an empty house.
+  (`zone.home`, or the people you list) and dims after two nobody-home
+  answers in a row. A Home Assistant that is still starting (people read
+  unknown), no answer, or a wall that can't reach the hub all leave it bright,
+  and Settings says why. Phones never dim for an empty house.
   Whatever night stills or hides, an empty house does too.
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the

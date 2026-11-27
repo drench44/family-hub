@@ -13318,7 +13318,8 @@ const DIM_NIGHT = { on: true, start: '22:00', end: '06:00' };
 const atClock = (sandbox, h, m = 0) => vm.runInContext(
   `Date = class extends Date { constructor(...a) { super(...(a.length ? a : [2026, 10, 27, ${h}, ${m}])); } };`,
   sandbox);
-const setHub = (sandbox, data) => vm.runInContext(`hubData = ${JSON.stringify(data)};`, sandbox);
+const setHub = (sandbox, data) => vm.runInContext(
+  `hubData = ${JSON.stringify(data)}; hubDataAt = new Date().getTime();`, sandbox);
 
 test('tickClock dims by the household dim hours, not a fixed 10pm', () => {
   const { document, sandbox } = newHub();
@@ -13408,10 +13409,68 @@ test('dim settings: Off, On and a new time each save the household setting', asy
   assert.equal(polled, 4, 'each save repaints from the hub');
 });
 
-test('dim settings: a refused save says why', async () => {
+const awayHub = (away) => ({ integrations: [], dim: { hours: DIM_NIGHT, away } });
+
+test('tickClock: a failed poll lets an old nobody-home answer expire', async () => {
   const { document, sandbox } = newHub();
+  atClock(sandbox, 12);
+  sandbox.fetch = async (url) => (url === '/api/hub'
+    ? okResp(awayHub({ enabled: true, state: 'away', home: 0, dim: true }))
+    : Promise.reject(new Error('offline in test')));
+  await sandbox.poll();
+  sandbox.tickClock();
+  assert.ok(document.body.classList.contains('is-night'), 'a fresh nobody-home answer dims');
+  // the hub goes away; four minutes on, nothing new has arrived
+  sandbox.fetch = async () => { throw new Error('hub down'); };
+  atClock(sandbox, 12, 4);
+  await sandbox.poll();
+  sandbox.tickClock();
+  assert.ok(!document.body.classList.contains('is-night'),
+    'the wall must not stay dim on an answer it can no longer refresh');
+});
+
+test('tickClock: a stale away payload held in memory never dims', () => {
+  const { document, sandbox } = newHub();
+  atClock(sandbox, 12);
+  setHub(sandbox, awayHub({ enabled: true, state: 'away', home: 0, dim: true }));
+  atClock(sandbox, 12, 5);
+  sandbox.tickClock();
+  assert.ok(!document.body.classList.contains('is-night'));
+});
+
+// A time picker as the change handler sees it: blur() really drops focus.
+function fakePicker(document, attr, value) {
+  const el = { value, matches: (s) => s === `[${attr}]`, tagName: 'SELECT' };
+  el.blur = () => { if (document.activeElement === el) document.activeElement = null; };
+  return el;
+}
+
+test('dim settings: an accepted time blurs the picker so the summary repaints', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'dim-ctl';
+  document.body.appendChild(host);
+  setHub(sandbox, awayHub(null));
+  sandbox.renderDimSettings(sandbox.hubData || vm.runInContext('hubData', sandbox));
+  const picker = fakePicker(document, 'data-dim-start', '21:00');
+  host.contains = (n) => n === picker;
+  document.activeElement = picker;
+  const saved = { on: true, start: '21:00', end: '06:00' };
+  sandbox.fetch = async (url) => (url === '/api/hub'
+    ? okResp({ integrations: [], dim: { hours: saved, away: null } }) : okResp(saved));
+  await sandbox.dimChange({ target: picker });
+  assert.equal(document.activeElement, null, 'the picker let go of focus before the save');
+  assert.match(host.innerHTML, /dims from 9pm to 6am/, 'the summary line shows the new time');
+});
+
+test('dim settings: a refused save says why and puts the stored time back', async () => {
+  const { document, sandbox } = newHub();
+  setHub(sandbox, awayHub(null));
   sandbox.fetch = async () => failResp(422, "The start and end times can't be the same.");
   sandbox.poll = async () => {};
-  await sandbox.dimChange({ target: { value: '06:00', matches: (s) => s === '[data-dim-start]' } });
+  const picker = fakePicker(document, 'data-dim-start', '06:00');
+  document.activeElement = picker;
+  await sandbox.dimChange({ target: picker });
   assert.match(document.getElementById('toast').textContent, /can't be the same/);
+  assert.equal(picker.value, '22:00', 'the picker shows what is really saved');
 });
