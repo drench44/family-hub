@@ -1786,6 +1786,9 @@ function rewardsCardHtml(st) {
   if (!st.feature_on) {
     return intro + `<div class="hint">The chore wallet is switched off in Features &amp; integrations above.</div>`;
   }
+  if (st.pin_key_missing) {
+    return intro + `<div class="hint">${PIN_KEY_MISSING}</div>`;
+  }
   if (!st.pin_set) {
     return intro + `<div class="hint">First pick a parent PIN. It keeps the money settings, payouts and fixes to old days for grown-ups.</div>`
       + `<button class="btn-primary" type="button" data-rw-setpin="1">Set a parent PIN</button>`;

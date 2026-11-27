@@ -12,7 +12,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Security
 
-- The parent PIN can no longer be guessed from a stolen copy of the database. Its hash now mixes in a secret key kept in its own file beside the database (`data/pin.key`) and uses scrypt. A PIN saved the old way keeps working and is upgraded the next time it is entered. If the key file is lost (a restore onto a new box), money actions say so, and `python -m family_hub.parent_pin --clear` on the box lets a parent set a new PIN.
+- The parent PIN can no longer be guessed from a stolen copy of the database. Its hash now mixes in a secret key kept in its own file beside the database (`data/pin.key`) and uses scrypt. A PIN saved the old way keeps working and is upgraded the next time it is entered. If the key file is lost or damaged (a restore onto a new box), the wall and Settings say so instead of asking for the PIN again, the box log says it once, and `python -m family_hub.parent_pin --clear` on the box lets a parent set a new PIN.
 
 ## [1.21.2] — 2026-11-26
 

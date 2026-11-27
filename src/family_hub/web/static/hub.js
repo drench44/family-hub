@@ -4841,6 +4841,7 @@ async function toggleChore(id, done, rowDay) {
   if (res.why === 'locked') showToast(pinLockMessage(res.wait_s));
   else if (res.why === 'cancelled') showToast('Not changed. That day needs a parent.');
   else if (res.why === 'wrong') showToast('That PIN didn’t match. Nothing was changed.');
+  else if (res.why === 'key_missing') showToast(PIN_KEY_MISSING);
   else if (!ok) {
     showToast(choreToggleMessage(attemptToggle.lastError,
       Boolean(shown && data_date && data_date !== shown)));

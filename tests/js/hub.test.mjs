@@ -1855,3 +1855,14 @@ test('allChoresHtml: personal goals are tagged so the paid ones are easy to scan
   assert.equal((h.match(/allch-goal/g) || []).length, 1);
   assert.match(h, /Vitamins<\/span><span class="allch-goal">personal goal/);
 });
+
+test('rewardsCardHtml: a lost PIN key says how to fix it and offers no money controls', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE({ pin_set: true, pin_key_missing: true }));
+  assert.match(h, /can’t be checked on this hub/);
+  assert.doesNotMatch(h, /data-rw-pay|data-rw-save|data-rw-setpin/);
+});
+
+test('pinRefusal: reads a lost-key refusal', () => {
+  assert.deepEqual({ ...sandbox.pinRefusal({ status: 403, detail: { pin: 'key_missing' } }) },
+    { pin: 'key_missing', wait_s: 0 });
+});

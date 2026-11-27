@@ -13108,3 +13108,11 @@ test('jParent: a lost PIN key file says so instead of asking for the PIN again',
     /can’t be checked on this hub/);
   assert.equal(asked, 0);
 });
+
+test('toggleChore: a lost PIN key on an old-day tick shows the fix, not a retry', async () => {
+  const { sandbox, document } = newHub();
+  sandbox.withParentPin = async () => ({ ok: false, why: 'key_missing' });
+  sandbox.poll = async () => {};
+  await sandbox.toggleChore(7, false);
+  assert.match(document.getElementById('toast').textContent, /can’t be checked on this hub/);
+});

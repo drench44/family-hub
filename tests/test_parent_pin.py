@@ -183,3 +183,106 @@ def test_pause_records_are_pruned(conn):
     for i in range(30):
         pp.check(conn, "0000", T0 + dt.timedelta(hours=i), source=f"10.0.0.{i}")
     assert len(fdb.kv_get(conn, "rewards.pin_lock") or {}) <= 3
+
+
+def test_changing_a_pin_still_stored_the_old_way(conn, tmp_path):
+    import hashlib
+    import secrets
+    salt = secrets.token_bytes(16)
+    old = {"salt": salt.hex(), "hash": hashlib.pbkdf2_hmac("sha256", b"2468", salt, 200_000).hex()}
+    fdb.kv_set(conn, "rewards.pin", old)
+    with pytest.raises(ValueError):
+        pp.set_pin(conn, "1357", current="0000")
+    assert fdb.kv_get(conn, "rewards.pin") == old             # a wrong current changes nothing
+    assert not (tmp_path / "pin.key").exists()
+    pp.set_pin(conn, "1357", current="2468")
+    assert fdb.kv_get(conn, "rewards.pin")["v"] == 2
+    assert pp.check(conn, "1357", T0) == (True, 0)
+    assert pp.check(conn, "2468", T0) == (False, 0)
+
+
+@pytest.mark.parametrize("bad", [b"", b"x" * 31, b"x" * 33])
+def test_a_damaged_key_fails_closed_and_is_never_remade_under_a_pin(conn, tmp_path, bad, caplog):
+    pp.set_pin(conn, "4826", current=None)
+    (tmp_path / "pin.key").write_bytes(bad)
+    with caplog.at_level("ERROR"):
+        assert pp.key_missing(conn)
+        assert pp.check(conn, "4826", T0) == (False, 0)
+    assert "pin.key" in caplog.text
+    assert (tmp_path / "pin.key").read_bytes() == bad
+    pp.clear(conn)
+    pp.set_pin(conn, "1357", current=None)                     # a damaged key is replaced, with no PIN set
+    assert len((tmp_path / "pin.key").read_bytes()) == 32
+    assert pp.check(conn, "1357", T0) == (True, 0)
+
+
+def test_an_unreadable_key_reads_as_missing_not_a_crash(conn, tmp_path, monkeypatch):
+    pp.set_pin(conn, "4826", current=None)
+    monkeypatch.setattr(pp, "KEY_PATH", str(tmp_path))         # a directory: IsADirectoryError
+    assert pp.key_missing(conn)
+    assert pp.check(conn, "4826", T0) == (False, 0)
+
+
+def test_an_existing_key_is_reused_and_tightened(conn, tmp_path):
+    import os
+    key = tmp_path / "pin.key"
+    key.write_bytes(b"k" * 32)
+    os.chmod(key, 0o644)
+    pp.set_pin(conn, "4826", current=None)
+    assert key.read_bytes() == b"k" * 32
+    assert key.stat().st_mode & 0o777 == 0o600
+
+
+def test_two_first_pins_at_once_never_orphan_the_pin(tmp_path):
+    """Review 2026-11-27: two requests making the key at once could leave a
+    hash made with a key that the file no longer holds."""
+    import threading
+    db = str(tmp_path / "hub.db")
+    c0 = fdb.connect(db)
+    fdb.ensure_schema(c0)
+    c0.close()
+    import time
+    real_make = pp._new_key_bytes
+
+    def slow():
+        time.sleep(0.2)              # widen the window two requests can race in
+        return real_make()
+    pp._new_key_bytes = slow
+    try:
+        def go():
+            c = fdb.connect(db)
+            pp._store(c, "4826")
+            c.close()
+        ts = [threading.Thread(target=go) for _ in range(2)]
+        [t.start() for t in ts]
+        [t.join(timeout=10) for t in ts]
+    finally:
+        pp._new_key_bytes = real_make
+    c = fdb.connect(db)
+    assert pp.check(c, "4826", T0) == (True, 0)
+    c.close()
+
+
+def test_an_upgrade_that_cannot_save_still_lets_the_right_pin_in(conn, monkeypatch, caplog):
+    import hashlib
+    import secrets
+    salt = secrets.token_bytes(16)
+    fdb.kv_set(conn, "rewards.pin", {"salt": salt.hex(), "hash": hashlib.pbkdf2_hmac(
+        "sha256", b"2468", salt, 200_000).hex()})
+
+    def boom(*a, **k):
+        raise OSError("read-only")
+    monkeypatch.setattr(pp, "_store", boom)
+    with caplog.at_level("ERROR"):
+        assert pp.check(conn, "2468", T0) == (True, 0)
+    assert "upgrade" in caplog.text
+
+
+def test_clear_also_lifts_any_pause(conn):
+    pp.set_pin(conn, "1234", current=None)
+    for _ in range(5):
+        pp.check(conn, "0000", T0)
+    pp.clear(conn)
+    assert fdb.kv_get(conn, "rewards.pin_lock") is None
+    pp.set_pin(conn, "1357", current=None)
+    assert pp.check(conn, "1357", T0 + dt.timedelta(seconds=1)) == (True, 0)
