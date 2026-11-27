@@ -5,7 +5,10 @@ public-domain artwork) fills the screen, the dashboard floats on it as frosted
 glass in the colours of your chosen theme, a few leaves drift down over it, and the accent colour and a
 small mark by the wordmark match the photo. It follows the calendar when
 **Season** is on, and each device picks its own look from preview tiles in
-**All settings → Seasonal looks**.
+**All settings → Seasonal looks**. Each season folds under its own heading
+there. The season showing now (and the one holding a look picked for every
+day) starts open; a folded heading still names the look that season uses and
+how many looks are inside.
 
 This document is the standard every look is held to. It exists because the
 first three attempts at fall missed, for reasons worth not repeating. Read it

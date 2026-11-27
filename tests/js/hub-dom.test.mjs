@@ -9920,6 +9920,82 @@ test('renderSettingsFull: a Seasonal looks card with an Off/Calendar/Pick one sw
   assert.match(html, /class="look-accent-note"/);
 });
 
+// Two seasons, so folding has something to fold: fall (in season) and Christmas.
+const XMAS = { id: 'christmas', name: 'Christmas', from: [12, 1], to: [12, 31], looks: [
+  { id: 'christmas-tree', name: 'Tree <lit>', blurb: 'Lights' },
+] };
+function twoSeasonHub({ pin = null, active = 'fall' } = {}) {
+  const env = seasonHub();
+  Object.assign(env.sandbox, {
+    FH_SEASONS: [FALL[0], XMAS],
+    activeSeason: () => active,
+    seasonLook: (sid) => (sid === 'fall' ? 'fall-maple' : 'christmas-tree'),
+    pinnedLook: () => pin,
+  });
+  const host = env.document.createElement('div');
+  host._id = 'settings-full';
+  env.document.body.appendChild(host);
+  return { ...env, host };
+}
+
+test('Seasonal looks: each season folds under its own heading, open only while in season', () => {
+  const { sandbox, host } = twoSeasonHub();
+  sandbox.renderSettingsFull();
+  const html = host.innerHTML;
+  assert.match(html, /<details class="look-season" data-look-season="fall" open>/, 'the season showing now starts open');
+  assert.match(html, /<details class="look-season" data-look-season="christmas">/, 'a season not showing starts folded');
+  const count = (re) => (html.match(re) || []).length;
+  assert.equal(count(/<details\b/g), count(/<\/details>/g), 'balanced details');
+  assert.equal(count(/<summary class="look-season-head">/g), 2, 'one tappable heading per season');
+  assert.match(html, /class="look-season-count">2 looks</, 'the heading says how many looks are inside');
+  assert.match(html, /class="look-season-count">1 look</, 'one look is singular');
+  // the tiles stay inside their season's fold
+  const xmas = html.slice(html.indexOf('data-look-season="christmas"'));
+  assert.match(xmas.slice(0, xmas.indexOf('</details>')), /data-look-pick="christmas-tree"/);
+  assert.doesNotMatch(html, /<lit>/, 'look names are escaped');
+});
+
+test('Seasonal looks: the season holding the picked-for-every-day look starts open too', () => {
+  const { sandbox, host } = twoSeasonHub({ pin: 'christmas-tree' });
+  sandbox.renderSettingsFull();
+  assert.match(host.innerHTML, /data-look-season="christmas" open>/);
+  assert.match(host.innerHTML, /data-look-season="fall" open>/, 'the season in its dates stays open');
+});
+
+test('Seasonal looks: with nothing in season and nothing pinned, every season starts folded', () => {
+  const { sandbox, host } = twoSeasonHub({ active: null });
+  sandbox.renderSettingsFull();
+  assert.doesNotMatch(host.innerHTML, /<details class="look-season"[^>]* open>/);
+});
+
+test('reflectThemeControls names each season\'s chosen look in its folded heading', () => {
+  const { document, sandbox, host } = twoSeasonHub();
+  document.documentElement.setAttribute('data-season', 'on');
+  sandbox.renderSettingsFull();
+  assert.equal(host.querySelector('[data-look-season-picked="fall"]').textContent, 'Maple');
+  assert.equal(host.querySelector('[data-look-season-picked="christmas"]').textContent, 'Tree <lit>',
+    'set as text, so it is never markup');
+});
+
+test('reflectThemeControls: with a look pinned, only its season names a look', () => {
+  const { document, sandbox, host } = twoSeasonHub({ pin: 'christmas-tree' });
+  document.documentElement.setAttribute('data-season', 'on');
+  sandbox.renderSettingsFull();
+  assert.equal(host.querySelector('[data-look-season-picked="christmas"]').textContent, 'Tree <lit>');
+  assert.equal(host.querySelector('[data-look-season-picked="fall"]').textContent, '',
+    'fall paints nothing while a Christmas look is kept every day');
+});
+
+test('Seasonal looks: a season folded or opened by hand stays that way when Settings repaints', () => {
+  const { sandbox, host } = twoSeasonHub();
+  sandbox.renderSettingsFull();
+  host.querySelector('[data-look-season="fall"]').open = false;
+  host.querySelector('[data-look-season="christmas"]').open = true;
+  sandbox.renderSettingsFull();
+  assert.match(host.innerHTML, /data-look-season="fall">/, 'fall stays folded');
+  assert.match(host.innerHTML, /data-look-season="christmas" open>/, 'Christmas stays open');
+});
+
 test('reflectThemeControls marks the season switch and each season\'s picked look', () => {
   const { document, sandbox } = seasonHub();
   const host = document.createElement('div');

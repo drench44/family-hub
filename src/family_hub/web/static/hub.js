@@ -5592,6 +5592,12 @@ function reflectThemeControls() {
       b.classList.toggle('on', on);
       b.setAttribute('aria-pressed', on && season === 'on' ? 'true' : 'false');
     });
+    // a folded season's heading names the look it uses, so it reads closed
+    ctl.querySelectorAll('[data-look-season-picked]').forEach((n) => {
+      const s = seasonList().find((x) => x.id === n.dataset.lookSeasonPicked);
+      const id = s && s.looks.find((l) => picked.has(l.id));
+      n.textContent = id ? id.name : '';
+    });
     ctl.querySelectorAll('[data-theme-set]').forEach((b) =>
       b.classList.toggle('on', b.dataset.themeSet === mode));
     ctl.querySelectorAll('[data-c]').forEach((b) =>
@@ -6169,8 +6175,17 @@ function seasonWindowText(s) {
 // season's looks as live preview tiles (the real scene in miniature, painted by
 // the look's own tokens). A tile shows that look now and keeps it any day of
 // the year ("Pick one"); "Calendar" goes back to following the dates.
-function seasonalCardHtml() {
+// Each season is a native fold (<details>), so a long list stays short: the
+// season showing now, and the one holding a look kept every day, start open;
+// the rest show just their heading, with how many looks are inside and which
+// one that season uses (filled by reflectThemeControls). `openIds` (season id
+// -> true/false) keeps a fold the way someone left it across a repaint.
+function seasonalCardHtml(openIds) {
   const now = typeof activeSeason === 'function' ? activeSeason() : null;
+  const pin = typeof pinnedLook === 'function' ? pinnedLook() : null;
+  const kept = openIds || new Map();
+  const startsOpen = (s) => (kept.has(s.id) ? kept.get(s.id)
+    : (s.id === now || (!!pin && s.looks.some((l) => l.id === pin))));
   const tile = (look) => `<button class="look-tile" type="button" data-look-pick="${escapeHtml(look.id)}" aria-pressed="false">`
     + `<span class="look-swatch" data-look="${escapeHtml(look.id)}" aria-hidden="true">`
     + seasonSceneHtml(look.id)
@@ -6182,15 +6197,25 @@ function seasonalCardHtml() {
     + (look.credit ? `<span class="look-credit">${escapeHtml(look.credit)}</span>` : '')
     + '</span>'
     + '</button>';
-  const groups = seasonList().map((s) => '<div class="look-season">'
-    + '<div class="look-season-head">'
-    + `<span class="look-season-name">${escapeHtml(s.name)}</span>`
-    + `<span class="look-season-when">${seasonWindowText(s)}</span>`
-    + (s.id === now ? '<span class="look-season-now">In season</span>' : '')
-    + '</div>'
-    + `<div class="look-tiles" role="group" aria-label="${escapeHtml(s.name)} looks">`
-    + s.looks.map(tile).join('')
-    + '</div></div>').join('');
+  const groups = seasonList().map((s) => {
+    const sid = escapeHtml(s.id);
+    const n = s.looks.length;
+    return `<details class="look-season" data-look-season="${sid}"${startsOpen(s) ? ' open' : ''}>`
+      + '<summary class="look-season-head">'
+      + '<span class="look-season-title">'
+      + `<span class="look-season-name">${escapeHtml(s.name)}</span>`
+      + `<span class="look-season-when">${seasonWindowText(s)}</span>`
+      + (s.id === now ? '<span class="look-season-now">In season</span>' : '')
+      + '</span>'
+      + '<span class="look-season-meta">'
+      + `<span class="look-season-picked" data-look-season-picked="${sid}"></span>`
+      + `<span class="look-season-count">${n} ${n === 1 ? 'look' : 'looks'}</span>`
+      + '</span>'
+      + '</summary>'
+      + `<div class="look-tiles" role="group" aria-label="${escapeHtml(s.name)} looks">`
+      + s.looks.map(tile).join('')
+      + '</div></details>';
+  }).join('');
   return '<div class="settings-row">'
     + tipLabelHtml('Mode')
     + '<div class="seg" role="group" aria-label="Seasonal looks">'
@@ -6623,6 +6648,11 @@ async function backupsClick(e) {
 function renderSettingsFull() {
   const host = document.getElementById('settings-full');
   if (!host) return;
+  // keep each season's fold the way it was left (details.open is the truth)
+  const lookSeasonsOpen = new Map();
+  host.querySelectorAll('.look-season').forEach((d) => {
+    if (typeof d.open === 'boolean') lookSeasonsOpen.set(d.dataset.lookSeason, d.open);
+  });
   host.innerHTML = settingsNavHtml()
     + `<div class="overlay-title">Settings</div>`
     + `<div class="card pad settings-card" id="settings-display">`
@@ -6658,7 +6688,7 @@ function renderSettingsFull() {
     // Seasonal looks: their own card, since the preview tiles need the room.
     + `<div class="card pad settings-card" id="settings-looks">`
     + `<div class="shead"><span class="tick"></span><h2>Seasonal looks</h2></div>`
-    + `<div class="theme-ctl stack">${seasonalCardHtml()}</div>`
+    + `<div class="theme-ctl stack">${seasonalCardHtml(lookSeasonsOpen)}</div>`
     + `</div>`
     // Per-device behavior, apart from the look: these two answer "how does THIS
     // screen act", so a phone and the wall can differ.
