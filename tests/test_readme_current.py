@@ -10,6 +10,7 @@ The tests that read repo files are marked engine_checkout (conftest skips them
 on the staged deploy tree, which has no .git and the house README).
 """
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -198,11 +199,19 @@ def test_readme_pictures_are_not_stale():
     if probe.returncode != 0:
         pytest.skip("git history is not available here")
     if probe.stdout.strip() == "true":
-        pytest.skip("shallow clone: the history needed to count UI changes is missing "
-                    "(CI checks out with fetch-depth: 0)")
+        why = ("shallow clone: the history needed to count UI changes is missing "
+               "(CI checks out with fetch-depth: 0)")
+        if os.environ.get("CI"):
+            pytest.fail(why + "; in CI that means the check never ran")
+        pytest.skip(why)
     last = _git("log", "-1", "--format=%H", "--", "docs/gallery")
     sha = last.stdout.strip()
     if last.returncode != 0 or not sha:
+        # The gallery pictures exist (the orphan test requires them), so a
+        # history that never touched them means a rename or a broken pathspec,
+        # never "nothing to check".
+        if (ROOT / "docs" / "gallery").is_dir():
+            pytest.fail("docs/gallery exists but no commit touches it: was it renamed?")
         pytest.skip("no commit has touched docs/gallery yet")
     n = _git("rev-list", "--count", f"{sha}..HEAD", "--", *UI_FILES)
     assert n.returncode == 0, n.stderr
