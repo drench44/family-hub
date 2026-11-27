@@ -66,6 +66,15 @@ at one URL.
   Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
 
   ![Seasonal looks: Christmas (Santa and the Moon, Snow Globe) and Halloween (Lantern Night, Haunted Pines)](docs/seasons.jpg)
+- **Dimming:** every screen dims from 10pm to 6am, and **All settings →
+  Display → Dim hours** changes the hours (a window can cross midnight or sit
+  inside one day) or turns the time-of-day dim off. It is one setting for the
+  house, so every wall and phone follows it. With Home Assistant connected, the
+  **Dim when nobody is home** switch (off until you turn it on) also dims the
+  wall while the house is empty: the hub asks Home Assistant once a minute
+  (`zone.home`, or the people you list), and if it can't get an answer the wall
+  stays bright and Settings says so. Phones never dim for an empty house.
+  Whatever night stills or hides, an empty house does too.
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
   hub in **Safari** and use Share → **Add to Home Screen** for a full-screen
@@ -244,7 +253,8 @@ outage never marks the container unhealthy.
 should gate on. It always returns 200 with a report:
 
 - `sources`: one entry per thing the wall shows (`calendar`, `laundry`,
-  `weather`, `climate`, `fleet`, `cameras`), each with `ok`, a `status` word
+  `weather`, `climate`, `fleet`, `cameras`, and `presence` while Dim when
+  nobody is home is on), each with `ok`, a `status` word
   (`ok`, `off`, `waiting`, `stale`, `needs_auth`, `error`, `upstream_down`,
   `degraded`) and the timestamps that prove freshness. Only reads made by the
   running process count: the calendar's `last_sync` must be newer than
@@ -333,6 +343,7 @@ and brings it back when someone uses a mouse. See
 | `weather_base` | Base URL of a weather JSON feed for the native weather card (the card shows for a configured `weather` panel; empty base = "unavailable" note) |
 | `climate_base` | Base URL of a per-room climate JSON feed for the native climate card (shows for a configured `climate` panel; empty base = "unavailable" note) |
 | `laundry` | Washer/dryer status via Home Assistant: `{"ha_base", "machines": [{"id","label","kind","status_entity","remaining_entity"}]}` — `kind` is `washer` or `dryer` (sets the drum tint), the entities are HA sensor ids (LG ThinQ's *Current status* enum + *Remaining time* timestamp, or equivalents). Optional per machine: `total_entity` (cycle length in minutes; LG *Total time*), `start_entity` (LG *Delayed start* timestamp) and `error_entity` (LG *Error* event). Each only adds detail; leave any out. The HA long-lived token comes from the `HA_TOKEN` env var, never this file. Omit to skip the card. |
+| `presence` | Optional, for **Dim when nobody is home**: `{"ha_base", "people": ["person.x", ...]}`. Both keys are optional. With no `ha_base` it uses the laundry block's Home Assistant. With no `people` it reads `zone.home`, whose state is how many people are home; with a list, the wall dims only when every listed person reads as away. Uses the same `HA_TOKEN`. The switch shows wherever a Home Assistant is configured. |
 | `fleet` | Fleet Console card and the 3D printer card (each with its own Settings switch): `{"base": "http://192.168.1.50:3000"}`, the base URL of a separate home-lab dashboard app exposing a compact `/api/rollup` status endpoint (host + 3D-printer status). Optional `"label"`. Omit to skip the card. Pair with a `"fleet"` entry in `panels` (below) to get the **⛶ Console** full-screen button. |
 | `theme` | House default display theme — `{"mode","accent","columns","layout","idleReturn","season"}` (`mode`: light/soft/dark/grey/black, `accent`: cyan/violet/amber/green, `columns`: none/wells/lines, `layout`: auto/desktop, `idleReturn`: on/off, `season`: on/off for seasonal looks). Applied on a fresh device with no saved override |
 
