@@ -2468,6 +2468,8 @@ body.kiosk-cursor-hidden, body.kiosk-cursor-hidden * { cursor: none !important; 
 .dim-times .txt-input { width: auto; min-width: 120px; min-height: 44px; }
 .dim-times .txt-input:disabled { opacity: .5; cursor: not-allowed; }
 .dim-ctl > .settings-row { flex: 1 1 100%; }
+/* the row is a column, so the On/Off pill would stretch the full card width */
+.dim-ctl .seg { align-self: flex-start; }
 /* the nobody-home line: its own sentence, a little apart from the hours */
 .settings-sub.dim-away { margin-top: 2px; }
 .todo-source-ctl:empty { display: none; }
