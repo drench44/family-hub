@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.17.1] — 2026-11-26
+
 ### Changed
 
 - Chore wallet: wrong PIN guesses now pause PIN checks for 30 seconds instead of 5 minutes (each further wrong guess pauses again), so guessing stays slow but nobody can keep a parent out for long. Deleting, turning off or making one-time a chore that was already done and paid today needs the parent PIN. The "How it works" wallet topic uses this wall's own amounts, bonus, shields and cutoff, and says so plainly when the wallet is off or its numbers can't be read instead of showing made-up defaults. The "Every chore" list in edit mode tags personal goals, so the paid chores are easy to pick out.
