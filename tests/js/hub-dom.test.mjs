@@ -13097,6 +13097,45 @@ test('settings menu: the edge fades show only on a side that has more to scroll'
   assert.deepEqual(JSON.parse(JSON.stringify(F(0, 700, 700))), { left: false, right: false });
 });
 
+test('wireSettingsNav: the first paint jumps the strip to the lit chip and lights the right fade', () => {
+  const { document, sandbox } = newHub();
+  const rect = (left, width, top = 0, height = 44) => ({ left, right: left + width, width, top, bottom: top + height, height });
+  // a 300px strip over 700px of buttons, scrolled to the start; the lit button
+  // (Backups) sits off screen to the right at 500..600
+  const calls = [];
+  const classes = new Set();
+  const strip = {
+    scrollLeft: 0, scrollWidth: 700, clientWidth: 300,
+    getBoundingClientRect: () => rect(0, 300),
+    scrollTo(opts) { calls.push(opts); },
+    addEventListener() {},
+    classList: { toggle(c, on) { if (on) classes.add(c); else classes.delete(c); } },
+  };
+  const lit = { getBoundingClientRect: () => rect(500, 100), textContent: 'Backups' };
+  const buttons = [0, 1, 2].map(() => ({ classList: { toggle() {} }, setAttribute() {}, removeAttribute() {} }));
+  const nav = {
+    getBoundingClientRect: () => rect(0, 300, 0, 62),
+    querySelector: (sel) => (sel === '.settings-strip' ? strip : sel === '.on' ? lit : null),
+    querySelectorAll: () => buttons,
+  };
+  const scroller = {
+    scrollTop: 0, clientHeight: 800, scrollHeight: 3000,
+    addEventListener() {}, getBoundingClientRect: () => rect(0, 300, 0, 800),
+  };
+  const host = { parentElement: scroller, querySelector: (sel) => (sel === '.settings-nav' ? nav : null) };
+  const realGet = document.getElementById;
+  document.getElementById = (id) => (id === 'settings-full' ? host : null);
+  try {
+    sandbox.wireSettingsNav();
+  } finally {
+    document.getElementById = realGet;   // later timers in the harness need the real lookup
+  }
+  assert.equal(calls.length, 1, 'the strip is moved once');
+  assert.equal(calls[0].left, 400, 'the lit chip is centered, clamped to the end of the strip');
+  assert.equal(calls[0].behavior, 'auto', 'the first paint jumps, it does not glide');
+  assert.ok(classes.has('fade-r') && !classes.has('fade-l'), 'more to the right, nothing to the left');
+});
+
 test('settings menu: the buttons sit in a scrolling strip inside the sticky menu', () => {
   const { document, sandbox } = newHub();
   const host = document.createElement('div');
