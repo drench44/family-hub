@@ -11,7 +11,8 @@ Away dimming is optional and off by default. The server asks Home Assistant
 who is home (zone.home's state is the number of people in the home zone, or a
 configured list of person.* entities) on a slow background loop and caches
 the answer; /api/hub carries it as the `away` block. It fails soft: an answer
-that is missing, stale, or unreadable never dims the wall.
+that is missing, stale, or unreadable never dims the wall, and the wall only
+dims on the second nobody-home read in a row.
 
 Pure except read_presence, which takes the caller's httpx client.
 """
@@ -148,12 +149,36 @@ async def _state(client, base: str, token: str, entity: str):
         return None, f"{entity}: {type(e).__name__}: {e}"[:200], False
 
 
+async def _all_people(client, base: str, token: str):
+    """Every person.* entity's state, as {entity_id: body}, from one read of
+    /api/states. (None, why, refused) when it can't be read."""
+    try:
+        r = await client.get(f"{base}/api/states", timeout=TIMEOUT,
+                             headers={"Authorization": f"Bearer {token}"})
+        if r.status_code in (401, 403):
+            return None, f"Home Assistant refused the token (HTTP {r.status_code})", True
+        r.raise_for_status()
+        body = r.json()
+        if not isinstance(body, list):
+            return None, "the state list is not a list", False
+    except Exception as e:
+        return None, f"the state list: {type(e).__name__}: {e}"[:200], False
+    return ({b["entity_id"]: b for b in body
+             if isinstance(b, dict) and isinstance(b.get("entity_id"), str)
+             and b["entity_id"].startswith("person.")}, None, False)
+
+
 async def read_presence(client, base: str, token: str, people: list[str]) -> dict:
     """Ask Home Assistant how many people are home. Never raises.
 
     {"ok": True, "home": n} or {"ok": False, "error": str, "auth": bool}.
     With a people list, one person at home is enough to say someone is home,
-    but "nobody is home" needs every person read as away."""
+    but "nobody is home" needs every person read as away.
+
+    zone.home reads "0" right after a Home Assistant restart, while every
+    tracker is still unknown. So a zero is only believed once every person
+    entity (and any zone.home names in its persons attribute) reads as a real
+    place; one unknown or unavailable person makes the read unreadable."""
     if not people:
         body, err, auth = await _state(client, base, token, DEFAULT_ENTITY)
         if err:
@@ -162,7 +187,22 @@ async def read_presence(client, base: str, token: str, people: list[str]) -> dic
         if n is None:
             return {"ok": False, "error": f"{DEFAULT_ENTITY} reads {body.get('state')!r}",
                     "auth": False}
-        return {"ok": True, "home": n}
+        if n > 0:
+            return {"ok": True, "home": n}
+        everyone, err, auth = await _all_people(client, base, token)
+        if err:
+            return {"ok": False, "error": err, "auth": auth}
+        attrs = body.get("attributes") if isinstance(body.get("attributes"), dict) else {}
+        named = [p for p in attrs.get("persons") or [] if isinstance(p, str)]
+        if not everyone and not named:
+            return {"ok": False, "auth": False,
+                    "error": "Home Assistant has no person entities, so zone.home can't count anyone"}
+        unsure = sorted(e for e in set(everyone) | set(named)
+                        if person_home(everyone.get(e)) is None)
+        if unsure:
+            return {"ok": False, "auth": False,
+                    "error": f"{', '.join(unsure)} reads unknown (Home Assistant may be starting)"}
+        return {"ok": True, "home": 0}
     got = await asyncio.gather(*(_state(client, base, token, p) for p in people))
     home, unknown, auth, errors = 0, [], False, []
     for ent, (body, err, refused) in zip(people, got):
@@ -181,15 +221,20 @@ async def read_presence(client, base: str, token: str, people: list[str]) -> dic
 
 
 def away_block(*, enabled: bool, token: bool, snap: dict | None,
-               at: float | None, now: float) -> dict:
+               at: float | None, now: float, watching: bool = True) -> dict:
     """The /api/hub `away` block: {enabled, state, home, dim}.
 
-    state is off | needs_auth | checking | unreadable | home | away, and dim
-    is True only for a fresh, readable answer of nobody home."""
+    state is off | needs_auth | stopped | checking | unreadable | home |
+    confirming | away, and dim is True only for a fresh, readable answer of
+    nobody home that a second read in a row confirmed. `watching` is False
+    when the background watcher has died: that is the hub's fault, so it is
+    named as such instead of blaming Home Assistant."""
     if not enabled:
         return {"enabled": False, "state": "off", "home": None, "dim": False}
     if not token:
         return {"enabled": True, "state": "needs_auth", "home": None, "dim": False}
+    if not watching:
+        return {"enabled": True, "state": "stopped", "home": None, "dim": False}
     if snap is None or at is None:
         return {"enabled": True, "state": "checking", "home": None, "dim": False}
     if not snap.get("ok") and snap.get("auth"):
@@ -199,6 +244,8 @@ def away_block(*, enabled: bool, token: bool, snap: dict | None,
     n = snap.get("home")
     if not isinstance(n, int) or n < 0:
         return {"enabled": True, "state": "unreadable", "home": None, "dim": False}
+    if n == 0 and snap.get("confirmed") is False:
+        return {"enabled": True, "state": "confirming", "home": 0, "dim": False}
     return {"enabled": True, "state": "away" if n == 0 else "home",
             "home": n, "dim": n == 0}
 

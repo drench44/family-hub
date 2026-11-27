@@ -33,7 +33,27 @@ def _app(tmp_path, monkeypatch, extra=None, token="tok", demo=False):
         monkeypatch.delenv("DEMO", raising=False)
     import family_hub.app as appmod
     importlib.reload(appmod)
+    monkeypatch.setattr(appmod, "_presence_watch_task", _Running())
     return appmod
+
+
+class _Running:
+    """Stands in for a live presence watcher task."""
+    def done(self):
+        return False
+
+
+# Everyone's tracker reads away: a zero zone.home is then a real empty house.
+EMPTY = [{"entity_id": "person.a", "state": "not_home"}]
+
+
+def _zone(n, people=EMPTY):
+    return {"zone.home": {"state": str(n)}, "states": people}
+
+
+def _ticks(appmod, n=1):
+    for _ in range(n):
+        asyncio.run(appmod._presence_tick())
 
 
 @pytest.fixture
@@ -147,13 +167,13 @@ def test_the_watcher_does_not_ask_home_assistant_while_switched_off(ha, monkeypa
 def test_nobody_home_dims_and_somebody_home_does_not(ha, monkeypatch):
     appmod, c = ha
     c.patch("/api/integrations/away_dim", json={"enabled": True})
-    asked = _ha_answers(appmod, monkeypatch, {"zone.home": {"state": "0"}})
-    asyncio.run(appmod._presence_tick())
-    assert asked == ["zone.home"]
+    asked = _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod, 2)
+    assert asked == ["zone.home", "states"] * 2
     assert c.get("/api/hub").json()["dim"]["away"] == \
         {"enabled": True, "state": "away", "home": 0, "dim": True}
     assert _row(c, "away_dim")["status"] is None
-    _ha_answers(appmod, monkeypatch, {"zone.home": {"state": "3"}})
+    _ha_answers(appmod, monkeypatch, _zone(3))
     asyncio.run(appmod._presence_tick())
     away = c.get("/api/hub").json()["dim"]["away"]
     assert away["state"] == "home" and away["home"] == 3 and away["dim"] is False
@@ -162,8 +182,8 @@ def test_nobody_home_dims_and_somebody_home_does_not(ha, monkeypatch):
 def test_home_assistant_unreadable_never_dims_and_the_row_says_so(ha, monkeypatch, caplog):
     appmod, c = ha
     c.patch("/api/integrations/away_dim", json={"enabled": True})
-    _ha_answers(appmod, monkeypatch, {"zone.home": {"state": "0"}})
-    asyncio.run(appmod._presence_tick())
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod, 2)
     assert c.get("/api/hub").json()["dim"]["away"]["dim"] is True
     # HA goes away: the wall comes back up at once, the row says error
     _ha_answers(appmod, monkeypatch, {"zone.home": 500})
@@ -176,7 +196,7 @@ def test_home_assistant_unreadable_never_dims_and_the_row_says_so(ha, monkeypatc
     # one warning for the outage, not one per tick
     assert caplog.text.count("away dimming: Home Assistant") == 1
     # and it heals
-    _ha_answers(appmod, monkeypatch, {"zone.home": {"state": "1"}})
+    _ha_answers(appmod, monkeypatch, _zone(1))
     asyncio.run(appmod._presence_tick())
     assert c.get("/api/hub").json()["dim"]["away"]["state"] == "home"
     assert _row(c, "away_dim")["status"] is None
@@ -185,8 +205,9 @@ def test_home_assistant_unreadable_never_dims_and_the_row_says_so(ha, monkeypatc
 def test_a_stale_answer_stops_dimming(ha, monkeypatch):
     appmod, c = ha
     c.patch("/api/integrations/away_dim", json={"enabled": True})
-    _ha_answers(appmod, monkeypatch, {"zone.home": {"state": "0"}})
-    asyncio.run(appmod._presence_tick())
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod, 2)
+    assert c.get("/api/hub").json()["dim"]["away"]["dim"] is True
     monkeypatch.setattr(appmod, "_presence_at", appmod._presence_at - dimming.FRESH_S - 5)
     assert c.get("/api/hub").json()["dim"]["away"]["dim"] is False
 
@@ -194,8 +215,8 @@ def test_a_stale_answer_stops_dimming(ha, monkeypatch):
 def test_turning_it_off_forgets_the_last_answer(ha, monkeypatch):
     appmod, c = ha
     c.patch("/api/integrations/away_dim", json={"enabled": True})
-    _ha_answers(appmod, monkeypatch, {"zone.home": {"state": "0"}})
-    asyncio.run(appmod._presence_tick())
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod, 2)
     c.patch("/api/integrations/away_dim", json={"enabled": False})
     asyncio.run(appmod._presence_tick())
     c.patch("/api/integrations/away_dim", json={"enabled": True})
@@ -210,8 +231,8 @@ def test_a_people_list_from_config_is_used(tmp_path, monkeypatch):
         c.patch("/api/integrations/away_dim", json={"enabled": True})
         asked = _ha_answers(appmod, monkeypatch, {
             "person.one": {"state": "not_home"}, "person.two": {"state": "Work"}})
-        asyncio.run(appmod._presence_tick())
-        assert sorted(asked) == ["person.one", "person.two"]
+        _ticks(appmod, 2)
+        assert sorted(set(asked)) == ["person.one", "person.two"]
         assert c.get("/api/hub").json()["dim"]["away"]["dim"] is True
 
 
@@ -289,6 +310,7 @@ def test_health_full_reports_presence_while_switched_on(ha, monkeypatch):
     appmod, c = ha
     assert c.get("/health/full").json()["sources"]["presence"]["enabled"] is False
     c.patch("/api/integrations/away_dim", json={"enabled": True})
+    monkeypatch.setattr(appmod, "_presence_watch_task", None)
     # switched on with no watcher running is a named problem
     src = c.get("/health/full").json()["sources"]["presence"]
     assert src["ok"] is False and "not running" in src["error"]
@@ -297,7 +319,7 @@ def test_health_full_reports_presence_while_switched_on(ha, monkeypatch):
         def done(self):
             return False
     monkeypatch.setattr(appmod, "_presence_watch_task", Running())
-    _ha_answers(appmod, monkeypatch, {"zone.home": {"state": "2"}})
+    _ha_answers(appmod, monkeypatch, _zone(2))
     asyncio.run(appmod._presence_tick())
     src = c.get("/health/full").json()["sources"]["presence"]
     assert src["ok"] is True and src["status"] == "ok" and src["last_ok"]
@@ -317,3 +339,129 @@ def test_demo_lists_the_switch_with_a_canned_someone_home(tmp_path, monkeypatch)
         c.patch("/api/integrations/away_dim", json={"enabled": True})
         assert c.get("/api/hub").json()["dim"]["away"] == \
             {"enabled": True, "state": "home", "home": 2, "dim": False}
+
+
+# --- review fixes: restarts, a stopped watcher, races, seeding, the kick ----
+
+def test_one_nobody_home_read_is_not_enough_to_dim(ha, monkeypatch):
+    """A single zero can be a blip; the wall dims on the second in a row, and
+    a read of someone home in between starts the count again."""
+    appmod, c = ha
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod)
+    away = c.get("/api/hub").json()["dim"]["away"]
+    assert away == {"enabled": True, "state": "confirming", "home": 0, "dim": False}
+    _ha_answers(appmod, monkeypatch, _zone(1))
+    _ticks(appmod)
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod)
+    assert c.get("/api/hub").json()["dim"]["away"]["dim"] is False
+    _ticks(appmod)
+    assert c.get("/api/hub").json()["dim"]["away"]["dim"] is True
+    # an unreadable read in between starts it over too
+    _ha_answers(appmod, monkeypatch, {"zone.home": 500})
+    _ticks(appmod)
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod)
+    assert c.get("/api/hub").json()["dim"]["away"]["state"] == "confirming"
+
+
+def test_a_home_assistant_restart_never_reads_as_nobody_home(ha, monkeypatch):
+    appmod, c = ha
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+    _ha_answers(appmod, monkeypatch, _zone(0, [{"entity_id": "person.a", "state": "unknown"}]))
+    _ticks(appmod, 3)
+    away = c.get("/api/hub").json()["dim"]["away"]
+    assert away["state"] == "unreadable" and away["dim"] is False
+
+
+def test_a_stopped_watcher_says_so_instead_of_blaming_home_assistant(ha, monkeypatch):
+    appmod, c = ha
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod, 2)
+
+    class Dead:
+        def done(self):
+            return True
+    monkeypatch.setattr(appmod, "_presence_watch_task", Dead())
+    away = c.get("/api/hub").json()["dim"]["away"]
+    assert away == {"enabled": True, "state": "stopped", "home": None, "dim": False}
+    assert _row(c, "away_dim")["status"] == "error"
+
+
+def test_forgetting_rearms_the_outage_warning(ha, monkeypatch, caplog):
+    appmod, c = ha
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+    _ha_answers(appmod, monkeypatch, {"zone.home": 500})
+    _ticks(appmod)
+    assert appmod._presence_warned is True
+    c.patch("/api/integrations/away_dim", json={"enabled": False})
+    assert appmod._presence_warned is False
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+    with caplog.at_level("WARNING"):
+        _ticks(appmod)
+    assert "could not be read" in caplog.text
+
+
+def test_a_tick_started_before_a_flip_cannot_write_after_it(ha, monkeypatch):
+    """The read is slow; the switch goes off and back on while it waits. Its
+    answer belongs to the old switch-on and must be dropped."""
+    appmod, c = ha
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+
+    async def slow_read(*_a, **_k):
+        c.patch("/api/integrations/away_dim", json={"enabled": False})
+        c.patch("/api/integrations/away_dim", json={"enabled": True})
+        return {"ok": True, "home": 0}
+    monkeypatch.setattr(appmod.dimming, "read_presence", slow_read)
+    _ticks(appmod)
+    assert appmod._presence_snap is None
+    assert c.get("/api/hub").json()["dim"]["away"]["state"] == "checking"
+
+
+def test_presence_configured_without_any_home_assistant_is_logged(tmp_path, monkeypatch, caplog):
+    appmod = _app(tmp_path, monkeypatch, {"presence": {"people": ["person.a"]}})
+    with caplog.at_level("WARNING"):
+        with TestClient(appmod.app):
+            pass
+    assert "presence" in caplog.text and "ha_base" in caplog.text
+
+
+def test_the_away_choice_survives_a_reseed_and_a_fresh_hub_seeds_it_off(ha):
+    appmod, c = ha
+    from family_hub import db as fdb
+    row = appmod._db().execute(
+        "SELECT enabled FROM integrations WHERE id = 'away_dim'").fetchone()
+    assert row is not None and row["enabled"] == 0, "a fresh database seeds it off"
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+    appmod._db_initialized = False
+    appmod._db()                                    # runs the seeding again
+    assert fdb.integration_enabled(appmod._db(), "away_dim", default=False) is True
+
+
+def test_the_kick_reruns_the_tick_at_once_and_clears_the_old_answer(ha, monkeypatch):
+    appmod, c = ha
+    c.patch("/api/integrations/away_dim", json={"enabled": True})
+    _ha_answers(appmod, monkeypatch, _zone(0))
+    _ticks(appmod, 2)
+    monkeypatch.setattr(appmod, "_presence_kick", False)
+    ticks, sleeps = [], []
+
+    async def tick():
+        ticks.append(appmod._presence_snap)
+        if len(ticks) == 1:
+            # the switch is flipped while the loop runs
+            c.patch("/api/integrations/away_dim", json={"enabled": False})
+        else:
+            raise asyncio.CancelledError
+
+    async def sleep(s):
+        sleeps.append(s)
+    monkeypatch.setattr(appmod, "_presence_tick", tick)
+    monkeypatch.setattr(appmod.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(appmod.presence_watch_loop())
+    assert len(ticks) == 2 and sleeps == [], "the kick skips the minute's wait"
+    assert ticks[0] is not None and ticks[1] is None, "and the old answer is gone"

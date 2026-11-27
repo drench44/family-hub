@@ -117,9 +117,35 @@ def _read(states, people=()):
     return asyncio.run(go())
 
 
+AWAY_PEOPLE = [{"entity_id": "person.a", "state": "not_home"},
+               {"entity_id": "person.b", "state": "Work"},
+               {"entity_id": "sensor.x", "state": "unknown"}]   # not a person: ignored
+
+
 def test_read_presence_uses_zone_home_by_default():
-    assert _read({"zone.home": {"state": "0"}}) == {"ok": True, "home": 0}
+    assert _read({"zone.home": {"state": "0"}, "states": AWAY_PEOPLE}) == {"ok": True, "home": 0}
     assert _read({"zone.home": {"state": "2"}}) == {"ok": True, "home": 2}
+
+
+def test_a_zero_while_trackers_are_unknown_is_unreadable_not_nobody_home():
+    """Right after a Home Assistant restart zone.home reads "0" while every
+    tracker is still unknown. That is not an empty house."""
+    restarting = [{"entity_id": "person.a", "state": "unknown"},
+                  {"entity_id": "person.b", "state": "not_home"}]
+    got = _read({"zone.home": {"state": "0"}, "states": restarting})
+    assert got["ok"] is False and "person.a" in got["error"]
+    got = _read({"zone.home": {"state": "0"},
+                 "states": [{"entity_id": "person.a", "state": "unavailable"}]})
+    assert got["ok"] is False
+    # a person named in zone.home's own persons attribute counts too
+    got = _read({"zone.home": {"state": "0", "attributes": {"persons": ["person.c"]}},
+                 "states": AWAY_PEOPLE + [{"entity_id": "person.c", "state": "unknown"}]})
+    assert got["ok"] is False and "person.c" in got["error"]
+    # the person list can't be read: no proof the house is empty
+    assert _read({"zone.home": {"state": "0"}, "states": 500})["ok"] is False
+    # no person entities at all: zone.home can never count anyone
+    got = _read({"zone.home": {"state": "0"}, "states": []})
+    assert got["ok"] is False and "person" in got["error"]
 
 
 def test_read_presence_fails_soft_when_ha_cannot_be_read():
@@ -178,6 +204,16 @@ def test_away_block_dims_only_on_a_fresh_read_of_nobody_home():
     ref = blk(enabled=True, token=True, snap={"ok": False, "error": "x", "auth": True},
               at=fresh, now=now)
     assert ref["state"] == "needs_auth" and ref["dim"] is False
+    # the first nobody-home read waits for a second one before dimming
+    first = blk(enabled=True, token=True, snap={"ok": True, "home": 0, "confirmed": False},
+                at=fresh, now=now)
+    assert first == {"enabled": True, "state": "confirming", "home": 0, "dim": False}
+    assert blk(enabled=True, token=True, snap={"ok": True, "home": 0, "confirmed": True},
+               at=fresh, now=now)["dim"] is True
+    # the watcher has stopped: say so, never blame Home Assistant
+    st = blk(enabled=True, token=True, snap={"ok": True, "home": 0}, at=fresh, now=now,
+             watching=False)
+    assert st == {"enabled": True, "state": "stopped", "home": None, "dim": False}
     # a stale answer (the watcher stopped) is the same as unreadable
     old = blk(enabled=True, token=True, snap={"ok": True, "home": 0},
               at=now - dimming.FRESH_S - 1, now=now)

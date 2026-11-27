@@ -14,6 +14,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 - Dim hours are a household setting. Settings, under Display, sets when every wall and phone dims (10pm to 6am by default, the same as before), or turns the time-of-day dim off. A window can cross midnight or sit inside one day. The times are kept while Off, so On brings them back.
 - Dim when nobody is home. On a hub with Home Assistant, a new switch under Features & integrations (off until turned on) dims the wall while nobody is home. The hub asks Home Assistant once a minute, using `zone.home` (how many people are home) or a `presence.people` list in config.json. If Home Assistant can't be read the wall stays bright and the switch says so. `/api/hub` carries the answer as `dim.away`, and `/health/full` reports it while the switch is on.
+- Dim when nobody is home is careful about saying the house is empty. It dims only on the second nobody-home answer in a row. A zero from `zone.home` counts only when every person in Home Assistant reads as somewhere real, so a Home Assistant restart (trackers still unknown) leaves the wall bright. If the hub's own watcher stops, Settings says the hub stopped checking instead of blaming Home Assistant. A `presence` block with no Home Assistant to ask is logged at startup.
 - How it works, under How the screen behaves, now says this hub's own dim hours and whether the wall dims while nobody is home. Phones never dim for an empty house, only for the dim hours.
 
 ### Changed

@@ -387,6 +387,13 @@ async def _lifespan(_app):
             or log.error("laundry watch: task exited (real-time lane dead; "
                          "tile route falls back to inline fetch)",
                          exc_info=t.exception()))
+    # A presence block with no Home Assistant to ask (no ha_base of its own
+    # and no laundry block): the switch can't exist, so say why once.
+    if (getattr(cfg, "presence", None) is not None
+            and not fintegrations.presence_base(cfg)):
+        log.warning("presence is set in config.json but there is no Home "
+                    "Assistant to ask: give it an ha_base (or configure "
+                    "laundry). Dim when nobody is home stays hidden.")
     # Who is home, for "dim when nobody is home": armored the same way.
     presence = None
     if _presence_watch_enabled():
@@ -1118,7 +1125,7 @@ async def health_full():
             configured="away_dim" in avail and not DEMO,
             enabled="away_dim" in on and not DEMO,
             token_present=bool(fintegrations.ha_token(os.environ)),
-            watching=_presence_watch_task is not None and not _presence_watch_task.done(),
+            watching=_presence_watching(),
             snap=_presence_snap, last_ok=_presence_last_ok,
             now=now, started_at=PROCESS_STARTED_AT),
         "cameras": deep_health.cameras_source(
@@ -1646,6 +1653,12 @@ _presence_warned = False
 # out its minute (the Settings line would read "Checking" until then).
 _presence_kick = False
 _presence_watch_task: "asyncio.Task | None" = None
+# Nobody-home reads in a row: one zero can be a blip, so the wall dims on the
+# second (dimming.away_block reads the snapshot's `confirmed`).
+_presence_zero_streak = 0
+# Bumped whenever the answer is dropped (the switch flipped), so a read that
+# started before the flip can't write its answer after it.
+_presence_gen = 0
 
 
 def _presence_watch_enabled() -> bool:
@@ -1657,9 +1670,20 @@ def _presence_watch_enabled() -> bool:
 
 def _presence_forget() -> None:
     """Drop the last answer, so turning the switch back on never revives an
-    old "nobody is home"."""
-    global _presence_snap, _presence_at
+    old "nobody is home", and start over: the outage warning re-arms, the
+    nobody-home count restarts, and any read still in flight is void."""
+    global _presence_snap, _presence_at, _presence_warned, \
+        _presence_zero_streak, _presence_gen
     _presence_snap, _presence_at = None, None
+    _presence_warned = False
+    _presence_zero_streak = 0
+    _presence_gen += 1
+
+
+def _presence_watching() -> bool:
+    """The background watcher is alive (started and not exited)."""
+    t = _presence_watch_task
+    return t is not None and not t.done()
 
 
 def _away_on_now() -> bool:
@@ -1668,7 +1692,9 @@ def _away_on_now() -> bool:
 
 async def _presence_tick() -> None:
     """One read of who is home. Off, or no token: ask nothing, keep nothing."""
-    global _presence_snap, _presence_at, _presence_last_ok, _presence_warned
+    global _presence_snap, _presence_at, _presence_last_ok, _presence_warned, \
+        _presence_zero_streak
+    gen = _presence_gen
     if not await asyncio.to_thread(_away_on_now):
         _presence_forget()
         return
@@ -1679,7 +1705,14 @@ async def _presence_tick() -> None:
     people = list((getattr(cfg, "presence", None) or {}).get("people") or [])
     snap = await dimming.read_presence(
         _http, fintegrations.presence_base(cfg), token, people)
+    if gen != _presence_gen:
+        return            # the switch flipped while we asked: not our answer
     now = time.time()
+    if snap.get("ok") and snap.get("home") == 0:
+        _presence_zero_streak += 1
+        snap = dict(snap, confirmed=_presence_zero_streak >= 2)
+    else:
+        _presence_zero_streak = 0
     _presence_snap, _presence_at = snap, now
     if snap.get("ok"):
         _presence_last_ok = now
@@ -1721,8 +1754,10 @@ def _away_row_status() -> str | None:
     if not fintegrations.ha_token(os.environ):
         return "needs_auth"
     st = dimming.away_block(enabled=True, token=True, snap=_presence_snap,
-                            at=_presence_at, now=time.time())["state"]
-    return {"needs_auth": "needs_auth", "unreadable": "error"}.get(st)
+                            at=_presence_at, now=time.time(),
+                            watching=_presence_watching())["state"]
+    return {"needs_auth": "needs_auth", "unreadable": "error",
+            "stopped": "error"}.get(st)
 
 
 def _dim_block(c, istate: dict) -> dict:
@@ -1740,7 +1775,8 @@ def _dim_block(c, istate: dict) -> dict:
         return {"hours": hours, "away": dimming.demo_away(enabled=on)}
     return {"hours": hours, "away": dimming.away_block(
         enabled=on, token=bool(fintegrations.ha_token(os.environ)),
-        snap=_presence_snap, at=_presence_at, now=time.time())}
+        snap=_presence_snap, at=_presence_at, now=time.time(),
+        watching=_presence_watching())}
 
 
 @app.put("/api/dim-hours")
