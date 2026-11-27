@@ -4,7 +4,11 @@ Paid, reward settings, house/personal on a chore).
 The hub's trust model stays LAN-only with no logins; the PIN only keeps a
 child from quietly changing money on the shared wall. It is 4 to 6 digits,
 stored as a salted PBKDF2 hash in kv ``rewards.pin``, and never logged. Five
-wrong tries inside five minutes lock PIN checks for five minutes.
+wrong tries inside five minutes pause PIN checks for 30 seconds; after that,
+each wrong try pauses them again until the right PIN goes in. Guessing runs
+at one try per 30 seconds at best (days for 4 digits). A child guessing on
+purpose can keep re-pausing it, 30 seconds at a time, so a parent may have
+to wait out one pause; the right PIN works as soon as it ends.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ LOCK_KEY = "rewards.pin_lock"
 ROUNDS = 200_000
 MAX_TRIES = 5
 WINDOW_S = 300
-LOCK_S = 300
+LOCK_S = 30
 _FORMAT = re.compile(r"[0-9]{4,6}")
 
 
@@ -61,7 +65,9 @@ def check(conn, pin, now: dt.datetime) -> tuple[bool, int]:
         left = (dt.datetime.fromisoformat(until) - now).total_seconds()
         if left > 0:
             return False, int(left) + 1
-        lock = {}
+        # the pause is over, but the guessing isn't forgotten: one more
+        # wrong try inside the window pauses again
+        lock = {"n": MAX_TRIES - 1, "first": now.isoformat()}
     if not is_set(conn):
         return False, 0
     if _matches(conn, pin):
@@ -74,6 +80,7 @@ def check(conn, pin, now: dt.datetime) -> tuple[bool, int]:
     else:
         lock = {"n": 1, "first": now.isoformat()}
     if lock["n"] >= MAX_TRIES:
-        lock = {"until": (now + dt.timedelta(seconds=LOCK_S)).isoformat()}
+        lock = {"until": (now + dt.timedelta(seconds=LOCK_S)).isoformat(),
+                "first": lock["first"]}
     fdb.kv_set(conn, LOCK_KEY, lock)
     return False, 0

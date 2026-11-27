@@ -1230,6 +1230,7 @@ body {
   font-size: 13px; font-weight: 600; color: var(--good);
   white-space: nowrap;
 }
+.allch-goal { margin-left: 8px; font-size: 13px; font-style: italic; color: var(--dim); }
 .chore-money.chore-goal { font-weight: 500; color: var(--dim); font-style: italic; }
 .chore-row.done .chore-money { opacity: 0.75; }
 .wallet-line {

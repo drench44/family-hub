@@ -1813,3 +1813,45 @@ test('projectionHtml: names anyone it could not count', () => {
     usual: { week: 0, month: 0, year: 0 } }, partial: [1] };
   assert.match(sandbox.projectionHtml(proj, RW_STATE().people, false), /Not counted: Ava/);
 });
+
+
+test('helpTopics: the wallet topic uses this wall’s own numbers', () => {
+  const t = sandbox.helpTopics({ enabled: new Set(['chores', 'rewards']),
+    wallet: { cents_per_chore: 25, fix_cutoff: '08:30', shields_on: true,
+      shield_every: 10, shield_max: 1, bonus_on: true, milestones: [[50, 5000]] } });
+  const text = t.find((x) => x.id === 'wallet').paras.join(' ');
+  assert.match(text, /8:30/);
+  assert.match(text, /every 10 good days, up to 1\b/);
+  assert.match(text, /25¢/);
+  assert.match(text, /\$50 at 50 days/);
+  const off = sandbox.helpTopics({ enabled: new Set(['chores', 'rewards']),
+    wallet: { cents_per_chore: 30, fix_cutoff: '09:00', shields_on: false,
+      shield_every: 20, shield_max: 2, bonus_on: false, milestones: [] } });
+  const t2 = off.find((x) => x.id === 'wallet').paras.join(' ');
+  assert.doesNotMatch(t2, /Shields keep/);
+  assert.match(t2, /9:00/);
+});
+
+
+test('walletHelpParas: off or unreadable says so instead of guessing numbers', () => {
+  const none = sandbox.walletHelpParas(null).join(' ');
+  assert.match(none, /turns it on in Settings/);
+  assert.doesNotMatch(none, /9:00|30¢|20 good days/);
+  const bad = sandbox.walletHelpParas({ error: true }).join(' ');
+  assert.match(bad, /can’t be read right now/);
+  const junk = sandbox.walletHelpParas({ cents_per_chore: 30, fix_cutoff: null, shields_on: true,
+    shield_every: 20, shield_max: 2, bonus_on: true, milestones: null, levels: [] }).join(' ');
+  assert.match(junk, /can’t be read right now/);
+  assert.doesNotMatch(junk, /NaN/);
+});
+
+test('allChoresHtml: personal goals are tagged so the paid ones are easy to scan', () => {
+  const base = { schedule_kind: 'daily', days_mask: 0, assign_kind: 'fixed',
+    fixed_person_id: 1, rotation_order: [], active: 1 };
+  const h = sandbox.allChoresHtml([
+    { ...base, id: 1, title: 'Dishes', icon: '', kind: 'house' },
+    { ...base, id: 2, title: 'Vitamins', icon: '', kind: 'personal' },
+  ], [{ id: 1, name: 'Ava', active: 1 }]);
+  assert.equal((h.match(/allch-goal/g) || []).length, 1);
+  assert.match(h, /Vitamins<\/span><span class="allch-goal">personal goal/);
+});

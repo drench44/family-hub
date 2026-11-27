@@ -6526,6 +6526,7 @@ function helpContext() {
     todoSource: todoSourceOf(hubData),
     todoReadonly: !ic || ic.readonly !== false,
     backup: (hubData && hubData.backup) || null,
+    wallet: (hubData && hubData.wallet) || null,
   };
 }
 
