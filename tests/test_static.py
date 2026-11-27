@@ -2805,3 +2805,17 @@ def test_money_float_stops_under_reduced_motion():
     assert "animation: money-float" in _css_rule(".money-float")
     reduce = CSS[CSS.index("==================== reduced motion"):]
     assert re.search(r"\.money-float\s*\{\s*display:\s*none", reduce)
+
+
+def test_settings_menu_sticks_and_stays_tappable():
+    """Settings menu (2026-11-26): a sticky row of section buttons inside the
+    Settings scroller, solid (no blur, which drops taps on iOS), 44px tap
+    targets, and every card's scroll target clears the menu."""
+    nav = _css_rule(".settings-nav")
+    assert "position: sticky" in nav and "top: -60px" in nav and "margin: -60px -24px 0 80px" in nav
+    assert "backdrop-filter" not in nav
+    assert "background" in nav
+    assert re.search(r"\.settings-nav button \{[^}]*min-height: 44px", CSS)
+    assert re.search(r"\.settings-card \{[^}]*scroll-margin-top", CSS)
+    assert "function settingsNavActive(" in HUB
+    assert "closest('[data-settings-go]')" in HUB
