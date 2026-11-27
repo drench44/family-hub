@@ -44,6 +44,7 @@ CLIMATE_MAX_AGE_S = 900      # the climate service polls its room sensors every 
 FLEET_MAX_AGE_S = 300        # the fleet rollup is computed per request
 LAUNDRY_MAX_AGE_S = 60       # the laundry watcher reads HA every 5 s
 CALENDAR_MAX_AGE_S = 900     # the calendar sync runs every 5 min
+PRESENCE_MAX_AGE_S = 210     # the presence watcher asks HA every 60 s
 
 # build_info.json sits next to this file in the image. deploy.sh writes it
 # into the staged tree (never into the repo), so a dev checkout has none.
@@ -268,6 +269,34 @@ def laundry_source(*, configured: bool, enabled: bool, config_error: str | None,
                    if isinstance(m, dict) and m.get("phase") == "offline"]
         out["machines_offline"] = offline
         out["status"] = "degraded" if offline else "ok"
+    out["ok"] = out["status"] == "ok"
+    return out
+
+
+def presence_source(*, configured: bool, enabled: bool, token_present: bool,
+                    watching: bool, snap: dict | None, last_ok: float | None,
+                    now: float, started_at: float,
+                    max_age_s: float = PRESENCE_MAX_AGE_S) -> dict:
+    """"Dim when nobody is home": Home Assistant's who-is-home answer, read
+    by the presence watcher every minute. Checked only while switched on."""
+    if not configured or not enabled:
+        return _off(configured)
+    out = {"configured": True, "enabled": True, "last_ok": iso(last_ok),
+           "data_age_s": _age(now, last_ok), "max_age_s": max_age_s}
+    if not token_present or (snap and snap.get("auth")):
+        out["status"] = "needs_auth"
+        out["error"] = ("HA_TOKEN is empty" if not token_present
+                        else "Home Assistant rejects HA_TOKEN")
+    elif not watching:
+        out["status"], out["error"] = "error", "the presence watcher is not running"
+    elif snap is not None and not snap.get("ok"):
+        out["status"], out["error"] = "error", snap.get("error") or "unreadable"
+    elif last_ok is None or last_ok < started_at:
+        out["status"] = "waiting"
+    elif now - last_ok > max_age_s:
+        out["status"] = "stale"
+    else:
+        out["status"] = "ok"
     out["ok"] = out["status"] == "ok"
     return out
 

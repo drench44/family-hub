@@ -174,6 +174,10 @@ def test_away_block_dims_only_on_a_fresh_read_of_nobody_home():
     un = blk(enabled=True, token=True, snap={"ok": False, "error": "x"},
              at=fresh, now=now)
     assert un["state"] == "unreadable" and un["dim"] is False
+    # a refused token says so, so the fix is named
+    ref = blk(enabled=True, token=True, snap={"ok": False, "error": "x", "auth": True},
+              at=fresh, now=now)
+    assert ref["state"] == "needs_auth" and ref["dim"] is False
     # a stale answer (the watcher stopped) is the same as unreadable
     old = blk(enabled=True, token=True, snap={"ok": True, "home": 0},
               at=now - dimming.FRESH_S - 1, now=now)

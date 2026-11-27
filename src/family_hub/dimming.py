@@ -192,6 +192,8 @@ def away_block(*, enabled: bool, token: bool, snap: dict | None,
         return {"enabled": True, "state": "needs_auth", "home": None, "dim": False}
     if snap is None or at is None:
         return {"enabled": True, "state": "checking", "home": None, "dim": False}
+    if not snap.get("ok") and snap.get("auth"):
+        return {"enabled": True, "state": "needs_auth", "home": None, "dim": False}
     if not snap.get("ok") or now - at > FRESH_S:
         return {"enabled": True, "state": "unreadable", "home": None, "dim": False}
     n = snap.get("home")

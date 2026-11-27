@@ -74,6 +74,12 @@ class Config:
     # rollup (host + 3D-printer status) via /api/tiles/fleet.
     # {"base": url, "label"?: str}. None/absent = no fleet integration.
     fleet: dict | None = None
+    # "Dim when nobody is home" (dimming.py): which Home Assistant to ask and
+    # whom. {"ha_base"?: url, "people"?: ["person.x", ...]}. Both optional: no
+    # ha_base uses the laundry block's, and no people uses zone.home (its
+    # state is how many people are home). None/absent = the defaults, which
+    # need a laundry ha_base to have any Home Assistant at all.
+    presence: dict | None = None
 
 
 # Allowed values per theme axis; anything else is dropped (never crashes).
@@ -203,6 +209,35 @@ def _clean_fleet(raw: object) -> dict | None:
     return result
 
 
+def _clean_presence(raw: object) -> dict | None:
+    """Keep only a well-formed presence block: {"ha_base": str, "people":
+    [person.* ids]}. A non-object block is dropped and a bad person entry is
+    skipped, each with a warning naming it."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        log.warning("presence: dropping the `presence` block %r (needs an "
+                    "object); away dimming uses zone.home", raw)
+        return None
+    base = raw.get("ha_base")
+    if base is not None and not isinstance(base, str):
+        log.warning("presence: ignoring ha_base=%r (needs a url string)", base)
+        base = ""
+    people = []
+    raw_people = raw.get("people")
+    if raw_people is not None and not isinstance(raw_people, list):
+        log.warning("presence: ignoring people=%r (needs a list of person.* "
+                    "ids); away dimming uses zone.home", raw_people)
+        raw_people = []
+    for p in raw_people or []:
+        if isinstance(p, str) and p.strip().startswith("person."):
+            people.append(p.strip())
+        else:
+            log.warning("presence: skipping %r in people (needs a person.* "
+                        "entity id)", p)
+    return {"ha_base": (base or "").strip().rstrip("/"), "people": people}
+
+
 def load_config(path: str) -> Config:
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
@@ -223,4 +258,5 @@ def load_config(path: str) -> Config:
         panels=list(raw.get("panels", [])),
         theme=_clean_theme(raw.get("theme")),
         fleet=_clean_fleet(raw.get("fleet")),
+        presence=_clean_presence(raw.get("presence")),
     )
