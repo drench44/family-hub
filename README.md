@@ -164,6 +164,13 @@ at one URL.
   does it?"), shows who does the chore on the next few days before you save,
   and can add the same chore for several people at once; the page lists
   every chore, including the ones not on today.
+- **Settings:** the gear opens one page with a menu along the top that jumps
+  to each part: **Display** (theme, accent and column separation), **Looks**
+  (the seasonal looks above), **This screen** (what only the device you are
+  holding decides: Auto or Desktop layout, and whether it drifts back to the
+  home wall when idle), **Features**
+  (a switch for every card and calendar source, so a wall can be slimmed down),
+  **Chore wallet**, **Backups** and **How it works**.
 - **How it works:** a plain-words guide in Settings (gear → **How it works**),
   one tap-to-open topic per feature that is turned on, so anyone in the house
   can find out what a card does without asking.
