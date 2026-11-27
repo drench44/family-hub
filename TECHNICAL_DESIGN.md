@@ -559,6 +559,19 @@ back on. Unticking a chore unsettles it. Pay queries read
 `COALESCE(earner, person_id)`; `pace()` stays on `person_id`, since it
 measures each person's chore load, not their money.
 
+Settings shows each wallet's summary since its last payout (owner,
+2026-11-27): chores, their money, streak bonuses, the total and the current
+streak. `rewards.since_payout` is pure. A payout row keeps `chores_n`, the
+done house chores the person had earned since launch when it was paid, so
+the chores since are today's count minus it, and an old-day fix after a
+payout moves both the count and the money. The money is split from
+`balance_cents` itself (bonus rows after the payout, and the rest is
+chores), so the total is the balance by construction, and `/api/rewards`
+reads the balance from the summary. A payout made before `chores_n` existed
+counts the chores ticked after it (`done_at`). Paid answers with the summary
+it paid for, which the Paid message shows. Paid zeroes the wallet, so the
+summary needs no reset of its own.
+
 ### 8.2 Backups (as built, 2026-11)
 Designed in `docs/superpowers/specs/2026-11-27-backups-design.md`; operator
 steps in `docs/backup-and-restore.md`. `backups.py` ports

@@ -90,7 +90,10 @@ at one URL.
   let one missed day pass without starting over. Personal goals (reading,
   vitamins) stay on the card without earning. Settings shows the projected
   cost per week, month and year before you save, and keeps each child's
-  payouts. An optional parent PIN guards the money settings, payouts and
+  payouts. Under each wallet it sums up what came in since the last payout
+  ("Since Nov 26: 12 chores, $3.60. Streak 47 days."); tapping Paid zeroes
+  the wallet and starts that summary over, so there is nothing else to
+  reset. An optional parent PIN guards the money settings, payouts and
   fixes to old days. Off until a parent turns it on in Settings.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
@@ -521,7 +524,8 @@ personal goal; only house chores earn and count. A day counts as kept when
 every house chore was done, or when nothing was due; away days and days the
 wall was down neither count nor break a run. Every row the wall serves is
 frozen with what it pays, so changing the amounts never rewrites the past.
-Bonuses and payouts are a ledger, and a bonus is paid once per run. With the
+Bonuses and payouts are a ledger, and a bonus is paid once per run. Settings
+sums each wallet since its last payout; its total is the balance itself. With the
 wallet on, yesterday can be fixed until a morning cutoff (default 9:00) and
 anything older needs the parent PIN. Turning the wallet on keeps everyone's
 current streak and starts every wallet at $0. Rules: `rewards.py`; money:
