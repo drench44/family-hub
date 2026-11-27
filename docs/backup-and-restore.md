@@ -67,12 +67,16 @@ beside `hub.db` but not inside it, so a copy of the database alone cannot be
 used to guess the PIN. The snapshots above copy only `hub.db`, so the key
 survives a restore only when the box's `data/` folder did. Restoring onto a
 new box (or after losing `data/`) leaves the chore wallet's money actions
-locked, and the wall and the log say why. Clear the PIN and set a new one in
-Settings:
+locked, and the wall and the log say why. Clear the PIN (and set a new one
+in Settings if you want one):
 
 ```sh
 docker compose exec web python -m family_hub.parent_pin --clear
 ```
+
+The same command is the way back if someone at the wall sets a PIN nobody
+knows. With no PIN set, anyone at the wall can pay out, change amounts, and
+also set a PIN; that is the trade the optional PIN makes.
 
 Clearing `hub.db-wal`/`hub.db-shm` before the copy is essential: the live db
 runs in WAL mode, and leaving an old write-ahead log next to the restored file

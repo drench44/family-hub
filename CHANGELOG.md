@@ -12,7 +12,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Changed
 
-- The parent PIN is optional. The chore wallet turns on and runs without one, and then nothing asks for a PIN. Settings shows a Parent PIN row to set one, or to remove it (which needs the PIN).
+- The parent PIN is optional. The chore wallet turns on and runs without one, and then nothing asks for a PIN. Settings shows a Parent PIN row to set one, or to remove it (which needs the PIN). With no PIN, anyone at the wall can also set one; a PIN nobody knows is cleared on the box (see docs/backup-and-restore.md).
 
 ## [1.21.3] — 2026-11-27
 

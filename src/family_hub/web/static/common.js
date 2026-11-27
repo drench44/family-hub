@@ -1729,10 +1729,10 @@ function choreMoneyHtml(ch) {
 /* Shown when the hub's PIN key file is gone (a restore onto a new box): no
    PIN can be checked until it is cleared on the box. */
 const PIN_KEY_MISSING = 'The parent PIN can’t be checked on this hub right now. '
-  + 'Clear it on the hub box (docs/backup-and-restore.md) and set a new one.';
+  + 'Clear it on the hub box (docs/backup-and-restore.md); a new one is optional.';
 
 /* The parent-PIN refusal on a failed write, or null for any other failure:
-   {pin: 'required'|'wrong'|'not_set'|'locked'|'key_missing', wait_s}. Pure. */
+   {pin: 'required'|'wrong'|'locked'|'key_missing', wait_s}. Pure. */
 function pinRefusal(err) {
   if (!err || (err.status !== 403 && err.status !== 429)) return null;
   const d = err.detail;

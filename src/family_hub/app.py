@@ -2052,7 +2052,7 @@ def _rewards_state(c) -> dict:
 @app.get("/api/rewards")
 def rewards_get():
     """Read-only: settings, balances and history (the wall cards already
-    show each balance). Every change below needs the parent PIN."""
+    show each balance). Every change below needs the parent PIN when one is set."""
     return _rewards_state(_db())
 
 

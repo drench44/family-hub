@@ -134,7 +134,7 @@ def key_missing(conn) -> bool:
         return False
     _warn_once("missing", "parent PIN: the key file %s is missing or damaged, so no PIN "
                "can be checked; on the box run `python -m family_hub.parent_pin "
-               "--clear` and set a new PIN", KEY_PATH)
+               "--clear` (then set a new PIN if you want one)", KEY_PATH)
     return True
 
 
@@ -181,7 +181,7 @@ def set_pin(conn, pin, *, current) -> None:
 
 def clear(conn) -> None:
     """Forget the PIN and any pauses (the box-side reset for a lost key file).
-    Money actions stay locked until a parent sets a new PIN."""
+    With no PIN, nothing asks for one until a parent sets a new one."""
     fdb.kv_set(conn, KEY, None)
     fdb.kv_set(conn, LOCK_KEY, None)
 
