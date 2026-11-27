@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.28.0] — 2026-11-27
+
 ### Added
 
 - Chore wallet: an **Earns money** switch for each person, under Wallets in the Chore wallet card. It is on for everyone by default, so nothing changes until a parent turns it off, and changing it asks for the parent PIN like amounts and payouts. Off is streak only. The person's card shows the streak count (with no goal after it) and shields, but no wallet, no amounts on their chores (even one ticked while still earning) and no bonus progress. Their chores add no money, no streak bonus is paid, more per chore on a streak is skipped, and they are left out of the projected cost and the wallet summary.
