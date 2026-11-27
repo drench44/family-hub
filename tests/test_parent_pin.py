@@ -95,3 +95,25 @@ def test_guessing_stays_slow_after_a_lockout(conn):
     assert pp.check(conn, "1234", T0 + dt.timedelta(seconds=70)) == (True, 0)
     assert pp.check(conn, "0000", T0 + dt.timedelta(seconds=71)) == (False, 0)
     assert pp.check(conn, "1234", T0 + dt.timedelta(seconds=72)) == (True, 0)
+
+
+def test_a_pause_on_one_screen_does_not_lock_another(conn):
+    """Guessing on the kitchen wall pauses the wall only: a parent on their
+    own phone (another address) can still enter the PIN."""
+    pp.set_pin(conn, "1234", current=None)
+    for i in range(5):
+        pp.check(conn, "0000", T0, source="wall")
+    ok, wait = pp.check(conn, "1234", T0 + dt.timedelta(seconds=1), source="wall")
+    assert not ok and wait > 0
+    assert pp.check(conn, "1234", T0 + dt.timedelta(seconds=1), source="phone") == (True, 0)
+    # and the phone's success does not lift the wall's pause
+    ok, wait = pp.check(conn, "1234", T0 + dt.timedelta(seconds=2), source="wall")
+    assert not ok and wait > 0
+
+
+def test_pause_records_are_pruned(conn):
+    """Old per-screen records don't pile up in the database."""
+    pp.set_pin(conn, "1234", current=None)
+    for i in range(30):
+        pp.check(conn, "0000", T0 + dt.timedelta(hours=i), source=f"10.0.0.{i}")
+    assert len(fdb.kv_get(conn, "rewards.pin_lock") or {}) <= 3

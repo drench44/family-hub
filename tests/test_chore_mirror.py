@@ -740,3 +740,29 @@ def test_people_with_gone_lists_names_only_mapped_people_whose_list_is_gone(conn
     # an inactive person is not mirrored, so not named
     fdb.update_person(conn, emma, reminder_list_id="caldav:nowhere", active=0)
     assert chore_mirror.people_with_gone_lists(conn) == []
+
+
+def test_reconcile_completions_refuses_a_day_older_than_the_fix_window(conn):
+    # audit 2026-11-26: with the wallet on, an old day ticked on the phone
+    # (left behind after an iCloud outage) must not turn into a kept day
+    # with no parent PIN, the same as the wall refuses it
+    from family_hub import reminders as rem
+    pid, cid = _mirrored(conn)
+    today = _NOW.date().isoformat()
+    m = fdb.get_chore_mirror(conn, cid, today)
+    oid = m["cal_object_id"]
+    coll = oid.split("/", 1)[0]
+    utcnow = _NOW.replace(tzinfo=dt.timezone.utc)
+    done = rem.set_completed(fdb.get_cal_object(conn, oid)["raw_ics"], True, utcnow)
+    fdb.upsert_cal_object_synced(conn, {
+        "id": oid, "collection_id": coll, "comp_type": "VTODO", "uid": m["uid"],
+        "href": "https://x", "etag": "e2", "summary": "Dishes", "raw_ics": done,
+        "sequence": 1, "last_modified": None}, force=True)
+    later = _NOW + dt.timedelta(days=3)
+    assert chore_mirror.reconcile_completions(
+        conn, later, oldest=later.date() - dt.timedelta(days=1)) == 0
+    assert not fdb.completion_exists(conn, cid, today)
+    # inside the window it still records
+    assert chore_mirror.reconcile_completions(
+        conn, _NOW, oldest=_NOW.date()) == 1
+    assert fdb.completion_exists(conn, cid, today)

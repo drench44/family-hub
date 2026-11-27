@@ -1344,6 +1344,10 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         who = owner.get((r["date"], r["chore_id"]), r["person_id"])
         by_day = cbd_by_pid.setdefault(who, {})
         by_day.setdefault(r["date"], set()).add(r["chore_id"])
+    # With the wallet on, the old chore-day streak is a different count from
+    # the wallet streak on today's card, so other days show none (audit,
+    # 2026-11-26). Today's card carries the wallet streak in "reward".
+    old_streak = d == today or not _rewards_on_safe(c)
     for entry in plan:
         pid = entry["person"]["id"]
         occ = occ_by_pid.get(pid, {})
@@ -1356,7 +1360,8 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         cbd = cbd_by_pid.get(pid, {})
         away_dates = amap.get(pid, {}).get("dates", set())
         entry["away"] = pid in away_today
-        entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
+        entry["streak"] = (chlogic.streak(occ, cbd, d, away_dates)
+                           if old_streak else 0)
         entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
     if d == today and wallet_on:
         _add_rewards(c, plan, rows, today, priced_ok)
@@ -1796,7 +1801,7 @@ REWARD_DEFAULTS = {
     "bonus_on": True, "milestones": [[100, 10000]],
     "levels_on": False, "levels": [[25, 35], [50, 40], [100, 45]],
     "shields_on": True, "shield_every": 20, "shield_max": 2,
-    "fix_cutoff": "09:00",
+    "fix_cutoff": wallet.FIX_CUTOFF_DEFAULT,
 }
 
 
@@ -1825,7 +1830,7 @@ def _guard_old_day(c, d: dt.date, request: Request) -> None:
     so it needs the parent PIN. Off, the old rules stand."""
     if (d < _today() and rewards_active(c) and not _edit_allowed(
             d, _now_local(), reward_settings(c)["fix_cutoff"])):
-        _pin_gate(c, request.headers.get(PIN_HEADER))
+        _pin_gate(c, request.headers.get(PIN_HEADER), _pin_source(request))
 
 
 def _guard_paid_today(c, cid: int, request: Request) -> None:
@@ -1878,7 +1883,7 @@ def _guard_away(c, request: Request, *, inserts=(), updates=(), deletes=()) -> N
             rows[i].update(fields)
     after = list(rows.values()) + [dict(r) for r in inserts]
     if _away_days(after, lo, hi) != before:
-        _pin_gate(c, request.headers.get(PIN_HEADER))
+        _pin_gate(c, request.headers.get(PIN_HEADER), _pin_source(request))
 
 
 # --- chore wallet: parent PIN ---------------------------------------------
@@ -1886,12 +1891,18 @@ def _guard_away(c, request: Request, *, inserts=(), updates=(), deletes=()) -> N
 PIN_HEADER = "X-Parent-Pin"
 
 
-def _pin_gate(c, pin) -> None:
+def _pin_source(request: Request | None) -> str:
+    """Which screen a PIN try came from, so a pause on one screen (the
+    kitchen wall) never locks another (a parent's phone)."""
+    return (request.client.host if request is not None and request.client else "")
+
+
+def _pin_gate(c, pin, source: str = "") -> None:
     """Raise the PIN refusal for ``pin`` unless it is right: 403 not_set,
     required (no PIN sent), wrong; 429 locked with the wait in seconds."""
     if not parent_pin.is_set(c):
         raise HTTPException(403, {"pin": "not_set"})
-    ok, wait = parent_pin.check(c, pin, _now_local())
+    ok, wait = parent_pin.check(c, pin, _now_local(), source=source)
     if wait:
         raise HTTPException(429, {"pin": "locked", "wait_s": wait})
     if ok:
@@ -1900,7 +1911,7 @@ def _pin_gate(c, pin) -> None:
 
 
 def require_parent(request: Request) -> None:
-    _pin_gate(_db(), request.headers.get(PIN_HEADER))
+    _pin_gate(_db(), request.headers.get(PIN_HEADER), _pin_source(request))
 
 
 class PinBody(BaseModel):
@@ -1909,10 +1920,10 @@ class PinBody(BaseModel):
 
 
 @app.post("/api/rewards/pin", status_code=204)
-def rewards_set_pin(body: PinBody):
+def rewards_set_pin(body: PinBody, request: Request):
     c = _db()
     if parent_pin.is_set(c):
-        _pin_gate(c, body.current)
+        _pin_gate(c, body.current, _pin_source(request))
     try:
         parent_pin.set_pin(c, body.pin, current=body.current)
     except ValueError as e:
@@ -2736,14 +2747,25 @@ def admin_patch_person(pid: int, p: PersonPatch):
         if fields["reminder_list_id"] not in vtodo:
             raise HTTPException(422, "unknown reminder list")
     fdb.update_person(c, pid, **fields)
+    if ("active" in fields and bool(fields["active"]) != bool(row["active"])
+            and fdb.kv_get(c, wallet.LAUNCH_KEY)):
+        # Days switched off count like away days on the wallet (audit,
+        # 2026-11-26), so a child switched back on gets no free kept days.
+        wallet.record_active_change(c, pid, bool(fields["active"]), _today())
     return _person_row(c, pid)
 
 
 @app.delete("/api/admin/people/{pid}")
-def admin_delete_person(pid: int):
+def admin_delete_person(pid: int, request: Request):
     """Hard-delete a person (history-safe — see db.delete_person). Distinct from
     the deactivate path (PATCH active=0), which keeps the row for reactivation."""
     c = _db()
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    if (launch and rewards_active(c)
+            and wallet.balance_cents(c, pid, launch["day"]) != 0):
+        # Deleting drops their earnings for good: with money still owed (or
+        # owing), that needs the parent PIN (audit, 2026-11-26).
+        require_parent(request)
     if not fdb.delete_person(c, pid):
         raise HTTPException(404, "unknown person")
     return {"ok": True}
@@ -2785,9 +2807,12 @@ def admin_patch_chore(cid: int, ch: ChorePatch, request: Request):
     if ("kind" in fields and fields["kind"] != row.get("kind", "house")
             and rewards_active(c)):
         require_parent(request)
-    # Turning it off, or into a one-time item, drops what it paid today.
-    if fields.get("active") == 0 or (fields.get("schedule_kind") == "once"
-                                     and row["schedule_kind"] != "once"):
+    # Turning it off, or into a one-time item, drops what it paid today;
+    # giving it to someone else moves that pay.
+    owner_change = any(k in fields and fields[k] != row.get(k) for k in (
+        "assign_kind", "fixed_person_id", "rotation_order", "rotate_every"))
+    if owner_change or fields.get("active") == 0 or (
+            fields.get("schedule_kind") == "once" and row["schedule_kind"] != "once"):
         _guard_paid_today(c, cid, request)
     merged = {**row, **fields}
     kind = merged["schedule_kind"]

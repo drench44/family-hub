@@ -10,6 +10,13 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.17.2] — 2026-11-26
+
+### Changed
+
+- Chore wallet: a PIN pause now holds only on the screen that was guessing (the kitchen wall), never on a parent's own phone, and moving a chore that was done and paid today to someone else needs the parent PIN.
+- Chore wallet: nobody gets free streak days. A streak starts on a person's first day with house chores, so someone added later, someone with only personal goals, or a parent on the wall never builds one from empty days, and days someone is switched off count like away days. A day older than the fix window ticked on an iPhone reminder is no longer recorded (fix it on the wall with the PIN), deleting someone who is still owed money needs the PIN, and other days in the chores browser no longer show the old streak count.
+
 ## [1.17.1] — 2026-11-26
 
 ### Changed

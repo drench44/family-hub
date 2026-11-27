@@ -7660,3 +7660,73 @@ def test_hub_wallet_rules_say_when_they_cannot_be_read(client, app_mod, monkeypa
         return real(c)
     monkeypatch.setattr(app_mod, "reward_settings", flaky)
     assert client.get("/api/hub").json()["wallet"] == {"error": True}
+
+
+
+def test_reassigning_a_paid_chore_done_today_needs_the_pin(client, app_mod):
+    """Moving a chore that was done and paid today to someone else moves
+    its pay, so with the wallet on it is a parent action."""
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    other = _mk_person(client, "Ben")
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    r = client.patch(f"/api/admin/chores/{cid}", json={"fixed_person_id": other})
+    assert r.status_code == 403
+    r = client.patch(f"/api/admin/chores/{cid}", json={
+        "assign_kind": "rotation", "rotation_order": [pid, other]})
+    assert r.status_code == 403
+    # a rename needs no PIN
+    assert client.patch(f"/api/admin/chores/{cid}", json={"title": "Dishes!"}
+                        ).status_code == 200
+    assert client.patch(f"/api/admin/chores/{cid}", json={"fixed_person_id": other},
+                        headers=PIN).status_code == 200
+
+
+def test_switching_a_person_off_and_on_records_the_days_off(client, app_mod, monkeypatch):
+    # audit 2026-11-26: days switched off must not count as kept rest days
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": 0}).status_code == 200
+    c = app_mod._db()
+    assert fdb.kv_get(c, "rewards.paused")[str(pid)] == [[now.date().isoformat(), None]]
+    later = now + dt.timedelta(days=4)
+    monkeypatch.setattr(app_mod, "_now_local", lambda: later)
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": 1}).status_code == 200
+    assert fdb.kv_get(c, "rewards.paused")[str(pid)] == [
+        [now.date().isoformat(), (later.date() - dt.timedelta(days=1)).isoformat()]]
+    # a name change records nothing
+    client.patch(f"/api/admin/people/{pid}", json={"name": "Avery"})
+    assert len(fdb.kv_get(c, "rewards.paused")[str(pid)]) == 1
+
+
+def test_deleting_a_person_who_is_owed_money_needs_the_pin(client, app_mod, monkeypatch):
+    # audit 2026-11-26: a delete wiped an unpaid wallet with no PIN
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    c = app_mod._db()
+    fdb.set_completion(c, cid, (now.date() - dt.timedelta(days=1)).isoformat(), pid)
+    r = client.delete(f"/api/admin/people/{pid}")
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    assert any(p["id"] == pid for p in fdb.list_people(c, include_inactive=True))
+    assert client.delete(f"/api/admin/people/{pid}",
+                         headers={"X-Parent-Pin": "2468"}).status_code == 200
+    # someone with nothing owed deletes as before
+    other = _mk_person(client, "Bo")
+    assert client.delete(f"/api/admin/people/{other}").status_code == 200
+
+
+def test_past_days_show_no_old_streak_with_the_wallet_on(client, app_mod, monkeypatch):
+    # audit 2026-11-26: yesterday showed the old "🔥 N" chip (a different
+    # count) while the home card showed the wallet streak
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    c = app_mod._db()
+    for back in (1, 2, 3):
+        fdb.set_completion(c, cid, (now.date() - dt.timedelta(days=back)).isoformat(), pid)
+    y = (now.date() - dt.timedelta(days=1)).isoformat()
+    people = client.get(f"/api/chores/day?date={y}").json()["people"]
+    assert [p["streak"] for p in people if p["person"]["id"] == pid] == [0]
+    fdb.kv_set(c, "rewards.launch", None)            # wallet off: old chip back
+    people = client.get(f"/api/chores/day?date={y}").json()["people"]
+    assert [p["streak"] for p in people if p["person"]["id"] == pid] == [3]
