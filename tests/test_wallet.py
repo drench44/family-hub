@@ -450,3 +450,121 @@ def test_summary_after_an_old_style_payout_counts_by_time(conn):
     _serve(conn, pid, 1, cid=2)                     # done now, after the payout
     s = _summary(conn, pid)
     assert (s["chores"], s["total_cents"]) == (1, 30)
+
+
+def _old_style_payout(conn, pid, day, at):
+    """A payout as written before payouts kept their chore count."""
+    fdb.add_ledger(conn, person_id=pid, kind="payout",
+                   cents=wallet.balance_cents(conn, pid, LAUNCH.isoformat()), day=day)
+    conn.execute("UPDATE ledger SET created_at = ? WHERE kind = 'payout'", (at,))
+    conn.commit()
+
+
+def _done_at(conn, cid, ds, at):
+    conn.execute("UPDATE completions SET done_at = ? WHERE chore_id = ? AND date = ?",
+                 (at, cid, ds))
+    conn.commit()
+
+
+def test_old_style_payout_time_compare_is_by_instant_not_text(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    _done_at(conn, 1, _day(0), "2020-01-01T12:00:00+00:00")
+    # isoformat drops the fraction on a whole second: "12:00:00+00:00"
+    _old_style_payout(conn, pid, _day(0), "2020-01-01T12:00:00+00:00")
+    _serve(conn, pid, 1, cid=2)
+    _done_at(conn, 2, _day(1), "2020-01-01T12:00:00+00:00")   # the same instant
+    _serve(conn, pid, 2, cid=3)
+    _done_at(conn, 3, _day(2), "2020-01-01T12:00:00.000001+00:00")
+    _serve(conn, pid, 3, cid=4)
+    _done_at(conn, 4, _day(3), "2020-01-01T13:00:00+01:00")   # same instant, other zone
+    # by instant: only the one a microsecond later is after the payout
+    assert wallet._ticked_after(conn, pid, LAUNCH.isoformat(),
+                                "2020-01-01T12:00:00+00:00") == (1, 30)
+    s = _summary(conn, pid)
+    # money: three ticks after the payout's balance was read (90); the same
+    # instant ones are not after it, but the money says they were not paid
+    # either, so the count follows the money
+    assert (s["chore_cents"], s["chores"]) == (90, 3)
+
+
+def test_old_style_payout_untick_counts_as_taken_back(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    _done_at(conn, 1, _day(0), "2020-01-01T10:00:00+00:00")
+    _old_style_payout(conn, pid, _day(0), "2020-01-01T12:00:00+00:00")
+    fdb.clear_completion(conn, 1, _day(0))
+    s = _summary(conn, pid)
+    assert (s["chores"], s["chore_cents"]) == (-1, -30)      # never "0 chores, -30¢"
+
+
+def test_old_style_payout_reticked_paid_chore_does_not_count_again(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    _done_at(conn, 1, _day(0), "2020-01-01T10:00:00+00:00")
+    _old_style_payout(conn, pid, _day(0), "2020-01-01T12:00:00+00:00")
+    fdb.clear_completion(conn, 1, _day(0))
+    fdb.set_completion(conn, 1, _day(0), pid)                 # ticked again: done_at is now
+    s = _summary(conn, pid)
+    assert (s["chores"], s["chore_cents"]) == (0, 0)          # never "1 chore, 0¢"
+
+
+def test_old_style_payout_logs_once_when_count_and_money_disagree(conn, caplog):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    _done_at(conn, 1, _day(0), "2020-01-01T10:00:00+00:00")
+    _old_style_payout(conn, pid, _day(0), "2020-01-01T12:00:00+00:00")
+    # money that no whole number of chores explains: a bonus row booked as
+    # neither (a hand edit) leaves 7 cents the count can't follow
+    conn.execute("UPDATE ledger SET cents = cents - 7 WHERE kind = 'payout'")
+    conn.commit()
+    wallet._logged_mismatch.clear()
+    with caplog.at_level("WARNING"):
+        _summary(conn, pid)
+        _summary(conn, pid)
+    hits = [r for r in caplog.records if "disagree" in r.getMessage()]
+    assert len(hits) == 1
+
+
+def test_two_payouts_on_the_same_day(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    ds = _day(0)
+    fdb.replace_day_log(conn, ds, [
+        {"chore_id": c, "person_id": pid, "title": "x", "icon": "", "rot": 0,
+         "cents": 30, "kind": "house"} for c in (1, 2, 3, 4)])
+    fdb.mark_served(conn, ds)
+    fdb.set_completion(conn, 1, ds, pid)
+    fdb.set_completion(conn, 2, ds, pid)
+    first = wallet.pay_out(conn, pid, LAUNCH)
+    assert (first["summary"]["chores"], first["cents"]) == (2, 60)
+    fdb.set_completion(conn, 3, ds, pid)
+    second = wallet.pay_out(conn, pid, LAUNCH)
+    assert (second["summary"]["chores"], second["cents"]) == (1, 30)
+    assert second["summary"]["since"] == ds and second["summary"]["paid_before"]
+    fdb.set_completion(conn, 4, ds, pid)
+    s = _summary(conn, pid)
+    assert (s["since"], s["chores"], s["chore_cents"], s["bonus_cents"]) == (ds, 1, 30, 0)
+
+
+def test_summary_bonus_on_payout_day_before_the_payout_is_left_out(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    custom = {**SET, "milestones": [[1, 500]]}
+    _launch(conn, {pid: 0}, custom)
+    _serve(conn, pid, 0)
+    wallet.award(conn, pid, _run(conn, pid, 0, custom), custom, LAUNCH)
+    wallet.pay_out(conn, pid, LAUNCH)        # same day, after the bonus
+    s = _summary(conn, pid)
+    assert (s["since"], s["bonus_cents"], s["total_cents"]) == (_day(0), 0, 0)
+
+
+def test_summary_person_added_after_launch_counts_from_launch(conn):
+    _launch(conn, {})
+    pid = fdb.add_person(conn, "Cal", "#5BF08A")
+    _serve(conn, pid, 5)
+    s = _summary(conn, pid)
+    assert (s["since"], s["paid_before"], s["chores"]) == (LAUNCH.isoformat(), False, 1)

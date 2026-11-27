@@ -7449,6 +7449,19 @@ def test_rewards_summary_streak_failure_is_fail_soft(client, app_mod, monkeypatc
     assert me["summary"]["total_cents"] == 30 and me["summary"]["streak"] is None
 
 
+def test_rewards_summary_for_an_inactive_person(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    client.patch(f"/api/admin/people/{pid}", json={"active": 0})
+    r = client.get("/api/rewards")
+    assert r.status_code == 200
+    me = next(k for k in r.json()["people"] if k["id"] == pid)
+    assert me["summary"]["chores"] == 1
+    assert me["summary"]["total_cents"] == me["balance_cents"] == 30
+
+
 def test_inactive_person_keeps_balance(client, app_mod):
     pid, cid, _ = _kid_with_history(client, app_mod)
     _enable(client)

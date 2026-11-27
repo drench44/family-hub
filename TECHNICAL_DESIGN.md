@@ -568,7 +568,11 @@ payout moves both the count and the money. The money is split from
 `balance_cents` itself (bonus rows after the payout, and the rest is
 chores), so the total is the balance by construction, and `/api/rewards`
 reads the balance from the summary. A payout made before `chores_n` existed
-counts the chores ticked after it (`done_at`). Paid answers with the summary
+counts the chores ticked after it (`done_at`, compared as instants), then
+lets the money correct that count at the person's chore price, since an
+untick of a paid chore leaves no row and a re-tick looks new; if the two
+still disagree it logs once. A streak that could not be read is `null` and
+the card says "Streak unavailable". Paid answers with the summary
 it paid for, which the Paid message shows. Paid zeroes the wallet, so the
 summary needs no reset of its own.
 

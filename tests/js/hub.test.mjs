@@ -1799,10 +1799,29 @@ test('walletSummaryText: a chore taken back after a payout says so', () => {
     'Since Nov 26: 1 chore taken back, -$0.30. Streak 47 days.');
 });
 
-test('walletSummaryText: no streak known leaves it out; another year names it', () => {
+test('walletSummaryText: a streak that could not be read says so, never 0 days', () => {
   assert.equal(sandbox.walletSummaryText(SUM({ streak: null, since: '2026-12-30' }), '2027-01-02'),
-    'Since Dec 30, 2026: 12 chores, $3.60.');
+    'Since Dec 30, 2026: 12 chores, $3.60. Streak unavailable.');
+  // no streak key at all (an older answer): nothing is said about it
+  const { streak, ...noKey } = SUM();
+  assert.equal(sandbox.walletSummaryText(noKey, '2026-11-27'), 'Since Nov 26: 12 chores, $3.60.');
   assert.equal(sandbox.walletSummaryText(null, '2026-11-27'), '');
+});
+
+test('walletSummaryText: missing or broken numbers are left out, never shown as $0.00', () => {
+  const t = (over) => sandbox.walletSummaryText(SUM(over), '2026-11-27');
+  // chore money missing: the count and the total still show
+  assert.equal(t({ chore_cents: undefined }), 'Since Nov 26: 12 chores. Total $3.60. Streak 47 days.');
+  assert.equal(t({ chore_cents: NaN }), 'Since Nov 26: 12 chores. Total $3.60. Streak 47 days.');
+  // the count missing: the money still shows
+  assert.equal(t({ chores: 'x' }), 'Since Nov 26: $3.60 from chores. Streak 47 days.');
+  // a bonus that isn't a number is not a bonus of $0
+  assert.equal(t({ bonus_cents: NaN }), 'Since Nov 26: 12 chores, $3.60. Total $3.60. Streak 47 days.');
+  // nothing usable at all
+  const h = t({ chores: null, chore_cents: null, bonus_cents: null, total_cents: null });
+  assert.equal(h, 'Since Nov 26: summary unavailable. Streak 47 days.');
+  assert.doesNotMatch(h, /\$0/);
+  assert.doesNotMatch(t({ streak: NaN }), /0 days/);
 });
 
 test('payoutToastText: says what was paid for', () => {
@@ -1813,6 +1832,9 @@ test('payoutToastText: says what was paid for', () => {
   assert.equal(sandbox.payoutToastText({ cents: 360 }, '2026-11-27'),
     'Paid $3.60. The wallet is back to $0.');
   assert.equal(sandbox.payoutToastText(null, '2026-11-27'), 'Nothing to pay.');
+  // an amount that isn't a number is not "$0.00"
+  assert.equal(sandbox.payoutToastText({ summary: SUM() }, '2026-11-27'),
+    'Paid for 12 chores since Nov 26. The wallet is back to $0.');
 });
 
 test('rewardsCardHtml: each wallet line has its summary under it', () => {

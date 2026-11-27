@@ -269,3 +269,11 @@ def test_since_payout_streak_may_be_unknown():
     s = rw.since_payout([], chores_done=0, balance_cents=0,
                         launch_day="2026-11-26", streak=None)
     assert s["streak"] is None and s["chores"] == 0
+
+
+def test_since_payout_skips_a_bonus_paid_before_the_payout_on_the_same_day():
+    ledger = [_bonus(1, 500, "2026-12-08"), _payout(2, 590, "2026-12-08", 3)]
+    s = rw.since_payout(ledger, chores_done=3, balance_cents=0,
+                        launch_day="2026-11-26", streak=3)
+    assert (s["since"], s["bonus_cents"], s["chores"], s["total_cents"]) == \
+        ("2026-12-08", 0, 0, 0)

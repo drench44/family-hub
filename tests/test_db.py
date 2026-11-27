@@ -1312,3 +1312,29 @@ def test_add_ledger_is_idempotent_on_run_and_streak(conn):
     rows = fdb.ledger_for(conn, pid)
     assert [r["kind"] for r in rows] == ["bonus", "payout", "payout"]
     assert fdb.ledger_for(conn) == rows
+
+
+def test_migration_adds_ledger_chores_n_and_keeps_old_payouts(tmp_path):
+    """A wallet ledger from before payouts kept their chore count gains
+    ``chores_n`` by additive ALTER; old rows read NULL (the summary then
+    counts by time), and a second boot changes nothing."""
+    path = str(tmp_path / "old.db")
+    c = fdb.connect(path)
+    c.executescript("""
+      CREATE TABLE ledger(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('bonus','payout')),
+        cents INTEGER NOT NULL, run_key TEXT, at_streak INTEGER,
+        day TEXT NOT NULL, created_at TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '', UNIQUE(person_id, run_key, at_streak));
+      INSERT INTO ledger(person_id, kind, cents, day, created_at, note)
+        VALUES(7, 'payout', 360, '2026-11-26', '2026-11-26T20:00:00+00:00', 'Paid');""")
+    c.commit()
+    assert "chores_n" not in {r["name"] for r in c.execute("PRAGMA table_info(ledger)")}
+    fdb.ensure_schema(c)
+    assert "chores_n" in {r["name"] for r in c.execute("PRAGMA table_info(ledger)")}
+    rows = fdb.ledger_for(c, 7)
+    assert [(r["cents"], r["chores_n"]) for r in rows] == [(360, None)]
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    assert fdb.ledger_for(c, 7) == rows
+    c.close()

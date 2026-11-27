@@ -1775,20 +1775,42 @@ const rwPlural = (n, one) => `${n} ${one}${Math.abs(n) === 1 ? '' : 's'}`;
 
 /* One wallet's summary since the last payout (or since the wallet started),
    in plain words: "Since Nov 26: 12 chores, $3.60. Streak 47 days." Its
-   total is the wallet balance (the server splits the balance itself). Pure. */
+   total is the wallet balance (the server splits the balance itself). A
+   number that is missing or broken is left out, never shown as $0.00, and
+   a streak the server could not read (null) says so instead of "0 days".
+   Pure. */
 function walletSummaryText(s, today) {
   if (!s) return '';
-  const n = Math.round(Number(s.chores) || 0);
-  const chore = Number(s.chore_cents) || 0;
-  const bonus = Number(s.bonus_cents) || 0;
-  let body;
-  if (n === 0 && chore === 0) body = bonus ? 'no chores' : 'no chores yet';
-  else if (n < 0) body = `${rwPlural(-n, 'chore')} taken back, ${formatCents(chore)}`;
-  else body = `${rwPlural(n, 'chore')}, ${formatCents(chore)}`;
-  const label = rwSinceLabel(s.since, today);
-  let out = `Since ${label}: ${body}`;
-  out += bonus ? `, plus a ${formatBonus(bonus)} streak bonus. Total ${formatCents(s.total_cents)}.` : '.';
-  if (s.streak !== null && s.streak !== undefined) out += ` Streak ${rwPlural(Math.round(Number(s.streak) || 0), 'day')}.`;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const n = num(s.chores) === null ? null : Math.round(s.chores);
+  const chore = num(s.chore_cents);
+  const bonus = num(s.bonus_cents);
+  const total = num(s.total_cents);
+  let body = null;
+  if (n !== null && chore !== null) {
+    if (n === 0 && chore === 0) body = bonus ? 'no chores' : 'no chores yet';
+    else if (n < 0) body = `${rwPlural(-n, 'chore')} taken back, ${formatCents(chore)}`;
+    else body = `${rwPlural(n, 'chore')}, ${formatCents(chore)}`;
+  } else if (n !== null) {
+    body = n < 0 ? `${rwPlural(-n, 'chore')} taken back` : rwPlural(n, 'chore');
+  } else if (chore !== null) {
+    body = `${formatCents(chore)} from chores`;
+  }
+  const hasBonus = bonus !== null && bonus > 0;
+  const showTotal = total !== null && (hasBonus || bonus === null || chore === null);
+  const head = s.since ? `Since ${rwSinceLabel(s.since, today)}` : 'Since the last payout';
+  let out;
+  if (body === null && !hasBonus) {
+    out = total !== null ? `${head}: total ${formatCents(total)}.` : `${head}: summary unavailable.`;
+  } else {
+    out = `${head}: ${body === null ? `a ${formatBonus(bonus)} streak bonus`
+      : body + (hasBonus ? `, plus a ${formatBonus(bonus)} streak bonus` : '')}.`;
+    if (showTotal) out += ` Total ${formatCents(total)}.`;
+  }
+  if ('streak' in s) {
+    const st = num(s.streak);
+    out += st === null ? ' Streak unavailable.' : ` Streak ${rwPlural(Math.round(st), 'day')}.`;
+  }
   return out;
 }
 
@@ -1804,7 +1826,8 @@ function payoutToastText(paid, today) {
     if (Number(s.bonus_cents) > 0) parts.push(`a ${formatBonus(s.bonus_cents)} streak bonus`);
     what = (parts.length ? ` for ${parts.join(' and ')}` : '') + ` since ${rwSinceLabel(s.since, today)}`;
   }
-  return `Paid ${formatCents(paid.cents)}${what}. The wallet is back to $0.`;
+  const amt = typeof paid.cents === 'number' && Number.isFinite(paid.cents) ? ` ${formatCents(paid.cents)}` : '';
+  return `Paid${amt}${what}. The wallet is back to $0.`;
 }
 
 function walletPeopleHtml(people, today) {

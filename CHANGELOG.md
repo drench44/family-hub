@@ -15,6 +15,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 - Chore wallet summary. Settings shows, under each wallet, what came in since the last payout (or since the wallet started): how many chores, the money from them, any streak bonus, the total and the current streak, for example "Since Nov 26: 12 chores, $3.60. Streak 47 days." The total is always the wallet balance. Tapping Paid starts it over by itself, and the message after Paid says what was paid for.
 - `/api/rewards` gives each wallet a `summary` (since, chores, chore and bonus money, total, streak), and a payout's answer carries the summary it paid for. A payout now keeps the chore count it paid (`ledger.chores_n`).
 - The Chore wallet card in Settings shows that summary on its own line under each wallet, and the message after Paid reads like "Paid $3.60 for 12 chores since Nov 26."
+- The wallet summary says "Streak unavailable" when the streak could not be read, leaves out a number it did not get instead of showing $0.00, and for a payout made before this release its chore count follows the money (a chore unticked after it counts as taken back, a paid chore ticked again does not count twice).
 
 ## [1.23.0] — 2026-11-27
 

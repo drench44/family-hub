@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
 from . import db as fdb
 from . import parent_pin
@@ -23,6 +24,9 @@ SHIELD_RULES_KEY = "rewards.shield_rules"
 MS_FLOOR_KEY = "rewards.ms_floor"
 SETTINGS_KEY = "rewards.settings"
 FIX_CUTOFF_DEFAULT = "09:00"
+
+log = logging.getLogger("family_hub")
+_logged_mismatch: set = set()     # (person, payout id) already logged
 
 
 def edit_floor(conn, now: dt.datetime) -> dt.date | None:
@@ -210,22 +214,72 @@ def balance_cents(conn, pid: int, launch_day: str) -> int:
     return earned_cents(conn, pid, launch_day) + bonus - payout
 
 
+def _instant(ts: str) -> dt.datetime:
+    t = dt.datetime.fromisoformat(ts)
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+
+
+def _ticked_after(conn, pid: int, launch_day: str, at: str) -> tuple[int, int]:
+    """(how many, cents) of this person's done house chores ticked after the
+    instant ``at``. Compared as instants, not text: isoformat drops the
+    fraction on a whole second, and a stamp may carry another offset."""
+    cut = _instant(at)
+    n = cents = 0
+    for done_at, c in conn.execute("SELECT c.done_at, o.cents " + _EARNED,
+                                   (pid, launch_day)):
+        if _instant(done_at) > cut:
+            n, cents = n + 1, cents + int(c)
+    return n, cents
+
+
+def _chore_unit(conn, pid: int) -> int:
+    """What one of this person's house chores paid most recently (done or
+    not: the log keeps the price), for turning money into a count."""
+    row = conn.execute(
+        "SELECT cents FROM occurrence_log WHERE COALESCE(earner, person_id) = ? "
+        "AND kind = 'house' AND cents > 0 ORDER BY date DESC, chore_id DESC "
+        "LIMIT 1", (pid,)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _legacy_count(conn, pid: int, launch_day: str, payout: dict,
+                  chore_cents: int) -> int:
+    """Chores since a payout written before payouts kept their count.
+
+    The ticks after it are a start, but they cannot see a paid chore that
+    was unticked (its row is gone) and they count a paid chore ticked again.
+    The money can: what the chores since are worth beyond those ticks is
+    turned into chores at the person's chore price. So it never says
+    "0 chores, -30¢" or "1 chore, 0¢". Logged once if it still can't agree."""
+    n, cents = _ticked_after(conn, pid, launch_day, payout["created_at"])
+    gap = chore_cents - cents
+    unit = _chore_unit(conn, pid)
+    if gap and unit:
+        n += round(gap / unit)
+    agree = (gap % unit == 0 if unit else gap == 0) and (
+        (n > 0) == (chore_cents > 0) and (n < 0) == (chore_cents < 0))
+    key = (pid, payout["id"])
+    if not agree and key not in _logged_mismatch:
+        _logged_mismatch.add(key)
+        log.warning("wallet summary: chore count and money disagree for "
+                    "person %s since payout %s (%s chores, %s cents)",
+                    pid, payout["id"], n, chore_cents)
+    return n
+
+
 def summary(conn, pid: int, launch_day: str, streak) -> dict:
     """What the wallet holds since the last payout (rewards.since_payout).
     The total is ``balance_cents``, the number the card shows."""
     ledger = fdb.ledger_for(conn, pid)
     n, _ = chores_earned(conn, pid, launch_day)
+    bal = balance_cents(conn, pid, launch_day)
+    out = rw.since_payout(ledger, chores_done=n, balance_cents=bal,
+                          launch_day=launch_day, streak=streak)
     payouts = [r for r in ledger if r["kind"] == "payout"]
-    legacy = None
     if payouts and payouts[-1].get("chores_n") is None:
-        # paid before payouts kept their count: count the ones ticked since
-        legacy = int(conn.execute(
-            "SELECT COUNT(*) " + _EARNED + " AND c.done_at > ?",
-            (pid, launch_day, payouts[-1]["created_at"])).fetchone()[0])
-    return rw.since_payout(ledger, chores_done=n,
-                           balance_cents=balance_cents(conn, pid, launch_day),
-                           launch_day=launch_day, streak=streak,
-                           legacy_chores=legacy)
+        out["chores"] = _legacy_count(conn, pid, launch_day, payouts[-1],
+                                      out["chore_cents"])
+    return out
 
 
 def pay_out(conn, pid: int, today: dt.date) -> dict | None:
