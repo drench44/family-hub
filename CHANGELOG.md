@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.28.1] — 2026-11-27
+
 ### Changed
 
 - Settings, Seasonal looks: each season now folds under its own heading, so the list no longer runs to dozens of pictures. Tap a heading to open or close it. The season showing now starts open, and so does the season holding a look picked for every day; the rest start folded. A folded heading still says which look that season uses and how many looks are inside, and a season stays open or folded the way you left it when Settings repaints. On a phone the heading stacks the dates under the name and the pictures go two across at a shorter height.
