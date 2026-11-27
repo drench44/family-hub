@@ -7967,3 +7967,41 @@ def test_removing_the_pin_needs_the_pin(client, app_mod, monkeypatch):
     # and one can be set again, from scratch
     assert client.post("/api/rewards/pin", json={"pin": "1357"}).status_code == 204
     assert client.post("/api/rewards/pin/check", headers={"X-Parent-Pin": "1357"}).status_code == 204
+
+
+def test_a_pin_set_on_a_running_open_wallet_locks_money_again(client, app_mod, monkeypatch):
+    """The wallet ran with no PIN, then a parent sets one: from that moment
+    payouts and old days need it, on the wall and for the iPhone sync."""
+    from family_hub import wallet
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    assert client.request("DELETE", "/api/rewards/pin", headers=PIN).status_code == 204
+    c = app_mod._db()
+    assert wallet.edit_floor(c, now) is None
+    assert client.post(f"/api/rewards/payout/{pid}").status_code in (200, 204)
+    assert client.post("/api/rewards/pin", json={"pin": "1357"}).status_code == 204
+    r = client.post(f"/api/rewards/payout/{pid}")
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    old = (now.date() - dt.timedelta(days=3)).isoformat()
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": old})
+    assert r.status_code == 403
+    assert wallet.edit_floor(c, now) == now.date()
+    assert client.post(f"/api/rewards/payout/{pid}",
+                       headers={"X-Parent-Pin": "1357"}).status_code in (200, 204)
+
+
+def test_a_lost_key_cannot_be_used_to_remove_the_pin(client, app_mod, monkeypatch):
+    """A stored PIN whose key file is gone still counts as set: removing it is
+    refused (key_missing), never opened. Only the box-side clear opens it."""
+    import os
+    from family_hub import parent_pin
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    os.remove(parent_pin.KEY_PATH)
+    for headers in ({}, PIN):
+        r = client.request("DELETE", "/api/rewards/pin", headers=headers)
+        assert r.status_code == 403 and r.json()["detail"] == {"pin": "key_missing"}
+    assert client.get("/api/rewards").json()["pin_set"] is True
+    parent_pin.clear(app_mod._db())
+    st = client.get("/api/rewards").json()
+    assert st["pin_set"] is False and st["pin_key_missing"] is False
+    assert client.post(f"/api/rewards/payout/{pid}").status_code in (200, 204)

@@ -312,12 +312,12 @@ def test_launch_starts_a_pause_for_people_already_switched_off(conn):
     assert _run(conn, off, 10).streak == 9
 
 
-def test_edit_floor_only_with_the_wallet_on(conn):
+def test_edit_floor_only_with_the_wallet_on_and_a_pin(conn):
     from family_hub import parent_pin
     now = dt.datetime(2026, 12, 10, 8, 0)
     assert wallet.edit_floor(conn, now) is None            # never launched
     _launch(conn, {})
-    assert wallet.edit_floor(conn, now) is None            # no PIN yet
+    assert wallet.edit_floor(conn, now) is None            # no PIN: open, as on the wall
     parent_pin.set_pin(conn, "2468", current=None)
     assert wallet.edit_floor(conn, now) == dt.date(2026, 12, 9)   # before 9:00
     assert wallet.edit_floor(conn, now.replace(hour=9, minute=5)) == \
