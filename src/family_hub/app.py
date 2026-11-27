@@ -981,6 +981,11 @@ def _health_full_local() -> dict:
     except Exception:
         log.error("health: in-app backup state read failed", exc_info=True)
         out["backups_in_app"] = None
+    try:
+        out["backups_restore_test"] = _restore_test_state(c)
+    except Exception:
+        log.error("health: restore test state read failed", exc_info=True)
+        out["backups_restore_test"] = None
     return out
 
 
@@ -1110,7 +1115,8 @@ async def health_full():
                                         local["config_now"], BUILD_INFO),
         db_ok=local["db_ok"], db_error=local["db_error"],
         settings=settings, sources=sources,
-        notes={"backup": local["backup"], "backups_in_app": local.get("backups_in_app")})
+        notes={"backup": local["backup"], "backups_in_app": local.get("backups_in_app"),
+               "backups_restore_test": local.get("backups_restore_test")})
 
 
 @app.get("/api/version")
@@ -2444,9 +2450,39 @@ def _backup_tick() -> dict | None:
         return None
     try:
         _backup_skip(None)
-        return _backup_run(c)[0]
+        result = _backup_run(c)[0]
+        _restore_test_if_due(c)
+        return result
     finally:
         _backup_lock.release()
+
+
+def _restore_test_run(c) -> dict:
+    """One restore test of the newest backup, and its record. The caller
+    holds _backup_lock. Only the test's own kv row is written."""
+    rec = fdb.kv_get(c, fbackups.STATE_KEY)
+    rec = rec if isinstance(rec, dict) else {}
+    files = (rec.get("settings") or {}).get("files")
+    result = fbackups.restore_test(
+        BACKUPS_PATH, live=fbackups.live_counts(c), key_path=BACKUP_KEY_PATH,
+        settings_files=files if isinstance(files, list) else None)
+    fbackups.record_restore_test(c, result, dt.datetime.now(dt.timezone.utc))
+    return result
+
+
+def _restore_test_if_due(c) -> None:
+    """The monthly restore test, from the hourly run right after its copy.
+    Armored: a crash here is logged and never fails the backup."""
+    try:
+        rec = fdb.kv_get(c, fbackups.STATE_KEY)
+        last = fdb.kv_get(c, fbackups.RESTORE_TEST_KEY)
+        if fbackups.restore_test_due(rec if isinstance(rec, dict) else {},
+                                     last if isinstance(last, dict) else None,
+                                     dt.datetime.now(dt.timezone.utc)):
+            _restore_test_run(c)
+    except Exception:
+        log.error("backups: the restore test crashed; it tries again next hour",
+                  exc_info=True)
 
 
 async def backup_loop() -> None:
@@ -2493,7 +2529,16 @@ def _backups_state(c) -> dict:
         "password_set": key == "ok",
         "password_problem": key in ("damaged", "unreadable")
         or (key == "unset" and bool(fdb.kv_get(c, _BACKUP_PW_KEY))),
+        "restore_test": _restore_test_state(c),
     }
+
+
+def _restore_test_state(c) -> dict | None:
+    """The last restore test for the card and /health/full, or None."""
+    rt = fdb.kv_get(c, fbackups.RESTORE_TEST_KEY)
+    if not isinstance(rt, dict):
+        return None
+    return {k: rt.get(k) for k in ("at", "ok", "snapshot", "reason", "settings_file")}
 
 
 @app.get("/api/backups")
@@ -2517,6 +2562,27 @@ def backups_run():
     if record_err is not None:
         # never "ok" next to a state that still shows the old run
         raise HTTPException(500, f"The backup ran, but the hub couldn’t record it ({record_err}).")
+    return {"result": result, "state": _backups_state(c)}
+
+
+@app.post("/api/backups/restore-test")
+def backups_restore_test():
+    """Test restore now: prove the newest backup restores. Shares the backup
+    lock (409 while one runs) and refuses when backups are off or there is
+    nothing to test yet."""
+    c = _db()
+    why = _backup_why_off(c)
+    if why:
+        raise HTTPException(409, _BACKUP_WHY[why])
+    rec = fdb.kv_get(c, fbackups.STATE_KEY)
+    if not (isinstance(rec, dict) and rec.get("last_ok")):
+        raise HTTPException(409, "There is no backup to test yet. Back up now first.")
+    if not _backup_lock.acquire(blocking=False):
+        raise HTTPException(409, "A backup is already running.")
+    try:
+        result = _restore_test_run(c)
+    finally:
+        _backup_lock.release()
     return {"result": result, "state": _backups_state(c)}
 
 
