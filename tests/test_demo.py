@@ -541,3 +541,24 @@ def test_clear_demo_also_clears_the_wallet(demo_app):
     assert db.kv_get(c, "rewards.pin") is None
     assert db.ledger_for(c) == []
     assert demo.is_unseeded(c)
+
+
+def test_demo_cameras_show_a_still_photo(demo_client):
+    """Demo cameras show a realistic still instead of a gradient (owner,
+    2026-11-26), so the README screenshot looks like a real wall. Every
+    still exists, is credited, and is styled."""
+    import pathlib
+    import re
+    links = demo_client.get("/api/hub").json()["links"]
+    static = pathlib.Path(__file__).resolve().parents[1] / "src/family_hub/web/static"
+    credits = (static / "demo-cams" / "CREDITS.md").read_text()
+    css = (static / "styles.css").read_text()
+    stills = {c["label"]: c["still"] for c in links["cameras"] + links["camera_page"]}
+    assert stills == {"Front Door": "front-door", "Back Yard": "back-yard",
+                      "Driveway": "driveway", "Mailbox": "mailbox",
+                      "Side Gate": "side-gate"}
+    for still in stills.values():
+        assert re.fullmatch(r"[a-z0-9-]+", still)
+        assert (static / "demo-cams" / f"{still}.webp").is_file()
+        assert f"`{still}.webp`" in credits
+        assert f'.cam-demo-photo[data-still="{still}"]' in css
