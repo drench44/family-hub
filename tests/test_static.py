@@ -2876,7 +2876,9 @@ def test_away_dimming_reuses_the_night_state():
     # wallDimmed reads both the dim hours and the server's nobody-home flag
     body = COMMON[COMMON.index("function wallDimmed("):]
     body = body[:body.index("\n}\n")]
-    assert "dimHoursOf(data)" in body and "away.dim === true" in body
+    assert "dimHoursOf(data)" in body and "away.dim !== true" in body
+    # ...and only while the payload that carried it is fresh
+    assert "AWAY_FRESH_MS" in body
 
 
 def test_dim_hours_live_in_the_display_card_not_this_screen():
