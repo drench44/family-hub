@@ -557,9 +557,17 @@ docker compose up -d web
 ```
 
 The folder must be writable by the hub's user (`HUB_UID`). For an SMB share,
-mount it with `uid=<that uid>`. If the share drops, the box's empty mount
-folder is what the hub sees, so keep the share mounted at boot (for example
-`nofail` in `/etc/fstab`) and check the card now and then.
+mount it with `uid=<that uid>`. The first good copy leaves a small
+`.family-hub-backups` file in the folder. If the share ever drops, the hub sees
+that file is gone, stops writing to the box's own disk, and says "Is the NAS
+mounted?" on the card, and the wall's backup warning shows once the last good
+copy gets old. If you move backups to a new folder on purpose, tap **Use this
+folder** on the card.
+
+`.env` must exist, even empty: compose mounts it read-only so the settings
+backup can include it, and stops with "bind source path does not exist" if
+it is missing. The quick start creates it; on an older install run
+`cp .env.example .env` once.
 
 **Save the settings files too.** In Settings → Backups, set a backup password
 (8 characters or more). From then on each backup also holds an encrypted copy

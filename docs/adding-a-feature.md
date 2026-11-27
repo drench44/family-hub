@@ -76,10 +76,13 @@ can never be turned off and don't degrade gracefully.*
       laundry card gone.)
 - [ ] **Never bind-mount a single file that may be missing** (`./.env:/app/.env`).
       Docker makes a missing bind source as an empty folder owned by root,
-      which then blocks the owner from creating the file. Mount a folder that
-      always exists (read-only if the app only reads it), or ship the folder
-      in the repo with a placeholder so a clone owns it. (Backups, 2026-11-27:
-      checked on a real box. Guard: `test_no_bind_mount_of_a_file_that_may_be_missing`.)
+      which then blocks the owner from creating the file. Use the long form
+      with `bind: {create_host_path: false}` (a missing file then stops `up`
+      loudly) and make the install steps create the file, or ship a folder in
+      the repo with a placeholder so a clone owns it. Don't mount the whole
+      project folder instead: it hands the app `.git` and a second view of
+      `data/`. (Backups, 2026-11-27: checked on a real box. Guard:
+      `test_no_bind_mount_can_turn_a_missing_file_into_a_root_owned_folder`.)
 - [ ] `config.example.json` gains a placeholder entry (use the
       `192.168.1.50` example-IP convention — this repo is public; never a
       real LAN IP, never house data).

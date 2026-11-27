@@ -61,11 +61,30 @@ pruning by the stamp in the name to 48 / 14 / 8 / 12, never emptying a tier.
 Leftover `.partial-*` files from a killed run are swept first. Other files in
 the folder are never touched.
 
-**A dropped NAS mount.** If the share drops, the box's mount point is an empty
-folder on its own disk, and the hub writes there without knowing. Keep the
-share mounted at boot (`nofail` and `_netdev` in fstab) and glance at the
-card; the box script's mount check (below) is the stronger guard if you need
-one.
+**A dropped NAS mount.** From inside the container a bind mount always looks
+mounted, so the hub can't ask whether the share is there. Instead the first
+good run writes `.family-hub-backups` into the folder, holding a random id the
+hub also keeps (kv `backups.marker`). If the share drops, the box's mount point
+is an empty folder on its own disk, the file is missing, and the hub refuses
+to back up there: the card says "The backup folder isn't the one backups went
+to before. Is the NAS mounted?", the heartbeat's `in_app_error` says the same,
+and `at` stays put, so the wall's stale badge fires on time. Remount the share
+and the next run goes through. If you moved backups to a new folder on
+purpose, tap **Use this folder** on the card (it needs the parent PIN when one
+is set) to write a fresh id there.
+
+**Stuck or skipped runs.** Each time the reason an hourly run is skipped
+changes (switched off, no folder, a run already going), the log says so
+once. A run that has held the lock for more than 20 minutes (a hung NAS) is
+recorded as "Backup stuck" on the card and in `in_app_error`. If Back up now
+copies the database but can't write its record, it answers with that error
+instead of a stale "ok". `/health/full` lists the job under
+`notes.backups_in_app` (information only, never a failing status).
+
+**A settings file that disappears.** If a file that was in the last settings
+bundle is gone now (a deleted `.env`, a lost `pin.key`), no smaller bundle is
+written over the good one. The card names the file and the log says so once.
+Put it back, or set the backup password again to start fresh.
 
 ### The settings bundle and backup.key
 
@@ -76,7 +95,7 @@ exist:
 | In the bundle | From | Restores to |
 |---|---|---|
 | `config.json` | `config.json` | the project folder |
-| `env` | `.env` (read from the project folder, mounted read-only at `/host`) | `.env` in the project folder |
+| `env` | `.env` (mounted read-only at `/app/.env`) | `.env` in the project folder |
 | `pin.key` | `data/pin.key` | `data/` |
 | `wyze.env` | `data/wyze.env` | `data/` |
 | `token.json` | `data/token.json` | `data/` |
@@ -96,11 +115,13 @@ or is damaged after a password was set, the card says so and bundles stop
 until the password is set again. Changing the password makes a new key:
 bundles saved before still need the old password.
 
-Why compose mounts the project folder instead of `./.env`: with no `.env`,
-docker makes an empty folder owned by root in place of a missing bind source,
-which leaves a `.env/` directory the owner can't replace. The read-only
-project folder always exists, and a missing `.env` is simply left out of the
-bundle.
+**`.env` must exist.** compose mounts it with the long bind form and
+`create_host_path: false`. The short form (`./.env:/app/.env`) would turn a
+missing `.env` into an empty folder owned by root, which the owner then can't
+replace with the file. With the long form a missing `.env` stops
+`docker compose up` with "bind source path does not exist" instead. The quick
+start creates it (`cp .env.example .env`); on an older install without one,
+run `cp .env.example .env` (or `touch .env`) once before `up`.
 
 ### Restore the settings files
 

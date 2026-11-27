@@ -583,11 +583,19 @@ folder, not mounted, not writable). Each run updates the shared
 `settings_at`, `in_app_error`), keeping the box script's `remote_*` fields,
 so the wall's stale badge covers whichever job ran last; `at` moves only on
 success. The job's own record, `backups.in_app`, feeds `GET /api/backups`.
+A bind mount always looks mounted from inside, so the first good run writes a
+random id into `<dir>/.family-hub-backups` and kv `backups.marker`; a folder
+without it (a dropped NAS) is refused as `marker_missing`, recorded as
+`in_app_error` without moving `at`, until the share is back or Use this folder
+(`POST /api/backups/adopt`, PIN-gated) writes a fresh id. The tick logs each
+change of skip reason once, and a run holding the lock over 20 minutes is
+recorded as stuck. A bundle is not written while a file from the last one is
+missing. `/health/full` notes the job under `backups_in_app`.
 
 With a backup password, the run also writes an encrypted settings bundle:
-a deterministic tar of `config.json`, `.env` (read from the project folder,
-mounted read-only at `/host`, because a direct bind of a missing `.env`
-makes a root-owned folder), `data/pin.key`, `data/wyze.env` and
+a deterministic tar of `config.json`, `.env` (mounted read-only with
+`create_host_path: false`, because the short bind form turns a missing `.env`
+into a root-owned folder), `data/pin.key`, `data/wyze.env` and
 `data/token.json`, sealed with AES-256-GCM (`cryptography`) under
 scrypt(password, salt, n=2^15, r=8, p=1). The header (`FHB1`, salt, nonce)
 is the associated data. `data/backup.key` holds the salt and derived key,
