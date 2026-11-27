@@ -2948,3 +2948,35 @@ def test_info_tip_button_is_a_44px_target_without_a_taller_row():
     assert "position: absolute" not in body and "position: fixed" not in body
     assert ".tip-btn:hover" not in CSS
     assert "display: none" in _css_rule(".tip-body[hidden]")
+
+
+def _setting_tip_keys():
+    block = COMMON[COMMON.index("const SETTING_TIPS = {"):]
+    block = block[:block.index("\n};\n")]
+    return block, set(re.findall(r"^\s+'([^']+)':", block, re.M))
+
+
+def test_every_info_tip_key_in_the_js_has_text():
+    """A label drawn with tipLabelHtml('X') or tipHeadHtml('X', ...) whose X
+    is missing from SETTING_TIPS draws no button at all, silently. So every
+    literal key in the JS must be in the map. The Backups card passes its
+    row labels through row('X', ...) into tipLabelHtml, so those count too."""
+    block, keys = _setting_tip_keys()
+    js = ALL_JS.replace(block, "")
+    used = set(re.findall(r"\btip(?:Label|Head)Html\('([^']+)'", js))
+    bk = COMMON[COMMON.index("function backupsCardHtml"):]
+    bk = bk[:bk.index("\n}\n")]
+    used |= set(re.findall(r"\brow\('([^']+)'", bk))
+    assert len(used) >= 25, sorted(used)
+    missing = sorted(used - keys)
+    assert not missing, f"labels with no tip text in SETTING_TIPS: {missing}"
+
+
+def test_every_info_tip_text_is_used_by_a_label():
+    """A tip whose label is gone (renamed or removed) is dead text that will
+    drift from the code. Every non-integration key must appear as a quoted
+    literal somewhere in the JS outside the map."""
+    block, keys = _setting_tip_keys()
+    js = ALL_JS.replace(block, "")
+    unused = sorted(k for k in keys if not k.startswith("integ:") and f"'{k}'" not in js)
+    assert not unused, f"tips no label uses: {unused}"

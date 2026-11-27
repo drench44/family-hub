@@ -2401,6 +2401,7 @@ test('info tips: the text map is filled in, plain and short', () => {
     assert.doesNotMatch(t, /colour|centre|favourite|licence/i, `${k}: American spelling`);
     assert.doesNotMatch(t, /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/, `${k}: no addresses`);
     assert.doesNotMatch(t, /:\s/, `${k}: no colons inside a sentence`);
+    assert.doesNotMatch(t, /\b(above|below|under it|line under|line below)\b/i, `${k}: no words about where things sit on the page`);
   }
 });
 

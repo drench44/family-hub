@@ -14,6 +14,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 - Every setting in Settings has a small ⓘ beside its name. Tapping it opens a short plain explanation right under the label, often with an example ("At 40¢ a chore, 3 chores is $1.20 that day"), and pushes the rest down. One is open at a time, and a second tap closes it. It works by finger, on the wall's touchscreen and by keyboard, and each button reads "What is ...?" to a screen reader. The words for all of them live in one list in common.js, and a test fails any setting label drawn without one.
 - The Backups card's password area has its own tips: one for the Backup password row, and one each for setting and changing the password.
+- The tip words were checked against what the hub really does (shields, the climate colors, the iCloud switch, backups), and none of them points at where something sits on the page. A test fails a label whose tip is missing from the list, and a tip no label uses.
 
 ## [1.26.1] — 2026-11-27
 
