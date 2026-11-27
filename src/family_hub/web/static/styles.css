@@ -1708,7 +1708,6 @@ body.hub-empty .tabbar { display: none; }
 /* Demo stills: made-up camera photos (static/demo-cams/, credited there),
    so the demo wall and its README screenshot look like real cameras. */
 .cam-demo-photo { background: #1a1d22 center / cover no-repeat; }
-.cam-demo-photo[data-still="front-door"] { background-image: url("demo-cams/front-door.webp"); }
 .cam-demo-photo[data-still="back-yard"] { background-image: url("demo-cams/back-yard.webp"); }
 .cam-demo-photo[data-still="driveway"] { background-image: url("demo-cams/driveway.webp"); }
 .cam-demo-photo[data-still="mailbox"] { background-image: url("demo-cams/mailbox.webp"); }

@@ -1,0 +1,30 @@
+{
+ "what": "kitchen-scenes",
+ "generator": {
+  "model": "FLUX.2 klein 4B (gen.py klein)",
+  "width": 1536,
+  "height": 864,
+  "upscale": "SeedVR2 7B (gen.py upscale), seed 1"
+ },
+ "finish": "README gallery scenes. Finish: art/find_screen.py (screen corners), then art/make_gallery.py.",
+ "pictures": [
+  {
+   "output": "counter-a",
+   "candidate": "kitchen-counter-a",
+   "seed": 4010,
+   "prompt": "A warm modern farmhouse kitchen with white cabinets, a wood countertop and subway tile; a slim white all-in-one computer on a simple stand sits on the counter against the tile backsplash, with a fruit bowl and a coffee mug beside it. The computer screen faces the camera perfectly straight on, a flat rectangle with no tilt and no perspective, filling about half the image width, centered, and the screen shows a completely uniform flat dark gray with no reflections, no glare and no content. Realistic interior photograph, soft natural light, shallow depth of field on the background, 16:9, no people, no text, no logos, no brand marks."
+  },
+  {
+   "output": "evening-b",
+   "candidate": "kitchen-evening-b",
+   "seed": 6021,
+   "prompt": "A cozy family kitchen in the evening with warm pendant lights; a slim white all-in-one touchscreen computer is mounted flat on the plain wall next to the refrigerator, a bowl of oranges on the counter below, warm light. The camera stands directly in front of the screen, centered on it, at the height of the screen's middle, with the lens exactly perpendicular to the wall, like a flat front elevation photograph, so the screen's left and right edges are perfectly vertical and equal in height and its top and bottom edges are perfectly horizontal and equal in width. The white bezel is plain, even and uniform, with no buttons, no calendar, no sticker and no markings anywhere on it. The screen is a uniform medium charcoal gray, not black. No people, no text, no logos, no brand marks. Realistic interior photograph, 16:9. The white frame around the screen is one single simple flat frame, thin and exactly the same width on all four sides, with nothing attached below or beside it and no second panel."
+  },
+  {
+   "output": "wall-mount-b",
+   "candidate": "kitchen-wall-mount-b",
+   "seed": 5001,
+   "prompt": "A bright modern family kitchen wall; a slim white all-in-one touchscreen computer with a thin even bezel is mounted flat on a light painted wall beside the kitchen doorway, above a small shelf with a plant and a mug, soft natural light. The camera stands directly in front of the screen, centered on it, at the height of the screen's middle, with the lens exactly perpendicular to the wall, like a flat front elevation photograph, so the screen's left and right edges are perfectly vertical and equal in height and its top and bottom edges are perfectly horizontal and equal in width. The white bezel is plain, even and uniform, with no buttons, no calendar, no sticker and no markings anywhere on it. The screen is a uniform medium charcoal gray, not black. No people, no text, no logos, no brand marks. Realistic interior photograph, 16:9."
+  }
+ ]
+}

@@ -190,13 +190,12 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
 
 - [ ] README: feature bullet in "What it looks like" + a row in the
       config.json reference.
-- [ ] **Regenerate `docs/hub.png`** from the demo at 1920px wide,
-      full-page, with the feature showing its best state. Procedure: run
-      `DEMO=1 DISABLE_SYNC=1 CONFIG_PATH=config.demo.json` on a spare port,
-      screenshot at 1920×(content height). A README screenshot of the
-      previous design is documentation rot.
-- [ ] `docs/phone.png` only if the phone home screen changed (it shows the
-      Chores tab).
+- [ ] **Regenerate the README pictures** with `python art/make_gallery.py`
+      (it starts the demo itself): `docs/hub.png` (full page, 1920 wide),
+      `docs/phone.png` and the kitchen gallery in `docs/gallery/`. Make the
+      demo show the feature in its best state first. A README picture of the
+      previous design is documentation rot. [`art/README.md`](../art/README.md)
+      has the setup and the rules the pictures follow.
 - [ ] `.env.example` documents any new env var with how to obtain it.
 
 ## 9. Review gate (CLAUDE.md's — restated because it caught everything)

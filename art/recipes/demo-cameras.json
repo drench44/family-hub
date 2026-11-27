@@ -1,0 +1,36 @@
+{
+ "what": "demo-cameras",
+ "generator": {
+  "model": "FLUX.2 klein 4B (gen.py klein)",
+  "width": 1536,
+  "height": 864,
+  "upscale": "SeedVR2 7B (gen.py upscale), seed 1"
+ },
+ "finish": "Demo camera stills. Finish: art/finish_cameras.py (center 70%, 16:9, 1280 px webp).",
+ "pictures": [
+  {
+   "output": "back-yard",
+   "candidate": "cam-back-yard-b",
+   "seed": 3011,
+   "prompt": "A suburban back yard seen from a camera under the eaves: green lawn, a wooden deck with patio chairs and a table, a grill, a wooden fence, trees along the back, a small garden bed. Realistic home security camera still frame, high mounted wide-angle lens with slight fisheye distortion, slightly soft focus and mild sensor noise like a real surveillance camera, natural daylight, 16:9, no people, no animals, no readable text, no timestamp, no logos, no license plates, no house numbers."
+  },
+  {
+   "output": "driveway",
+   "candidate": "cam-driveway-b",
+   "seed": 3021,
+   "prompt": "A driveway seen from a camera on the garage corner: a dark gray SUV parked on a concrete driveway, a basketball hoop, the sidewalk and a quiet tree-lined residential street. Realistic home security camera still frame, high mounted wide-angle lens with slight fisheye distortion, slightly soft focus and mild sensor noise like a real surveillance camera, natural daylight, 16:9, no people, no animals, no readable text, no timestamp, no logos, no license plates, no house numbers."
+  },
+  {
+   "output": "mailbox",
+   "candidate": "cam-mailbox-a",
+   "seed": 3030,
+   "prompt": "The curb at the end of a front yard seen from a camera on the house: a black mailbox on a post, the sidewalk, neat shrubs, a quiet street with houses across the road. Realistic home security camera still frame, high mounted wide-angle lens with slight fisheye distortion, slightly soft focus and mild sensor noise like a real surveillance camera, natural daylight, 16:9, no people, no animals, no readable text, no timestamp, no logos, no license plates, no house numbers."
+  },
+  {
+   "output": "side-gate",
+   "candidate": "cam-side-gate-b",
+   "seed": 3041,
+   "prompt": "A narrow side yard between a house and a wooden fence seen from a high corner camera: a closed wooden side gate, trash and recycling bins, a gravel path, a garden hose reel. Realistic home security camera still frame, high mounted wide-angle lens with slight fisheye distortion, slightly soft focus and mild sensor noise like a real surveillance camera, natural daylight, 16:9, no people, no animals, no readable text, no timestamp, no logos, no license plates, no house numbers."
+  }
+ ]
+}
