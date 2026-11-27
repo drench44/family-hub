@@ -41,7 +41,7 @@ README_NAMES = {
     "todos": ("to-dos",),
     "backups": ("backups",),
     "google_calendar": ("google calendar",),
-    "ics_calendar": ("ics",),
+    "ics_calendar": ("ics feed", "ics/webcal"),
     "icloud_caldav": ("icloud",),
     "cameras": ("cameras",),
     "weather": ("weather",),
@@ -66,6 +66,11 @@ def registry_ids() -> list[str]:
     return [i["id"] for i in available_integrations(cfg, {})]
 
 
+def has_phrase(low: str, phrase: str) -> bool:
+    """Whole-word match, so "ics" is not found inside "heuristics"."""
+    return bool(re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", low))
+
+
 def integrations_missing(readme: str, ids, names=README_NAMES, exempt=README_EXEMPT):
     low = readme.lower()
     out = []
@@ -74,7 +79,7 @@ def integrations_missing(readme: str, ids, names=README_NAMES, exempt=README_EXE
             continue
         if iid not in names:
             out.append(f"{iid} (no README name chosen in README_NAMES)")
-        elif not any(w in low for w in names[iid]):
+        elif not any(has_phrase(low, w) for w in names[iid]):
             out.append(f"{iid} (README should say {names[iid][0]!r})")
     return out
 
@@ -86,7 +91,9 @@ def settings_sections(js: str) -> list[str]:
 
 
 def sections_missing(readme: str, labels):
-    return [s for s in labels if s not in readme]
+    """A label counts only in its bold form (**Display**), which the README's
+    Settings bullet uses; plain words like "display" or "looks" appear everywhere."""
+    return [s for s in labels if f"**{s}**" not in readme]
 
 
 def linked_pictures(readme: str) -> set[str]:
@@ -130,7 +137,14 @@ def test_missing_integration_is_caught():
 
 
 def test_missing_settings_section_is_caught():
-    assert sections_missing("Display only", ["Display", "Backups"]) == ["Backups"]
+    assert sections_missing("**Display** only", ["Display", "Backups"]) == ["Backups"]
+    assert sections_missing("the display modes and looks", ["Display", "Looks"]) == ["Display", "Looks"]
+
+
+def test_heuristics_is_not_ics():
+    assert integrations_missing("a few heuristics here", ["ics_calendar"])
+    assert not integrations_missing("any ICS feed works", ["ics_calendar"])
+    assert not integrations_missing("any ICS/webcal feeds", ["ics_calendar"])
 
 
 def test_broken_pictures_are_caught():
