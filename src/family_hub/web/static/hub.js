@@ -77,7 +77,11 @@ function tickClock() {
   const ss = String(d.getSeconds()).padStart(2, '0');
   document.getElementById('clock-time').textContent =
     `${h12}:${mm}:${ss}${hh < 12 ? 'am' : 'pm'}`;
-  document.body.classList.toggle('is-night', nightClass(hh) === 'is-night');
+  // Dim (the CSS night state) inside the household dim hours, or on the
+  // wall while nobody is home (wallDimmed in common.js). One class for both,
+  // so whatever night hides or calms, an empty house does the same.
+  document.body.classList.toggle('is-night',
+    wallDimmed(d, hubData, phoneLayoutActive()));
   // A wall runs for weeks: re-derive the seasonal look when the date turns, so
   // fall arrives (and leaves) at midnight with no reload. Keyed on the FULL
   // date: a wall asleep from Aug 20 to Sep 20 has the same day-of-month.
@@ -4522,6 +4526,7 @@ const RENDER_STEPS = {
   renderPeople: { label: 'Chores', panel: true },
   renderTodoSlot: { label: 'To-dos', panel: true },
   renderIntegrations: { label: 'Settings list', panel: false },
+  renderDimSettings: { label: 'Dim hours', panel: false },
   renderBackup: { label: 'Backup badge', panel: false },
   pruneEvIndex: { label: 'Event cleanup', panel: false },
 };
@@ -4600,6 +4605,7 @@ async function poll() {
   renderStep('renderPeople', () => renderPeople(data));
   renderStep('renderTodoSlot', () => renderTodoSlot(data));
   renderStep('renderIntegrations', () => renderIntegrations(data));
+  renderStep('renderDimSettings', () => renderDimSettings(data));
   renderStep('renderBackup', () => renderBackup(data));
   renderStep('pruneEvIndex', () => pruneEvIndex());
   paintConnWord();
@@ -6561,7 +6567,12 @@ function renderSettingsFull() {
     + `<button type="button" data-cols-set="wells">Wells</button>`
     + `<button type="button" data-cols-set="lines">Lines</button>`
     + `</div></div>`
-    + `</div></div>`
+    + `</div>`
+    // Dim hours: a household setting every wall and phone follows (it lives
+    // on the hub, unlike the per-screen choices above), plus the nobody-home
+    // line on a hub with Home Assistant. Repainted on each poll.
+    + `<div class="theme-ctl dim-ctl" id="dim-ctl">${dimCardHtml(hubData)}</div>`
+    + `</div>`
     // Seasonal looks: their own card, since the preview tiles need the room.
     + `<div class="card pad settings-card" id="settings-looks">`
     + `<div class="shead"><span class="tick"></span><h2>Seasonal looks</h2></div>`
@@ -6634,7 +6645,47 @@ function renderSettingsFull() {
   const bk = document.getElementById('backups-ctl');
   if (bk) bk.addEventListener('click', backupsClick);
   paintBackups();
+  const dim = document.getElementById('dim-ctl');
+  if (dim) {
+    dim.addEventListener('click', dimClick);
+    dim.addEventListener('change', dimChange);
+  }
   wireSettingsNav();
+}
+
+/* ---- Settings: Dim hours (Display card) ---- */
+
+/* Repaint the Dim hours rows from the latest hub payload, but never while
+   one of its time pickers is open: a 60 s poll would snap it shut. */
+function renderDimSettings(data) {
+  const host = document.getElementById('dim-ctl');
+  if (!host) return;
+  const focused = document.activeElement;
+  if (focused && focused.tagName === 'SELECT' && host.contains && host.contains(focused)) return;
+  host.innerHTML = dimCardHtml(data);
+}
+
+async function saveDimHours(patch) {
+  try {
+    await j('/api/dim-hours', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  } catch (err) {
+    showToast(err.message || 'Couldn’t save the dim hours.');
+  }
+  await poll();   // every screen follows the hub; this one repaints now
+}
+
+async function dimClick(e) {
+  const b = e.target.closest('[data-dim-set]');
+  if (b) await saveDimHours({ on: b.dataset.dimSet === 'on' });
+}
+
+async function dimChange(e) {
+  const t = e.target;
+  if (t.matches('[data-dim-start]')) await saveDimHours({ start: t.value });
+  else if (t.matches('[data-dim-end]')) await saveDimHours({ end: t.value });
 }
 
 /* The Settings menu: a sticky row of section buttons at the top of the
@@ -6755,6 +6806,7 @@ function helpContext() {
     todoReadonly: !ic || ic.readonly !== false,
     backup: (hubData && hubData.backup) || null,
     wallet: (hubData && hubData.wallet) || null,
+    dim: (hubData && hubData.dim) || null,
   };
 }
 
@@ -7330,7 +7382,12 @@ function selfhealOrientation() {
 // Only relevant in the phone app-shell (the fixed-inset flex column). The wall
 // / desktop-forced layout has an in-flow tab bar with no browser toolbar
 // interplay, so it never sees this bug — leave it alone.
-function selfhealMobileActive() {
+function selfhealMobileActive() { return phoneLayoutActive(); }
+
+/* Is this screen on the phone layout? The CSS split exactly: data-layout=
+   "desktop" forces the wall at any width, else max-width:1000px decides.
+   False where matchMedia is missing (the wall's own browser always has it). */
+function phoneLayoutActive() {
   try {
     if (document.documentElement.getAttribute('data-layout') === 'desktop') return false;
     return window.matchMedia('(max-width: 1000px)').matches;

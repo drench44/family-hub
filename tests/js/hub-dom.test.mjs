@@ -13311,3 +13311,107 @@ test('backupsClick: a refused Use this folder (409) says why', async () => {
   await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-adopt]' ? {} : null) } });
   assert.match(document.getElementById('toast').textContent, /No backup folder is set up\./);
 });
+
+// --- dim hours and away dimming: the clock, Settings, saving ---------------
+
+const DIM_NIGHT = { on: true, start: '22:00', end: '06:00' };
+const atClock = (sandbox, h, m = 0) => vm.runInContext(
+  `Date = class extends Date { constructor(...a) { super(...(a.length ? a : [2026, 10, 27, ${h}, ${m}])); } };`,
+  sandbox);
+const setHub = (sandbox, data) => vm.runInContext(`hubData = ${JSON.stringify(data)};`, sandbox);
+
+test('tickClock dims by the household dim hours, not a fixed 10pm', () => {
+  const { document, sandbox } = newHub();
+  setHub(sandbox, { dim: { hours: { on: true, start: '20:00', end: '07:00' }, away: null } });
+  atClock(sandbox, 20, 30);
+  sandbox.tickClock();
+  assert.ok(document.body.classList.contains('is-night'), '8:30pm is inside 8pm to 7am');
+  setHub(sandbox, { dim: { hours: { ...DIM_NIGHT, on: false }, away: null } });
+  atClock(sandbox, 23);
+  sandbox.tickClock();
+  assert.ok(!document.body.classList.contains('is-night'), 'dim hours Off: 11pm stays bright');
+});
+
+test('tickClock dims the wall at noon while nobody is home, and brightens when someone is', () => {
+  const { document, sandbox } = newHub();
+  atClock(sandbox, 12);
+  setHub(sandbox, { dim: { hours: DIM_NIGHT, away: { enabled: true, state: 'away', home: 0, dim: true } } });
+  sandbox.tickClock();
+  assert.ok(document.body.classList.contains('is-night'),
+    'the same is-night state as night, so everything night calms is calmed too');
+  setHub(sandbox, { dim: { hours: DIM_NIGHT, away: { enabled: true, state: 'home', home: 1, dim: false } } });
+  sandbox.tickClock();
+  assert.ok(!document.body.classList.contains('is-night'));
+});
+
+test('tickClock: a phone never dims for nobody home', () => {
+  const { document, sandbox } = newHub({ mobile: true });
+  atClock(sandbox, 12);
+  setHub(sandbox, { dim: { hours: DIM_NIGHT, away: { enabled: true, state: 'away', home: 0, dim: true } } });
+  sandbox.tickClock();
+  assert.ok(!document.body.classList.contains('is-night'));
+});
+
+test('renderSettingsFull puts Dim hours in the Display card', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.getAttribute = () => null;
+  setHub(sandbox, { integrations: [], dim: { hours: DIM_NIGHT, away: null } });
+  sandbox.renderSettingsFull();
+  const html = host.innerHTML;
+  const display = html.slice(html.indexOf('id="settings-display"'), html.indexOf('id="settings-looks"'));
+  assert.match(display, /id="dim-ctl"/, 'Dim hours sits in Display, a household setting, not This screen');
+  assert.match(display, /data-dim-set="on"/);
+  assert.match(display, /Every screen in the house dims from 10pm to 6am/);
+});
+
+test('renderDimSettings repaints on each poll but never under an open time picker', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'dim-ctl';
+  document.body.appendChild(host);
+  sandbox.renderDimSettings({ dim: { hours: DIM_NIGHT, away: null } });
+  assert.match(host.innerHTML, /10pm to 6am/);
+  const picker = { tagName: 'SELECT' };
+  host.contains = (n) => n === picker;
+  document.activeElement = picker;
+  sandbox.renderDimSettings({ dim: { hours: { on: true, start: '21:00', end: '06:00' }, away: null } });
+  assert.match(host.innerHTML, /10pm to 6am/, 'an open picker is left alone');
+  document.activeElement = null;
+  sandbox.renderDimSettings({ dim: { hours: { on: true, start: '21:00', end: '06:00' }, away: null } });
+  assert.match(host.innerHTML, /9pm to 6am/);
+});
+
+test('dim settings: Off, On and a new time each save the household setting', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.fetch = async (url, opts) => {
+    calls.push([url, opts && opts.method, opts && opts.body]);
+    return okResp({ on: true, start: '21:00', end: '06:00' });
+  };
+  let polled = 0;
+  sandbox.poll = async () => { polled++; };
+  const btn = (v) => ({ target: { closest: (s) => (s === '[data-dim-set]' ? { dataset: { dimSet: v } } : null) } });
+  await sandbox.dimClick(btn('off'));
+  await sandbox.dimClick(btn('on'));
+  const sel = (attr, value) => ({ target: { value, matches: (s) => s === `[${attr}]` } });
+  await sandbox.dimChange(sel('data-dim-start', '21:00'));
+  await sandbox.dimChange(sel('data-dim-end', '07:30'));
+  assert.deepEqual(calls.map((c) => [c[0], c[1], JSON.parse(c[2])]), [
+    ['/api/dim-hours', 'PUT', { on: false }],
+    ['/api/dim-hours', 'PUT', { on: true }],
+    ['/api/dim-hours', 'PUT', { start: '21:00' }],
+    ['/api/dim-hours', 'PUT', { end: '07:30' }],
+  ]);
+  assert.equal(polled, 4, 'each save repaints from the hub');
+});
+
+test('dim settings: a refused save says why', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.fetch = async () => failResp(422, "The start and end times can't be the same.");
+  sandbox.poll = async () => {};
+  await sandbox.dimChange({ target: { value: '06:00', matches: (s) => s === '[data-dim-start]' } });
+  assert.match(document.getElementById('toast').textContent, /can't be the same/);
+});

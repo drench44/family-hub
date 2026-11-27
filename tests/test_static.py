@@ -2861,3 +2861,28 @@ def test_settings_menu_survives_a_repaint_and_needs_no_negative_offsets():
     assert "top: 0" in nav and "-60px" not in nav and "-56px" not in CSS
     assert re.search(r"\.overlay-panel\.settings-panel \{[^}]*padding-top", CSS)
     assert 'class="overlay-panel settings-panel"' in HUB
+
+
+def test_away_dimming_reuses_the_night_state():
+    """Whatever night hides, pauses or calms (the dim filter, solid glass,
+    stilled seasonal motion), an empty house must do the same. So both
+    reasons set the ONE body.is-night class, from one place (tickClock via
+    wallDimmed), and no second class exists that every night rule would have
+    to be repeated for (and that a future night rule would forget)."""
+    toggles = re.findall(r"classList\.toggle\(\s*'is-night'[^;]*;", HUB)
+    assert len(toggles) == 1, toggles
+    assert "wallDimmed(" in toggles[0]
+    assert "is-away" not in CSS and "is-away" not in ALL_JS
+    # wallDimmed reads both the dim hours and the server's nobody-home flag
+    body = COMMON[COMMON.index("function wallDimmed("):]
+    body = body[:body.index("\n}\n")]
+    assert "dimHoursOf(data)" in body and "away.dim === true" in body
+
+
+def test_dim_hours_live_in_the_display_card_not_this_screen():
+    """Dim hours are one household setting, so they belong with Display (the
+    house-default theme), not under This screen (per-device choices)."""
+    i_disp = HUB.index('id="settings-display"')
+    i_looks = HUB.index('id="settings-looks"')
+    i_dim = HUB.index('id="dim-ctl"')
+    assert i_disp < i_dim < i_looks

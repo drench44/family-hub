@@ -163,7 +163,10 @@ body {
 
 .num { font-variant-numeric: tabular-nums; }
 
-/* Night: the whole page dims after 22:00. The dim is applied to each DIRECT
+/* Night: the whole page dims inside the household dim hours (Settings,
+   Display; 22:00 to 06:00 by default) and, on the wall, while nobody is home.
+   Both set this one class (hub.js tickClock, common.js wallDimmed), so every
+   .is-night rule below covers an empty house too. The dim is applied to each DIRECT
    CHILD of <body>, never to <body>/.is-night itself: a `filter` on an element
    makes it the containing block for its position:fixed descendants, so putting
    it on <body> unpinned the fixed mobile tab bar and the full-screen overlays
@@ -2457,6 +2460,16 @@ body.kiosk-cursor-hidden, body.kiosk-cursor-hidden * { cursor: none !important; 
    and the CalDAV panel. Empty (no CalDAV configured) => it takes no space, so
    the card's flex gap doesn't open a hole where the picker isn't shown. */
 .todo-source-ctl { display: flex; flex-direction: column; gap: 8px; }
+/* Dim hours (Display card, hub.js renderDimSettings): On/Off, then the two
+   time pickers side by side, wrapping on a phone. 44px pickers for a
+   fingertip; locked (not hidden) while Off, so On brings back the same times. */
+.dim-times { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.dim-times label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+.dim-times .txt-input { width: auto; min-width: 120px; min-height: 44px; }
+.dim-times .txt-input:disabled { opacity: .5; cursor: not-allowed; }
+.dim-ctl > .settings-row { flex: 1 1 100%; }
+/* the nobody-home line: its own sentence, a little apart from the hours */
+.settings-sub.dim-away { margin-top: 2px; }
 .todo-source-ctl:empty { display: none; }
 
 /* ---- iCloud (CalDAV) account panel, inside the Integrations card ---- */
