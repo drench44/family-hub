@@ -521,6 +521,7 @@ def demo_backups() -> dict:
     now = dt.datetime.now(dt.timezone.utc)
     at = (now - dt.timedelta(minutes=20)).isoformat()
     stamp = (dt.datetime.now() - dt.timedelta(minutes=20)).strftime("%Y%m%d-%H%M")
+    tested = (dt.datetime.now() - dt.timedelta(days=12)).strftime("%Y%m%d-%H%M")
     return {
         "enabled": True, "why_off": None, "switch_on": True, "scheduled": True,
         "every_s": 3600, "dir": "/mnt/nas/family-hub", "running": False,
@@ -531,4 +532,11 @@ def demo_backups() -> dict:
         "counts_error": None,
         "keep": {"hourly": 48, "daily": 14, "weekly": 8, "monthly": 12, "settings": 14},
         "password_set": True, "password_problem": False,
+        # the monthly restore test, passed twelve days ago
+        "restore_test": {"at": (now - dt.timedelta(days=12)).isoformat(), "ok": True,
+                         "snapshot": f"hub-{tested}.db", "reason": None,
+                         "settings_file": f"settings-{tested}.fhb", "settings_checked": True,
+                         "settings_skip": None,
+                         "last_pass_at": (now - dt.timedelta(days=12)).isoformat()},
+        "restore_test_overdue": False,
     }

@@ -6474,6 +6474,24 @@ async function backupsClick(e) {
     await paintBackups();
     return;
   }
+  const test = t.closest('[data-bk-test]');
+  if (test) {
+    if (test.disabled) return;
+    test.disabled = true;     // one test at a time; the server holds the lock too
+    test.textContent = 'Testing…';
+    try {
+      const r = await j('/api/backups/restore-test', { method: 'POST' });
+      const res = (r && r.result) || {};
+      showToast(res.ok ? 'The restore test passed.'
+        : `The restore test failed. ${res.reason || 'Settings says why.'}`);
+    } catch (err) {
+      showToast(err.message || 'Couldn’t start the restore test.');
+    } finally {
+      test.disabled = false;
+    }
+    await paintBackups();
+    return;
+  }
   if (t.closest('[data-bk-adopt]')) {
     try {
       await jParent('/api/backups/adopt', { method: 'POST' },

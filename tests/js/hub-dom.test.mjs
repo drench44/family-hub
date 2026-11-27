@@ -13164,6 +13164,45 @@ test('backupsClick: a failed run says so instead of "backed up"', async () => {
   assert.match(document.getElementById('toast').textContent, /The backup failed\. The copy came out too small\./);
 });
 
+test('backupsClick: Test restore now posts once and toasts the result', async () => {
+  const { document, sandbox } = newHub();
+  const btn = { dataset: { bkTest: '1' }, disabled: false, textContent: 'Test restore now' };
+  const urls = [];
+  let release;
+  sandbox.j = (url, opts) => { urls.push([url, opts.method]); return new Promise((r) => { release = r; }); };
+  let painted = 0;
+  sandbox.paintBackups = async () => { painted++; };
+  const ev = { target: { closest: (sel) => (sel === '[data-bk-test]' ? btn : null) } };
+  const first = sandbox.backupsClick(ev);
+  await sandbox.backupsClick(ev);
+  assert.deepEqual(urls, [['/api/backups/restore-test', 'POST']], 'a double tap tests once');
+  assert.equal(btn.disabled, true);
+  release({ result: { ok: true }, state: {} });
+  await first;
+  assert.equal(painted, 1);
+  assert.equal(btn.disabled, false);
+  assert.match(document.getElementById('toast').textContent, /The restore test passed\./);
+});
+
+test('backupsClick: a refused restore test toasts why and leaves the button usable', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.j = async () => { throw new Error('A backup is already running.'); };
+  sandbox.paintBackups = async () => {};
+  const btn = { dataset: { bkTest: '1' }, disabled: false, textContent: 'Test restore now' };
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-test]' ? btn : null) } });
+  assert.match(document.getElementById('toast').textContent, /A backup is already running\./);
+  assert.equal(btn.disabled, false);
+});
+
+test('backupsClick: a failed restore test toasts its reason', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.j = async () => ({ result: { ok: false, reason: 'It looks old or cut short.' }, state: {} });
+  sandbox.paintBackups = async () => {};
+  const btn = { dataset: { bkTest: '1' }, disabled: false, textContent: '' };
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-test]' ? btn : null) } });
+  assert.match(document.getElementById('toast').textContent, /The restore test failed\. It looks old or cut short\./);
+});
+
 function backupsHost(document, a, b) {
   const host = document.createElement('div');
   host._id = 'backups-ctl';
