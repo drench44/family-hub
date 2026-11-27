@@ -10,6 +10,14 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.28.0] — 2026-11-27
+
+### Added
+
+- Chore wallet: an **Earns money** switch for each person, under Wallets in the Chore wallet card. It is on for everyone by default, so nothing changes until a parent turns it off, and changing it asks for the parent PIN like amounts and payouts. Off is streak only. The person's card shows the streak count (with no goal after it) and shields, but no wallet, no amounts on their chores (even one ticked while still earning) and no bonus progress. Their chores add no money, no streak bonus is paid, more per chore on a streak is skipped, and they are left out of the projected cost and the wallet summary.
+- The streak keeps counting exactly as before, with shields and the fix-yesterday rule.
+- Switching never rewrites past money. Each served chore row is frozen with whether it earned (`occurrence_log.earning`), so a chore done while earning keeps its pay after the switch goes off, and money already in the wallet stays in Settings, with Paid, until it is paid. Turned back on, chores from then pay, and a streak bonus the run passed while off is never paid. Switching off first pays a streak bonus already reached while earning, even if no screen refreshed in between. The switch re-prices today at once, so a tap just after it lands at the new rate. If today can't be re-priced right then, the switch is still saved and the answer carries `repriced: false`, so Settings says so instead of claiming success. New route `PUT /api/rewards/people/{id}/earns`; `/api/rewards` and the hub's reward block gain `earns`. An upgrade adds `people.earns` and `occurrence_log.earning`, both 1, so every existing person keeps earning.
+
 ## [1.27.0] — 2026-11-27
 
 ### Added

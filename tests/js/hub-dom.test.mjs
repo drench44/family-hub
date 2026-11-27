@@ -12963,6 +12963,44 @@ test('rewardsClick: Paid asks through the parent PIN and posts the payout', asyn
   assert.match(document.getElementById('toast').textContent, /Paid \$18\.50/);
 });
 
+test('rewardsClick: Earns money sends the switch through the parent PIN', async () => {
+  const { document, sandbox } = newHub();
+  const sent = [];
+  sandbox.jParent = async (url, opts, msg) => { sent.push([url, opts.method, JSON.parse(opts.body), msg]); return {}; };
+  let painted = 0;
+  sandbox.paintRewards = async () => { painted++; };
+  sandbox.poll = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-earns', { rwEarns: '5', rwVal: '0' }));
+  assert.deepEqual(sent[0].slice(0, 3), ['/api/rewards/people/5/earns', 'PUT', { earns: false }]);
+  assert.match(sent[0][3], /needs a parent/);
+  assert.match(document.getElementById('toast').textContent, /streak only from now on/);
+  assert.equal(painted, 1);
+  await sandbox.rewardsClick(rwEvent('data-rw-earns', { rwEarns: '5', rwVal: '1' }));
+  assert.deepEqual(sent[1][2], { earns: true });
+  assert.match(document.getElementById('toast').textContent, /earns money again from now on/);
+});
+
+test('rewardsClick: Earns money says so when today could not be re-priced', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.jParent = async () => ({ repriced: false });
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-earns', { rwEarns: '5', rwVal: '0' }));
+  assert.equal(document.getElementById('toast').textContent,
+    'Saved, but today’s prices could not be updated yet. Check again in a minute.');
+});
+
+test('rewardsClick: tapping the side already lit sends nothing', async () => {
+  const { sandbox } = newHub();
+  let sent = 0;
+  sandbox.jParent = async () => { sent++; return {}; };
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  const lit = { dataset: { rwEarns: '5', rwVal: '1' }, classList: { contains: (c) => c === 'on' } };
+  await sandbox.rewardsClick({ target: { closest: (sel) => (sel === '[data-rw-earns]' ? lit : null) } });
+  assert.equal(sent, 0);
+});
+
 test('rewardsClick: Save sends the form as it stands, through the PIN', async () => {
   const { sandbox } = newHub();
   const sent = [];

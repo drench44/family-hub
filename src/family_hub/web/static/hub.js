@@ -6424,6 +6424,29 @@ async function rewardsClick(e) {
     await poll();
     return;
   }
+  const earn = t.closest('[data-rw-earns]');
+  if (earn) {
+    if (earn.classList && earn.classList.contains('on')) return;   // already so
+    const pid = Number(earn.dataset.rwEarns);
+    const on = earn.dataset.rwVal === '1';
+    const k = ((rwState && rwState.people) || []).find((p) => p.id === pid);
+    const who = k ? k.name : 'They';
+    try {
+      const r = await jParent(`/api/rewards/people/${pid}/earns`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ earns: on }),
+      }, 'Changing who earns money needs a parent.');
+      // saved, but today's rows kept their old prices (the server logged why)
+      if (r && r.repriced === false) showToast('Saved, but today’s prices could not be updated yet. Check again in a minute.');
+      else {
+        showToast(on ? `${who} earns money again from now on.`
+          : `${who} is on streak only from now on. Money already earned stays until Paid.`);
+      }
+    } catch (ex) { showToast(ex.message); }
+    await paintRewards();
+    await poll();
+    return;
+  }
   const tog = t.closest('[data-rw-toggle]');
   if (tog) {
     repaintRewardsDraft({ ...readRewardsForm(), [tog.dataset.rwToggle]: tog.dataset.rwVal === '1' });

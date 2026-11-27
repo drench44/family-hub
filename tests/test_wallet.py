@@ -14,11 +14,13 @@ def _day(n):
     return (LAUNCH + dt.timedelta(days=n)).isoformat()
 
 
-def _serve(conn, pid, n, *, done=True, cents=30, kind="house", cid=1):
+def _serve(conn, pid, n, *, done=True, cents=30, kind="house", cid=1,
+           earning=1):
     ds = _day(n)
     fdb.replace_day_log(conn, ds, [{"chore_id": cid, "person_id": pid,
                                     "title": "Dishes", "icon": "", "rot": 0,
-                                    "cents": cents, "kind": kind}])
+                                    "cents": cents, "kind": kind,
+                                    "earning": earning}])
     fdb.mark_served(conn, ds)
     if done:
         fdb.set_completion(conn, cid, ds, pid)
@@ -568,3 +570,95 @@ def test_summary_person_added_after_launch_counts_from_launch(conn):
     _serve(conn, pid, 5)
     s = _summary(conn, pid)
     assert (s["since"], s["paid_before"], s["chores"]) == (LAUNCH.isoformat(), False, 1)
+
+
+# --- "Earns money" off: streak only -----------------------------------------
+
+def test_a_streak_only_row_counts_for_the_streak_but_not_the_wallet(conn):
+    """A row frozen while its person earned nothing (``earning`` 0) is a
+    house chore for the streak, and nothing at all for the money: not in the
+    balance, the chore count, the weekly history or the summary."""
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0, cid=1)                          # earned 30
+    _serve(conn, pid, 1, cid=2, cents=0, earning=0)      # streak only
+    _serve(conn, pid, 2, cid=3, cents=0, earning=0)
+    assert _run(conn, pid, 2).streak == 3
+    assert wallet.chores_earned(conn, pid, LAUNCH.isoformat()) == (1, 30)
+    assert wallet.balance_cents(conn, pid, LAUNCH.isoformat()) == 30
+    weeks = wallet.history(conn, pid, LAUNCH.isoformat())["weeks"]
+    assert sum(w["earned_cents"] for w in weeks) == 30
+    s = _summary(conn, pid)
+    assert (s["chores"], s["chore_cents"]) == (1, 30)
+
+
+def test_a_payout_after_streak_only_days_starts_the_count_right(conn):
+    """chores_n on a payout uses the same rule, so chores done while not
+    earning never show up later as extra chores or chores taken back."""
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0, cid=1)
+    _serve(conn, pid, 1, cid=2, cents=0, earning=0)
+    paid = wallet.pay_out(conn, pid, LAUNCH + dt.timedelta(days=1))
+    assert paid["cents"] == 30 and paid["summary"]["chores"] == 1
+    _serve(conn, pid, 2, cid=3)
+    s = _summary(conn, pid)
+    assert (s["chores"], s["chore_cents"]) == (1, 30)
+
+
+def test_award_pays_nothing_to_someone_not_earning(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 99})
+    _serve(conn, pid, 0, cents=0, earning=0)
+    run = _run(conn, pid, 0)
+    assert run.streak == 100
+    fdb.set_person_earns(conn, pid, False)
+    assert wallet.award(conn, pid, run, SET, LAUNCH) == []
+    assert fdb.ledger_for(conn, pid) == []
+
+
+def test_turning_earning_back_on_never_pays_a_milestone_passed_while_off(conn):
+    """The run reached 100 while the person earned nothing. Turning earning
+    back on records the run as already past it, so only milestones still
+    ahead pay (the next one at 200)."""
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 99})
+    fdb.set_person_earns(conn, pid, False)
+    _serve(conn, pid, 0, cents=0, earning=0)
+    run = _run(conn, pid, 0)
+    assert run.streak == 100
+    fdb.set_person_earns(conn, pid, True)
+    wallet.record_earning_on(conn, pid, run)
+    assert wallet.award(conn, pid, run, SET, LAUNCH) == []
+    # a floor already further along the same run is never lowered
+    fdb.kv_set(conn, wallet.MS_FLOOR_KEY, {str(pid): [run.run_key, 150]})
+    wallet.record_earning_on(conn, pid, run)
+    assert fdb.kv_get(conn, wallet.MS_FLOOR_KEY)[str(pid)] == [run.run_key, 150]
+
+
+def test_launch_pays_no_seed_bonus_to_someone_not_earning(conn):
+    a = fdb.add_person(conn, "Ava", "#5BC9F0")
+    b = fdb.add_person(conn, "Ben", "#F05B5B")
+    fdb.set_person_earns(conn, b, False)
+    custom = {**SET, "milestones": [[25, 1000], [100, 10000]]}
+    _launch(conn, {a: 30, b: 30}, custom)
+    assert [r["at_streak"] for r in fdb.ledger_for(conn, a)] == [25]
+    assert fdb.ledger_for(conn, b) == []
+
+
+def test_a_break_and_rebuild_to_100_pays_despite_an_old_floor(conn):
+    """The floor from switching back on belongs to that run. After a break
+    the new run starts clean, and its 100 pays."""
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 99})
+    _serve(conn, pid, 0)
+    run = _run(conn, pid, 0)
+    assert run.streak == 100
+    wallet.record_earning_on(conn, pid, run)          # floor at 100 on the seed run
+    _serve(conn, pid, 1, done=False)                  # missed: the run ends
+    for n in range(2, 102):
+        _serve(conn, pid, n)
+    run = _run(conn, pid, 101)
+    assert run.streak == 100 and run.run_key == _day(2)
+    paid = wallet.award(conn, pid, run, SET, LAUNCH + dt.timedelta(days=101))
+    assert [(r["at_streak"], r["cents"]) for r in paid] == [(100, 10000)]

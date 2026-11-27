@@ -9,6 +9,11 @@
 - The summary (``summary``) splits that same balance into what came in
   since the last payout. Paid zeroes the wallet, so it starts over by itself.
 - A bonus is paid once per (child, run, streak length) and never clawed back.
+- "Earns money" off (people.earns 0) is streak only. Their rows are served
+  at 0 and frozen ``earning`` 0, so they are left out of the money and the
+  chore count; no bonus is paid. The run counts as usual. The switch never
+  rewrites a frozen row: a chore done while earning keeps its pay, and the
+  unpaid balance stays until Paid. Back on, only milestones still ahead pay.
 """
 from __future__ import annotations
 
@@ -75,6 +80,27 @@ def record_milestone_floor(conn, pid: int, run) -> None:
     else:
         floors.pop(str(pid), None)
     fdb.kv_set(conn, MS_FLOOR_KEY, floors)
+
+
+def record_earning_on(conn, pid: int, run) -> None:
+    """Earning switched back on during this run: the milestones it passed
+    while streak only are behind it and never pay. Only milestones still
+    ahead do. A floor already further along the same run is kept."""
+    if not run.run_key:
+        return
+    floors = fdb.kv_get(conn, MS_FLOOR_KEY) or {}
+    cur = floors.get(str(pid))
+    if cur and cur[0] == run.run_key and int(cur[1]) >= int(run.streak):
+        return
+    floors[str(pid)] = [run.run_key, int(run.streak)]
+    fdb.kv_set(conn, MS_FLOOR_KEY, floors)
+
+
+def earns(conn, pid: int) -> bool:
+    """The person's "Earns money" switch (a person who is gone earns nothing)."""
+    return bool(fdb.get_person_earns(conn, pid))
+
+
 PACE_DAYS = 56
 
 
@@ -157,6 +183,8 @@ def award(conn, pid: int, run: rw.Run, settings: dict, today: dt.date) -> list:
     is skipped too, so a late fix that re-keys a run cannot pay it twice."""
     if not settings.get("bonus_on") or not run.run_key or run.streak <= 0:
         return []
+    if not earns(conn, pid):
+        return []                       # streak only: no bonus
     launch = fdb.kv_get(conn, LAUNCH_KEY)
     if not launch:
         return []
@@ -187,13 +215,14 @@ def award(conn, pid: int, run: rw.Run, settings: dict, today: dt.date) -> list:
 _EARNED = ("FROM occurrence_log o "
            "JOIN completions c ON c.chore_id = o.chore_id AND c.date = o.date "
            "WHERE COALESCE(o.earner, o.person_id) = ? AND o.kind = 'house' "
-           "AND o.date >= ?")
+           "AND o.earning = 1 AND o.date >= ?")
 
 
 def chores_earned(conn, pid: int, launch_day: str) -> tuple[int, int]:
     """(how many, cents) of the done house chores this person earned since
     launch. Done house chores pay their earner: who owned the row when it
-    was ticked (``earner``), else its owner (``person_id``)."""
+    was ticked (``earner``), else its owner (``person_id``). A row served
+    while its owner was streak only (``earning`` 0) is not counted."""
     n, cents = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(o.cents), 0) " + _EARNED,
         (pid, launch_day)).fetchone()
@@ -337,6 +366,8 @@ def launch(conn, today: dt.date, settings: dict, seeds: dict) -> dict:
                                          int(settings.get("shield_max", 2))]])
     if settings.get("bonus_on"):
         for pid, n in seeds.items():
+            if not earns(conn, int(pid)):
+                continue                # streak only: the run carries, no bonus
             for at, cents in rw.milestones_crossed(
                     0, int(n), settings.get("milestones") or []):
                 fdb.add_ledger(conn, person_id=int(pid), kind="bonus",
@@ -349,7 +380,10 @@ def launch(conn, today: dt.date, settings: dict, seeds: dict) -> dict:
 def cents_for_today(conn, pid: int, today: dt.date, settings: dict,
                     launch: dict, away: set) -> int:
     """What one house chore pays today: the rate for the streak as it stood
-    at the end of yesterday, so today's own ticks never change today's rate."""
+    at the end of yesterday, so today's own ticks never change today's rate.
+    Nothing for someone on streak only."""
+    if not earns(conn, pid):
+        return 0
     run = person_run(conn, pid, today, settings, launch, away)
     streak = run.streak - (1 if run.outcomes.get(today.isoformat()) == rw.KEPT
                            else 0)
@@ -377,7 +411,7 @@ def history(conn, pid: int, launch_day: str) -> dict:
             "SELECT o.date, o.cents FROM occurrence_log o "
             "JOIN completions c ON c.chore_id = o.chore_id AND c.date = o.date "
             "WHERE COALESCE(o.earner, o.person_id) = ? AND o.kind = 'house' "
-            "AND o.date >= ?",
+            "AND o.earning = 1 AND o.date >= ?",
             (pid, launch_day)):
         d = dt.date.fromisoformat(ds)
         wk = (d - dt.timedelta(days=d.weekday())).isoformat()
