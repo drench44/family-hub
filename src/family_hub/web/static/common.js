@@ -30,6 +30,7 @@ async function j(url, opts) {
       try { detail = (await r.json()).detail || ''; } catch (e) { /* not json */ }
       const err = new Error((typeof detail === 'string' && detail) || `${url} -> HTTP ${r.status}`);
       err.status = r.status;   // lets a caller tell "refused" (4xx) from "down"
+      err.detail = detail;     // a structured refusal (the parent PIN's {pin: ...})
       throw err;
     }
     // `return await` (not bare `return r.json()`) is load-bearing: it keeps the
@@ -718,6 +719,8 @@ function buildChorePayload(f) {
     rotate_every: assign === 'rotation' && f.rotateEvery === 'week' ? 'week' : 'turn',
     // The one-time due date; the server ignores it for daily/weekly chores.
     date: kind === 'once' ? (f.date || '') : null,
+    // House chore (earns in the chore wallet) or personal goal (doesn't).
+    kind: f.choreKind === 'personal' ? 'personal' : 'house',
   };
 }
 
@@ -788,6 +791,7 @@ function choreToModel(ch) {
     assign: ch.assign_kind, fixed_person_id: ch.fixed_person_id,
     rot: ch.rotation_order.slice(),
     rotateEvery: ch.rotate_every === 'week' ? 'week' : 'turn',
+    choreKind: ch.kind === 'personal' ? 'personal' : 'house',
     each: [],
     // For a one-time chore the due date is stored as rotation_epoch.
     date: ch.schedule_kind === 'once' ? (ch.rotation_epoch || '') : '',
@@ -1022,6 +1026,12 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
           </div>
         </div>
       </div></div>
+    <div class="field f-kindfield"><label>Does it earn money?</label>
+      <div class="segmented f-kind">
+        <button class="seg-btn" type="button" data-kind="house">House chore</button>
+        <button class="seg-btn" type="button" data-kind="personal">Personal goal</button>
+      </div>
+      <div class="hint">A personal goal (like reading or vitamins) stays on the card but doesn't earn money or count for the streak.</div></div>
     <div class="chore-preview f-preview hidden" aria-live="polite">
       <div class="preview-head">Coming up</div>
       <div class="preview-cells f-cells"></div>
@@ -1041,6 +1051,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
 
   const $ = (sel) => host.querySelector(sel);
   if (!model.rotateEvery) model.rotateEvery = 'turn';
+  if (model.choreKind !== 'personal') model.choreKind = 'house';
   if (!Array.isArray(model.each)) model.each = [];
   $('.f-title').value = model.title || '';
   $('.f-icon').value = model.icon || '';
@@ -1070,7 +1081,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     intervalDays: $('.f-intervaldays').value, times: model.times,
     assign: model.repeat === 'once' ? 'fixed' : model.assign,
     person: model.fixed_person_id, rot: model.rot, rotateEvery: model.rotateEvery,
-    each: model.each, date: $('.f-date').value,
+    each: model.each, date: $('.f-date').value, choreKind: model.choreKind,
   });
   const paintSummary = () => {
     $('.f-summary').textContent = choreSummary({ ...model, ...draft(), fixed_person_id: model.fixed_person_id }, people);
@@ -1084,6 +1095,12 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     $('.f-weekfreq').classList.toggle('hidden', model.repeat !== 'weekly');
     $('.f-interval').classList.toggle('hidden', model.repeat !== 'interval');
     $('.f-date').classList.toggle('hidden', model.repeat !== 'once');
+    // a one-time item never earns or counts, so there is nothing to choose
+    $('.f-kindfield').classList.toggle('hidden', model.repeat === 'once');
+  };
+  const paintKind = () => {
+    $('.f-kind').querySelectorAll('.seg-btn').forEach((b) =>
+      b.classList.toggle('active', b.dataset.kind === model.choreKind));
   };
   const paintDays = () => {
     $('.f-days').innerHTML = DAY_LABELS.map((d, i) =>
@@ -1283,6 +1300,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
   };
   const repaintAll = () => {
     paintRepeat(); paintDays(); paintWeekFreq(); paintTimes(); paintAssign(); paintPeople(); paintRotation();
+    paintKind();
     refreshPreview();
   };
   repaintAll();
@@ -1402,6 +1420,12 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     model.rotateEvery = b.dataset.rotevery === 'week' ? 'week' : 'turn';
     paintRotation();
     refreshPreview();
+  };
+  $('.f-kind').onclick = (e) => {
+    const b = e.target.closest('[data-kind]');
+    if (!b) return;
+    model.choreKind = b.dataset.kind === 'personal' ? 'personal' : 'house';
+    paintKind();
   };
   $('.f-first').onclick = (e) => {
     const b = e.target.closest('[data-first]');
@@ -1638,19 +1662,87 @@ function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
    `date` is the day the wall is showing. Send it: just after midnight the wall
    still shows yesterday until its next poll, and a dateless tap would land on
    the server's new day and vanish from the row that was tapped. */
-async function attemptToggle(id, done, date) {
+/* ------------------------------------------------------------ chore wallet */
+
+/* Money is whole cents: "$18.50", and "30¢" under a dollar. Pure. */
+function formatCents(c) {
+  const n = Math.round(Number(c) || 0);
+  if (n > 0 && n < 100) return `${n}¢`;
+  const a = Math.abs(n);
+  return `${n < 0 ? '-' : ''}$${Math.floor(a / 100)}.${String(a % 100).padStart(2, '0')}`;
+}
+
+const SHIELD_SVG = (on) => `<svg class="shield ${on ? 'shield-on' : 'shield-off'}" viewBox="0 0 16 18" aria-hidden="true">`
+  + '<path d="M8 1 15 4v5c0 4-3 7-7 8-4-1-7-4-7-8V4z"/></svg>';
+
+/* The card head when the wallet is on: the streak toward the next goal and
+   one shield per save held (an outline for each still to earn). Pure. */
+function rewardHeadHtml(r) {
+  if (!r) return '';
+  const max = Math.max(0, Number(r.shield_max) || 0);
+  const held = Math.min(max, Math.max(0, Number(r.shields) || 0));
+  const shields = max
+    ? `<span class="shields" title="${held} of ${max} saves: a missed day uses one instead of ending the streak">`
+      + Array.from({ length: max }, (_, i) => SHIELD_SVG(i < held)).join('') + `</span>`
+    : '';
+  return `<span class="chip-streak chip-wallet" title="${Number(r.streak)} days in a row toward ${Number(r.goal)}">`
+    + `🔥 <span class="num">${Number(r.streak)} / ${Number(r.goal)}</span></span>` + shields;
+}
+
+/* The wallet line under a card's chores. Pure. */
+function walletLineHtml(r) {
+  if (!r) return '';
+  let right = '';
+  if (Number(r.bonus_today_cents) > 0) {
+    right = `<span class="wallet-bonus">+${formatCents(r.bonus_today_cents)} bonus today</span>`;
+  } else if (r.next_bonus) {
+    right = `<span class="wallet-next">next bonus ${formatCents(r.next_bonus.cents)} at ${Number(r.next_bonus.at)}</span>`;
+  } else if (r.next_level) {
+    right = `<span class="wallet-next">${formatCents(r.next_level.cents)} a chore at ${Number(r.next_level.at)}</span>`;
+  }
+  return `<div class="wallet-line"><span class="wallet-amt">Wallet <b class="num">${formatCents(r.wallet_cents)}</b></span>${right}</div>`;
+}
+
+/* What a chore row pays, or a quiet tag on a personal goal. Rows from a
+   wall without the wallet carry no kind, and get nothing. Pure. */
+function choreMoneyHtml(ch) {
+  if (!ch || !ch.kind) return '';
+  if (ch.kind === 'personal') return `<span class="chore-money chore-goal">personal goal</span>`;
+  if (ch.kind === 'house' && Number(ch.cents) > 0) {
+    return `<span class="chore-money num">+${formatCents(ch.cents)}</span>`;
+  }
+  return '';
+}
+
+/* The parent-PIN refusal on a failed write, or null for any other failure:
+   {pin: 'required'|'wrong'|'not_set'|'locked', wait_s}. Pure. */
+function pinRefusal(err) {
+  if (!err || (err.status !== 403 && err.status !== 429)) return null;
+  const d = err.detail;
+  if (!d || typeof d !== 'object' || typeof d.pin !== 'string') return null;
+  return { pin: d.pin, wait_s: Number(d.wait_s) || 0 };
+}
+
+function pinLockMessage(waitS) {
+  const mins = Math.max(1, Math.ceil((Number(waitS) || 0) / 60));
+  return `Too many wrong tries. Try again in ${mins === 1 ? 'a minute' : `${mins} minutes`}.`;
+}
+
+async function attemptToggle(id, done, date, headers) {
   const url = `/api/chores/${id}/complete`;
   try {
     if (done) {
-      await j(date ? `${url}?date=${encodeURIComponent(date)}` : url, { method: 'DELETE' });
+      await j(date ? `${url}?date=${encodeURIComponent(date)}` : url,
+        { method: 'DELETE', headers: headers || undefined });
     } else {
       await j(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(headers || {}) },
         body: JSON.stringify(date ? { date } : {}),
       });
     }
     attemptToggle.lastError = '';
+    attemptToggle.lastPin = null;
     return true;
   } catch (e) {
     // keep the server's reason findable, and readable by the caller
@@ -1658,10 +1750,12 @@ async function attemptToggle(id, done, date) {
     // "tap again"
     console.warn('chore toggle failed:', e && e.message);
     attemptToggle.lastError = (e && e.message) || '';
+    attemptToggle.lastPin = pinRefusal(e);
     return false;
   }
 }
 attemptToggle.lastError = '';
+attemptToggle.lastPin = null;
 
 /* The toast for a refused chore tap. 'stays done' matches the detail
    app.uncomplete sends (409) for a chore finished before it came off today's

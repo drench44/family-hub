@@ -1213,6 +1213,47 @@ body {
    dim wash of the accent hue reads as "paused for a reason", not "failed". */
 .ws-away { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 .ws-today { outline: 1px solid var(--ink); outline-offset: 1px; }
+/* chore wallet: a missed day a shield saved. Not red (nothing was lost) and
+   not green (it did not count): the streak's own warm hue, dimmed. */
+.ws-saved { background: color-mix(in srgb, var(--warn) 35%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 70%, transparent); }
+
+/* ---- chore wallet on the card ---- */
+.chip-wallet .num { font-family: inherit; }
+.shields { display: inline-flex; gap: 3px; align-items: center; }
+.shield { width: 13px; height: 15px; }
+.shield path { stroke-width: 1.6; stroke-linejoin: round; }
+.shield-on path { fill: var(--warn); stroke: var(--warn); }
+.shield-off path { fill: none; stroke: color-mix(in srgb, var(--warn) 55%, transparent); }
+.chore-money {
+  margin-left: auto; padding-left: 10px;
+  font-size: 13px; font-weight: 600; color: var(--good);
+  white-space: nowrap;
+}
+.chore-money.chore-goal { font-weight: 500; color: var(--dim); font-style: italic; }
+.chore-row.done .chore-money { opacity: 0.75; }
+.wallet-line {
+  display: flex; align-items: baseline; gap: 12px;
+  margin-top: 6px; padding-top: 8px;
+  border-top: 1px solid var(--edge);
+  font-size: 14px; color: var(--dim);
+}
+.wallet-amt b { font-size: 18px; color: var(--ink); margin-left: 4px; }
+.wallet-next, .wallet-bonus { margin-left: auto; text-align: right; }
+.wallet-bonus { color: var(--good); font-weight: 700; }
+.chore-row { position: relative; }
+.money-float {
+  position: absolute; right: 16px; top: 4px;
+  font-size: 15px; font-weight: 700; color: var(--good);
+  pointer-events: none;
+  animation: money-float 1000ms ease-out forwards;
+}
+@keyframes money-float {
+  0% { opacity: 0; transform: translateY(6px); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-22px); }
+}
+.card-bonus { box-shadow: 0 0 0 2px var(--warn), 0 0 28px color-mix(in srgb, var(--warn) 45%, transparent); }
 
 .chore-row {
   display: flex; align-items: center; gap: 12px;
@@ -2063,13 +2104,13 @@ body.overlay-open { overflow: hidden; }
 /* NOT window.confirm (blocked/ugly on kiosks). Layers above the editor too
    (z-index 95 > the editor's 90 > the overlay's 50); the failure toast (100)
    still wins. Centered — the card is short. */
-.confirm-modal {
+.confirm-modal, .pin-modal {
   position: fixed; inset: 0; z-index: 95;
   background: rgba(0, 0, 0, 0.62);
   display: flex; align-items: center; justify-content: center;
   padding: 24px;
 }
-.confirm-card {
+.confirm-card, .pin-card {
   width: 100%; max-width: 420px;
   background: var(--surface);
   border: 1px solid var(--edge);
@@ -2100,6 +2141,14 @@ body.overlay-open { overflow: hidden; }
   color: #fff;
   background: var(--crit);
   border: 1px solid var(--crit);
+}
+/* the PIN prompt sits above the delete confirm, and OK is not destructive */
+.pin-modal { z-index: 96; }
+.pin-ok { color: var(--accent-ink, #fff); background: var(--accent); border: 1px solid var(--accent); }
+.pin-ok:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pin-input {
+  display: block; width: 100%; margin-top: 16px;
+  font-size: 28px; letter-spacing: 0.4em; text-align: center;
 }
 .confirm-cancel:focus-visible, .confirm-del:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
@@ -2696,6 +2745,7 @@ body.integ-off-todos .todo-slot { display: none; }
      than this block, so rules here would lose the cascade to them */
   .card-celebrate { border-color: var(--good); }
   .confetti-particle { display: none; }
+  .money-float { display: none; }
 }
 
 /* ============= chore / person editor form (shared) =============

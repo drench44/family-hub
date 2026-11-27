@@ -216,6 +216,21 @@
     </div>
   </div>
 
+  <!-- Parent PIN (chore wallet): asked when a change needs a parent, such as
+       fixing an older day. The digits stay in memory for two minutes only.
+       Filled + toggled by hub.js (askParentPin). -->
+  <div class="pin-modal hidden" id="pin-modal" role="dialog" aria-modal="true" aria-labelledby="pin-msg" aria-describedby="pin-sub" tabindex="-1">
+    <div class="pin-card" id="pin-card">
+      <div class="confirm-msg" id="pin-msg">Parent PIN</div>
+      <div class="confirm-sub" id="pin-sub"></div>
+      <input class="txt-input pin-input" id="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" aria-label="Parent PIN">
+      <div class="confirm-actions">
+        <button class="confirm-cancel" type="button" data-pin-cancel="1">Cancel</button>
+        <button class="pin-ok" type="button" data-pin-ok="1">OK</button>
+      </div>
+    </div>
+  </div>
+
   <script src="common.js?v=1.16.0"></script>
   <!-- On-screen keyboard for the no-physical-keyboard touchscreen wall. Loads
        after common.js (oskApplyKey) and before hub.js. It turns itself on

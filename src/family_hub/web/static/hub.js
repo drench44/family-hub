@@ -456,10 +456,13 @@ function closeEventDetail() {
 
 /* --------------------------------------------------------------- people */
 
-function weekStripHtml(week) {
+function weekStripHtml(week, outcomes) {
+  // With the chore wallet on, a day a shield saved shows as its own "saved"
+  // cell (outcomes is the wallet's 7-day list, oldest first, like week).
   return `<div class="week-strip">` + week.map((st, i) => {
     const today = i === week.length - 1 ? ' ws-today' : '';
-    return `<span class="ws-cell ws-${st}${today}"></span>`;
+    const shown = outcomes && outcomes[i] === 'saved' ? 'saved' : st;
+    return `<span class="ws-cell ws-${shown}${today}"></span>`;
   }).join('') + `</div>`;
 }
 
@@ -482,7 +485,7 @@ function choreRowHtml(ch, firstName, opts = {}) {
     ? `<span class="chore-covering">covering for ${escapeHtml(coveringName)}</span>` : '';
   const cls = `chore-row${ch.done ? ' done' : ''}${readonly ? ' readonly' : ''}${editing ? ' is-editing' : ''}`;
   const body = `<span class="chore-check">✓</span>`
-    + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}${covering}</span>`;
+    + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}${covering}${choreMoneyHtml(ch)}</span>`;
   if (readonly) return `<div class="${cls}">${body}</div>`;   // past/future: look, don't touch
   // finished earlier, then paused or edited off today: stays done, not tappable
   if (ch.locked && !editing) return `<div class="${cls} locked" title="Finished before it came off today's plan">${body}</div>`;
@@ -509,9 +512,12 @@ function personCardHtml(p, opts = {}) {
   // tooltip spells this out since the bare number can't; no visible sub-label.
   // An away day is rest-day-neutral (see chores.streak/week_strip), so the
   // streak keeps showing even while away — it hasn't broken, it's paused.
-  const streak = p.streak >= 2
-    ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
-      + `🔥 ${p.streak}</span>` : '';
+  // With the chore wallet on, the head shows the wallet streak (calendar
+  // days toward the next goal, plus shields) instead, from p.reward.
+  const streak = p.reward ? rewardHeadHtml(p.reward)
+    : p.streak >= 2
+      ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
+        + `🔥 ${p.streak}</span>` : '';
   let rows;
   if (p.away) {
     // Away: their fixed chores are reassigned to a backup (or paused) and
@@ -543,10 +549,11 @@ function personCardHtml(p, opts = {}) {
     + `<div class="person-head">`
     + `<span class="person-name" style="color:${safeColor(p.person.color)}">${escapeHtml(p.person.name)}</span>`
     + streak
-    + weekStripHtml(p.week)
+    + weekStripHtml(p.week, p.reward && p.reward.outcomes7)
     + `</div>`
     + rows
     + addRow
+    + walletLineHtml(p.reward)
     + `</div>`;
 }
 
@@ -1660,6 +1667,35 @@ function fireCelebrations(people) {
     const card = document.querySelector(`.person-card[data-person="${p.person.id}"]`);
     if (card) celebrate(card, p.person.color);
   });
+  // The chore wallet's big moment: a streak bonus landed today. Fires on the
+  // poll that first carries it (a load of a day already paid stays quiet).
+  people.forEach((p) => {
+    const now = p.reward ? Number(p.reward.bonus_today_cents) || 0 : 0;
+    const key = `bonus:${p.person.id}:${data_date}`;
+    if (!now || celebrated.has(key)) return;
+    celebrated.add(key);
+    const prev = lastPeople.find((q) => q.person.id === p.person.id);
+    if (!prev || !prev.reward || Number(prev.reward.bonus_today_cents)) return;
+    const card = document.querySelector(`.person-card[data-person="${p.person.id}"]`);
+    if (card) celebrateBonus(card, p.person.color);
+  });
+}
+
+function celebrateBonus(card, color) {
+  celebrate(card, color);
+  card.classList.add('card-bonus');
+  const burst = document.createElement('div');
+  burst.className = 'confetti confetti-big';
+  for (let i = 0; i < 18; i++) {
+    const bit = document.createElement('span');
+    bit.className = 'confetti-particle';
+    bit.style.background = i % 3 ? color : 'var(--warn)';
+    bit.style.setProperty('--dx', `${Math.round((i - 8.5) * 18)}px`);
+    bit.style.setProperty('--dy', `${40 + (i % 4) * 22}px`);
+    burst.appendChild(bit);
+  }
+  card.appendChild(burst);
+  setTimeout(() => { card.classList.remove('card-bonus'); burst.remove(); }, 1800);
 }
 
 function celebrate(card, color) {
@@ -2568,6 +2604,7 @@ function closeOverlay() {
    the idle-timer/#overlay-home pair drifted apart in the first place (issue
    #34: only closeOverlay() knew to close the overlay, nothing closed these). */
 const MODAL_CLOSERS = {
+  'pin-modal': () => closePinPrompt(null),
   'ev-modal': () => closeEventDetail(),
   'chore-modal': () => closeChoreEditor(),
   'confirm-modal': () => closeDeleteConfirm(),
@@ -4659,6 +4696,81 @@ function showToast(msg) {
   _toastTimer = setTimeout(() => el.classList.remove('hub-toast-visible'), 4000);
 }
 
+/* ------------------------------------------------- parent PIN (chore wallet) */
+
+/* The PIN a parent typed, kept in memory only (never storage) for two
+   minutes so a run of fixes asks once. */
+let parentPinCache = null;
+const PARENT_PIN_MS = 2 * 60 * 1000;
+
+function parentPinHeaders() {
+  if (parentPinCache && parentPinCache.until > Date.now()) {
+    return { 'X-Parent-Pin': parentPinCache.pin };
+  }
+  parentPinCache = null;
+  return null;
+}
+
+function forgetParentPin() { parentPinCache = null; }
+
+let pinResolve = null;
+
+/* Ask for the parent PIN. Resolves to the digits, or null on Cancel. */
+function askParentPin(message) {
+  if (pinResolve) pinResolve(null);            // a stale prompt never wins
+  const modal = document.getElementById('pin-modal');
+  if (!modal) return Promise.resolve(null);
+  document.getElementById('pin-sub').textContent = message || '';
+  const input = document.getElementById('pin-input');
+  input.value = '';
+  modal.classList.remove('hidden');
+  dialogOpened('pin-modal', input);
+  armIdle();
+  return new Promise((resolve) => { pinResolve = resolve; });
+}
+
+function closePinPrompt(pin) {
+  const modal = document.getElementById('pin-modal');
+  if (modal) modal.classList.add('hidden');
+  dialogClosed('pin-modal');
+  const done = pinResolve;
+  pinResolve = null;
+  const digits = pin && /^[0-9]{4,6}$/.test(pin) ? pin : null;
+  if (digits) parentPinCache = { pin: digits, until: Date.now() + PARENT_PIN_MS };
+  if (done) done(digits);
+}
+
+/* Run a write that may need the parent PIN: send any remembered PIN; on a
+   "needs a parent" refusal ask once and retry. Resolves {ok, why} where why
+   is 'cancelled' or 'locked' (with wait_s) when the PIN stopped it. */
+async function withParentPin(write, refusalOf, message) {
+  let ok = await write(parentPinHeaders());
+  let r = ok ? null : refusalOf();
+  if (r && r.pin === 'wrong') forgetParentPin();
+  if (r && (r.pin === 'required' || r.pin === 'wrong')) {
+    const pin = await askParentPin(r.pin === 'wrong'
+      ? 'That PIN didn’t match. Try again.' : message);
+    if (!pin) return { ok: false, why: 'cancelled' };
+    ok = await write({ 'X-Parent-Pin': pin });
+    r = ok ? null : refusalOf();
+    if (r && r.pin === 'wrong') forgetParentPin();
+  }
+  if (r && r.pin === 'locked') return { ok: false, why: 'locked', wait_s: r.wait_s };
+  return { ok, why: ok ? '' : 'failed' };
+}
+
+/* A small "+30¢" that floats up from a row that just earned it. */
+function floatMoney(id) {
+  const row = document.querySelector(`.chore-row[data-chore="${id}"]`);
+  const tag = row && row.querySelector('.chore-money:not(.chore-goal)');
+  if (!tag) return;
+  const f = document.createElement('span');
+  f.className = 'money-float num';
+  f.textContent = tag.textContent;
+  row.appendChild(f);
+  setTimeout(() => f.remove(), 1100);
+}
+
 async function toggleChore(id, done, rowDay) {
   // attemptToggle (common.js) returns false if the write failed. Surface it
   // with a toast instead of swallowing: under a PERSISTENT write failure (full
@@ -4678,11 +4790,20 @@ async function toggleChore(id, done, rowDay) {
     else if (hubData) renderPeople(hubData);
     return;
   }
-  const ok = await attemptToggle(id, done, shown || undefined);
+  // With the chore wallet on, an older day needs the parent PIN: the
+  // server refuses, we ask once and retry (withParentPin).
+  const res = await withParentPin(
+    (headers) => attemptToggle(id, done, shown || undefined, headers || undefined),
+    () => attemptToggle.lastPin,
+    'Changing an older day needs a parent.');
+  const ok = res.ok;
+  if (ok && !done) floatMoney(id);
   await poll();
   // A refused tap on a day that has since rolled over will never succeed on
   // retry, so don't tell anyone to tap again: say the day has ended.
-  if (!ok) {
+  if (res.why === 'locked') showToast(pinLockMessage(res.wait_s));
+  else if (res.why === 'cancelled') showToast('Not changed. That day needs a parent.');
+  else if (!ok) {
     showToast(choreToggleMessage(attemptToggle.lastError,
       Boolean(shown && data_date && data_date !== shown)));
   }
@@ -5110,6 +5231,14 @@ async function confirmDelete() {
 document.addEventListener('click', (e) => {
   const tabBtn = e.target.closest('.tab-btn');
   if (tabBtn) { setTab(tabBtn.dataset.tab); return; }
+  // parent PIN prompt (above everything): Cancel or a backdrop tap answers null
+  if (e.target.closest('[data-pin-cancel]')
+      || (e.target.closest('.pin-modal') && !e.target.closest('.pin-card'))) {
+    closePinPrompt(null); return;
+  }
+  if (e.target.closest('[data-pin-ok]')) {
+    closePinPrompt(document.getElementById('pin-input').value.trim()); return;
+  }
   // delete confirm (above everything): Cancel or a backdrop tap dismisses it
   // with NO write; Delete fires the DELETE. Checked before the editor so its
   // own backdrop logic can't run against this modal.
@@ -6677,6 +6806,7 @@ document.addEventListener('keydown', (e) => {
     if (gear) { try { gear.focus({ preventScroll: true }); } catch (err) { /* not focusable */ } }
     return;
   }
+  if (modalShown('pin-modal')) { closePinPrompt(null); return; }
   if (modalShown('confirm-modal')) { closeDeleteConfirm(); return; }
   if (modalShown('chore-modal')) { closeChoreEditor(); return; }
   if (modalShown('ev-modal')) { closeEventDetail(); return; }

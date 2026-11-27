@@ -48,7 +48,10 @@ UNSTYLED_OK = {"f-title", "f-icon", "f-repeat", "f-days", "f-assign",
                # .preview-cells, .preview-first, .remind, .chore-summary
                "f-emoji", "f-weekly", "f-presets", "f-each", "f-turns",
                "f-rotevery", "f-preview", "f-cells", "f-first", "f-turnnote", "f-remind",
-               "f-remindcount", "f-summary"}
+               "f-remindcount", "f-summary",
+               # house chore or personal goal (chore wallet): rides .field
+               # and .segmented
+               "f-kindfield", "f-kind"}
 
 
 def _css_rule(selector):
@@ -2788,3 +2791,17 @@ def test_help_is_wired_from_the_gear_and_settings():
     assert re.search(r"#help-card \{[^}]*scroll-margin-top", CSS)
     # a disclosure title is a full-size tap target
     assert re.search(r"\.help-item > summary \{[^}]*min-height: 44px", CSS)
+
+
+def test_parent_pin_is_never_stored_in_the_browser():
+    """The chore wallet's parent PIN lives in memory for two minutes only: a
+    PIN in localStorage would sit on the shared wall for any child to read."""
+    for line in ALL_JS.splitlines():
+        if re.search(r"(localStorage|sessionStorage|document\.cookie)", line):
+            assert not re.search(r"pin", line, re.I), line.strip()
+
+
+def test_money_float_stops_under_reduced_motion():
+    assert "animation: money-float" in _css_rule(".money-float")
+    reduce = CSS[CSS.index("==================== reduced motion"):]
+    assert re.search(r"\.money-float\s*\{\s*display:\s*none", reduce)

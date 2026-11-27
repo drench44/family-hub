@@ -12860,3 +12860,89 @@ test('a hub that answers 502 (a proxy while the container restarts) holds the re
   assert.equal(reloadCalls.length, 0, 'a 502 is not an answer');
   assert.match(document.getElementById('toast').textContent, /hub isn't answering/);
 });
+
+/* ------------------------------------------------------------ chore wallet */
+
+const WALLET_P = {
+  person: { id: 1, name: 'Ava', color: '#5BC9F0' }, away: false,
+  chores: [
+    { id: 10, title: 'Dishes', icon: '', done: true, rot: false, kind: 'house', cents: 30 },
+    { id: 11, title: 'Read', icon: '', done: false, rot: false, kind: 'personal', cents: 0 },
+  ],
+  week: ['done', 'done', 'none', 'done', 'done', 'done', 'partial'], streak: 3,
+  total: 2, done_count: 1,
+  reward: {
+    streak: 47, goal: 100, shields: 1, shield_max: 2, wallet_cents: 1850, rate_cents: 30,
+    next_bonus: { at: 100, cents: 10000 }, next_level: null, bonus_today_cents: 0,
+    outcomes7: ['kept', 'kept', 'saved', 'kept', 'kept', 'kept', 'open'],
+  },
+};
+
+test('personCardHtml: the wallet card shows progress, shields, pay and the wallet line', () => {
+  const { sandbox } = newHub();
+  const card = sandbox.personCardHtml(WALLET_P);
+  assert.match(card, /47 \/ 100/);
+  assert.match(card, /shield-on/);
+  assert.match(card, /\+30¢/);
+  assert.match(card, /personal goal/);
+  assert.match(card, /Wallet <b class="num">\$18\.50<\/b>/);
+  assert.match(card, /next bonus \$100\.00 at 100/);
+  // a day a shield saved shows as saved on the week strip
+  assert.match(card, /ws-saved/);
+  assert.doesNotMatch(card, /🔥 3</, 'the old chore-day count is replaced');
+});
+
+test('personCardHtml: without the wallet the card is exactly as before', () => {
+  const { sandbox } = newHub();
+  const plain = { ...WALLET_P, reward: undefined,
+    chores: WALLET_P.chores.map(({ kind, cents, ...rest }) => rest) };
+  const card = sandbox.personCardHtml(plain);
+  assert.doesNotMatch(card, /wallet-line|chore-money|shield|ws-saved/);
+  assert.match(card, /🔥 3<\/span>/);
+});
+
+test('toggleChore asks for the parent PIN when an old day needs it, then retries with it', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.attemptToggle = async (id, done, date, headers) => {
+    calls.push(headers || null);
+    if (!headers) {
+      sandbox.attemptToggle.lastPin = { pin: 'required', wait_s: 0 };
+      return false;
+    }
+    sandbox.attemptToggle.lastPin = null;
+    return true;
+  };
+  const asked = [];
+  sandbox.askParentPin = async (msg) => { asked.push(msg); return '2468'; };
+  await sandbox.toggleChore(42, false);
+  assert.equal(asked.length, 1);
+  assert.deepEqual({ ...calls[1] }, { 'X-Parent-Pin': '2468' });
+});
+
+test('toggleChore shows the wait when the PIN is locked, and does not ask', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.attemptToggle = async () => {
+    sandbox.attemptToggle.lastPin = { pin: 'locked', wait_s: 240 };
+    return false;
+  };
+  let asked = 0;
+  sandbox.askParentPin = async () => { asked++; return null; };
+  await sandbox.toggleChore(42, false);
+  assert.equal(asked, 0);
+  assert.match(document.getElementById('toast').textContent, /Try again in 4 minutes/);
+});
+
+test('toggleChore: a cancelled PIN prompt writes nothing more and says why', async () => {
+  const { document, sandbox } = newHub();
+  let writes = 0;
+  sandbox.attemptToggle = async () => {
+    writes++;
+    sandbox.attemptToggle.lastPin = { pin: 'required', wait_s: 0 };
+    return false;
+  };
+  sandbox.askParentPin = async () => null;
+  await sandbox.toggleChore(42, false);
+  assert.equal(writes, 1);
+  assert.match(document.getElementById('toast').textContent, /needs a parent/);
+});

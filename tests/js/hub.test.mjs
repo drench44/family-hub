@@ -262,6 +262,7 @@ test('buildChorePayload: daily fixed chore trims and shapes correctly', () => {
     title: 'Dishes', icon: '🍽️', schedule_kind: 'daily', days_mask: 0,
     week_interval: 1, interval_days: null, due_times: [],
     assign_kind: 'fixed', fixed_person_id: 3, rotation_order: [], rotate_every: 'turn', date: null,
+    kind: 'house',
   });
 });
 
@@ -277,6 +278,7 @@ test('buildChorePayload: one-time chore carries its date and forces fixed', () =
     week_interval: 1, interval_days: null, due_times: [],
     assign_kind: 'fixed',              // rotation is coerced away
     fixed_person_id: 4, rotation_order: [], rotate_every: 'turn', date: '2026-08-20',
+    kind: 'house',
   });
 });
 
@@ -1614,4 +1616,86 @@ test('helpHtml escapes every string, keeps open rows open, one details row per t
   assert.equal((html.match(/<\/details>/g) || []).length, 2, 'balanced');
   assert.match(html, /data-help="z" open>/, 'a topic open before a repaint stays open');
   assert.ok(!/data-help="x&quot;y" open/.test(html));
+});
+
+
+/* ------------------------------------------------------------ chore wallet */
+
+test('formatCents: dollars, cents under a dollar, zero and below', () => {
+  assert.equal(sandbox.formatCents(1850), '$18.50');
+  assert.equal(sandbox.formatCents(30), '30¢');
+  assert.equal(sandbox.formatCents(100), '$1.00');
+  assert.equal(sandbox.formatCents(0), '$0.00');
+  assert.equal(sandbox.formatCents(-250), '-$2.50');
+});
+
+const R = {
+  streak: 47, goal: 100, shields: 2, shield_max: 2, wallet_cents: 1850,
+  rate_cents: 30, next_bonus: { at: 100, cents: 10000 }, next_level: null,
+  bonus_today_cents: 0, outcomes7: ['kept', 'kept', 'saved', 'kept', 'kept', 'kept', 'open'],
+};
+
+test('rewardHeadHtml: streak toward the goal and one mark per shield', () => {
+  const h = sandbox.rewardHeadHtml(R);
+  assert.match(h, /47 \/ 100/);
+  assert.equal((h.match(/shield-on/g) || []).length, 2);
+  assert.equal((h.match(/shield-off/g) || []).length, 0);
+  const one = sandbox.rewardHeadHtml({ ...R, shields: 1 });
+  assert.equal((one.match(/shield-on/g) || []).length, 1);
+  assert.equal((one.match(/shield-off/g) || []).length, 1);
+  // shields switched off: no shield marks at all
+  assert.doesNotMatch(sandbox.rewardHeadHtml({ ...R, shields: 0, shield_max: 0 }), /shield-/);
+  assert.equal(sandbox.rewardHeadHtml(null), '');
+});
+
+test('walletLineHtml: the wallet and what comes next', () => {
+  const w = sandbox.walletLineHtml(R);
+  assert.match(w, /\$18\.50/);
+  assert.match(w, /next bonus \$100\.00 at 100/);
+  const lv = sandbox.walletLineHtml({ ...R, next_bonus: null, next_level: { at: 25, cents: 35 } });
+  assert.match(lv, /35¢ a chore at 25/);
+  const none = sandbox.walletLineHtml({ ...R, next_bonus: null, next_level: null });
+  assert.doesNotMatch(none, /next/);
+  const paid = sandbox.walletLineHtml({ ...R, bonus_today_cents: 10000 });
+  assert.match(paid, /\+\$100\.00 bonus today/);
+  assert.doesNotMatch(paid, /next bonus/);
+  assert.equal(sandbox.walletLineHtml(undefined), '');
+});
+
+test('choreMoneyHtml: what a row pays, a personal goal tag, or nothing', () => {
+  assert.match(sandbox.choreMoneyHtml({ kind: 'house', cents: 30 }), /\+30¢/);
+  assert.match(sandbox.choreMoneyHtml({ kind: 'personal', cents: 0 }), /personal goal/);
+  assert.equal(sandbox.choreMoneyHtml({ kind: 'once', cents: 0 }), '');
+  assert.equal(sandbox.choreMoneyHtml({ title: 'no wallet' }), '');
+});
+
+test('pinRefusal: reads the server refusal off a failed write', () => {
+  const e = (status, detail) => Object.assign(new Error('x'), { status, detail });
+  assert.deepEqual({ ...sandbox.pinRefusal(e(403, { pin: 'required' })) }, { pin: 'required', wait_s: 0 });
+  assert.deepEqual({ ...sandbox.pinRefusal(e(403, { pin: 'wrong' })) }, { pin: 'wrong', wait_s: 0 });
+  assert.deepEqual({ ...sandbox.pinRefusal(e(429, { pin: 'locked', wait_s: 120 })) }, { pin: 'locked', wait_s: 120 });
+  assert.equal(sandbox.pinRefusal(e(403, 'forbidden')), null);
+  assert.equal(sandbox.pinRefusal(e(500, { pin: 'required' })), null);
+  assert.equal(sandbox.pinRefusal(null), null);
+});
+
+test('pinLockMessage: says how long to wait in plain words', () => {
+  assert.equal(sandbox.pinLockMessage(30), 'Too many wrong tries. Try again in a minute.');
+  assert.equal(sandbox.pinLockMessage(240), 'Too many wrong tries. Try again in 4 minutes.');
+});
+
+test('buildChorePayload and choreToModel carry house chore or personal goal', () => {
+  const p = sandbox.buildChorePayload({
+    title: 'Read', repeat: 'daily', days: new Set(), assign: 'fixed', person: '3',
+    rot: [], choreKind: 'personal',
+  });
+  assert.equal(p.kind, 'personal');
+  assert.equal(sandbox.buildChorePayload({ title: 'x', repeat: 'daily', days: new Set(),
+    assign: 'fixed', person: '3', rot: [], choreKind: 'nonsense' }).kind, 'house');
+  const m = sandbox.choreToModel({ title: 'Read', icon: '', schedule_kind: 'daily', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [], kind: 'personal' });
+  assert.equal(m.choreKind, 'personal');
+  const old = sandbox.choreToModel({ title: 'Bed', icon: '', schedule_kind: 'daily', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [] });
+  assert.equal(old.choreKind, 'house');
 });
