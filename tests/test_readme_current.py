@@ -50,6 +50,7 @@ README_NAMES = {
     "laundry": ("laundry",),
     "fleet": ("fleet console",),
     "printer": ("3d printer",),
+    "away_dim": ("dim when nobody is home",),
 }
 # Registry ids that are deliberately not in the README. Say why.
 README_EXEMPT: dict[str, str] = {}
