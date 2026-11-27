@@ -1844,3 +1844,14 @@ test('walletHelpParas: off or unreadable says so instead of guessing numbers', (
   assert.match(junk, /can’t be read right now/);
   assert.doesNotMatch(junk, /NaN/);
 });
+
+test('allChoresHtml: personal goals are tagged so the paid ones are easy to scan', () => {
+  const base = { schedule_kind: 'daily', days_mask: 0, assign_kind: 'fixed',
+    fixed_person_id: 1, rotation_order: [], active: 1 };
+  const h = sandbox.allChoresHtml([
+    { ...base, id: 1, title: 'Dishes', icon: '', kind: 'house' },
+    { ...base, id: 2, title: 'Vitamins', icon: '', kind: 'personal' },
+  ], [{ id: 1, name: 'Ava', active: 1 }]);
+  assert.equal((h.match(/allch-goal/g) || []).length, 1);
+  assert.match(h, /Vitamins<\/span><span class="allch-goal">personal goal/);
+});

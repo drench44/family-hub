@@ -761,6 +761,9 @@ function allChoresHtml(chores, people) {
     const label = escapeHtml(ch.icon ? `${ch.icon} ${ch.title}` : ch.title);
     return `<div class="allch-row">`
       + `<div class="allch-text"><span class="allch-title">${label}</span>`
+      // a personal goal earns nothing in the chore wallet: say so, so the paid
+      // chores are easy to pick out at a glance
+      + (ch.kind === 'personal' ? `<span class="allch-goal">personal goal</span>` : '')
       + `<span class="allch-when">${escapeHtml(choreSummary(m, people))}</span></div>`
       + `<button class="padmin-btn" type="button" data-edit-chore="${ch.id}">Edit</button>`
       + `<button class="padmin-btn padmin-del" type="button" data-del-chore="${ch.id}" aria-label="Delete ${escapeHtml(ch.title)}">Delete</button>`
