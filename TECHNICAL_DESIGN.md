@@ -518,6 +518,19 @@ family's existing chore/reward habit is served without polluting the calendar
 with non-native structure. Coexists with the Apolosign's own Calendar-Mode chore
 feature (PRD §7.10) rather than replacing it.
 
+### 8.1 The chore wallet (as built, 2026-11)
+The shipped web hub pays chores through an optional wallet, designed in
+`docs/superpowers/specs/2026-11-26-chore-wallet-design.md`. `rewards.py` is
+the pure rules layer: calendar-day streaks (a rest day is kept; away and
+unserved days are neutral), shields, repeating milestone bonuses, pay
+levels and cost projections. `wallet.py` reads the frozen
+`occurrence_log` (which now stores each row's `kind` and `cents`), the
+`served_days` table and the `ledger` table (bonuses and payouts, a bonus
+keyed by person, run and streak length so it can never pay twice).
+`parent_pin.py` holds the hashed PIN and its lockout; `app.py` gates
+old-day edits, money settings and payouts on it, and adds a `reward` block
+to the wall payload only while the wallet is on.
+
 ---
 
 ## 9. Widget Slot / Plugin Architecture (PRD §6, FR#8)

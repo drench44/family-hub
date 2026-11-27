@@ -73,6 +73,15 @@ at one URL.
   every-few-days schedules, one-time chores due on a single date, a
   browsable day history, an away/pause mode so a trip never breaks a streak,
   and a one-shot confetti celebration when someone clears their day.
+- **Chore wallet (optional):** each house chore adds money to a wallet on
+  that person's card, and a long streak earns more: a bonus at set days
+  (default $100 at 100 days), higher pay per chore, or both. Streaks count
+  calendar days, so a light schedule moves as fast as a full one, and shields
+  let one missed day pass without starting over. Personal goals (reading,
+  vitamins) stay on the card without earning. Settings shows the projected
+  cost per week, month and year before you save, and keeps each child's
+  payouts. A parent PIN guards the money settings, payouts and fixes to old
+  days. Off until a parent sets a PIN and turns it on.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
   carry over until done, a checked item stays struck-through for five minutes
@@ -240,7 +249,8 @@ A deploy script can write `build_info.json` into the tree it builds from
 
 Want to see the whole wall before wiring up anything? Run it with `DEMO=1` and
 it comes up as a fully populated sample: a fake family (Ava, Milo, Ruby) with
-chores, streaks and a week strip, a shared to-do list, a few calendar events,
+chores, streaks, a week strip and the chore wallet (demo parent PIN
+`1234`), a shared to-do list, a few calendar events,
 canned weather and per-room climate cards, and placeholder camera tiles. No
 config, no calendars, no cameras, no feeds needed. Nothing reaches the network.
 
@@ -490,6 +500,17 @@ browser on the LAN. Deleting
 a person is history-safe: their frozen past days stay recorded, and they're
 stripped from every chore's rotation or fixed assignment; **Deactivate** is the
 reversible alternative.
+
+**The chore wallet** sits on top of this. Each chore is a house chore or a
+personal goal; only house chores earn and count. A day counts as kept when
+every house chore was done, or when nothing was due; away days and days the
+wall was down neither count nor break a run. Every row the wall serves is
+frozen with what it pays, so changing the amounts never rewrites the past.
+Bonuses and payouts are a ledger, and a bonus is paid once per run. With the
+wallet on, yesterday can be fixed until a morning cutoff (default 9:00) and
+anything older needs the parent PIN. Turning the wallet on keeps everyone's
+current streak and starts every wallet at $0. Rules: `rewards.py`; money:
+`wallet.py`; PIN: `parent_pin.py`.
 
 ## Backup
 
