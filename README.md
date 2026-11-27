@@ -181,7 +181,9 @@ at one URL.
   holding decides: Auto or Desktop layout, and whether it drifts back to the
   home wall when idle), **Features**
   (a switch for every card and calendar source, so a wall can be slimmed down),
-  **Chore wallet**, **Backups** and **How it works**.
+  **Chore wallet**, **Backups** and **How it works**. Every setting has a
+  small ⓘ beside its name. Tap it for a short plain explanation right under
+  the label, with an example, and tap it again to close it.
 - **How it works:** a plain-words guide in Settings (gear → **How it works**),
   one tap-to-open topic per feature that is turned on, so anyone in the house
   can find out what a card does without asking.
