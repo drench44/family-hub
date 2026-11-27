@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.26.1] — 2026-11-27
+
 ### Fixed
 
 - Settings on a phone. The Home button is a small round icon beside the section strip instead of overlapping it, the section buttons are smaller sentence-case chips (about three and a half fit on a phone, with a soft fade and a half-cut chip to show the strip scrolls, and they snap as you swipe), and the strip scrolls the lit section into view on open and whenever it changes. The Backups card now says plainly when a backup password is set and on what day, lists the files locked into the latest settings copy, and keeps the change form behind a Change password button. Saving a password shows the set state at once. `/api/backups` gains `password_set_at`.
