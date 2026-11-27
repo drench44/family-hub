@@ -535,5 +535,8 @@ def demo_backups() -> dict:
         # the monthly restore test, passed twelve days ago
         "restore_test": {"at": (now - dt.timedelta(days=12)).isoformat(), "ok": True,
                          "snapshot": f"hub-{tested}.db", "reason": None,
-                         "settings_file": f"settings-{tested}.fhb"},
+                         "settings_file": f"settings-{tested}.fhb", "settings_checked": True,
+                         "settings_skip": None,
+                         "last_pass_at": (now - dt.timedelta(days=12)).isoformat()},
+        "restore_test_overdue": False,
     }

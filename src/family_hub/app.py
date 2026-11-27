@@ -982,7 +982,7 @@ def _health_full_local() -> dict:
         log.error("health: in-app backup state read failed", exc_info=True)
         out["backups_in_app"] = None
     try:
-        out["backups_restore_test"] = _restore_test_state(c)
+        out["backups_restore_test"] = _restore_test_health_note(c)
     except Exception:
         log.error("health: restore test state read failed", exc_info=True)
         out["backups_restore_test"] = None
@@ -2470,6 +2470,12 @@ def _restore_test_run(c) -> dict:
         result = fbackups.restore_test(
             BACKUPS_PATH, live=fbackups.live_counts(c), key_path=BACKUP_KEY_PATH,
             settings_files=files if isinstance(files, list) else None)
+    except Exception as e:
+        # Saved as a failed test all the same, so the card shows it and the
+        # hourly loop retries in a day instead of every hour.
+        log.exception("backups: the restore test could not run")
+        result = {"ok": False, "snapshot": None, "settings_file": None,
+                  "reason": f"The restore test couldn't run ({e})."}
     finally:
         _backup_started_at = None
     fbackups.record_restore_test(c, result, dt.datetime.now(dt.timezone.utc))
@@ -2536,15 +2542,40 @@ def _backups_state(c) -> dict:
         "password_problem": key in ("damaged", "unreadable")
         or (key == "unset" and bool(fdb.kv_get(c, _BACKUP_PW_KEY))),
         "restore_test": _restore_test_state(c),
+        "restore_test_overdue": _restore_test_overdue(c, why),
     }
 
 
+_RESTORE_FIELDS = ("at", "ok", "snapshot", "reason", "settings_file", "settings_checked",
+                   "settings_skip", "last_pass_at")
+
+
 def _restore_test_state(c) -> dict | None:
-    """The last restore test for the card and /health/full, or None."""
+    """The last restore test for the card, or None."""
     rt = fdb.kv_get(c, fbackups.RESTORE_TEST_KEY)
     if not isinstance(rt, dict):
         return None
-    return {k: rt.get(k) for k in ("at", "ok", "snapshot", "reason", "settings_file")}
+    return {k: rt.get(k) for k in _RESTORE_FIELDS}
+
+
+def _restore_test_overdue(c, why) -> bool:
+    """No pass in 35 days while backups are on and the hourly job runs: the
+    scheduler may never be firing, which must not look like quiet success."""
+    if why is not None or not _backup_loop_enabled():
+        return False
+    rec = fdb.kv_get(c, fbackups.STATE_KEY)
+    last = fdb.kv_get(c, fbackups.RESTORE_TEST_KEY)
+    return fbackups.restore_test_overdue(rec if isinstance(rec, dict) else {},
+                                         last if isinstance(last, dict) else None,
+                                         dt.datetime.now(dt.timezone.utc))
+
+
+def _restore_test_health_note(c) -> dict:
+    """/health/full's note: the last result (fields None before any) and
+    whether it is overdue. Information only, never a failing status."""
+    note = _restore_test_state(c) or {k: None for k in _RESTORE_FIELDS}
+    note["overdue"] = _restore_test_overdue(c, _backup_why_off(c))
+    return note
 
 
 @app.get("/api/backups")

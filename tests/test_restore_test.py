@@ -158,6 +158,7 @@ def test_a_stale_snapshot_far_below_live_fails(tmp_path):
     assert t["ok"] is False and t["snapshot"] == r["snapshot"]
     assert t["reason"] == (f"The newest backup ({r['snapshot']}) has 100 chore history "
                            "rows, but the hub has 300. It looks old or cut short.")
+    assert list(_scratch(tmp_path).iterdir()) == [], "the temp copy is removed on a failure"
 
 
 def test_an_empty_table_where_live_has_rows_fails(tmp_path):
@@ -177,6 +178,24 @@ def test_a_little_growth_since_the_last_copy_still_passes(tmp_path):
     _grow(conn, people=1, occ=8)          # a new person and a few chores done since
     t = _test(tmp_path, conn)
     assert t["ok"] is True, t["reason"]
+
+
+def test_nine_of_ten_passes(tmp_path):
+    db = tmp_path / "hub.db"
+    conn = _hub(db, people=9)
+    _backup(tmp_path, db)
+    _grow(conn, people=1)
+    t = _test(tmp_path, conn)
+    assert t["ok"] is True, t["reason"]
+
+
+def test_eight_of_ten_fails(tmp_path):
+    db = tmp_path / "hub.db"
+    conn = _hub(db, people=8)
+    _backup(tmp_path, db)
+    _grow(conn, people=2)
+    t = _test(tmp_path, conn)
+    assert t["ok"] is False and "has 8 people, but the hub has 10" in t["reason"]
 
 
 def test_empty_tables_on_both_sides_pass(tmp_path):
@@ -201,6 +220,7 @@ def test_a_snapshot_missing_a_table_fails(tmp_path):
     t = _test(tmp_path, conn)
     assert t["ok"] is False and t["snapshot"] == "hub-20260818-1030.db"
     assert "is missing tables the hub needs" in t["reason"] and "ledger" in t["reason"]
+    assert list(_scratch(tmp_path).iterdir()) == [], "the temp copy is removed on a failure"
 
 
 def test_the_newest_snapshot_is_the_one_tested(tmp_path):
@@ -307,6 +327,64 @@ def test_without_a_key_the_settings_check_is_skipped(tmp_path):
     os.remove(tmp_path / "backup.key")
     t = _test(tmp_path, conn, files=None)
     assert t["ok"] is True and t["settings_checked"] is False
+    assert t["settings_skip"] == "no backup password set"
+
+
+def test_a_damaged_key_skips_the_settings_check_and_says_why(tmp_path):
+    conn, r = _with_settings(tmp_path)
+    (tmp_path / "backup.key").write_bytes(b"short")
+    t = _test(tmp_path, conn, files=r["settings_names"])
+    assert t["ok"] is True and t["settings_checked"] is False
+    assert t["settings_skip"] == "the backup key on the hub can't be used"
+
+
+def test_a_key_with_no_bundle_yet_skips_and_says_why(tmp_path):
+    db = tmp_path / "hub.db"
+    conn = _hub(db)
+    fb.set_password(str(tmp_path / "backup.key"), "family hub 2026")
+    _backup(tmp_path, db)
+    t = _test(tmp_path, conn, files=None)
+    assert t["ok"] is True and t["settings_checked"] is False
+    assert t["settings_skip"] == "no settings backup was found yet"
+
+
+def test_a_checked_bundle_has_no_skip_reason(tmp_path):
+    conn, r = _with_settings(tmp_path)
+    t = _test(tmp_path, conn, files=r["settings_names"])
+    assert t["settings_checked"] is True and t["settings_skip"] is None
+
+
+def test_a_temp_folder_that_cannot_be_removed_is_named_in_the_log(tmp_path, monkeypatch, caplog):
+    db = tmp_path / "hub.db"
+    conn = _hub(db)
+    _backup(tmp_path, db)
+
+    def stuck(path, *a, **k):
+        raise PermissionError(13, "Permission denied", path)
+    monkeypatch.setattr(fb.shutil, "rmtree", stuck)
+    with caplog.at_level(logging.WARNING, logger="family_hub"):
+        t = _test(tmp_path, conn)
+    assert t["ok"] is True, "the test result is kept"
+    left = [p for p in _scratch(tmp_path).iterdir()]
+    assert len(left) == 1
+    warn = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warn and str(left[0]) in warn[0].getMessage()
+    assert "copy of the database" in warn[0].getMessage()
+
+
+def test_a_crash_inside_the_test_keeps_its_traceback(tmp_path, monkeypatch, caplog):
+    db = tmp_path / "hub.db"
+    conn = _hub(db)
+    _backup(tmp_path, db)
+
+    def boom(*a, **k):
+        raise KeyError("surprise")
+    monkeypatch.setattr(fb, "_check_snapshot", boom)
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        t = _test(tmp_path, conn)
+    assert t["ok"] is False and "couldn't finish" in t["reason"]
+    crashed = [r for r in caplog.records if r.exc_info]
+    assert len(crashed) == 1 and "surprise" in caplog.text
 
 
 def test_a_bad_database_is_reported_before_the_settings(tmp_path):
@@ -404,7 +482,40 @@ def test_the_result_is_recorded_without_moving_the_heartbeat(tmp_path):
     assert fdb.kv_get(conn, fb.STATE_KEY) == state
     assert fdb.kv_get(conn, fb.RESTORE_TEST_KEY) == {
         "at": later.isoformat(), "ok": False, "snapshot": r["snapshot"],
-        "reason": "It looks old.", "settings_file": None}
+        "reason": "It looks old.", "settings_file": None,
+        "settings_checked": False, "settings_skip": None, "last_pass_at": None}
+
+
+def test_the_record_keeps_the_settings_check_and_the_last_pass(tmp_path):
+    conn = _hub(tmp_path / "hub.db")
+    fb.record_restore_test(conn, {"ok": True, "snapshot": "hub-1.db", "reason": None,
+                                  "settings_checked": False,
+                                  "settings_skip": "no backup password set"}, T0)
+    rec = fdb.kv_get(conn, fb.RESTORE_TEST_KEY)
+    assert rec["settings_checked"] is False and rec["settings_skip"] == "no backup password set"
+    assert rec["last_pass_at"] == T0.isoformat()
+    later = T0 + dt.timedelta(days=31)
+    fb.record_restore_test(conn, {"ok": False, "snapshot": "hub-2.db", "reason": "x"}, later)
+    rec = fdb.kv_get(conn, fb.RESTORE_TEST_KEY)
+    assert rec["ok"] is False and rec["last_pass_at"] == T0.isoformat()
+
+
+@pytest.mark.parametrize("state,last,now,overdue", [
+    ({}, None, T0, False),                                                     # no backup yet
+    ({"first_ok_at": _iso(T0)}, None, T0 + dt.timedelta(days=35), False),
+    ({"first_ok_at": _iso(T0)}, None, T0 + dt.timedelta(days=37), True),      # never ran
+    ({"first_ok_at": _iso(T0)}, {"at": _iso(T0), "ok": True, "last_pass_at": _iso(T0)},
+     T0 + dt.timedelta(days=34), False),
+    ({"first_ok_at": _iso(T0)}, {"at": _iso(T0), "ok": True, "last_pass_at": _iso(T0)},
+     T0 + dt.timedelta(days=36), True),                                       # scheduler stopped
+    ({"first_ok_at": _iso(T0)},
+     {"at": _iso(T0 + dt.timedelta(days=40)), "ok": False, "last_pass_at": _iso(T0)},
+     T0 + dt.timedelta(days=40), True),                                        # failing for weeks
+    ({"first_ok_at": _iso(T0)}, {"at": _iso(T0), "ok": True},                 # older record
+     T0 + dt.timedelta(days=36), True),
+])
+def test_overdue(state, last, now, overdue):
+    assert fb.restore_test_overdue(state, last, now) is overdue
 
 
 def test_a_failure_logs_once_per_reason_and_a_pass_after_it_says_so(tmp_path, caplog):

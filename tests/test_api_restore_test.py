@@ -4,6 +4,7 @@ import datetime as dt
 import importlib
 import json
 import logging
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -228,7 +229,8 @@ def test_a_hung_restore_test_counts_as_a_stuck_run(client, app_mod, monkeypatch)
 def test_health_full_notes_the_restore_test_without_failing(client, app_mod, tmp_path):
     r = _backed_up(client, app_mod)
     body = client.get("/health/full").json()
-    assert body["notes"]["backups_restore_test"] is None
+    note = body["notes"]["backups_restore_test"]
+    assert note["at"] is None and note["overdue"] is False
     _snap(tmp_path, r["snapshot"]).write_bytes(b"junk" * 5000)
     client.post("/api/backups/restore-test")
     body = client.get("/health/full").json()
@@ -236,3 +238,65 @@ def test_health_full_notes_the_restore_test_without_failing(client, app_mod, tmp
     assert note["ok"] is False and "can't be opened" in note["reason"]
     assert note["at"] and note["snapshot"] == r["snapshot"]
     assert not any("restore" in p for p in body.get("problems", []))
+
+
+# --- review fixes (2026-11-27) ---------------------------------------------------------
+
+def test_a_skipped_settings_check_is_recorded_and_shown(client, app_mod):
+    _backed_up(client, app_mod)                       # no backup password set
+    rt = client.post("/api/backups/restore-test").json()["state"]["restore_test"]
+    assert rt["ok"] is True and rt["settings_checked"] is False
+    assert rt["settings_skip"] == "no backup password set"
+
+
+def test_the_endpoint_releases_the_lock_when_the_run_raises(app_mod, monkeypatch):
+    def boom(c):
+        raise RuntimeError("kaboom")
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        _backed_up(client, app_mod)
+        monkeypatch.setattr(app_mod, "_restore_test_run", boom)
+        assert client.post("/api/backups/restore-test").status_code == 500
+        assert app_mod._backup_lock.locked() is False
+        assert client.post("/api/backups/run").status_code == 200
+
+
+def test_a_failure_before_the_result_is_saved_still_records_a_failed_test(client, app_mod,
+                                                                           monkeypatch):
+    _backed_up(client, app_mod)
+
+    def broken(conn):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(fb, "live_counts", broken)
+    body = client.post("/api/backups/restore-test").json()
+    assert body["result"]["ok"] is False
+    rt = body["state"]["restore_test"]
+    assert rt["ok"] is False and "database is locked" in rt["reason"]
+    # so the hourly loop retries in a day, not every hour
+    st = fdb.kv_get(app_mod._db(), fb.STATE_KEY)
+    raw = fdb.kv_get(app_mod._db(), fb.RESTORE_TEST_KEY)
+    at = dt.datetime.fromisoformat(raw["at"])
+    assert fb.restore_test_due(st, raw, at + dt.timedelta(hours=1)) is False
+
+
+def test_an_overdue_test_shows_on_the_card_and_in_health(client, app_mod, monkeypatch):
+    _backed_up(client, app_mod)
+    monkeypatch.setattr(app_mod, "_backup_loop_enabled", lambda: True)
+    c = app_mod._db()
+    assert client.get("/api/backups").json()["restore_test_overdue"] is False
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=40)).isoformat()
+    fdb.kv_set(c, fb.RESTORE_TEST_KEY, {"at": old, "ok": True, "snapshot": "hub-x.db",
+                                        "reason": None, "last_pass_at": old})
+    assert client.get("/api/backups").json()["restore_test_overdue"] is True
+    assert client.get("/health/full").json()["notes"]["backups_restore_test"]["overdue"] is True
+
+
+def test_overdue_stays_quiet_when_backups_are_off_or_not_scheduled(client, app_mod, monkeypatch):
+    _backed_up(client, app_mod)
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=40)).isoformat()
+    fdb.kv_set(app_mod._db(), fb.RESTORE_TEST_KEY,
+               {"at": old, "ok": True, "snapshot": "hub-x.db", "reason": None,
+                "last_pass_at": old})
+    assert client.get("/api/backups").json()["restore_test_overdue"] is False   # DISABLE_SYNC
+    monkeypatch.setattr(app_mod, "_backup_loop_enabled", lambda: True)
+    client.patch("/api/integrations/backups", json={"enabled": False})
+    assert client.get("/api/backups").json()["restore_test_overdue"] is False

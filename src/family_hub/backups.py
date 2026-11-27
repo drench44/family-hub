@@ -610,6 +610,9 @@ RESTORE_SLACK_ROWS = 1
 RESTORE_EVERY = dt.timedelta(days=30)        # after a passed test
 RESTORE_RETRY = dt.timedelta(days=1)         # after a failed one, until it passes
 RESTORE_FIRST_AFTER = dt.timedelta(days=1)   # the first, after the first good backup
+# No pass in this long while backups are on means the test is not running or
+# keeps failing, and the card and /health/full say so.
+RESTORE_OVERDUE = dt.timedelta(days=35)
 
 
 def _parse_at(value) -> dt.datetime | None:
@@ -635,6 +638,20 @@ def restore_test_due(state: dict, last: dict | None, now: dt.datetime) -> bool:
     return first is not None and now - first >= RESTORE_FIRST_AFTER
 
 
+def restore_test_overdue(state: dict, last: dict | None, now: dt.datetime) -> bool:
+    """Whether no restore test has passed for RESTORE_OVERDUE. The clock
+    starts at the last pass, or when the first test was due."""
+    passed = _parse_at((last or {}).get("last_pass_at")) if isinstance(last, dict) else None
+    if passed is None and isinstance(last, dict) and last.get("ok"):
+        passed = _parse_at(last.get("at"))       # a record from before last_pass_at
+    if passed is None:
+        first = _parse_at((state or {}).get("first_ok_at"))
+        if first is None:
+            return False                        # no backup yet: nothing to test
+        passed = first + RESTORE_FIRST_AFTER
+    return now - passed > RESTORE_OVERDUE
+
+
 def newest_snapshot(out_dir: str) -> Path | None:
     """The newest database copy: the newest hourly one, or the newest in the
     next tier down when the hourly folder is empty."""
@@ -657,6 +674,18 @@ def live_counts(conn) -> dict:
         out[table] = (conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
                       if table in have else None)
     return out
+
+
+def _remove_work(path: str) -> None:
+    """Remove the test's temp folder. It holds a full copy of the family's
+    database, so a folder that stays behind is named in the log."""
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("backups: couldn't remove the restore test's temp folder %s (%s). "
+                    "It holds a copy of the database; delete it by hand.", path, e)
 
 
 def _check_snapshot(snap: Path, live: dict, tmp_dir: str | None) -> tuple[str | None, dict]:
@@ -701,7 +730,7 @@ def _check_snapshot(snap: Path, live: dict, tmp_dir: str | None) -> tuple[str | 
         finally:
             conn.close()
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        _remove_work(work)
     for table, what in RESTORE_COUNTED.items():
         got, want = counts[table]["backup"], counts[table]["live"]
         if not want:
@@ -718,7 +747,7 @@ def _check_snapshot(snap: Path, live: dict, tmp_dir: str | None) -> tuple[str | 
 def _check_settings(out_dir: str, key_path: str, recorded) -> tuple[str | None, str | None, bool]:
     """(problem or None, bundle name or None, checked) for the newest
     settings bundle, opened in memory with the stored key. With no usable key
-    there is nothing to open it with, and the card already says so."""
+    there is nothing to open it with (settings_skip says why)."""
     folder = Path(out_dir) / "settings"
     names = sorted((n for n in os.listdir(folder) if re.fullmatch(r"settings-[0-9-]+\.fhb", n)),
                    reverse=True) if folder.is_dir() else []
@@ -757,14 +786,24 @@ def _check_settings(out_dir: str, key_path: str, recorded) -> tuple[str | None, 
     return None, name, True
 
 
+def _settings_skip(key_path: str) -> str:
+    state = key_state(key_path)
+    if state == "unset":
+        return "no backup password set"
+    if state != "ok":
+        return "the backup key on the hub can't be used"
+    return "no settings backup was found yet"
+
+
 def restore_test(out_dir: str, *, live: dict, key_path: str, settings_files=None,
                  tmp_dir: str | None = None) -> dict:
     """Prove the newest backup restores. Never raises:
-    {ok, snapshot, reason, counts, settings_file, settings_checked}.
+    {ok, snapshot, reason, counts, settings_file, settings_checked,
+    settings_skip (why the settings were not checked, in plain words)}.
     `live` is live_counts() of hub.db; `settings_files` the short names the
     last backup recorded in its bundle (None when it recorded none)."""
     out = {"ok": False, "snapshot": None, "reason": None, "counts": {},
-           "settings_file": None, "settings_checked": False}
+           "settings_file": None, "settings_checked": False, "settings_skip": None}
     try:
         snap = newest_snapshot(out_dir)
         if snap is None:
@@ -777,11 +816,14 @@ def restore_test(out_dir: str, *, live: dict, key_path: str, settings_files=None
             return out
         problem, out["settings_file"], out["settings_checked"] = _check_settings(
             out_dir, key_path, settings_files)
+        if not out["settings_checked"] and not problem:
+            out["settings_skip"] = _settings_skip(key_path)
         if problem:
             out["reason"] = problem
             return out
         out["ok"] = True
     except Exception as e:      # noqa: BLE001 - reported, never raised
+        log.exception("backups: the restore test crashed")
         out["ok"] = False
         out["reason"] = f"The restore test couldn't finish ({e})."
     return out
@@ -799,7 +841,12 @@ def record_restore_test(conn, result: dict, at: dt.datetime) -> None:
     prev = prev if isinstance(prev, dict) else None
     value = {"at": at.isoformat(), "ok": bool(result.get("ok")),
              "snapshot": result.get("snapshot"), "reason": result.get("reason"),
-             "settings_file": result.get("settings_file")}
+             "settings_file": result.get("settings_file"),
+             "settings_checked": bool(result.get("settings_checked")),
+             "settings_skip": result.get("settings_skip"),
+             "last_pass_at": (prev or {}).get("last_pass_at")}
+    if value["ok"]:
+        value["last_pass_at"] = value["at"]
     if not value["ok"]:
         if prev is None or prev.get("ok") or prev.get("reason") != value["reason"]:
             log.error("backups: the restore test failed: %s", value["reason"])
