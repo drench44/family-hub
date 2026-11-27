@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.26.0] — 2026-11-27
+
 ### Added
 
 - Dim hours are a household setting. Settings, under Display, sets when every wall and phone dims (10pm to 6am by default, the same as before), or turns the time-of-day dim off. A window can cross midnight or sit inside one day. The times are kept while Off, so On brings them back.
