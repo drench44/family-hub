@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.23.0] — 2026-11-27
+
 ### Added
 
 - The hub backs itself up. Every hour it copies the database into a backup folder (`./backups` by default, or any folder you set with `BACKUP_DIR`, such as a NAS share the box has mounted), checked and kept in hourly, daily, weekly and monthly copies like the box backup script. With a backup password set in Settings, it also saves the settings files (`config.json`, `.env`, the PIN key, the Wyze and Google sign-ins), locked with that password. `python -m family_hub.backups restore-settings` puts them back.
