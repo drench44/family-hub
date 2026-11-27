@@ -9,6 +9,8 @@ LAN, handed out every camera URL and a writable config. pyyaml is always
 installed here (the caldav package requires it), so these never skip.
 """
 import re
+
+import pytest
 from pathlib import Path
 
 import yaml
@@ -197,12 +199,14 @@ def test_no_bind_mount_can_turn_a_missing_file_into_a_root_owned_folder():
                 assert v.get("bind", {}).get("create_host_path") is False, (name, v)
 
 
+@pytest.mark.engine_checkout
 def test_the_quick_start_creates_env_before_compose_up():
     readme = (COMPOSE.parent / "README.md").read_text()
     quick = readme[readme.index("## Quick start"):]
     assert quick.index("cp .env.example .env") < quick.index("docker compose up")
 
 
+@pytest.mark.engine_checkout
 def test_the_default_backup_folder_ships_in_the_repo():
     """Docker would make a missing ./backups owned by root, which the hub's
     non-root user can't write. A tracked placeholder means a clone already

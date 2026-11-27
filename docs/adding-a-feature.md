@@ -153,6 +153,12 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       an absolute instant fail on CI's UTC runners; anchor fixtures to
       local wall-clock components. (Three laundry tests turned CI red.)
 - [ ] Verify the suites genuinely RUN — a skip is not a pass.
+- [ ] A test that reads the engine repo's own files (README, `.gitignore`,
+      a tracked placeholder) carries `@pytest.mark.engine_checkout`. The
+      deploy runs the suite on a staged tree with no `.git` and the house
+      overlay's README, where such checks fail for no real reason. (Two
+      backups tests stopped the 2026-11-27 deploy this way, after the gallery
+      test did the same the day before.)
 
 ## 7. Visual gates (all of them, on the demo)
 
