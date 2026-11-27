@@ -1203,14 +1203,16 @@ def laundry_log_recent(conn, machine: str | None = None,
 
 # --- integrations ---------------------------------------------------------
 
-def seed_integration(conn, iid: str, kind: str, sort: int = 0) -> None:
-    """Insert an integration row if absent (default enabled). Idempotent, so a
-    re-seed on startup never flips an operator's existing toggle."""
+def seed_integration(conn, iid: str, kind: str, sort: int = 0,
+                     enabled: bool = True) -> None:
+    """Insert an integration row if absent (enabled unless the registry says
+    it starts off). Idempotent, so a re-seed on startup never flips an
+    operator's existing toggle."""
     with conn:
         conn.execute(
             "INSERT OR IGNORE INTO integrations(id, kind, enabled, config_json, "
-            "sort, created_at) VALUES(?, ?, 1, '{}', ?, ?)",
-            (iid, kind, sort, _now_iso()))
+            "sort, created_at) VALUES(?, ?, ?, '{}', ?, ?)",
+            (iid, kind, 1 if enabled else 0, sort, _now_iso()))
 
 
 def list_integrations(conn) -> list[dict]:

@@ -30,7 +30,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -53,6 +53,7 @@ from . import caldav_service
 from . import caldav_sync
 from . import chore_mirror
 from . import deep_health
+from . import dimming
 from .calendar_sync import GoogleCalendarClient, sync_once
 from .config import load_config
 
@@ -299,7 +300,8 @@ def _init_db_once(conn) -> None:
         # Idempotent: never flips an existing toggle. This is the non-breaking
         # hinge — an existing install seeds every configured source ON.
         for i, integ in enumerate(_available_only()):
-            fdb.seed_integration(conn, integ["id"], integ["kind"], sort=i)
+            fdb.seed_integration(conn, integ["id"], integ["kind"], sort=i,
+                                 enabled=integ.get("default_on", True))
         _ensure_history_backfill(conn)   # kv-guarded, atomic; raises on failure
         if DEMO:
             _ensure_demo_seed(conn)      # people-guarded; raises on failure
@@ -356,7 +358,7 @@ _http = httpx.AsyncClient()
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app):
-    global _laundry_watch_task
+    global _laundry_watch_task, _presence_watch_task
     # Configured but unusable is a misconfiguration, not a runtime failure:
     # say it once, here, before anything tries to use it.
     if _laundry_env_broken():
@@ -385,6 +387,23 @@ async def _lifespan(_app):
             or log.error("laundry watch: task exited (real-time lane dead; "
                          "tile route falls back to inline fetch)",
                          exc_info=t.exception()))
+    # A presence block with no Home Assistant to ask (no ha_base of its own
+    # and no laundry block): the switch can't exist, so say why once.
+    if (getattr(cfg, "presence", None) is not None
+            and not fintegrations.presence_base(cfg)):
+        log.warning("presence is set in config.json but there is no Home "
+                    "Assistant to ask: give it an ha_base (or configure "
+                    "laundry). Dim when nobody is home stays hidden.")
+    # Who is home, for "dim when nobody is home": armored the same way.
+    presence = None
+    if _presence_watch_enabled():
+        presence = asyncio.create_task(presence_watch_loop())
+        _presence_watch_task = presence
+        presence.add_done_callback(
+            lambda t: t.cancelled()
+            or log.error("away dimming: the presence task exited (the wall "
+                         "will not dim for nobody home until a restart)",
+                         exc_info=t.exception()))
     # The hourly backup (backups.py), armored and cancelled the same way.
     backup_task = None
     if _backup_loop_enabled():
@@ -400,6 +419,10 @@ async def _lifespan(_app):
             backup_task.cancel()
             with contextlib.suppress(BaseException):
                 await backup_task
+        if presence is not None:
+            presence.cancel()
+            with contextlib.suppress(BaseException):
+                await presence
         # aclose() must run even if shutdown itself raises — and awaiting a
         # crashed (already-done) task re-raises its stored exception, which
         # is NOT a CancelledError, so keep that from eating the cleanup too.
@@ -704,7 +727,8 @@ def _available_only():
         return memo
     items = fintegrations.available_integrations(
         cfg, os.environ, caldav_ok=caldav_service.configured(os.environ))
-    demo_ids = ({"cameras", "weather", "climate", "laundry", "fleet", "printer"}
+    demo_ids = ({"cameras", "weather", "climate", "laundry", "fleet", "printer",
+                 "away_dim"}
                 if DEMO else set())
     return [dict(i, available=True) if (i["id"] in demo_ids and not i["available"])
             else i
@@ -716,9 +740,9 @@ def _integration_on(c, iid: str) -> bool:
     """One definition of 'this integration is on': available (configured in
     config/env) AND its toggle enabled. Every render/sync gate goes through here
     so their notions of 'on' cannot drift (Fable architecture review, rec 4)."""
-    available = any(i["id"] == iid
-                    for i in _available_only())
-    return available and fdb.integration_enabled(c, iid, default=True)
+    integ = next((i for i in _available_only() if i["id"] == iid), None)
+    return integ is not None and fdb.integration_enabled(
+        c, iid, default=integ.get("default_on", True))
 
 
 def _visible_reminders(c) -> list:
@@ -795,7 +819,8 @@ def _laundry_row_status() -> str | None:
 
 def _integ_status(iid: str, caldav_status: dict, cal_status: dict,
                   mirror_status: dict | None = None,
-                  laundry_status: str | None = None):
+                  laundry_status: str | None = None,
+                  away_status: str | None = None):
     """A compact health string for an integration: 'ok' | 'needs_auth' | 'error',
     or None for one with no sync (cameras/weather/climate). Drives the settings
     menu's 'Reconnect iCloud' / warning affordance on auth-failure or error.
@@ -815,6 +840,8 @@ def _integ_status(iid: str, caldav_status: dict, cal_status: dict,
     # (ICS gets no status rather than mis-inheriting Google's auth state).
     if iid == "laundry":
         return laundry_status
+    if iid == "away_dim":
+        return away_status
     src = (caldav_status if iid == "icloud_caldav"
            else cal_status if iid == "google_calendar" else None)
     if not src:
@@ -838,17 +865,20 @@ def _integrations_state(c) -> dict:
     cal_status = fdb.kv_get(c, "calendar_status") or {}
     mirror_status = fdb.kv_get(c, "chore_mirror_status") or {}
     laundry_status = _laundry_row_status()
+    away_status = _away_row_status()
     lst = []
     enabled_ids = set()
     for integ in _available_only():
-        en = fdb.integration_enabled(c, integ["id"], default=True)
+        en = fdb.integration_enabled(c, integ["id"],
+                                     default=integ.get("default_on", True))
         if en:
             enabled_ids.add(integ["id"])
         entry = {"id": integ["id"], "kind": integ["kind"],
                  "name": integ["name"], "enabled": en,
                  "group": integ.get("group", "integration"),
                  "status": _integ_status(integ["id"], caldav_status, cal_status,
-                                         mirror_status, laundry_status)}
+                                         mirror_status, laundry_status,
+                                         away_status if en else None)}
         if integ["id"] == "icloud_caldav":
             # the connected Apple ID (not a secret) so settings can show it; the
             # password is never included. readonly = 1-way (read-only) vs 2-way.
@@ -968,7 +998,8 @@ def _health_full_local() -> dict:
         return out
     c = _db()
     out["on"] = {i["id"] for i in _available_only()
-                 if fdb.integration_enabled(c, i["id"], default=True)}
+                 if fdb.integration_enabled(c, i["id"],
+                                            default=i.get("default_on", True))}
     out["cal_status"] = fdb.kv_get(c, "calendar_status") or {}
     out["caldav_status"] = fdb.kv_get(c, "caldav_status") or {}
     try:
@@ -1090,6 +1121,13 @@ async def health_full():
             enabled=fleet_on,
             state=tiles.SOURCE_STATE.get("fleet"), available=fleet.get("available"),
             now=now, max_age_s=deep_health.FLEET_MAX_AGE_S),
+        "presence": deep_health.presence_source(
+            configured="away_dim" in avail and not DEMO,
+            enabled="away_dim" in on and not DEMO,
+            token_present=bool(fintegrations.ha_token(os.environ)),
+            watching=_presence_watching(),
+            snap=_presence_snap, last_ok=_presence_last_ok,
+            now=now, started_at=PROCESS_STARTED_AT),
         "cameras": deep_health.cameras_source(
             configured="cameras" in avail, enabled=cams_on,
             wanted=_camera_srcs(), streams=streams, error=streams_err),
@@ -1592,6 +1630,168 @@ def _build_backup(conn, now=None, stale_s=BACKUP_STALE_S):
     return _backup_status(_heartbeat_ts(rec.get("at")), now, stale_s, remote)
 
 
+# --- dimming: the household dim hours and "nobody is home" ---------------
+#
+# The wall dims itself (body.is-night) inside the household dim hours, and,
+# with the away_dim switch on, while Home Assistant says nobody is home. The
+# hours are one kv record every wall and phone reads from /api/hub. Who is
+# home comes from a slow background watcher (every PRESENCE_WATCH_S) that
+# keeps the last answer here; /api/hub only reads it, so a slow Home
+# Assistant can never slow the wall. Every failure leaves the wall bright.
+
+PRESENCE_WATCH_S = dimming.WATCH_S
+# The last answer from Home Assistant ({"ok", "home"} or {"ok": False,
+# "error", "auth"}) and when it came (wall clock). None until the first read
+# after the switch goes on; cleared whenever it goes off.
+_presence_snap: dict | None = None
+_presence_at: float | None = None
+# When Home Assistant last gave a readable answer, for /health/full.
+_presence_last_ok: float | None = None
+# One warning per outage, not one per minute; re-armed on recovery.
+_presence_warned = False
+# Set by the away_dim switch so the watcher asks at once instead of waiting
+# out its minute (the Settings line would read "Checking" until then).
+_presence_kick = False
+_presence_watch_task: "asyncio.Task | None" = None
+# Nobody-home reads in a row: one zero can be a blip, so the wall dims on the
+# second (dimming.away_block reads the snapshot's `confirmed`).
+_presence_zero_streak = 0
+# Bumped whenever the answer is dropped (the switch flipped), so a read that
+# started before the flip can't write its answer after it.
+_presence_gen = 0
+
+
+def _presence_watch_enabled() -> bool:
+    """The watcher runs where the calendar sync would (not in DEMO, not under
+    DISABLE_SYNC) and only on a hub that has a Home Assistant. It still asks
+    HA nothing while the switch is off (see _presence_tick)."""
+    return _sync_enabled() and bool(fintegrations.presence_base(cfg))
+
+
+def _presence_forget() -> None:
+    """Drop the last answer, so turning the switch back on never revives an
+    old "nobody is home", and start over: the outage warning re-arms, the
+    nobody-home count restarts, and any read still in flight is void."""
+    global _presence_snap, _presence_at, _presence_warned, \
+        _presence_zero_streak, _presence_gen
+    _presence_snap, _presence_at = None, None
+    _presence_warned = False
+    _presence_zero_streak = 0
+    _presence_gen += 1
+
+
+def _presence_watching() -> bool:
+    """The background watcher is alive (started and not exited)."""
+    t = _presence_watch_task
+    return t is not None and not t.done()
+
+
+def _away_on_now() -> bool:
+    return _integration_on(_db(), "away_dim")
+
+
+async def _presence_tick() -> None:
+    """One read of who is home. Off, or no token: ask nothing, keep nothing."""
+    global _presence_snap, _presence_at, _presence_last_ok, _presence_warned, \
+        _presence_zero_streak
+    gen = _presence_gen
+    if not await asyncio.to_thread(_away_on_now):
+        _presence_forget()
+        return
+    token = fintegrations.ha_token(os.environ)
+    if not token:
+        _presence_forget()
+        return
+    people = list((getattr(cfg, "presence", None) or {}).get("people") or [])
+    snap = await dimming.read_presence(
+        _http, fintegrations.presence_base(cfg), token, people)
+    if gen != _presence_gen:
+        return            # the switch flipped while we asked: not our answer
+    now = time.time()
+    if snap.get("ok") and snap.get("home") == 0:
+        _presence_zero_streak += 1
+        snap = dict(snap, confirmed=_presence_zero_streak >= 2)
+    else:
+        _presence_zero_streak = 0
+    _presence_snap, _presence_at = snap, now
+    if snap.get("ok"):
+        _presence_last_ok = now
+        if _presence_warned:
+            _presence_warned = False
+            log.warning("away dimming: Home Assistant answers again")
+    elif not _presence_warned:
+        _presence_warned = True
+        log.warning("away dimming: Home Assistant could not be read (%s); the "
+                    "wall will not dim for nobody home until it can",
+                    snap.get("error"))
+
+
+async def presence_watch_loop() -> None:
+    """Ask every PRESENCE_WATCH_S, armored like the laundry loop: a crashing
+    tick is logged and the loop carries on; only cancel stops it. The wait is
+    sliced so the switch going on is answered within seconds."""
+    global _presence_kick
+    while True:
+        try:
+            await _presence_tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("away dimming: presence tick crashed; continuing")
+        waited = 0.0
+        while waited < PRESENCE_WATCH_S and not _presence_kick:
+            await asyncio.sleep(2.0)
+            waited += 2.0
+        _presence_kick = False
+
+
+def _away_row_status() -> str | None:
+    """The away_dim settings row: 'needs_auth' with no token or a refused one,
+    'error' while Home Assistant can't be read, else None. DEMO has no Home
+    Assistant and nothing to complain about."""
+    if DEMO:
+        return None
+    if not fintegrations.ha_token(os.environ):
+        return "needs_auth"
+    st = dimming.away_block(enabled=True, token=True, snap=_presence_snap,
+                            at=_presence_at, now=time.time(),
+                            watching=_presence_watching())["state"]
+    return {"needs_auth": "needs_auth", "unreadable": "error",
+            "stopped": "error"}.get(st)
+
+
+def _dim_block(c, istate: dict) -> dict:
+    """/api/hub's `dim`: {"hours": the household dim hours, "away": the
+    nobody-home answer, or None on a hub with no Home Assistant}."""
+    try:
+        hours = dimming.clean_hours(fdb.kv_get(c, dimming.KV_KEY))
+    except Exception:
+        log.error("dim hours unreadable; serving the default", exc_info=True)
+        hours = dict(dimming.DIM_DEFAULT)
+    if not any(i["id"] == "away_dim" for i in istate["list"]):
+        return {"hours": hours, "away": None}
+    on = "away_dim" in istate["enabled_ids"]
+    if DEMO:
+        return {"hours": hours, "away": dimming.demo_away(enabled=on)}
+    return {"hours": hours, "away": dimming.away_block(
+        enabled=on, token=bool(fintegrations.ha_token(os.environ)),
+        snap=_presence_snap, at=_presence_at, now=time.time(),
+        watching=_presence_watching())}
+
+
+@app.put("/api/dim-hours")
+def dim_hours_put(body: dict = Body(...)):
+    """Set the household dim hours: any of {"on": bool, "start": "HH:MM",
+    "end": "HH:MM"}. Every wall and phone picks it up on its next poll."""
+    c = _db()
+    try:
+        hours = dimming.merge_hours(fdb.kv_get(c, dimming.KV_KEY), body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    fdb.kv_set(c, dimming.KV_KEY, hours)
+    return hours
+
+
 @app.get("/api/hub")
 def hub():
     with _available_once():
@@ -1687,6 +1887,9 @@ def _hub_payload() -> dict:
         # on a fresh device with no localStorage override; None => the shipped
         # grey/green/none stays. Never persisted client-side.
         "theme": cfg.theme,
+        # When this wall dims: the household dim hours and, where a Home
+        # Assistant is configured, whether nobody is home (_dim_block).
+        "dim": _dim_block(c, istate),
     }
 
 
@@ -2696,9 +2899,15 @@ def integrations_patch(iid: str, body: IntegrationPatch, request: Request):
             and body.enabled != fdb.integration_enabled(c, iid)):
         require_parent(request)
     # ensure a row exists (a never-toggled integration has none yet), then set it
-    fdb.seed_integration(c, iid, avail[iid]["kind"])
+    fdb.seed_integration(c, iid, avail[iid]["kind"],
+                         enabled=avail[iid].get("default_on", True))
     if body.enabled is not None:
         fdb.set_integration_enabled(c, iid, body.enabled)
+        if iid == "away_dim":
+            # never let an old answer stand across a flip; ask HA at once
+            global _presence_kick
+            _presence_forget()
+            _presence_kick = True
     if body.readonly is not None:
         conf = fdb.integration_config(c, iid)
         conf["readonly"] = bool(body.readonly)

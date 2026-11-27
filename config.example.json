@@ -45,6 +45,7 @@
         "error_entity": "event.dryer_error" }
     ]
   },
+  "presence": { "people": [] },
   "theme": { "mode": "grey", "accent": "green", "columns": "none" },
   "fleet": { "base": "http://192.168.1.50:3000" }
 }

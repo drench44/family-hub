@@ -32,8 +32,8 @@ services:
       # iCloud CalDAV bot credentials (optional; see .env). Empty = off.
       - ICLOUD_CALDAV_USER=${ICLOUD_CALDAV_USER:-}
       - ICLOUD_CALDAV_APP_PASSWORD=${ICLOUD_CALDAV_APP_PASSWORD:-}
-      # Home Assistant long-lived token for the laundry card (optional; see
-      # .env). Empty = laundry off. This allowlist is the only way env vars
+      # Home Assistant long-lived token for the laundry card and away dimming
+      # (optional; see .env). Empty = both off. This allowlist is the only way env vars
       # reach the container — a var missing here is invisible inside.
       - HA_TOKEN=${HA_TOKEN:-}
       # The hub's own hourly backup (see README, Backup). BACKUP_DIR here is

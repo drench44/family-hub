@@ -247,6 +247,134 @@ test('nightClass covers 22:00–05:59', () => {
   assert.equal(nightClass(6), '');
 });
 
+// --- dim hours and away dimming (common.js; the server side is dimming.py) ---
+
+const night = { on: true, start: '22:00', end: '06:00' };
+const hub = (dim) => ({ dim });
+
+test('nightClass follows the dim hours, minutes included', () => {
+  const nc = sandbox.nightClass;
+  const late = { on: true, start: '21:30', end: '07:15' };
+  assert.equal(nc(21, 29, late), '');
+  assert.equal(nc(21, 30, late), 'is-night');
+  assert.equal(nc(7, 14, late), 'is-night');
+  assert.equal(nc(7, 15, late), '');
+});
+
+test('inDimWindow: a window across midnight, one inside a day, and Off', () => {
+  const w = sandbox.inDimWindow;
+  const m = (h, mm = 0) => h * 60 + mm;
+  assert.ok(w(m(22), night) && w(m(23, 59), night) && w(m(0), night) && w(m(5, 59), night));
+  assert.ok(!w(m(6), night) && !w(m(12), night) && !w(m(21, 59), night));
+  const nap = { on: true, start: '13:00', end: '15:30' };
+  assert.ok(w(m(13), nap) && w(m(15, 29), nap));
+  assert.ok(!w(m(15, 30), nap) && !w(m(0, 30), nap) && !w(m(12, 59), nap));
+  assert.ok(!w(m(23), { ...night, on: false }), 'Off never dims for the time of day');
+  assert.ok(!w(m(23), { on: true, start: '22:00', end: '22:00' }), 'an empty window never dims');
+});
+
+test('dimHoursOf reads the hub payload and falls back to 10pm to 6am', () => {
+  const d = (x) => ({ ...sandbox.dimHoursOf(x) });
+  assert.deepEqual(d(null), night, 'before the first poll: the old fixed hours');
+  assert.deepEqual(d({}), night, 'an older hub with no dim block');
+  assert.deepEqual(d(hub({ hours: { on: false, start: '21:00', end: '07:00' } })),
+    { on: false, start: '21:00', end: '07:00' });
+  for (const bad of [{ on: 'yes', start: '21:00', end: '07:00' },
+    { on: true, start: '9pm', end: '07:00' }, { on: true, start: '07:00', end: '07:00' }]) {
+    assert.deepEqual(d(hub({ hours: bad })), night, JSON.stringify(bad));
+  }
+});
+
+test('wallDimmed: night by the clock, or nobody home on the wall only', () => {
+  const at = (h, mm = 0) => new Date(2026, 10, 27, h, mm);
+  const wd = sandbox.wallDimmed;
+  assert.equal(wd(at(23), null, false), true, 'no payload yet: the old 10pm rule');
+  assert.equal(wd(at(12), null, false), false);
+  const off = hub({ hours: { ...night, on: false }, away: null });
+  assert.equal(wd(at(23), off, false), false, 'dim hours Off');
+  const empty = hub({ hours: night, away: { enabled: true, state: 'away', home: 0, dim: true } });
+  assert.equal(wd(at(12), empty, false, at(12).getTime()), true, 'nobody home dims the wall at noon');
+  assert.equal(wd(at(12), empty, true, at(12).getTime()), false, 'a phone is in someone\'s hand away from home: no away dim');
+  assert.equal(wd(at(23), empty, true, at(23).getTime()), true, 'the phone still dims at night');
+  const home = hub({ hours: night, away: { enabled: true, state: 'home', home: 2, dim: false } });
+  assert.equal(wd(at(12), home, false), false);
+  const unread = hub({ hours: night, away: { enabled: true, state: 'unreadable', home: null, dim: false } });
+  assert.equal(wd(at(12), unread, false), false, 'Home Assistant unreadable never dims');
+  const switchedOff = hub({ hours: night, away: { enabled: false, state: 'off', home: null, dim: true } });
+  assert.equal(wd(at(12), switchedOff, false, at(12).getTime()), false, 'a stray dim flag with the switch off is ignored');
+});
+
+test('wallDimmed: an old nobody-home answer stops dimming; night still works offline', () => {
+  const at = (h, mm = 0, ss = 0) => new Date(2026, 10, 27, h, mm, ss);
+  const wd = sandbox.wallDimmed;
+  const empty = hub({ hours: night, away: { enabled: true, state: 'away', home: 0, dim: true } });
+  const got = at(12).getTime();
+  assert.equal(wd(at(12, 3, 30), empty, false, got), true, '210 s later it still counts');
+  assert.equal(wd(at(12, 3, 31), empty, false, got), false,
+    'older than the server\'s own 210 s: the hub may be gone, so the wall comes back up');
+  assert.equal(wd(at(12), empty, false, null), false, 'no arrival time: never trusted');
+  assert.equal(wd(at(23), empty, false, got), true, 'the dim hours run from the local clock');
+});
+
+test('dimHoursWords says the window in plain clock words', () => {
+  const w = sandbox.dimHoursWords;
+  assert.equal(w(night), '10pm to 6am');
+  assert.equal(w({ on: true, start: '21:30', end: '07:15' }), '9:30pm to 7:15am');
+  assert.equal(w({ on: true, start: '00:00', end: '12:00' }), 'midnight to noon');
+  assert.equal(w({ on: true, start: '12:30', end: '13:00' }), '12:30pm to 1pm');
+  assert.equal(w({ ...night, on: false }), '');
+});
+
+test('dimAwayLine: one plain sentence per state', () => {
+  const l = sandbox.dimAwayLine;
+  assert.equal(l(null), '', 'no Home Assistant: nothing to say');
+  assert.match(l({ enabled: false, state: 'off' }), /Dim when nobody is home/);
+  assert.match(l({ enabled: true, state: 'checking' }), /Asking Home Assistant/);
+  assert.match(l({ enabled: true, state: 'away', home: 0, dim: true }), /nobody is home/);
+  assert.match(l({ enabled: true, state: 'home', home: 1 }), /1 person is home/);
+  assert.match(l({ enabled: true, state: 'home', home: 3 }), /3 people are home/);
+  assert.match(l({ enabled: true, state: 'unreadable' }), /couldn.t be read/);
+  assert.match(l({ enabled: true, state: 'unreadable' }), /won.t dim/);
+  assert.match(l({ enabled: true, state: 'needs_auth' }), /HA_TOKEN/);
+  assert.match(l({ enabled: true, state: 'confirming', home: 0 }), /nobody is home.*once more/);
+  const stopped = l({ enabled: true, state: 'stopped' });
+  assert.match(stopped, /hub stopped checking/);
+  assert.doesNotMatch(stopped, /Home Assistant couldn/, 'never blames Home Assistant for the hub');
+  for (const st of ['off', 'checking', 'away', 'home', 'unreadable', 'needs_auth', 'confirming', 'stopped']) {
+    const text = l({ enabled: st !== 'off', state: st, home: 0 });
+    assert.ok(!text.includes(String.fromCharCode(0x2014)), `${st}: no long dash`);
+  }
+});
+
+test('dimTimeOptions: every half hour, the saved time selected, an off-grid one kept', () => {
+  const o = sandbox.dimTimeOptions;
+  const html = o('22:00');
+  assert.equal((html.match(/<option /g) || []).length, 48);
+  assert.match(html, /<option value="22:00" selected>10pm<\/option>/);
+  assert.match(html, /<option value="00:00">midnight<\/option>/);
+  const odd = o('21:45');
+  assert.equal((odd.match(/<option /g) || []).length, 49);
+  assert.match(odd, /<option value="21:30">9:30pm<\/option><option value="21:45" selected>9:45pm<\/option><option value="22:00">/);
+});
+
+test('dimCardHtml: the On/Off switch, both times, and the away line only with Home Assistant', () => {
+  const html = sandbox.dimCardHtml(hub({ hours: night, away: null }));
+  assert.match(html, /data-dim-set="on" class="on"/);
+  assert.match(html, /data-dim-set="off"/);
+  assert.match(html, /data-dim-start/);
+  assert.match(html, /data-dim-end/);
+  assert.match(html, /Every screen in the house dims from 10pm to 6am/);
+  assert.doesNotMatch(html, /dim-away/, 'no Home Assistant: no away line');
+  const offHtml = sandbox.dimCardHtml(hub({ hours: { ...night, on: false }, away: null }));
+  assert.match(offHtml, /data-dim-set="off" class="on"/);
+  assert.match(offHtml, /<select[^>]*data-dim-start[^>]*disabled/, 'times are kept but locked while Off');
+  assert.match(offHtml, /No screen dims for the time of day/);
+  const withHa = sandbox.dimCardHtml(hub({ hours: night,
+    away: { enabled: true, state: 'unreadable', home: null, dim: false } }));
+  assert.match(withHa, /class="settings-sub dim-away"/);
+  assert.match(withHa, /couldn&#39;t be read|couldn’t be read/);
+});
+
 // --- admin chore payload serialization (extracted into common.js so the
 // admin form's model->POST logic is testable; a bad days_mask/rotation_order
 // would otherwise only show up as a silent 422 or a wrong chore on the wall).
@@ -1570,12 +1698,32 @@ test('helpTopics: the screen topic reads its times from idleReturnMs', () => {
   assert.match(t, /a minute and a half on most pages, three minutes on the calendar, five minutes on a camera and five minutes in Settings/);
 });
 
+test('helpTopics: the screen topic says this hub\'s dim hours and whether an empty house dims it', () => {
+  const screen = (dim) => topic(ctxOf([], { dim }), 'screen').paras.join(' ');
+  assert.match(screen(null), /From 10pm to 6am every screen dims/, 'before the first poll: the default');
+  assert.match(screen({ hours: { on: true, start: '21:30', end: '07:00' }, away: null }),
+    /From 9:30pm to 7am every screen dims/);
+  const off = screen({ hours: { on: false, start: '22:00', end: '06:00' }, away: null });
+  assert.match(off, /don.t dim for the time of day/);
+  assert.match(off, /Settings, under Display/);
+  assert.doesNotMatch(off, /nobody is home/, 'no Home Assistant: no away line');
+  const on = screen({ hours: { on: true, start: '22:00', end: '06:00' },
+    away: { enabled: true, state: 'home', home: 2, dim: false } });
+  assert.match(on, /While nobody is home the wall dims too/);
+  assert.match(on, /stays bright/, 'and says what happens when it can\'t tell');
+  const offSwitch = screen({ hours: { on: true, start: '22:00', end: '06:00' },
+    away: { enabled: false, state: 'off', home: null, dim: false } });
+  assert.match(offSwitch, /can also dim while nobody is home/);
+});
+
 test('help text: no em or en dashes, and no names, in every string the help can show', () => {
   const ctxs = [
     ctxOf(['chores', 'todos', 'google_calendar', 'cameras', 'weather', 'climate', 'laundry', 'printer',
       'fleet'], { backup: { known: true, age_s: 60 }, status: { laundry: 'error' } }),
     ctxOf(['todos', 'icloud_caldav'], { todoSource: 'icloud', todoReadonly: true, status: { icloud_caldav: 'error' } }),
     ctxOf(['todos', 'icloud_caldav'], { todoSource: 'icloud', todoReadonly: false, status: { icloud_caldav: 'needs_auth' } }),
+    ctxOf([], { dim: { hours: { on: false, start: '22:00', end: '06:00' }, away: { enabled: false, state: 'off' } } }),
+    ctxOf([], { dim: { hours: { on: true, start: '21:30', end: '07:00' }, away: { enabled: true, state: 'away', home: 0, dim: true } } }),
   ];
   const strings = ctxs.flatMap((c) => sandbox.helpTopics(c).flatMap((t) => [t.title, ...t.paras]));
   // top-level consts live in the script scope, not on the sandbox object
@@ -1594,7 +1742,8 @@ test('help text: no em or en dashes, and no names, in every string the help can 
   // The help speaks about "each person", never a named one: any capitalized
   // word that is not ordinary sentence text, a feature or a UI label would be
   // a name, and this repo is public.
-  const allowed = new Set(['A', 'Add', 'After', 'All', 'Anyone', 'Auto-return', 'Away', 'Back', 'Backups',
+  const allowed = new Set(['A', 'Add', 'After', 'All', 'Anyone', 'Assistant', 'Auto-return', 'Away', 'Back', 'Backups',
+    'Dim', 'Display', 'Phones', 'Turn',
     'Calendar', 'Camera', 'Cameras', 'Changes', 'Changing', 'Check', 'Chores', 'D', 'Deactivate', 'Delete',
     'Each', 'Edit', 'Everyone', 'Everyone’s', 'Features', 'Finish', 'Fix', 'Fleet', 'From', 'Full', 'Going',
     'Green', 'Home', 'House', 'How', 'If', 'In', 'Items', 'It', 'Last', 'Later', 'Laundry', 'Loading', 'Month',

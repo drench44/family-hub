@@ -208,3 +208,58 @@ def test_laundry_config_cleaning_warns_loudly(caplog):
     # among the per-entry ones.
     assert any(r.levelno >= logging.ERROR and "no valid machines survived" in r.message
                for r in caplog.records)
+
+
+# --- away dimming: "dim the wall when nobody is home" ----------------------
+
+def test_away_dim_is_listed_only_where_home_assistant_is_configured():
+    """It has no Home Assistant of its own: it rides the laundry block's
+    ha_base, or a `presence` block's. A hub with neither never shows it."""
+    ids = lambda cfg: {i["id"] for i in fi.available_only(cfg, {"HA_TOKEN": "t"})}
+    assert "away_dim" not in ids(_cfg())
+    assert "away_dim" in ids(_cfg(laundry={"ha_base": "http://ha", "machines": []}))
+    assert "away_dim" in ids(_cfg(presence={"ha_base": "http://ha", "people": []}))
+
+
+def test_away_dim_is_off_until_someone_turns_it_on():
+    row = next(i for i in fi.available_integrations(
+        _cfg(presence={"ha_base": "http://ha", "people": []}), {})
+        if i["id"] == "away_dim")
+    assert row == {"id": "away_dim", "kind": "presence",
+                   "name": "Dim when nobody is home", "available": True,
+                   "group": "integration", "default_on": False}
+
+
+def test_presence_base_prefers_the_presence_block():
+    assert fi.presence_base(_cfg()) == ""
+    assert fi.presence_base(_cfg(laundry={"ha_base": "http://l"})) == "http://l"
+    assert fi.presence_base(_cfg(laundry={"ha_base": "http://l"},
+                                 presence={"ha_base": "http://p", "people": []})) == "http://p"
+    # a presence block that only lists people uses the laundry HA
+    assert fi.presence_base(_cfg(laundry={"ha_base": "http://l"},
+                                 presence={"ha_base": "", "people": ["person.a"]})) == "http://l"
+
+
+def test_presence_config_cleaning(caplog):
+    from family_hub.config import _clean_presence
+    assert _clean_presence(None) is None
+    assert _clean_presence({"ha_base": "http://ha/", "people": ["person.a", "person.b"]}) == \
+        {"ha_base": "http://ha", "people": ["person.a", "person.b"]}
+    assert _clean_presence({}) == {"ha_base": "", "people": []}
+    with caplog.at_level("WARNING"):
+        got = _clean_presence({"people": ["person.a", "sensor.x", 3, " person.b "]})
+    assert got == {"ha_base": "", "people": ["person.a", "person.b"]}
+    assert "sensor.x" in caplog.text
+    with caplog.at_level("WARNING"):
+        assert _clean_presence(["person.a"]) is None
+    assert "presence" in caplog.text
+
+
+def test_load_config_reads_the_presence_block(tmp_path):
+    import json
+    from family_hub.config import load_config
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"presence": {"people": ["person.a"]}}))
+    assert load_config(str(p)).presence == {"ha_base": "", "people": ["person.a"]}
+    p.write_text(json.dumps({}))
+    assert load_config(str(p)).presence is None

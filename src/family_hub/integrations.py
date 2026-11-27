@@ -50,6 +50,15 @@ def laundry_needs_auth(cfg, env: dict) -> bool:
     return bool(getattr(cfg, "laundry", None)) and not ha_token(env)
 
 
+def presence_base(cfg) -> str:
+    """The Home Assistant that answers "is anyone home": the `presence`
+    block's own ha_base when it sets one, else the laundry block's. Empty
+    when this hub has no Home Assistant at all."""
+    pres = getattr(cfg, "presence", None) or {}
+    laundry = getattr(cfg, "laundry", None) or {}
+    return (pres.get("ha_base") or laundry.get("ha_base") or "").rstrip("/")
+
+
 def caldav_configured(env: dict) -> bool:
     """True iff the iCloud CalDAV bot credentials are present. This is the
     feature flag: with no credential the whole CalDAV subsystem is inert and the
@@ -81,9 +90,13 @@ def available_integrations(cfg, env: dict | None = None,
     cals = getattr(cfg, "calendars", []) or []
     out: list[dict] = []
 
-    def add(iid, kind, name, available, group="integration"):
-        out.append({"id": iid, "kind": kind, "name": name,
-                    "available": bool(available), "group": group})
+    def add(iid, kind, name, available, group="integration", default_on=True):
+        row = {"id": iid, "kind": kind, "name": name,
+               "available": bool(available), "group": group}
+        if not default_on:
+            # seeded OFF: the hub must not start doing it on its own
+            row["default_on"] = False
+        out.append(row)
 
     # Core features — always available; the operator turns them off to slim the
     # wall down. Listed first so they seed with the lowest sort and head the
@@ -112,6 +125,11 @@ def available_integrations(cfg, env: dict | None = None,
     add("climate", "climate", "Climate",
         bool(getattr(cfg, "climate_base", "")))
     add("laundry", "laundry", "Laundry", laundry_configured(cfg, env))
+    # Dim the wall while nobody is home (dimming.py). Listed wherever a Home
+    # Assistant is configured, off until someone turns it on. Like laundry it
+    # stays listed without a token and reports needs_auth instead.
+    add("away_dim", "presence", "Dim when nobody is home",
+        bool(presence_base(cfg)), default_on=False)
     add("fleet", "fleet", "Fleet status", bool(getattr(cfg, "fleet", None)))
     # The printer card reads the same fleet rollup, so it exists exactly when
     # fleet is configured, with its own switch (keep one card, drop the other).

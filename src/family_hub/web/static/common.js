@@ -272,9 +272,134 @@ function clampFrac(v, max) {
   return Math.max(0, Math.min(1, n / max));
 }
 
-/* The wall dims itself overnight (CSS state); the display's own power is a
-   Pi-side schedule in Phase 2. Night = 22:00 through 05:59. */
-function nightClass(hour) { return (hour >= 22 || hour < 6) ? 'is-night' : ''; }
+/* When the screen dims (body.is-night, the CSS night state). Two reasons:
+   the household dim hours (/api/hub `dim.hours`, one setting for every
+   screen, 10pm to 6am until someone changes it) and, on the wall, nobody
+   being home (`dim.away`, read from Home Assistant by the server; see
+   dimming.py). The display's own power is a Pi-side schedule. */
+const DIM_DEFAULT = Object.freeze({ on: true, start: '22:00', end: '06:00' });
+
+/* 'HH:MM' (24-hour) as minutes after midnight, else null. Pure. */
+function hmMinutes(s) {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(typeof s === 'string' ? s : '');
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/* Is `mins` (after midnight) inside the dim window? The end is exclusive, and
+   a window may cross midnight (22:00 to 06:00) or not (13:00 to 15:00). The
+   same rule as dimming.in_window. Pure. */
+function inDimWindow(mins, hours) {
+  if (!hours || hours.on !== true) return false;
+  const s = hmMinutes(hours.start);
+  const e = hmMinutes(hours.end);
+  if (s === null || e === null || s === e) return false;
+  return s < e ? (mins >= s && mins < e) : (mins >= s || mins < e);
+}
+
+function nightClass(hour, minute = 0, hours = DIM_DEFAULT) {
+  return inDimWindow(hour * 60 + minute, hours) ? 'is-night' : '';
+}
+
+/* The dim hours from a hub payload, or the default when it has none (before
+   the first poll, an older hub) or they don't make sense. Pure. */
+function dimHoursOf(data) {
+  const h = data && data.dim && data.dim.hours;
+  if (!h || typeof h.on !== 'boolean' || hmMinutes(h.start) === null
+      || hmMinutes(h.end) === null || h.start === h.end) return DIM_DEFAULT;
+  return h;
+}
+
+/* How long a nobody-home answer is trusted after it arrived: the server's own
+   limit (dimming.FRESH_S, 210 s). Past it the hub may be unreachable, and a
+   wall must not stay dim on an answer it can no longer refresh. */
+const AWAY_FRESH_MS = 210 * 1000;
+
+/* Should this screen be dim now? `phone` is true on the phone layout, which
+   never dims for nobody home: a phone that sees an empty house is almost
+   always in someone's hand away from it. Only the server's own dim flag,
+   with the switch on, in a payload that arrived (`receivedAt`, epoch ms)
+   within AWAY_FRESH_MS, dims for that; anything unclear leaves it bright.
+   The dim hours need no hub at all: they run from this screen's clock. */
+function wallDimmed(d, data, phone, receivedAt) {
+  if (nightClass(d.getHours(), d.getMinutes(), dimHoursOf(data)) === 'is-night') return true;
+  const away = data && data.dim && data.dim.away;
+  if (phone || !away || away.enabled !== true || away.dim !== true) return false;
+  return typeof receivedAt === 'number' && d.getTime() - receivedAt <= AWAY_FRESH_MS;
+}
+
+/* '22:00' -> '10pm', '21:30' -> '9:30pm', '00:00' -> 'midnight'. Pure. */
+function hmWords(s) {
+  const m = hmMinutes(s);
+  if (m === null) return '';
+  if (m === 0) return 'midnight';
+  if (m === 720) return 'noon';
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${h % 12 || 12}${mm ? `:${String(mm).padStart(2, '0')}` : ''}${h < 12 ? 'am' : 'pm'}`;
+}
+
+/* '10pm to 6am', or '' when the dim hours are off. Pure. */
+function dimHoursWords(hours) {
+  if (!hours || hours.on !== true) return '';
+  return `${hmWords(hours.start)} to ${hmWords(hours.end)}`;
+}
+
+/* The Settings line under the dim hours about nobody being home, from the
+   hub's `dim.away` block. '' on a hub with no Home Assistant. Pure. */
+function dimAwayLine(away) {
+  if (!away) return '';
+  if (away.enabled !== true) {
+    return 'The wall can also dim while nobody is home. Turn on Dim when nobody is home under Features & integrations.';
+  }
+  switch (away.state) {
+    case 'away': return 'Home Assistant says nobody is home, so the wall is dim.';
+    case 'confirming': return 'Home Assistant says nobody is home. The wall dims if it still says so when it asks once more, in a minute.';
+    case 'stopped': return 'The hub stopped checking who is home, so the wall won’t dim for this. Restarting the hub starts it again.';
+    case 'home': {
+      const n = Number(away.home) || 0;
+      return `Home Assistant says ${n} ${n === 1 ? 'person is' : 'people are'} home, so the wall stays bright.`;
+    }
+    case 'unreadable': return 'Home Assistant couldn’t be read, so the wall won’t dim for nobody home until it can.';
+    case 'needs_auth': return 'Home Assistant won’t answer without its token. Set HA_TOKEN on the hub to use this.';
+    default: return 'Asking Home Assistant who is home.';
+  }
+}
+
+/* The <option>s for a dim time picker: every half hour, plus the saved time
+   when it is off that grid (set through the API), with it selected. Pure. */
+function dimTimeOptions(sel) {
+  const times = [];
+  for (let m = 0; m < 1440; m += 30) {
+    times.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  }
+  if (hmMinutes(sel) !== null && !times.includes(sel)) {
+    times.push(sel);
+    times.sort((a, b) => hmMinutes(a) - hmMinutes(b));
+  }
+  return times.map((t) => `<option value="${t}"${t === sel ? ' selected' : ''}>${hmWords(t)}</option>`).join('');
+}
+
+/* The Dim hours rows of the Settings Display card. Pure. */
+function dimCardHtml(data) {
+  const h = dimHoursOf(data);
+  const away = data && data.dim ? data.dim.away : null;
+  const lock = h.on ? '' : ' disabled';
+  const words = h.on ? `Every screen in the house dims from ${dimHoursWords(h)}.`
+    : 'No screen dims for the time of day.';
+  const awayLine = dimAwayLine(away);
+  return '<div class="settings-row"><span class="settings-k">Dim hours</span>'
+    + '<div class="seg" role="group" aria-label="Dim hours">'
+    + `<button type="button" data-dim-set="on"${h.on ? ' class="on"' : ''}>On</button>`
+    + `<button type="button" data-dim-set="off"${h.on ? '' : ' class="on"'}>Off</button>`
+    + '</div>'
+    + '<div class="dim-times">'
+    + `<label>From <select class="txt-input" data-dim-start aria-label="Dim from"${lock}>${dimTimeOptions(h.start)}</select></label>`
+    + `<label>to <select class="txt-input" data-dim-end aria-label="Dim until"${lock}>${dimTimeOptions(h.end)}</select></label>`
+    + '</div>'
+    + `<div class="settings-sub">${escapeHtml(words)}</div>`
+    + (awayLine ? `<div class="settings-sub dim-away">${escapeHtml(awayLine)}</div>` : '')
+    + '</div>';
+}
 
 /* '8/12' style month/day from a 'YYYY-MM-DD...' string. */
 function _md(s) {
@@ -2588,6 +2713,7 @@ function buildTripForm(host, model, people, onsubmit) {
      todoSource: 'local' | 'icloud' (todoSourceOf, never the raw setting),
      todoReadonly: bool, iCloud to-dos are view-only until 2-way sync is on,
      backup: the hub's backup block, or null when it hasn't said,
+     dim: the hub's dim block ({hours, away}), or null before it loads,
    }. Pure. */
 const HELP_BROKEN = 'This card is not connecting right now. Fix it under Features & integrations below.';
 // iCloud's status also goes to "error" when only the copy of chores into
@@ -2759,7 +2885,7 @@ function helpTopics(ctx) {
   topics.push({
     id: 'screen', title: 'How the screen behaves',
     paras: [
-      'From 10pm to 6am the screen dims, and the seasonal look stops moving.',
+      ...dimHelpParas(c.dim),
       `If nobody taps for a while, the screen goes back to the main page on its own. That takes ${helpIdleWords()}. Each screen can turn this off under This screen, Auto-return.`,
       'The ⚙ button sets the theme and accent color and turns the seasonal look on or off. All settings, at the bottom of it, has the rest. Each screen remembers its own choices.',
     ],
@@ -2771,6 +2897,22 @@ function helpTopics(ctx) {
     'A backup password also locks a copy of the hub’s settings files into each backup. Only someone with the password can open them, so write it down.',
     'If a copy fails or gets too old, a ⚠ backup warning shows at the top of the screen.'] });
   return topics;
+}
+
+/* The screen topic's dim lines, from this hub's `dim` block (the default
+   hours until it loads), so the help says what the screens really do. Pure. */
+function dimHelpParas(dim) {
+  const h = dimHoursOf(dim ? { dim } : null);
+  const out = [h.on
+    ? `From ${dimHoursWords(h)} every screen dims, and the seasonal look stops moving. Settings, under Display, changes the hours.`
+    : 'The screens don’t dim for the time of day. Settings, under Display, sets dim hours.'];
+  const away = dim && dim.away;
+  if (away && away.enabled === true) {
+    out.push('While nobody is home the wall dims too. The hub asks Home Assistant who is home once a minute and dims after it hears nobody is home twice in a row. If it can’t tell, or the hub can’t be reached, the wall stays bright. Phones don’t dim for this.');
+  } else if (away) {
+    out.push('The wall can also dim while nobody is home. Turn on Dim when nobody is home under Features & integrations.');
+  }
+  return out;
 }
 
 /* The auto-return times in words, read from idleReturnMs so the help can

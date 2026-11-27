@@ -623,6 +623,57 @@ decrypts one into an empty folder; `--list` shows the newest copies.
 
 ---
 
+### 8.3 Dimming (as built, 2026-11)
+`dimming.py` holds the rules; `app.py` and `common.js` use them. The wall has
+one dim state, `body.is-night`, set every second by `tickClock` through
+`wallDimmed`. Every night rule in `styles.css` (the dim filter on body's
+children, solid glass, paused and hidden seasonal motion) keys on that one
+class, so both reasons below get all of it, and a static test keeps a second
+class from appearing.
+
+Dim hours are one household record, kv `dim_hours` =
+`{"on", "start", "end"}` (`HH:MM`, end exclusive, may cross midnight), default
+22:00 to 06:00, so an untouched hub behaves as before. `PUT /api/dim-hours`
+merges any of the three keys and refuses a bad time, equal start and end, or an
+empty change with a plain 422. `/api/hub` carries it as `dim.hours`; a damaged
+record is repaired field by field with a warning. There was no per-screen
+dim override before, so none was added: Settings, Display shows the hours
+(Display holds the house-wide theme; This screen holds per-device choices).
+
+Dim when nobody is home is the `away_dim` registry entry (kind `presence`),
+listed wherever `integrations.presence_base` finds a Home Assistant (the
+`presence` block's `ha_base`, else the laundry block's). It is the first entry
+seeded OFF: the registry row carries `default_on: False`, which seeding, the
+PATCH route and every enabled read honor. `presence_watch_loop` runs beside
+the laundry watcher (off in DEMO and under `DISABLE_SYNC`), every 60 s, with
+its wait sliced so flipping the switch is answered within seconds. A tick asks
+Home Assistant nothing while the switch is off or `HA_TOKEN` is empty. It reads
+`zone.home` (a state of `"0"` means nobody) or, with `presence.people`, each
+`person.*`: one person at home is enough to say someone is home, but nobody
+home needs every person read as away. A zero from `zone.home` is checked
+against every `person.*` in `/api/states` (and zone.home's `persons`
+attribute): a Home Assistant restart reads zero while trackers are unknown, so
+any unknown or unavailable person, or no person entities at all, makes the read
+unreadable. The wall dims on the second nobody-home read in a row
+(`_presence_zero_streak`; the first shows as `confirming`). The answer and its
+time are kept in memory. A flip of the switch clears them, re-arms the outage
+warning, resets the streak and bumps `_presence_gen`, so a read that was in
+flight is dropped. `dim.away` is `{enabled, state, home, dim}` with state off,
+needs_auth, stopped, checking, unreadable, home, confirming or away; `dim` is
+true only for a confirmed answer of nobody home under 210 s old, so any
+failure leaves the wall bright. `stopped` means the watcher task has exited,
+named as the hub's fault rather than Home Assistant's. The browser also stops
+trusting `dim.away` 210 s after the payload arrived (`hubDataAt`,
+`AWAY_FRESH_MS`), so a wall that loses the hub comes back up; the dim hours
+keep running from its own clock. The settings row shows needs_auth for a
+missing or refused token and error while Home Assistant can't be read or the
+watcher has stopped; the log warns once per outage, and once at startup for a
+`presence` block with no Home Assistant to ask. DEMO lists the switch with a
+canned two people home. The browser never talks to Home Assistant. The phone
+layout skips the away reason (a phone that sees an empty house is in someone's
+hand elsewhere) but keeps the dim hours. `/health/full` reports `presence`
+while the switch is on.
+
 ## 9. Widget Slot / Plugin Architecture (PRD §6, FR#8)
 
 The slot system is a **registry of `TileProvider`s** + a `widget_slots` config

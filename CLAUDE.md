@@ -78,7 +78,8 @@ are meaningless. Several "looks fine to me" false negatives have come from
 measuring a viewport that never rendered those columns; trust a real full-width
 screenshot over a cramped-viewport measurement. Below 1000px the
 `@media (max-width: 1000px)` mobile layout takes over (single column + the fixed
-bottom tab bar). `.is-night` dims the page from 22:00 to 06:00. Because a CSS
+bottom tab bar). `.is-night` dims the page inside the household dim hours (Settings, Display;
+22:00 to 06:00 by default) and on the wall while nobody is home (`dimming.py`). Because a CSS
 `filter` establishes a containing block for `position: fixed` descendants, that
 dim is applied to the body's children, never to `<body>` (a test guards it).
 Test all of: full desktop width, the mobile breakpoint, and night mode.
