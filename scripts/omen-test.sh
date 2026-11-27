@@ -45,10 +45,13 @@ fi
 if [ -n "$(git status --porcelain)" ]; then
   echo "omen-test: WARNING uncommitted changes are NOT tested (only the pushed commit is)" >&2
 fi
+case "$branch" in
+  main|master) echo "omen-test: run this from a feature branch, not $branch" >&2; exit 64 ;;
+esac
 sha=$(git rev-parse HEAD)
 
 echo "omen-test: pushing $branch at ${sha:0:12}" >&2
-git push --quiet origin "HEAD:refs/heads/$branch"
+git push --quiet origin HEAD
 
 runner=${FH_TEST_RUNNER:-"ssh -o ConnectTimeout=10 $host bash -l -s"}
 echo "omen-test: running the suites on the box" >&2
