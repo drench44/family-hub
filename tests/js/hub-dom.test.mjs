@@ -12946,3 +12946,44 @@ test('toggleChore: a cancelled PIN prompt writes nothing more and says why', asy
   assert.equal(writes, 1);
   assert.match(document.getElementById('toast').textContent, /needs a parent/);
 });
+
+const rwEvent = (attr, dataset = {}) => ({
+  target: { closest: (sel) => (sel === `[${attr}]` ? { dataset, disabled: false } : null) },
+});
+
+test('rewardsClick: Paid asks through the parent PIN and posts the payout', async () => {
+  const { document, sandbox } = newHub();
+  const calls = [];
+  sandbox.jParent = async (url, opts, msg) => { calls.push([url, opts.method, msg]); return { paid: { cents: 1850 } }; };
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-pay', { rwPay: '7' }));
+  assert.deepEqual(calls[0].slice(0, 2), ['/api/rewards/payout/7', 'POST']);
+  assert.match(calls[0][2], /needs a parent/);
+  assert.match(document.getElementById('toast').textContent, /Paid \$18\.50/);
+});
+
+test('rewardsClick: Save sends the form as it stands, through the PIN', async () => {
+  const { sandbox } = newHub();
+  const sent = [];
+  sandbox.readRewardsForm = () => ({ cents_per_chore: 35, bonus_on: true, milestones: [[100, 10000]] });
+  sandbox.jParent = async (url, opts) => { sent.push([url, opts.method, JSON.parse(opts.body)]); return {}; };
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-save'));
+  assert.equal(sent[0][0], '/api/rewards/settings');
+  assert.equal(sent[0][1], 'PUT');
+  assert.equal(sent[0][2].cents_per_chore, 35);
+});
+
+test('rewardsClick: setting a PIN needs it typed twice the same', async () => {
+  const { document, sandbox } = newHub();
+  const answers = ['2468', '2469'];
+  sandbox.askParentPin = async () => answers.shift();
+  let posted = 0;
+  sandbox.j = async () => { posted++; return null; };
+  sandbox.paintRewards = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-setpin'));
+  assert.equal(posted, 0);
+  assert.match(document.getElementById('toast').textContent, /didn’t match/);
+});

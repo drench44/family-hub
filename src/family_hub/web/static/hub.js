@@ -4759,6 +4759,25 @@ async function withParentPin(write, refusalOf, message) {
   return { ok, why: ok ? '' : 'failed' };
 }
 
+/* j() for a write that may need the parent PIN: asks once and retries.
+   Throws like j() does; a cancelled or locked PIN throws a plain message. */
+async function jParent(url, opts, message) {
+  let lastErr = null;
+  let result = null;
+  const write = async (headers) => {
+    try {
+      result = await j(url, { ...opts, headers: { ...((opts && opts.headers) || {}), ...(headers || {}) } });
+      lastErr = null;
+      return true;
+    } catch (e) { lastErr = e; return false; }
+  };
+  const res = await withParentPin(write, () => pinRefusal(lastErr), message);
+  if (res.ok) return result;
+  if (res.why === 'locked') throw new Error(pinLockMessage(res.wait_s));
+  if (res.why === 'cancelled') throw new Error('Not saved. That change needs a parent.');
+  throw lastErr || new Error('Couldn’t save. Check the hub and try again.');
+}
+
 /* A small "+30¢" that floats up from a row that just earned it. */
 function floatMoney(id) {
   const row = document.querySelector(`.chore-row[data-chore="${id}"]`);
@@ -4851,11 +4870,13 @@ async function submitChore(url, method, body, form, people) {
   const savedFor = [];
   try {
     for (const b of bodies) {
-      await j(url, {
+      // jParent: with the chore wallet on, turning a house chore into a
+      // personal goal (or back) needs the parent PIN
+      await jParent(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(b),
-      });
+      }, 'Changing whether a chore earns money needs a parent.');
       savedFor.push(b.fixed_person_id);
     }
   } catch (e) {
@@ -6224,6 +6245,159 @@ async function toggleIntegration(id) {
    below it). Built the same way as chores-full/todos-full/cal-full: an
    instant paint from cached state, wired through the same delegated click
    listener as the rest of the app. */
+/* ---- Settings: the chore wallet card ---- */
+
+let rwState = null;      // the last /api/rewards answer
+let rwDraftOn = false;   // the form holds unsaved edits
+let rwProjTimer = null;
+
+async function paintRewards() {
+  const host = document.getElementById('rewards-ctl');
+  if (!host) return;
+  try {
+    rwState = await j('/api/rewards');
+  } catch (e) {
+    host.innerHTML = `<div class="hint">Couldn’t load the chore wallet. ${escapeHtml(e.message || '')}</div>`;
+    return;
+  }
+  rwDraftOn = false;
+  host.innerHTML = rewardsCardHtml(rwState);
+  if (rwState.launch) refreshProjection();
+}
+
+/* The amounts as the form shows them now. */
+function readRewardsForm() {
+  const host = document.getElementById('rewards-ctl');
+  const val = (sel) => { const el = host.querySelector(sel); return el ? el.value : ''; };
+  const on = (name) => {
+    const b = host.querySelector(`[data-rw-toggle="${name}"].on`);
+    return b ? b.dataset.rwVal === '1' : !!(rwState && rwState.settings[name]);
+  };
+  const rows = (daysAttr, amtAttr, amtKey) => Array.from(host.querySelectorAll(`[${daysAttr}]`))
+    .map((el) => {
+      const i = el.getAttribute(daysAttr);
+      const amt = host.querySelector(`[${amtAttr}="${i}"]`);
+      return { days: el.value, [amtKey]: amt ? amt.value : '' };
+    });
+  return rewardsDraft({
+    cents_per_chore: val('[name="cents_per_chore"]'),
+    bonus_on: on('bonus_on'), levels_on: on('levels_on'), shields_on: on('shields_on'),
+    fix_cutoff: val('[name="fix_cutoff"]'),
+    milestones: rows('data-rw-ms-days', 'data-rw-ms-dollars', 'dollars'),
+    levels: rows('data-rw-lv-days', 'data-rw-lv-cents', 'cents'),
+  });
+}
+
+/* Re-draw the form from a draft (a toggle, an added or removed step),
+   keeping the unsaved edits. */
+function repaintRewardsDraft(draft) {
+  const host = document.getElementById('rewards-ctl');
+  if (!host || !rwState) return;
+  rwDraftOn = true;
+  host.innerHTML = rewardsCardHtml({ ...rwState, settings: { ...rwState.settings, ...draft } });
+  refreshProjection();
+}
+
+function refreshProjection() {
+  clearTimeout(rwProjTimer);
+  rwProjTimer = setTimeout(async () => {
+    const box = document.getElementById('rw-projection');
+    if (!box || !rwState) return;
+    let draft;
+    try { draft = readRewardsForm(); } catch (e) { return; }
+    try {
+      const proj = await j('/api/rewards/projection', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      });
+      box.innerHTML = projectionHtml(proj, rwState.people || [], rwDraftOn);
+    } catch (e) {
+      // a draft the server refuses (a step out of order) says why, in place
+      box.innerHTML = `<div class="hint">${escapeHtml(e.message || 'Can’t work out the cost yet.')}</div>`;
+    }
+  }, 300);
+}
+
+async function rewardsClick(e) {
+  const t = e.target;
+  if (t.closest('[data-rw-setpin]')) {
+    const a = await askParentPin('Pick a parent PIN, 4 to 6 digits.');
+    if (!a) return;
+    const b = await askParentPin('Type the same PIN again.');
+    if (a !== b) { forgetParentPin(); showToast('Those didn’t match. Nothing was set.'); return; }
+    try {
+      await j('/api/rewards/pin', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: a }) });
+      showToast('Parent PIN set.');
+    } catch (err) { forgetParentPin(); showToast(err.message || 'Couldn’t set the PIN.'); }
+    await paintRewards();
+    return;
+  }
+  if (t.closest('[data-rw-enable]')) {
+    try {
+      await jParent('/api/rewards/enable', { method: 'POST' }, 'Turning on the wallet needs a parent.');
+      showToast('The chore wallet is on.');
+    } catch (err) { showToast(err.message); }
+    await paintRewards();
+    await poll();
+    return;
+  }
+  const tog = t.closest('[data-rw-toggle]');
+  if (tog) {
+    repaintRewardsDraft({ ...readRewardsForm(), [tog.dataset.rwToggle]: tog.dataset.rwVal === '1' });
+    return;
+  }
+  const add = t.closest('[data-rw-add]');
+  if (add) {
+    const d = readRewardsForm();
+    if (add.dataset.rwAdd === 'ms') {
+      const last = d.milestones.length ? d.milestones[d.milestones.length - 1][0] : 0;
+      d.milestones.push([Math.min(1000, last + 25), 1000]);
+    } else {
+      const last = d.levels.length ? d.levels[d.levels.length - 1] : [0, d.cents_per_chore];
+      d.levels.push([Math.min(1000, last[0] + 25), Math.min(500, last[1] + 5)]);
+    }
+    repaintRewardsDraft(d);
+    return;
+  }
+  const del = t.closest('[data-rw-del]');
+  if (del) {
+    const [kind, i] = del.dataset.rwDel.split(':');
+    const d = readRewardsForm();
+    const list = kind === 'ms' ? d.milestones : d.levels;
+    list.splice(Number(i), 1);
+    repaintRewardsDraft(d);
+    return;
+  }
+  if (t.closest('[data-rw-save]')) {
+    const err = document.getElementById('rw-error');
+    if (err) err.classList.add('hidden');
+    try {
+      await jParent('/api/rewards/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(readRewardsForm()),
+      }, 'Changing the amounts needs a parent.');
+      showToast('Amounts saved. They apply from today on.');
+      await paintRewards();
+      await poll();
+    } catch (ex) {
+      if (err) { err.textContent = ex.message || 'Couldn’t save.'; err.classList.remove('hidden'); }
+    }
+    return;
+  }
+  const pay = t.closest('[data-rw-pay]');
+  if (pay && !pay.disabled) {
+    const pid = Number(pay.dataset.rwPay);
+    try {
+      const r = await jParent(`/api/rewards/payout/${pid}`, { method: 'POST' },
+        'Marking a wallet paid needs a parent.');
+      showToast(r && r.paid ? `Paid ${formatCents(r.paid.cents)}. The wallet is back to $0.` : 'Nothing to pay.');
+    } catch (ex) { showToast(ex.message); }
+    await paintRewards();
+    await poll();
+  }
+}
+
 function renderSettingsFull() {
   const host = document.getElementById('settings-full');
   if (!host) return;
@@ -6284,6 +6458,11 @@ function renderSettingsFull() {
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
     + `</div>`
+    // The chore wallet: PIN, amounts, projected cost, each wallet and Paid.
+    + `<div class="card pad settings-card" id="rewards-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Chore wallet</h2></div>`
+    + `<div class="rewards-ctl" id="rewards-ctl">${rewardsCardHtml(null)}</div>`
+    + `</div>`
     // How it works: plain-words help, one tap-to-open row per feature this
     // wall has on (helpTopics in common.js). The gear popover's "How it works"
     // link opens Settings scrolled here.
@@ -6305,6 +6484,12 @@ function renderSettingsFull() {
   renderTodoSourcePicker();
   renderCaldavPanel();
   fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
+  const rw = document.getElementById('rewards-ctl');
+  if (rw) {
+    rw.addEventListener('click', rewardsClick);
+    rw.addEventListener('input', () => { rwDraftOn = true; refreshProjection(); });
+  }
+  paintRewards();
 }
 
 /* What the help needs to know about this wall, from the last hub payload:

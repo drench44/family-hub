@@ -2725,6 +2725,31 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 /* <<< phone shell (max-width:1000px unless forced desktop) <<< */
 
+/* ============ Settings: the chore wallet card ============ */
+.rewards-ctl { display: flex; flex-direction: column; gap: 10px; }
+.rw-form { display: flex; flex-direction: column; gap: 8px; }
+.rw-num { width: 84px; text-align: right; }
+.rw-word { color: var(--dim); font-size: 14px; }
+.rw-sub { padding-left: 12px; border-left: 2px solid var(--edge); }
+.rw-steps { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.rw-step { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rw-projection { margin-top: 6px; }
+.rw-proj-head { margin-top: 10px; font-size: 13px; color: var(--dim); }
+.rw-proj { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 14px; }
+.rw-proj th, .rw-proj td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--edge); }
+.rw-proj th[scope="row"] { text-align: left; font-weight: 500; }
+.rw-total th, .rw-total td { font-weight: 700; color: var(--ink); }
+.rw-unsaved {
+  margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+}
+.rw-people { margin-top: 8px; }
+.rw-kid { flex-wrap: wrap; }
+.rw-bal { margin-left: auto; font-size: 18px; font-weight: 700; color: var(--ink); }
+.rw-hist { flex-basis: 100%; font-size: 13px; color: var(--dim); }
+.rw-hist ul { margin: 4px 0 0 18px; padding: 0; }
+
 /* ==================== reduced motion ========================= */
 @media (prefers-reduced-motion: reduce) {
   /* kill every transition wholesale (mockup convention) so nothing eases; the

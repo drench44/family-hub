@@ -1699,3 +1699,97 @@ test('buildChorePayload and choreToModel carry house chore or personal goal', ()
     assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [] });
   assert.equal(old.choreKind, 'house');
 });
+
+/* ------------------------------------------------ chore wallet: Settings */
+
+const RW_SET = {
+  cents_per_chore: 30, bonus_on: true, milestones: [[100, 10000]],
+  levels_on: false, levels: [[25, 35], [50, 40], [100, 45]],
+  shields_on: true, shield_every: 20, shield_max: 2, fix_cutoff: '09:00',
+};
+const RW_STATE = (over) => ({
+  settings: RW_SET, pin_set: true, feature_on: true,
+  launch: { day: '2026-12-01', seeds: {} }, active: true,
+  people: [
+    { id: 1, name: 'Ava', color: '#5BC9F0', active: true, balance_cents: 1850,
+      pace: { chores_per_week: 14, done_share: 0.9 },
+      history: { weeks: [{ week_start: '2026-11-30', earned_cents: 420 }],
+        ledger: [{ kind: 'payout', cents: 500, day: '2026-12-02', note: 'Paid' }] } },
+    { id: 2, name: 'Ben', color: '#F05B5B', active: false, balance_cents: 90,
+      pace: { chores_per_week: 0, done_share: 1 },
+      history: { weeks: [], ledger: [] } },
+  ],
+  ...over,
+});
+
+test('rewardsCardHtml: no PIN yet offers to set one, and nothing else', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE({ pin_set: false, launch: null, active: false }));
+  assert.match(h, /data-rw-setpin/);
+  assert.doesNotMatch(h, /data-rw-enable|data-rw-save|data-rw-pay/);
+});
+
+test('rewardsCardHtml: PIN set, not on yet, offers to turn it on and says what happens', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE({ launch: null, active: false }));
+  assert.match(h, /data-rw-enable/);
+  assert.match(h, /keeps the streak/);
+  assert.doesNotMatch(h, /data-rw-pay/);
+});
+
+test('rewardsCardHtml: on, shows the amounts, the projection host and each wallet', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE());
+  assert.match(h, /name="cents_per_chore" value="30"/);
+  assert.match(h, /data-rw-ms-days="0" value="100"/);
+  assert.match(h, /data-rw-ms-dollars="0" value="100"/);    // $100, shown in dollars
+  assert.match(h, /name="fix_cutoff" value="09:00"/);
+  assert.match(h, /id="rw-projection"/);
+  assert.match(h, /data-rw-pay="1"/);
+  assert.match(h, /\$18\.50/);
+  // a person who has gone but still has money is listed under Inactive
+  assert.match(h, /Inactive[\s\S]*Ben[\s\S]*90¢/);
+  assert.match(h, /data-rw-save/);
+});
+
+test('rewardsCardHtml: the switch off in Features says so', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE({ feature_on: false, active: false }));
+  assert.match(h, /switched off/);
+});
+
+test('rewardsDraft: reads dollars as cents and keeps steps in order', () => {
+  const d = sandbox.rewardsDraft({
+    cents_per_chore: '35', bonus_on: true, levels_on: false, shields_on: true,
+    fix_cutoff: '08:30',
+    milestones: [{ days: '100', dollars: '100' }, { days: '25', dollars: '7.50' }, { days: '', dollars: '5' }],
+    levels: [{ days: '50', cents: '40' }],
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(d)), {
+    cents_per_chore: 35, bonus_on: true, levels_on: false, shields_on: true,
+    fix_cutoff: '08:30',
+    milestones: [[25, 750], [100, 10000]],
+    levels: [[50, 40]],
+  });
+});
+
+test('projectionHtml: per child and family, week month year, both rows', () => {
+  const proj = {
+    children: [{ id: 1, perfect: { week: 1780, month: 7713, year: 92560 },
+      usual: { week: 900, month: 3900, year: 46800 } }],
+    total: { perfect: { week: 1780, month: 7713, year: 92560 },
+      usual: { week: 900, month: 3900, year: 46800 } },
+  };
+  const h = sandbox.projectionHtml(proj, RW_STATE().people, true);
+  assert.match(h, /Ava/);
+  assert.match(h, /\$17\.80/);
+  assert.match(h, /\$925\.60/);
+  assert.match(h, /Perfect streak/);
+  assert.match(h, /Usual pace, about/);
+  assert.match(h, /Family/);
+  assert.match(h, /not saved yet/);
+  assert.doesNotMatch(sandbox.projectionHtml(proj, RW_STATE().people, false), /not saved yet/);
+});
+
+test('helpTopics: the chore wallet topic only when its switch is on', () => {
+  const on = sandbox.helpTopics({ enabled: new Set(['chores', 'rewards']) });
+  assert.ok(on.some((t) => t.id === 'wallet'));
+  const off = sandbox.helpTopics({ enabled: new Set(['chores']) });
+  assert.ok(!off.some((t) => t.id === 'wallet'));
+});
