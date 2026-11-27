@@ -6436,6 +6436,84 @@ async function rewardsClick(e) {
   }
 }
 
+/* ---- Settings: the Backups card ---- */
+
+let bkSeq = 0;           // only the newest /api/backups answer may paint
+
+async function paintBackups() {
+  const host = document.getElementById('backups-ctl');
+  if (!host) return;
+  const seq = ++bkSeq;
+  let st;
+  try {
+    st = await j('/api/backups');
+  } catch (e) {
+    if (seq !== bkSeq) return;
+    host.innerHTML = `<div class="hint">Couldn’t load the backup status. ${escapeHtml(e.message || '')}</div>`;
+    return;
+  }
+  if (seq !== bkSeq) return;
+  host.innerHTML = backupsCardHtml(st, Date.now());
+}
+
+async function backupsClick(e) {
+  const t = e.target;
+  const run = t.closest('[data-bk-run]');
+  if (run) {
+    if (run.disabled) return;
+    run.disabled = true;      // a double tap must not queue a second run
+    try {
+      const r = await j('/api/backups/run', { method: 'POST' });
+      const res = (r && r.result) || {};
+      showToast(res.ok ? 'Backed up.' : `The backup failed. ${res.error || 'Settings says why.'}`);
+    } catch (err) {
+      showToast(err.message || 'Couldn’t start a backup.');
+    } finally {
+      run.disabled = false;   // a refusal leaves the button usable
+    }
+    await paintBackups();
+    return;
+  }
+  if (t.closest('[data-bk-adopt]')) {
+    try {
+      await jParent('/api/backups/adopt', { method: 'POST' },
+        'Changing the backup folder needs a parent.');
+      showToast('Backups go to this folder from now on.');
+    } catch (err) {
+      showToast(err.message || 'Couldn’t change the backup folder.');
+      return;
+    }
+    await paintBackups();
+    return;
+  }
+  if (t.closest('[data-bk-savepw]')) {
+    const host = document.getElementById('backups-ctl');
+    if (!host) return;
+    const field = (sel) => { const el = host.querySelector(sel); return el ? el.value : ''; };
+    const pw = field('[name="bk_pw"]');
+    const errBox = host.querySelector('#bk-pw-error');
+    const say = (msg) => {
+      if (!errBox) { showToast(msg); return; }
+      errBox.textContent = msg;
+      errBox.classList.remove('hidden');
+    };
+    const why = backupPasswordProblem(pw, field('[name="bk_pw2"]'));
+    if (why) { say(why); return; }
+    if (errBox) errBox.classList.add('hidden');
+    try {
+      await jParent('/api/backups/password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      }, 'Setting the backup password needs a parent.');
+    } catch (ex) {
+      say(ex.message || 'Couldn’t save the password.');
+      return;
+    }
+    showToast('Backup password saved. Write it down.');
+    await paintBackups();
+  }
+}
+
 function renderSettingsFull() {
   const host = document.getElementById('settings-full');
   if (!host) return;
@@ -6502,6 +6580,12 @@ function renderSettingsFull() {
     + `<div class="shead"><span class="tick"></span><h2>Chore wallet</h2></div>`
     + `<div class="rewards-ctl" id="rewards-ctl">${rewardsCardHtml(null)}</div>`
     + `</div>`
+    // Backups: where the hourly copies go, the last one, Back up now, and the
+    // backup password that also saves the settings files.
+    + `<div class="card pad settings-card" id="backups-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Backups</h2></div>`
+    + `<div class="backups-ctl" id="backups-ctl">${backupsCardHtml(null)}</div>`
+    + `</div>`
     // How it works: plain-words help, one tap-to-open row per feature this
     // wall has on (helpTopics in common.js). The gear popover's "How it works"
     // link opens Settings scrolled here.
@@ -6529,6 +6613,9 @@ function renderSettingsFull() {
     rw.addEventListener('input', () => { rwDraftOn = true; refreshProjection(); });
   }
   paintRewards();
+  const bk = document.getElementById('backups-ctl');
+  if (bk) bk.addEventListener('click', backupsClick);
+  paintBackups();
   wireSettingsNav();
 }
 
@@ -6542,6 +6629,7 @@ const SETTINGS_SECTIONS = [
   ['settings-screen', 'This screen'],
   ['settings-features', 'Features'],
   ['rewards-card', 'Chore wallet'],
+  ['backups-card', 'Backups'],
   ['help-card', 'How it works'],
 ];
 

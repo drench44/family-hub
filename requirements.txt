@@ -11,3 +11,6 @@ tzdata>=2024.1
 icalendar>=5.0
 recurring-ical-events>=2.2
 caldav>=1.3
+# AES-256-GCM for the encrypted settings backup (backups.py). Already in the
+# image (another package pulls it in); listed because the app imports it.
+cryptography>=42

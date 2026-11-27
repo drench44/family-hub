@@ -162,3 +162,52 @@ def test_web_service_is_hardened():
     assert web.get("cap_drop") == ["ALL"]
     assert "cap_add" not in web
     assert not web.get("privileged")
+
+
+def test_web_mounts_the_backup_folder_and_only_env_read_only():
+    """The hub's own backup job writes to /backups, mounted from BACKUP_DIR
+    (default ./backups; a NAS is any folder the host has mounted). The
+    settings bundle reads .env, mounted on its own, read-only. Not the whole
+    project folder: that would hand the hub .git and a second view of data/."""
+    web = _services()["web"]
+    vols = web["volumes"]
+    assert "${BACKUP_DIR:-./backups}:/backups" in vols
+    assert not any(isinstance(v, str) and v.split(":", 1)[0] in (".", "./") for v in vols)
+    env_mounts = [v for v in vols if isinstance(v, dict) and v.get("source") == "./.env"]
+    assert env_mounts == [{"type": "bind", "source": "./.env", "target": "/app/.env",
+                           "read_only": True, "bind": {"create_host_path": False}}]
+    env = web["environment"]
+    assert "SETTINGS_ENV_PATH=/app/.env" in env
+    # only a label for the Settings card: the host path, which the container can't see
+    assert "BACKUP_DIR=${BACKUP_DIR:-./backups}" in env
+
+
+def test_no_bind_mount_can_turn_a_missing_file_into_a_root_owned_folder():
+    """Docker makes a missing short-form bind source as an empty root-owned
+    FOLDER. A `./.env:/app/.env` mount on a clone with no .env (checked
+    2026-11-27, compose v5) left a root-owned `.env/` directory behind, and
+    the owner could no longer create the file there. The long form with
+    create_host_path false refuses to start instead, loudly ("bind source
+    path does not exist"), and the quick start creates .env first."""
+    for name, svc in _services().items():
+        for v in svc.get("volumes", []):
+            if isinstance(v, str):
+                assert v.split(":", 1)[0] not in ("./.env", ".env"), (name, v)
+            else:                      # every long-form bind refuses to invent its source
+                assert v.get("bind", {}).get("create_host_path") is False, (name, v)
+
+
+def test_the_quick_start_creates_env_before_compose_up():
+    readme = (COMPOSE.parent / "README.md").read_text()
+    quick = readme[readme.index("## Quick start"):]
+    assert quick.index("cp .env.example .env") < quick.index("docker compose up")
+
+
+def test_the_default_backup_folder_ships_in_the_repo():
+    """Docker would make a missing ./backups owned by root, which the hub's
+    non-root user can't write. A tracked placeholder means a clone already
+    has the folder, owned by whoever cloned it."""
+    root = COMPOSE.parent
+    assert (root / "backups" / ".gitkeep").is_file()
+    ignore = (root / ".gitignore").read_text().splitlines()
+    assert "backups/*" in ignore and "!backups/.gitkeep" in ignore

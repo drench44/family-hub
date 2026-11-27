@@ -512,3 +512,23 @@ def demo_laundry_log() -> dict:
          "finishes_at": iso(-26 * 60 - 2), "status_since": iso(-26 * 60),
          "note": "missed_finish"},
     ]}
+
+
+def demo_backups() -> dict:
+    """A live-shaped Settings > Backups state (matches GET /api/backups): the
+    hourly copy 20 minutes ago, a few days of copies on hand, and the settings
+    files saved with a password. Times relative to now, like demo_laundry."""
+    now = dt.datetime.now(dt.timezone.utc)
+    at = (now - dt.timedelta(minutes=20)).isoformat()
+    stamp = (dt.datetime.now() - dt.timedelta(minutes=20)).strftime("%Y%m%d-%H%M")
+    return {
+        "enabled": True, "why_off": None, "switch_on": True, "scheduled": True,
+        "every_s": 3600, "dir": "/mnt/nas/family-hub", "running": False,
+        "last_ok": {"at": at, "snapshot": f"hub-{stamp}.db", "bytes": 1843200},
+        "last_error": None,
+        "settings": {"at": at, "file": f"settings-{stamp}.fhb"}, "settings_error": None,
+        "counts": {"hourly": 48, "daily": 9, "weekly": 2, "monthly": 1, "settings": 3},
+        "counts_error": None,
+        "keep": {"hourly": 48, "daily": 14, "weekly": 8, "monthly": 12, "settings": 14},
+        "password_set": True, "password_problem": False,
+    }

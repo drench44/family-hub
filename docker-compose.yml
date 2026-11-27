@@ -36,12 +36,34 @@ services:
       # .env). Empty = laundry off. This allowlist is the only way env vars
       # reach the container — a var missing here is invisible inside.
       - HA_TOKEN=${HA_TOKEN:-}
+      # The hub's own hourly backup (see README, Backup). BACKUP_DIR here is
+      # only the label Settings shows; the folder itself is the mount below.
+      - BACKUP_DIR=${BACKUP_DIR:-./backups}
+      # .env, mounted read-only below, for the settings backup.
+      - SETTINGS_ENV_PATH=/app/.env
     # HUB_BIND (in .env) pins every published port to one LAN interface.
     # The hub has NO auth — never expose it beyond your LAN. See README.
     ports: [ "${HUB_BIND:-0.0.0.0}:8138:8138" ]
     volumes:
       - ./config.json:/app/config.json:ro
       - ./data:/data
+      # Where the hourly backups go. Set BACKUP_DIR in .env to a folder the
+      # box has mounted from a NAS (for example /mnt/nas/family-hub) and the
+      # copies leave the box. It must be writable by HUB_UID. The default
+      # ./backups ships in the repo, so a clone already has it.
+      - ${BACKUP_DIR:-./backups}:/backups
+      # .env, read-only, so the settings backup can include it. The long form
+      # with create_host_path false is on purpose: the short form
+      # (./.env:/app/.env) makes an empty root-owned FOLDER called .env when
+      # the file is missing. With this one, a missing .env stops `up` with
+      # "bind source path does not exist"; create it with
+      # `cp .env.example .env` (the quick start does).
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
   wyze-bridge:
     # OPTIONAL — only needed for Wyze cameras (no native RTSP): bridges them
     # onto the compose network; go2rtc consumes

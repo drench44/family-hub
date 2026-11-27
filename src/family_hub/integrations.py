@@ -94,6 +94,10 @@ def available_integrations(cfg, env: dict | None = None,
     # turns it on in Settings, so the wall is unchanged until then.
     add("rewards", "rewards", "Chore wallet", True, group="feature")
     add("todos", "todos", "To-Dos", True, group="feature")
+    # The hub's own hourly backup (backups.py). Listed everywhere so its
+    # switch always shows; it only runs once a backup folder is mounted, and
+    # Settings > Backups says why when it can't.
+    add("backups", "backups", "Backups", True, group="feature")
     add("google_calendar", "calendar", "Google Calendar",
         any(c.get("kind", "google") == "google" for c in cals))
     add("ics_calendar", "calendar", "Shared / ICS calendars",

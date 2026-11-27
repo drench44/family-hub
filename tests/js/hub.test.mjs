@@ -1879,3 +1879,140 @@ test('pinRefusal: reads a lost-key refusal', () => {
   assert.deepEqual({ ...sandbox.pinRefusal({ status: 403, detail: { pin: 'key_missing' } }) },
     { pin: 'key_missing', wait_s: 0 });
 });
+
+
+/* ------------------------------------------------------------ backups card */
+
+const NOW_MS = Date.parse('2026-11-27T18:00:00Z');
+const agoIso = (s) => new Date(NOW_MS - s * 1000).toISOString();
+const BK = (extra = {}) => ({
+  enabled: true, why_off: null, switch_on: true, scheduled: true, every_s: 3600,
+  dir: '/mnt/nas/family-hub', running: false,
+  last_ok: { at: agoIso(20 * 60), snapshot: 'hub-20261127-0940.db', bytes: 1843200 },
+  last_error: null, settings: null, settings_error: null,
+  counts: { hourly: 12, daily: 1, weekly: 1, monthly: 1, settings: 0 }, counts_error: null,
+  keep: { hourly: 48, daily: 14, weekly: 8, monthly: 12, settings: 14 },
+  password_set: false, password_problem: false, ...extra,
+});
+
+test('backupAgo: plain words, and a bad or future time never claims an age', () => {
+  const A = (s) => sandbox.backupAgo(agoIso(s), NOW_MS);
+  assert.equal(A(20), 'just now');
+  assert.equal(A(-300), 'just now', 'a clock a little ahead is not "in 5 minutes"');
+  assert.equal(A(60), '1 minute ago');
+  assert.equal(A(20 * 60), '20 minutes ago');
+  assert.equal(A(3600), '1 hour ago');
+  assert.equal(A(5 * 3600), '5 hours ago');
+  assert.equal(A(47 * 3600), '47 hours ago');
+  assert.equal(A(3 * 86400), '3 days ago');
+  assert.equal(sandbox.backupAgo(null, NOW_MS), 'at a time the hub could not read');
+  assert.equal(sandbox.backupAgo('garbage', NOW_MS), 'at a time the hub could not read');
+});
+
+test('backupsCardHtml: loading, then the working state with every row', () => {
+  assert.match(sandbox.backupsCardHtml(null, NOW_MS), /Loading/);
+  const html = sandbox.backupsCardHtml(BK(), NOW_MS);
+  assert.match(html, /On\. A copy every hour\./);
+  assert.match(html, /\/mnt\/nas\/family-hub/);
+  assert.match(html, /Last good backup<\/span><span class="hint">20 minutes ago/);
+  assert.match(html, /12 hourly, 1 daily, 1 weekly and 1 monthly\. It keeps up to 48, 14, 8 and 12\./);
+  assert.match(html, /<button class="btn-primary" type="button" data-bk-run="1">Back up now<\/button>/);
+  assert.match(html, /Set a backup password/);
+  assert.match(html, /Write this down\. You need it to restore the settings files on a new box\./);
+  assert.match(html, /type="password" name="bk_pw"/);
+  assert.match(html, /type="password" name="bk_pw2"/);
+  assert.ok(!/old password/.test(html), 'nothing about an old password before one is set');
+  assert.equal((html.match(/<div/g) || []).length, (html.match(/<\/div>/g) || []).length, 'balanced divs');
+});
+
+test('backupsCardHtml: no copy yet, and paused hourly runs', () => {
+  const html = sandbox.backupsCardHtml(BK({ last_ok: null, scheduled: false }), NOW_MS);
+  assert.match(html, /None yet/);
+  assert.match(html, /Hourly copies are paused on this hub\. Back up now still works\./);
+});
+
+test('backupsCardHtml: each reason it is off, with Back up now disabled', () => {
+  const cases = {
+    switched_off: /Switched off\. Turn it on under Features &amp; integrations above\./,
+    no_folder: /No backup folder is set up\. Set BACKUP_DIR on the hub box \(see Backup in the README\)\./,
+    not_mounted: /No backup folder is mounted into the hub\. Set BACKUP_DIR on the hub box \(see Backup in the README\)\./,
+    not_writable: /The hub can’t write to the backup folder\. It must belong to the hub’s user on the box \(see Backup in the README\)\./,
+    demo: /Off in the demo\./,
+  };
+  for (const [why, re] of Object.entries(cases)) {
+    const html = sandbox.backupsCardHtml(BK({ enabled: false, why_off: why, counts: null }), NOW_MS);
+    assert.match(html, re, why);
+    assert.match(html, /data-bk-run="1" disabled>Back up now/, `${why}: button disabled`);
+  }
+});
+
+test('backupsCardHtml: a failure newer than the last good copy is shown; an old one is not', () => {
+  const fresh = sandbox.backupsCardHtml(BK({ last_error: { at: agoIso(5 * 60),
+    message: 'The backup folder is full <b>x</b>.' } }), NOW_MS);
+  assert.match(fresh, /The last try failed 5 minutes ago\. The backup folder is full &lt;b&gt;x&lt;\/b&gt;\./);
+  assert.ok(!fresh.includes('<b>x'), 'the message is escaped');
+  const old = sandbox.backupsCardHtml(BK({ last_error: { at: agoIso(3 * 3600), message: 'old' } }), NOW_MS);
+  assert.ok(!/The last try failed/.test(old));
+  const never = sandbox.backupsCardHtml(BK({ last_ok: null, last_error: { at: agoIso(60), message: 'nope' } }), NOW_MS);
+  assert.match(never, /The last try failed 1 minute ago\. nope/);
+});
+
+test('backupsCardHtml: the settings files row for each password state', () => {
+  const unset = sandbox.backupsCardHtml(BK(), NOW_MS);
+  assert.match(unset, /Not saved\. Set a backup password below to save them too\./);
+  const waiting = sandbox.backupsCardHtml(BK({ password_set: true }), NOW_MS);
+  assert.match(waiting, /Saved with the next backup\./);
+  assert.match(waiting, /Change the backup password/);
+  assert.match(waiting, /Copies saved before a change still need the old password\./);
+  const saved = sandbox.backupsCardHtml(BK({ password_set: true,
+    settings: { at: agoIso(2 * 3600), file: 'settings-20261127-0800.fhb' } }), NOW_MS);
+  assert.match(saved, /Saved with the backup password, 2 hours ago\./);
+  const problem = sandbox.backupsCardHtml(BK({ password_problem: true }), NOW_MS);
+  assert.match(problem, /Not saved\. Set the backup password again, because its key file on the hub can’t be used\./);
+  const err = sandbox.backupsCardHtml(BK({ password_set: true, settings_error: 'Couldn’t read .env <x>.' }), NOW_MS);
+  assert.match(err, /Couldn’t read \.env &lt;x&gt;\./);
+});
+
+test('backupsCardHtml: a running backup and an unreadable folder', () => {
+  const html = sandbox.backupsCardHtml(BK({ running: true, counts: null,
+    counts_error: 'Couldn’t read the backup folder (gone).' }), NOW_MS);
+  assert.match(html, /data-bk-run="1" disabled>Backing up/);
+  assert.match(html, /Couldn’t read the backup folder \(gone\)\./);
+});
+
+test('backupsCardHtml: the folder name is escaped', () => {
+  const html = sandbox.backupsCardHtml(BK({ dir: '/mnt/"x"<y>' }), NOW_MS);
+  assert.ok(html.includes('/mnt/&quot;x&quot;&lt;y&gt;') && !html.includes('<y>'));
+});
+
+test('backupPasswordProblem: length and a matching second copy', () => {
+  assert.equal(sandbox.backupPasswordProblem('short', 'short'), 'The password needs at least 8 characters.');
+  assert.equal(sandbox.backupPasswordProblem('long enough', 'long enougj'), 'Those didn’t match. Nothing was saved.');
+  assert.equal(sandbox.backupPasswordProblem('long enough', 'long enough'), null);
+  assert.equal(sandbox.backupPasswordProblem('x'.repeat(1025), 'x'.repeat(1025)), 'The password can be 1024 characters at most.');
+});
+
+test('helpTopics: the Backups topic points at Settings and the password', () => {
+  const t = topic(ctxOf([]), 'backup').paras.join(' ');
+  assert.match(t, /Settings, under Backups, shows where the copies go/);
+  assert.match(t, /backup password/);
+});
+
+test('backups card text: no em or en dashes in any state', () => {
+  const states = [null, BK(), BK({ password_set: true, settings: { at: agoIso(60), file: 'x' } }),
+    BK({ password_problem: true, last_error: { at: agoIso(1), message: 'm' } })];
+  for (const why of ['switched_off', 'no_folder', 'not_mounted', 'not_writable', 'demo']) {
+    states.push(BK({ enabled: false, why_off: why }));
+  }
+  const text = states.map((s) => sandbox.backupsCardHtml(s, NOW_MS)).join(' ');
+  assert.ok(!text.includes(String.fromCharCode(0x2014)), 'no em dashes');
+  assert.ok(!text.includes(String.fromCharCode(0x2013)), 'no en dashes');
+});
+
+test('backupsCardHtml: a folder that lost its marker asks about the NAS and offers Use this folder', () => {
+  const html = sandbox.backupsCardHtml(BK({ enabled: false, why_off: 'marker_missing' }), NOW_MS);
+  assert.match(html, /The backup folder isn’t the one backups went to before\. Is the NAS mounted\?/);
+  assert.match(html, /<button class="padmin-btn" type="button" data-bk-adopt="1">Use this folder<\/button>/);
+  assert.match(html, /data-bk-run="1" disabled>/);
+  assert.ok(!/data-bk-adopt/.test(sandbox.backupsCardHtml(BK(), NOW_MS)), 'no adopt button when all is well');
+});

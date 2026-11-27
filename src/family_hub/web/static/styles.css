@@ -2740,6 +2740,15 @@ body.integ-off-todos .todo-slot { display: none; }
 }
 /* <<< phone shell (max-width:1000px unless forced desktop) <<< */
 
+/* ============ Settings: the Backups card ============ */
+.backups-ctl { display: flex; flex-direction: column; gap: 10px; }
+.backups-ctl .btn-primary { align-self: flex-start; }
+.bk-dir { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.bk-error { color: var(--warn); }
+.bk-pw { gap: 8px; margin-top: 6px; }
+.bk-pw .txt-input { max-width: 420px; }
+.bk-pw .padmin-btn { align-self: flex-start; }
+
 /* ============ Settings: the chore wallet card ============ */
 .rewards-ctl { display: flex; flex-direction: column; gap: 10px; }
 .rw-form { display: flex; flex-direction: column; gap: 8px; }

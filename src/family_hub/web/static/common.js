@@ -1825,6 +1825,104 @@ function rewardsCardHtml(st) {
     + walletPeopleHtml(st.people || []) + `</div>`;
 }
 
+/* ---- Settings > Backups (pure renderers, wired in hub.js) ---- */
+
+/* How long ago an ISO time was, in plain words. A time a little in the
+   future (a clock slightly ahead) reads as just now. Pure. */
+function backupAgo(iso, nowMs) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return 'at a time the hub could not read';
+  const s = Math.max(0, (nowMs - t) / 1000);
+  if (s < 60) return 'just now';
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'} ago`;
+  if (s < 3600) return plural(Math.floor(s / 60), 'minute');
+  if (s < 48 * 3600) return plural(Math.floor(s / 3600), 'hour');
+  return plural(Math.floor(s / 86400), 'day');
+}
+
+/* Why backups are off, and what fixes it, by the server's why_off code. */
+const BACKUP_SEE_README = 'Set BACKUP_DIR on the hub box (see Backup in the README).';
+const BACKUP_OFF = {
+  switched_off: 'Switched off. Turn it on under Features & integrations above.',
+  no_folder: `No backup folder is set up. ${BACKUP_SEE_README}`,
+  not_mounted: `No backup folder is mounted into the hub. ${BACKUP_SEE_README}`,
+  not_writable: 'The hub can’t write to the backup folder. It must belong to the hub’s user on the box (see Backup in the README).',
+  demo: 'Off in the demo.',
+  // the folder lost the marker the first good run left there: most likely
+  // the NAS share dropped and the box's empty mount folder is showing
+  marker_missing: 'The backup folder isn’t the one backups went to before. Is the NAS mounted?',
+};
+
+/* What is wrong with a new backup password and its second copy, or null.
+   The server checks the same length rule (backups.check_password). Pure. */
+function backupPasswordProblem(a, b) {
+  const pw = String(a || '');
+  if (pw.length < 8) return 'The password needs at least 8 characters.';
+  if (pw.length > 1024) return 'The password can be 1024 characters at most.';
+  if (pw !== String(b || '')) return 'Those didn’t match. Nothing was saved.';
+  return null;
+}
+
+/* The whole Backups card for a /api/backups state. Pure. */
+function backupsCardHtml(st, nowMs) {
+  if (!st) return `<div class="hint">Loading…</div>`;
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const row = (k, v) => `<div class="settings-row"><span class="settings-k">${k}</span><span class="hint">${v}</span></div>`;
+  let html = `<div class="settings-sub">The hub saves a copy of its database every hour into a backup folder. Put that folder on a NAS and the copies leave the box.</div>`;
+  const status = st.enabled
+    ? (st.scheduled === false ? 'Hourly copies are paused on this hub. Back up now still works.'
+      : 'On. A copy every hour.')
+    : (BACKUP_OFF[st.why_off] || st.why_off_text || 'Off.');
+  html += row('Status', escapeHtml(status));
+  if (st.why_off === 'marker_missing') {
+    html += `<div class="hint">If you moved backups to a new folder on purpose, tap Use this folder.</div>`
+      + `<button class="padmin-btn" type="button" data-bk-adopt="1">Use this folder</button>`;
+  }
+  if (st.dir) html += row('Folder', `<span class="bk-dir">${escapeHtml(st.dir)}</span>`);
+  const ok = st.last_ok;
+  html += row('Last good backup', ok ? escapeHtml(backupAgo(ok.at, now)) : 'None yet');
+  const err = st.last_error;
+  if (err && (!ok || Date.parse(err.at) > Date.parse(ok.at))) {
+    html += `<div class="hint bk-error" role="status">The last try failed ${escapeHtml(backupAgo(err.at, now))}. ${escapeHtml(err.message || '')}</div>`;
+  }
+  const c = st.counts;
+  const keep = st.keep || {};
+  if (c) {
+    html += row('Copies kept', `${Number(c.hourly) || 0} hourly, ${Number(c.daily) || 0} daily, `
+      + `${Number(c.weekly) || 0} weekly and ${Number(c.monthly) || 0} monthly. It keeps up to `
+      + `${Number(keep.hourly)}, ${Number(keep.daily)}, ${Number(keep.weekly)} and ${Number(keep.monthly)}.`);
+  }
+  if (st.counts_error) html += `<div class="hint bk-error">${escapeHtml(st.counts_error)}</div>`;
+  const busy = !!st.running;
+  html += `<button class="btn-primary" type="button" data-bk-run="1"${st.enabled && !busy ? '' : ' disabled'}>`
+    + `${busy ? 'Backing up…' : 'Back up now'}</button>`;
+  // The settings files: only with a backup password, encrypted with it.
+  let files;
+  if (st.password_problem) {
+    files = 'Not saved. Set the backup password again, because its key file on the hub can’t be used.';
+  } else if (!st.password_set) {
+    files = 'Not saved. Set a backup password below to save them too.';
+  } else if (st.settings && st.settings.at) {
+    files = `Saved with the backup password, ${backupAgo(st.settings.at, now)}.`;
+  } else {
+    files = 'Saved with the next backup.';
+  }
+  html += row('Settings files', escapeHtml(files));
+  if (st.settings_error) html += `<div class="hint bk-error">${escapeHtml(st.settings_error)}</div>`;
+  const set = !!st.password_set;
+  html += `<div class="theme-ctl stack bk-pw">`
+    + `<div class="settings-k">${set ? 'Change the backup password' : 'Set a backup password'}</div>`
+    + `<div class="hint">It locks a copy of config.json, .env and the sign-ins into each backup.</div>`
+    + `<input class="txt-input" type="password" name="bk_pw" autocomplete="new-password" placeholder="At least 8 characters" aria-label="Backup password">`
+    + `<input class="txt-input" type="password" name="bk_pw2" autocomplete="new-password" placeholder="The same again" aria-label="The same password again">`
+    + `<div class="hint">Write this down. You need it to restore the settings files on a new box.</div>`
+    + (set ? `<div class="hint">Copies saved before a change still need the old password.</div>` : '')
+    + `<div class="form-error hidden" id="bk-pw-error"></div>`
+    + `<button class="padmin-btn" type="button" data-bk-savepw="1">Save password</button>`
+    + `</div>`;
+  return html;
+}
+
 /* The form's values -> a settings patch in cents, steps sorted by days and
    blank rows dropped. Pure. */
 function rewardsDraft(f) {
@@ -2565,6 +2663,8 @@ function helpTopics(ctx) {
   });
   topics.push({ id: 'backup', title: 'Backups', paras: [helpBackupLine(c.backup),
     'The hub saves a copy of all the chores, streaks, to-dos and history on its own. Everyone’s progress can be put back from a copy if something goes wrong.',
+    'Settings, under Backups, shows where the copies go and when the last one was made. Back up now makes one right away.',
+    'A backup password also locks a copy of the hub’s settings files into each backup. Only someone with the password can open them, so write it down.',
     'If a copy fails or gets too old, a ⚠ backup warning shows at the top of the screen.'] });
   return topics;
 }

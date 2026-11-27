@@ -1,5 +1,9 @@
 # Box-only state + secrets — never committed.
 data/
+# The hub's own backups (README, Backup). The folder ships so docker never
+# makes it root-owned; what lands in it stays out of git.
+backups/*
+!backups/.gitkeep
 # Written into the staged tree by the deploy (commit + config hash), never here.
 src/family_hub/build_info.json
 config.json

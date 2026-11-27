@@ -5,7 +5,146 @@ people, to-dos, completions, streaks. Code and config live in git; calendar
 events re-sync; **a lost `hub.db` is gone for good.** So it is snapshotted on a
 schedule, before every deploy, and (optionally) mirrored off the box.
 
-## What runs
+Two things can take those snapshots, with the same names, checks and keep
+counts:
+
+- **The hub itself** (`src/family_hub/backups.py`), hourly, into whatever
+  folder is mounted at `/backups`. Nothing to install. It also saves the
+  settings files, encrypted, once a backup password is set. This is the
+  default for anyone who installs from GitHub.
+- **The box script** (`backup/family-hub-backup.sh` with its systemd timer),
+  for a box that wants a host-side job, a pre-deploy snapshot, or an rsync
+  mirror. Unchanged; it can run beside the hub's own job.
+
+Both write the hub's `backup_status` record, so the wall's "Backup stale"
+badge reads whichever ran last.
+
+## The hub's own backup
+
+**Where.** `docker-compose.yml` mounts `${BACKUP_DIR:-./backups}` at
+`/backups`. `./backups` ships in the repo (an empty folder with a
+placeholder), so docker never creates it owned by root. For a NAS, mount the
+share on the box and set `BACKUP_DIR` in `.env`:
+
+```sh
+BACKUP_DIR=/mnt/nas/family-hub
+```
+
+then `docker compose up -d web`. The hub mounts nothing itself: the
+container drops every capability and runs unprivileged, so mounting SMB or
+NFS is the box's job (the fstab example under "Enable off-box mirroring"
+below works here too, with `uid=` set to `HUB_UID`). Outside docker, set
+`BACKUPS_PATH` to any writable folder.
+
+**When.** A few minutes after the hub starts, then every hour. It is off in
+the demo and under `DISABLE_SYNC=1` (tests), where Back up now still works.
+The work runs in a thread, one run at a time, so a slow NAS never holds up
+the wall. A failed run is logged with the reason, shown on the Settings card
+and recorded in `backup_status.in_app_error`; it never stops the next run.
+
+**It is off, and says why, when** the Backups switch (Features &
+integrations) is off, the folder is missing, the default `/backups` is not a
+mount (a folder baked into the container would vanish with it), or the hub's
+user can't write to it.
+
+**Layout:**
+
+```
+<BACKUP_DIR>/db/{hourly,daily,weekly,monthly}/hub-<stamp>.db
+<BACKUP_DIR>/settings/settings-<stamp>.fhb
+```
+
+The database copies follow the box script exactly: SQLite's online backup,
+`PRAGMA integrity_check`, out of WAL mode, a size floor, a temp file and an
+atomic rename, promotion into the coarser tiers by temp copy and rename, and
+pruning by the stamp in the name to 48 / 14 / 8 / 12, never emptying a tier.
+Leftover `.partial-*` files from a killed run are swept first. Other files in
+the folder are never touched.
+
+**A dropped NAS mount.** From inside the container a bind mount always looks
+mounted, so the hub can't ask whether the share is there. Instead the first
+good run writes `.family-hub-backups` into the folder, holding a random id the
+hub also keeps (kv `backups.marker`). If the share drops, the box's mount point
+is an empty folder on its own disk, the file is missing, and the hub refuses
+to back up there: the card says "The backup folder isn't the one backups went
+to before. Is the NAS mounted?", the heartbeat's `in_app_error` says the same,
+and `at` stays put, so the wall's stale badge fires on time. Remount the share
+and the next run goes through. If you moved backups to a new folder on
+purpose, tap **Use this folder** on the card (it needs the parent PIN when one
+is set) to write a fresh id there.
+
+**Stuck or skipped runs.** Each time the reason an hourly run is skipped
+changes (switched off, no folder, a run already going), the log says so
+once. A run that has held the lock for more than 20 minutes (a hung NAS) is
+recorded as "Backup stuck" on the card and in `in_app_error`. If Back up now
+copies the database but can't write its record, it answers with that error
+instead of a stale "ok". `/health/full` lists the job under
+`notes.backups_in_app` (information only, never a failing status).
+
+**A settings file that disappears.** If a file that was in the last settings
+bundle is gone now (a deleted `.env`, a lost `pin.key`), no smaller bundle is
+written over the good one. The card names the file and the log says so once.
+Put it back, or set the backup password again to start fresh.
+
+### The settings bundle and backup.key
+
+With a backup password set (Settings → Backups, at least 8 characters, and
+the parent PIN when one is set), each run also saves whichever of these
+exist:
+
+| In the bundle | From | Restores to |
+|---|---|---|
+| `config.json` | `config.json` | the project folder |
+| `env` | `.env` (mounted read-only at `/app/.env`) | `.env` in the project folder |
+| `pin.key` | `data/pin.key` | `data/` |
+| `wyze.env` | `data/wyze.env` | `data/` |
+| `token.json` | `data/token.json` | `data/` |
+
+The files are packed in a tar and encrypted with AES-256-GCM. The key is
+scrypt(password, 16-byte salt, n=2^15, r=8, p=1). A bundle is the bytes `FHB1`,
+the salt, a 12-byte nonce, then the ciphertext and tag; the first 32 bytes
+are the GCM associated data, so a changed header is refused too. A new bundle
+is written only when a file changed (or the password did); the last 14 are
+kept.
+
+The password itself is never stored. `data/backup.key` (mode 0600, written
+to a temp file and renamed, like `pin.key`) holds the salt and the key made
+from it, so the hourly job can encrypt with nobody typing anything, while a
+copy of the backup folder alone can't be opened. If `backup.key` goes missing
+or is damaged after a password was set, the card says so and bundles stop
+until the password is set again. Changing the password makes a new key:
+bundles saved before still need the old password.
+
+**`.env` must exist.** compose mounts it with the long bind form and
+`create_host_path: false`. The short form (`./.env:/app/.env`) would turn a
+missing `.env` into an empty folder owned by root, which the owner then can't
+replace with the file. With the long form a missing `.env` stops
+`docker compose up` with "bind source path does not exist" instead. The quick
+start creates it (`cp .env.example .env`); on an older install without one,
+run `cp .env.example .env` (or `touch .env`) once before `up`.
+
+### Restore the settings files
+
+```sh
+cd ~/family-hub                       # the project folder
+docker compose run --rm web python -m family_hub.backups --list
+mkdir -p restored
+docker compose run --rm -v "$PWD/restored:/restored" web \
+  python -m family_hub.backups restore-settings \
+  /backups/settings/settings-20260817-0900.fhb /restored
+```
+
+It asks for the backup password, then writes the files into `./restored`
+under their real names (mode 0600) and says where each one goes. A wrong
+password or a damaged file writes nothing, and it never overwrites a file, so
+point it at an empty folder. Move the files into place, then
+`docker compose up -d`.
+
+On a new box, restore the settings files first (so `data/pin.key` comes back
+and the parent PIN keeps working), then the database as below. Set the backup
+password again in Settings afterwards: `backup.key` is not in the bundle.
+
+## The box script
 
 `backup/family-hub-backup.sh` takes one WAL-safe snapshot (SQLite online-backup
 API — safe against the live database), size-checks it, atomically moves it into
@@ -51,7 +190,9 @@ mount leaves behind; `none` turns the check off),
 
 ## Restore
 
-Any snapshot is a plain SQLite file — pick the tier/timestamp you want:
+Any snapshot is a plain SQLite file, from either job. The hub's own copies
+are under `<BACKUP_DIR>/db/<tier>/`; the box script's under `FH_OUT`. Pick the
+tier and time you want:
 
 ```sh
 cd ~/docker-services/family-hub
@@ -64,8 +205,9 @@ curl -s http://127.0.0.1:8138/health      # {"status":"ok"}
 
 **The parent PIN on a new box.** The PIN's secret key lives in `data/pin.key`,
 beside `hub.db` but not inside it, so a copy of the database alone cannot be
-used to guess the PIN. The snapshots above copy only `hub.db`, so the key
-survives a restore only when the box's `data/` folder did. Restoring onto a
+used to guess the PIN. The database snapshots copy only `hub.db`, so the key
+survives a restore only when the box's `data/` folder did, or when you put it
+back from a settings bundle (above). Restoring onto a
 new box (or after losing `data/`) leaves the chore wallet's money actions
 locked, and the wall and the log say why. Clear the PIN (and set a new one
 in Settings if you want one):

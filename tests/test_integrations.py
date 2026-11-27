@@ -36,9 +36,18 @@ def test_caldav_available_only_with_credentials():
 def test_available_only_filters_to_configured():
     cfg = _cfg(weather_base="http://w")   # only weather configured
     # chores/todos and the chore wallet are always-on core features, so
-    # they're included alongside whatever's actually configured (weather here)
+    # they're included alongside whatever's actually configured (weather here),
+    # and so is the hub's own backup switch
     assert {i["id"] for i in fi.available_only(cfg, {})} == \
-        {"weather", "chores", "rewards", "todos"}
+        {"weather", "chores", "rewards", "todos", "backups"}
+
+
+def test_backups_in_registry_as_feature():
+    """Always listed, so its switch always shows; the job itself only runs
+    once a backup folder is mounted (app._backup_why_off)."""
+    row = next(i for i in fi.available_integrations(_cfg(), {}) if i["id"] == "backups")
+    assert row == {"id": "backups", "kind": "backups", "name": "Backups",
+                   "available": True, "group": "feature"}
 
 
 def test_rewards_in_registry_as_feature():
