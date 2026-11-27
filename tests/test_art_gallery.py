@@ -145,6 +145,10 @@ def test_every_kept_picture_has_a_recipe_that_can_remake_it():
 
 def test_the_readme_shows_every_gallery_picture_and_each_file_exists():
     readme = (ROOT / "README.md").read_text()
+    if not readme.startswith("# family-hub\n"):
+        # a staged deploy tree: the house overlay's README replaces the
+        # engine's (the first deploy after the gallery failed on exactly this)
+        pytest.skip("not the engine's README (a staged deploy tree)")
     cfg = json.loads((ART / "gallery.json").read_text())
     for s in cfg["shots"]:
         assert f"docs/gallery/{s['name']}-thumb.jpg" in readme, s["name"]
