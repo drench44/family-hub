@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- Twelve festive Christmas looks for the wall, picked by the owner: Santa and the Moon (the new Christmas default), North Pole, Christmas Morning, Stockings, Main Street, Gingerbread House, Santa's Sleigh, Ornament, Snow Globe, Toy Train, Lit-Up House and Cabin on Christmas Eve. They are AI-made pictures (FLUX.2, Apache 2.0) and are credited that way; lit windows, fires and tree lights glow in place, and the eight earlier Christmas looks are unchanged.
+
 ## [1.18.0] — 2026-11-26
 
 ### Added

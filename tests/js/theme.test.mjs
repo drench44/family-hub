@@ -343,8 +343,8 @@ test('windows are inclusive at both ends: Sep 1 to Dec 31 in, Aug 31 and Jan 1 o
   assert.equal(win.refreshLook(day(9, 1)), 'fall-aspen-grove');
   assert.equal(win.refreshLook(day(11, 1)), 'thanksgiving-pumpkin-patch');
   assert.equal(win.refreshLook(day(11, 30)), 'thanksgiving-pumpkin-patch');
-  assert.equal(win.refreshLook(day(12, 1)), 'christmas-glowing-cabin', 'Thanksgiving hands over to Christmas');
-  assert.equal(win.refreshLook(day(12, 31)), 'christmas-glowing-cabin');
+  assert.equal(win.refreshLook(day(12, 1)), 'christmas-santa-moon', 'Thanksgiving hands over to Christmas');
+  assert.equal(win.refreshLook(day(12, 31)), 'christmas-santa-moon');
   assert.equal(win.refreshLook(new Date(2027, 0, 1, 12, 0, 0)), 'none');
 });
 
@@ -411,7 +411,7 @@ test('a window may wrap the new year, and the FIRST matching season wins', () =>
     looks: [{ id: 'winter-snow', name: 'Snow' }] });
   win.FH_SEASONS.unshift({ id: 'harvest', name: 'Harvest', from: [9, 20], to: [9, 27],
     looks: [{ id: 'harvest-table', name: 'Table' }] });
-  assert.equal(win.refreshLook(day(12, 25)), 'christmas-glowing-cabin',
+  assert.equal(win.refreshLook(day(12, 25)), 'christmas-santa-moon',
     'Christmas is listed before a later winter, so it keeps December');
   assert.equal(win.refreshLook(day(1, 10)), 'winter-snow');
   assert.equal(win.refreshLook(day(3, 1)), 'none');
@@ -831,7 +831,7 @@ test('house looks: none valid means no style element, and no head is fine', () =
 test('house looks: a house look without default leaves the built-in default', () => {
   const { win } = loadTheme({ houseLooks: [HOUSE()] });
   const xmas = win.FH_SEASONS.find((s) => s.id === 'christmas');
-  assert.equal(xmas.looks.filter((l) => l.default).map((l) => l.id).join(), 'christmas-glowing-cabin');
+  assert.equal(xmas.looks.filter((l) => l.default).map((l) => l.id).join(), 'christmas-santa-moon');
   assert.equal(xmas.looks[0].id, 'christmas-house-cabin', 'still listed first');
 });
 

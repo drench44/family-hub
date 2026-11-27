@@ -1855,6 +1855,30 @@ def test_season_art_files_exist_and_are_credited():
             continue
         assert f"`{f.name}`" in credits, f"seasons/{f.name} is not in CREDITS.md"
 
+AI_LOOKS = ["christmas-santa-moon", "christmas-north-pole", "christmas-morning", "christmas-stockings",
+            "christmas-main-street", "christmas-gingerbread", "christmas-santas-sleigh", "christmas-ornament",
+            "christmas-snow-globe", "christmas-toy-train", "christmas-lit-house", "christmas-cabin-eve"]
+
+
+def test_generated_christmas_looks_are_credited_honestly_and_santa_moon_is_the_default():
+    """The twelve FLUX.2 looks (docs/seasonal-looks.md, section 5) say plainly
+    that they are AI pictures: the tile credit, and a CREDITS.md row naming the
+    model, its licence, the upscaler and the date. Santa Moon is the season's
+    one default."""
+    theme = (STATIC / "theme.js").read_text()
+    credits = (STATIC / "seasons" / "CREDITS.md").read_text()
+    for look in AI_LOOKS:
+        assert look in _look_ids(), f"{look} is not registered in theme.js"
+        entry = re.search(r'id: "%s"[^\n]*' % look, theme).group(0)
+        assert "FLUX.2 (AI)" in entry, f"{look}'s tile credit must say it is AI made"
+        row = next((ln for ln in credits.splitlines() if ln.startswith(f"| `{look}.webp`")), None)
+        assert row, f"{look}.webp has no CREDITS.md row"
+        for needle in ("FLUX.2 klein 4B", "Black Forest Labs", "Apache 2.0", "SeedVR2", "2026-11-26"):
+            assert needle in row, f"{look}.webp's credit row must name {needle}"
+    xmas = theme[theme.index('{ id: "christmas"'):theme.index('{ id: "thanksgiving"')]
+    assert re.findall(r'id: "([^"]+)"[^\n]*default: true', xmas) == ["christmas-santa-moon"]
+
+
 def test_season_scene_sits_behind_and_never_takes_a_tap():
     """The scene is a full-viewport fixed layer: it must be inert
     (pointer-events none), painted UNDER the page (z-index -1 with the body's

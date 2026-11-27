@@ -3258,6 +3258,138 @@ body.integ-off-todos .todo-slot { display: none; }
   --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
 }
 
+/* ---- Santa and the Moon: santa's sleigh crossing a full moon over a glowing village (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-santa-moon"][data-theme][data-accent],
+.look-swatch[data-look="christmas-santa-moon"] {
+  --accent:#F2C46B; --accent-ink:#2A1C00; --accent-soft:rgba(242,196,107,.18);
+  --sn-scene:url("seasons/christmas-santa-moon.webp"); --sn-glass:url("seasons/glass/christmas-santa-moon.webp"); --sn-pos:50% 50%;
+}
+:root[data-look="christmas-santa-moon"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-santa-moon"] {
+  --accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba(134,96,19,.13);
+}
+
+/* ---- North Pole: a candy-striped workshop and a tall tree under the northern lights (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-north-pole"][data-theme][data-accent],
+.look-swatch[data-look="christmas-north-pole"] {
+  --accent:#8CCCA6; --accent-ink:#0B2A18; --accent-soft:rgba(140,204,166,.18);
+  --sn-scene:url("seasons/christmas-north-pole.webp"); --sn-glass:url("seasons/glass/christmas-north-pole.webp"); --sn-pos:62% 50%;
+}
+:root[data-look="christmas-north-pole"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-north-pole"] {
+  --accent:#246444; --accent-ink:#FFFFFF; --accent-soft:rgba(36,100,68,.13);
+}
+
+/* ---- Christmas Morning: presents under the tree and a fire in the hearth (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-morning"][data-theme][data-accent],
+.look-swatch[data-look="christmas-morning"] {
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
+  --sn-scene:url("seasons/christmas-morning.webp"); --sn-glass:url("seasons/glass/christmas-morning.webp"); --sn-pos:28% 50%;
+}
+:root[data-look="christmas-morning"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-morning"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
+/* ---- Stockings: knitted stockings, cookies and milk by a crackling fire (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-stockings"][data-theme][data-accent],
+.look-swatch[data-look="christmas-stockings"] {
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
+  --sn-scene:url("seasons/christmas-stockings.webp"); --sn-glass:url("seasons/glass/christmas-stockings.webp"); --sn-pos:42% 50%;
+}
+:root[data-look="christmas-stockings"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-stockings"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
+/* ---- Main Street: a snowy street strung with lights, a great tree at the end (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-main-street"][data-theme][data-accent],
+.look-swatch[data-look="christmas-main-street"] {
+  --accent:#F2C46B; --accent-ink:#2A1C00; --accent-soft:rgba(242,196,107,.18);
+  --sn-scene:url("seasons/christmas-main-street.webp"); --sn-glass:url("seasons/glass/christmas-main-street.webp"); --sn-pos:50% 50%;
+}
+:root[data-look="christmas-main-street"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-main-street"] {
+  --accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba(134,96,19,.13);
+}
+
+/* ---- Gingerbread House: a glowing gingerbread house between two warm mugs (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-gingerbread"][data-theme][data-accent],
+.look-swatch[data-look="christmas-gingerbread"] {
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
+  --sn-scene:url("seasons/christmas-gingerbread.webp"); --sn-glass:url("seasons/glass/christmas-gingerbread.webp"); --sn-pos:52% 50%;
+}
+:root[data-look="christmas-gingerbread"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-gingerbread"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
+/* ---- Santa's Sleigh: a red sleigh full of presents in a sparkling snowy forest (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-santas-sleigh"][data-theme][data-accent],
+.look-swatch[data-look="christmas-santas-sleigh"] {
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
+  --sn-scene:url("seasons/christmas-santas-sleigh.webp"); --sn-glass:url("seasons/glass/christmas-santas-sleigh.webp"); --sn-pos:48% 50%;
+}
+:root[data-look="christmas-santas-sleigh"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-santas-sleigh"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
+/* ---- Ornament: a shiny red bauble on a snowy branch (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-ornament"][data-theme][data-accent],
+.look-swatch[data-look="christmas-ornament"] {
+  --accent:#F18C95; --accent-ink:#2A0A0E; --accent-soft:rgba(241,140,149,.18);
+  --sn-scene:url("seasons/christmas-ornament.webp"); --sn-glass:url("seasons/glass/christmas-ornament.webp"); --sn-pos:50% 50%;
+}
+:root[data-look="christmas-ornament"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-ornament"] {
+  --accent:#A52B38; --accent-ink:#FFFFFF; --accent-soft:rgba(165,43,56,.13);
+}
+
+/* ---- Snow Globe: a little village in a snow globe by a frosty window (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-snow-globe"][data-theme][data-accent],
+.look-swatch[data-look="christmas-snow-globe"] {
+  --accent:#F2C46B; --accent-ink:#2A1C00; --accent-soft:rgba(242,196,107,.18);
+  --sn-scene:url("seasons/christmas-snow-globe.webp"); --sn-glass:url("seasons/glass/christmas-snow-globe.webp"); --sn-pos:50% 50%;
+}
+:root[data-look="christmas-snow-globe"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-snow-globe"] {
+  --accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba(134,96,19,.13);
+}
+
+/* ---- Toy Train: a toy train and nutcrackers under the tree (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-toy-train"][data-theme][data-accent],
+.look-swatch[data-look="christmas-toy-train"] {
+  --accent:#8CCCA6; --accent-ink:#0B2A18; --accent-soft:rgba(140,204,166,.18);
+  --sn-scene:url("seasons/christmas-toy-train.webp"); --sn-glass:url("seasons/glass/christmas-toy-train.webp"); --sn-pos:52% 50%;
+}
+:root[data-look="christmas-toy-train"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-toy-train"] {
+  --accent:#246444; --accent-ink:#FFFFFF; --accent-soft:rgba(36,100,68,.13);
+}
+
+/* ---- Lit-Up House: a house wrapped in lights with a glowing snowman out front (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-lit-house"][data-theme][data-accent],
+.look-swatch[data-look="christmas-lit-house"] {
+  --accent:#8CCCA6; --accent-ink:#0B2A18; --accent-soft:rgba(140,204,166,.18);
+  --sn-scene:url("seasons/christmas-lit-house.webp"); --sn-glass:url("seasons/glass/christmas-lit-house.webp"); --sn-pos:50% 50%;
+}
+:root[data-look="christmas-lit-house"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-lit-house"] {
+  --accent:#246444; --accent-ink:#FFFFFF; --accent-soft:rgba(36,100,68,.13);
+}
+
+/* ---- Cabin on Christmas Eve: a log cabin aglow under a shooting star (made with FLUX.2, AI) ---- */
+:root[data-look="christmas-cabin-eve"][data-theme][data-accent],
+.look-swatch[data-look="christmas-cabin-eve"] {
+  --accent:#F2C46B; --accent-ink:#2A1C00; --accent-soft:rgba(242,196,107,.18);
+  --sn-scene:url("seasons/christmas-cabin-eve.webp"); --sn-glass:url("seasons/glass/christmas-cabin-eve.webp"); --sn-pos:45% 50%;
+}
+:root[data-look="christmas-cabin-eve"][data-accent]:is([data-theme="light"],[data-theme="soft"]),
+:root:is([data-theme="light"],[data-theme="soft"]) .look-swatch[data-look="christmas-cabin-eve"] {
+  --accent:#866013; --accent-ink:#FFFFFF; --accent-soft:rgba(134,96,19,.13);
+}
+
 /* ---- Thanksgiving: shared by every thanksgiving-* look ----
    Harvest light: a warm amber glow from the top corners over the photo and
    the theme's wash. Leaves fall in the look's own colours (the fall leaf
@@ -4062,7 +4194,7 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
 .look-swatch .sn-snow.still .sn-flake { animation-name: sn-snowfall-tile; animation-play-state: paused; }
 .look-swatch .sn-snow.still .sn-flake b { animation-play-state: paused; }
 /* an indoor look's tile keeps the snow outside too: none in the room */
-.look-swatch:is([data-look="christmas-cabin-window"], [data-look="christmas-tree"], [data-look="christmas-fireside"]) .sn-snow { display: none; }
+.look-swatch:is([data-look="christmas-cabin-window"], [data-look="christmas-tree"], [data-look="christmas-fireside"], [data-look="christmas-morning"], [data-look="christmas-stockings"], [data-look="christmas-gingerbread"], [data-look="christmas-ornament"], [data-look="christmas-snow-globe"], [data-look="christmas-toy-train"]) .sn-snow { display: none; }
 @keyframes sn-snowfall-tile { from { transform: translate3d(0, -6px, 0); } to { transform: translate3d(0, 134px, 0); } }
 .look-swatch .sn-web:nth-child(1) { --s: 92px; left: -34px; top: -38px; }
 .look-swatch .sn-web:nth-child(2) { --s: 78px; right: -30px; bottom: -30px; }
