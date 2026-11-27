@@ -1769,6 +1769,61 @@ test('rewardsCardHtml: on, shows the amounts, the projection host and each walle
   assert.match(h, /data-rw-save/);
 });
 
+/* the wallet summary (owner, 2026-11-27: a summary per kid, and "an easy way
+   to reset after payout"; Paid zeroes the wallet, so it starts over itself) */
+const SUM = (over) => ({ since: '2026-11-26', paid_before: false, chores: 12,
+  chore_cents: 360, bonus_cents: 0, total_cents: 360, streak: 47, ...over });
+
+test('walletSummaryText: chores, money and streak in plain words', () => {
+  assert.equal(sandbox.walletSummaryText(SUM(), '2026-11-27'),
+    'Since Nov 26: 12 chores, $3.60. Streak 47 days.');
+  assert.equal(sandbox.walletSummaryText(SUM({ chores: 1, chore_cents: 30, total_cents: 30, streak: 1 }), '2026-11-27'),
+    'Since Nov 26: 1 chore, 30¢. Streak 1 day.');
+});
+
+test('walletSummaryText: a bonus shows with the total, which is the balance', () => {
+  assert.equal(sandbox.walletSummaryText(SUM({ bonus_cents: 10000, total_cents: 10360 }), '2026-11-27'),
+    'Since Nov 26: 12 chores, $3.60, plus a $100 streak bonus. Total $103.60. Streak 47 days.');
+  assert.equal(sandbox.walletSummaryText(SUM({ chores: 0, chore_cents: 0, bonus_cents: 10000, total_cents: 10000 }), '2026-11-27'),
+    'Since Nov 26: no chores, plus a $100 streak bonus. Total $100.00. Streak 47 days.');
+});
+
+test('walletSummaryText: paid today starts over, with nothing yet', () => {
+  assert.equal(sandbox.walletSummaryText(SUM({ since: '2026-11-27', paid_before: true, chores: 0,
+    chore_cents: 0, total_cents: 0 }), '2026-11-27'),
+  'Since today: no chores yet. Streak 47 days.');
+});
+
+test('walletSummaryText: a chore taken back after a payout says so', () => {
+  assert.equal(sandbox.walletSummaryText(SUM({ chores: -1, chore_cents: -30, total_cents: -30 }), '2026-11-27'),
+    'Since Nov 26: 1 chore taken back, -$0.30. Streak 47 days.');
+});
+
+test('walletSummaryText: no streak known leaves it out; another year names it', () => {
+  assert.equal(sandbox.walletSummaryText(SUM({ streak: null, since: '2026-12-30' }), '2027-01-02'),
+    'Since Dec 30, 2026: 12 chores, $3.60.');
+  assert.equal(sandbox.walletSummaryText(null, '2026-11-27'), '');
+});
+
+test('payoutToastText: says what was paid for', () => {
+  assert.equal(sandbox.payoutToastText({ cents: 360, summary: SUM() }, '2026-11-27'),
+    'Paid $3.60 for 12 chores since Nov 26. The wallet is back to $0.');
+  assert.equal(sandbox.payoutToastText({ cents: 10360, summary: SUM({ bonus_cents: 10000, total_cents: 10360 }) }, '2026-11-27'),
+    'Paid $103.60 for 12 chores and a $100 streak bonus since Nov 26. The wallet is back to $0.');
+  assert.equal(sandbox.payoutToastText({ cents: 360 }, '2026-11-27'),
+    'Paid $3.60. The wallet is back to $0.');
+  assert.equal(sandbox.payoutToastText(null, '2026-11-27'), 'Nothing to pay.');
+});
+
+test('rewardsCardHtml: each wallet line has its summary under it', () => {
+  const st = RW_STATE({ today: '2026-12-03' });
+  st.people[0].summary = SUM({ total_cents: 1850, chore_cents: 1850, chores: 62, since: '2026-12-02' });
+  const h = sandbox.rewardsCardHtml(st);
+  assert.match(h, /\$18\.50[\s\S]*data-rw-pay="1"[\s\S]*class="rw-sum"[^>]*>Since Dec 2: 62 chores, \$18\.50\. Streak 47 days\.</);
+  // Ben has no summary (an older answer): no empty line for him
+  assert.equal((h.match(/class="rw-sum"/g) || []).length, 1);
+});
+
 test('rewardsCardHtml: the switch off in Features says so', () => {
   const h = sandbox.rewardsCardHtml(RW_STATE({ feature_on: false, active: false }));
   assert.match(h, /switched off/);

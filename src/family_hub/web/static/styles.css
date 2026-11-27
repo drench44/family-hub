@@ -2773,6 +2773,7 @@ body.integ-off-todos .todo-slot { display: none; }
 .rw-people { margin-top: 8px; }
 .rw-kid { flex-wrap: wrap; }
 .rw-bal { margin-left: auto; font-size: 18px; font-weight: 700; color: var(--ink); }
+.rw-sum { flex-basis: 100%; font-size: 15px; line-height: 1.35; color: var(--ink); }
 .rw-hist { flex-basis: 100%; font-size: 13px; color: var(--dim); }
 .rw-hist ul { margin: 4px 0 0 18px; padding: 0; }
 

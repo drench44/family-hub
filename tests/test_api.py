@@ -7417,7 +7417,9 @@ def test_rewards_lists_each_wallet_summary_and_payout_starts_it_over(client, app
     _enable(client)
     client.get("/api/hub")
     client.post(f"/api/chores/{cid}/complete")
-    me = next(k for k in client.get("/api/rewards").json()["people"] if k["id"] == pid)
+    st = client.get("/api/rewards").json()
+    assert st["today"] == _today().isoformat()        # for "Since today"
+    me = next(k for k in st["people"] if k["id"] == pid)
     s = me["summary"]
     assert s["since"] == fdb.kv_get(app_mod._db(), "rewards.launch")["day"]
     assert (s["chores"], s["chore_cents"], s["bonus_cents"]) == (1, 30, 0)

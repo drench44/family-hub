@@ -2083,6 +2083,7 @@ def _wallet_people(c, today: dt.date) -> list[dict]:
 def _rewards_state(c) -> dict:
     today = _today()
     return {"settings": reward_settings(c),
+            "today": today.isoformat(),     # the house day, for "Since today"
             "pin_set": parent_pin.is_set(c),
             "pin_key_missing": parent_pin.key_missing(c),
             "feature_on": _integration_on(c, "rewards"),
