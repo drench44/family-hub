@@ -74,6 +74,12 @@ can never be turned off and don't degrade gracefully.*
       fields, so a source missing there can break on a deploy with nothing
       rolled back. (2026-09-17: `/health` stayed 200 for a day with the
       laundry card gone.)
+- [ ] **Never bind-mount a single file that may be missing** (`./.env:/app/.env`).
+      Docker makes a missing bind source as an empty folder owned by root,
+      which then blocks the owner from creating the file. Mount a folder that
+      always exists (read-only if the app only reads it), or ship the folder
+      in the repo with a placeholder so a clone owns it. (Backups, 2026-11-27:
+      checked on a real box. Guard: `test_no_bind_mount_of_a_file_that_may_be_missing`.)
 - [ ] `config.example.json` gains a placeholder entry (use the
       `192.168.1.50` example-IP convention — this repo is public; never a
       real LAN IP, never house data).

@@ -559,6 +559,43 @@ back on. Unticking a chore unsettles it. Pay queries read
 `COALESCE(earner, person_id)`; `pace()` stays on `person_id`, since it
 measures each person's chore load, not their money.
 
+### 8.2 Backups (as built, 2026-11)
+Designed in `docs/superpowers/specs/2026-11-27-backups-design.md`; operator
+steps in `docs/backup-and-restore.md`. `backups.py` ports
+`backup/family-hub-backup.sh` into the app so a hub installed from GitHub
+backs itself up with no host timer: the same `hub-<stamp>.db` names and
+stamps, the online backup, `integrity_check`, out of WAL mode, a size floor,
+temp file then atomic rename, promotion into hourly/daily/weekly/monthly
+tiers (48/14/8/12), pruning by the stamp in the name with a keep below 1
+refused, and `.partial-*` leftovers swept. It writes to `/backups`, which
+compose mounts from the host's `BACKUP_DIR` (default `./backups`, shipped in
+the repo so docker never creates it owned by root); a NAS is a folder the
+host has mounted. The default path only counts when it is a mount point.
+
+`app.py` runs it as a lifespan task beside the laundry watcher: first run
+after five minutes, then hourly, in `asyncio.to_thread`, armored, cancelled
+on shutdown, off in DEMO and under `DISABLE_SYNC`. `_backup_lock` keeps one
+run at a time and is shared with `POST /api/backups/run` (409 while one
+runs). The registry carries a `backups` feature (always listed) for the
+switch, and `_backup_why_off` names why it can't run (switched off, no
+folder, not mounted, not writable). Each run updates the shared
+`backup_status` heartbeat (`at`, `snapshot`, `bytes`, plus `source`, `dir`,
+`settings_at`, `in_app_error`), keeping the box script's `remote_*` fields,
+so the wall's stale badge covers whichever job ran last; `at` moves only on
+success. The job's own record, `backups.in_app`, feeds `GET /api/backups`.
+
+With a backup password, the run also writes an encrypted settings bundle:
+a deterministic tar of `config.json`, `.env` (read from the project folder,
+mounted read-only at `/host`, because a direct bind of a missing `.env`
+makes a root-owned folder), `data/pin.key`, `data/wyze.env` and
+`data/token.json`, sealed with AES-256-GCM (`cryptography`) under
+scrypt(password, salt, n=2^15, r=8, p=1). The header (`FHB1`, salt, nonce)
+is the associated data. `data/backup.key` holds the salt and derived key,
+never the password (0600, temp and rename, a damaged one logged once and
+reported on the card). A bundle is written only when its contents or the
+key changed; 14 are kept. `python -m family_hub.backups restore-settings`
+decrypts one into an empty folder; `--list` shows the newest copies.
+
 ---
 
 ## 9. Widget Slot / Plugin Architecture (PRD §6, FR#8)

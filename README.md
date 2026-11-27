@@ -164,6 +164,11 @@ at one URL.
 - **How it works:** a plain-words guide in Settings (gear → **How it works**),
   one tap-to-open topic per feature that is turned on, so anyone in the house
   can find out what a card does without asking.
+- **Backups:** the hub copies its database every hour into a backup folder,
+  and with a backup password it also saves its settings files, locked with
+  that password. Settings → **Backups** shows where they go, the last good
+  copy and a **Back up now** button. Point the folder at a NAS and the copies
+  leave the box (see [Backup](#backup)).
 
 ## Architecture & trust model
 
@@ -524,12 +529,75 @@ current streak and starts every wallet at $0. Rules: `rewards.py`; money:
 
 ## Backup
 
-The SQLite DB (`data/hub.db`) is the only state that originates here —
-everything else re-syncs. `backup/` contains a WAL-safe nightly snapshot
-script + systemd units (fail-loud, atomic, keeps 14): edit the paths in the
-`.service` file, then install script + units and
-`systemctl enable --now family-hub-backup.timer`.
-**Restore:** stop the container, copy a snapshot over `data/hub.db`, start.
+The database (`data/hub.db`) holds everything that starts in the hub: chores,
+people, streaks, to-dos, wallets and history. Calendars re-sync, but a lost
+database is gone for good. The hub backs it up on its own, with nothing to
+install.
+
+**It works out of the box.** Every hour (first a few minutes after start) the
+hub writes a checked copy into `./backups` next to `docker-compose.yml`, and
+keeps 48 hourly, 14 daily, 8 weekly and 12 monthly copies. Settings →
+**Backups** shows the folder, the last good copy, how many are kept and the
+last failure, and has a **Back up now** button. The wall's ⚠ backup warning
+shows when the last good copy is more than 36 hours old. The Backups switch
+under Features & integrations turns it off.
+
+**Send it to a NAS.** `./backups` sits on the same disk as the hub, so it
+won't survive that disk dying. Mount a NAS share on the box (any way the box
+can mount it: SMB, NFS, a USB disk), then point the hub at it in `.env` and
+recreate the container:
+
+```bash
+# .env
+BACKUP_DIR=/mnt/nas/family-hub
+```
+
+```bash
+docker compose up -d web
+```
+
+The folder must be writable by the hub's user (`HUB_UID`). For an SMB share,
+mount it with `uid=<that uid>`. If the share drops, the box's empty mount
+folder is what the hub sees, so keep the share mounted at boot (for example
+`nofail` in `/etc/fstab`) and check the card now and then.
+
+**Save the settings files too.** In Settings → Backups, set a backup password
+(8 characters or more). From then on each backup also holds an encrypted copy
+of `config.json`, `.env`, `data/pin.key`, `data/wyze.env` and
+`data/token.json`, as `settings/settings-<time>.fhb` in the backup folder. A
+new copy is written only when one of them changed; the last 14 are kept. The
+password is never stored, only a key made from it (`data/backup.key`), so a
+copy of the backup folder alone can't be opened. **Write the password down.**
+You need it to restore the settings on a new box.
+
+**Restore the database:** stop the hub, remove the old WAL files, copy the
+snapshot you want over `data/hub.db`, start it:
+
+```bash
+docker compose stop web
+rm -f data/hub.db-wal data/hub.db-shm
+cp backups/db/daily/hub-20260817.db data/hub.db
+docker compose start web
+```
+
+**Restore the settings files:** from the project folder, with the backup
+folder mounted,
+
+```bash
+docker compose run --rm web python -m family_hub.backups --list
+mkdir -p restored
+docker compose run --rm -v "$PWD/restored:/restored" web \
+  python -m family_hub.backups restore-settings /backups/settings/settings-20260817-0900.fhb /restored
+```
+
+It asks for the backup password and writes the files into `./restored` (it
+never overwrites a file). `config.json` and `.env` go in the project folder,
+the rest in `data/`. Full steps: [`docs/backup-and-restore.md`](docs/backup-and-restore.md).
+
+`backup/family-hub-backup.sh` is the older host-side script with systemd
+units, for a box that wants its own timer (it also mirrors to a remote path
+with rsync). Both can run on one box: they write the same backup record, so
+the wall's warning reads whichever ran last.
 
 ## Adding a feature
 
