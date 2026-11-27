@@ -6515,6 +6515,19 @@ async function backupsClick(e) {
     await paintBackups();
     return;
   }
+  if (t.closest('[data-bk-changepw]') || t.closest('[data-bk-cancelpw]')) {
+    // fold the change form open or shut; nothing is sent
+    const host = document.getElementById('backups-ctl');
+    const form = host && host.querySelector('#bk-pw-form');
+    const open = !!t.closest('[data-bk-changepw]');
+    if (!form) return;
+    form.classList.toggle('hidden', !open);
+    const btn = host.querySelector('[data-bk-changepw]');
+    if (btn) btn.classList.toggle('hidden', open);
+    const first = open && form.querySelector('[name="bk_pw"]');
+    if (first && first.focus) first.focus();
+    return;
+  }
   if (t.closest('[data-bk-savepw]')) {
     const host = document.getElementById('backups-ctl');
     if (!host) return;
@@ -6529,8 +6542,9 @@ async function backupsClick(e) {
     const why = backupPasswordProblem(pw, field('[name="bk_pw2"]'));
     if (why) { say(why); return; }
     if (errBox) errBox.classList.add('hidden');
+    let reply;
     try {
-      await jParent('/api/backups/password', {
+      reply = await jParent('/api/backups/password', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: pw }),
       }, 'Setting the backup password needs a parent.');
@@ -6539,7 +6553,13 @@ async function backupsClick(e) {
       return;
     }
     showToast('Backup password saved. Write it down.');
-    await paintBackups();
+    if (reply && typeof reply === 'object' && 'password_set' in reply) {
+      // the reply is the new state: show "Set" now, and drop any older fetch
+      bkSeq++;
+      host.innerHTML = backupsCardHtml(reply, Date.now());
+    } else {
+      await paintBackups();
+    }
   }
 }
 
@@ -6720,10 +6740,35 @@ const SETTINGS_SECTIONS = [
 ];
 
 function settingsNavHtml() {
-  return `<nav class="settings-nav" aria-label="Settings sections">`
+  return `<nav class="settings-nav" aria-label="Settings sections"><div class="settings-strip">`
     + SETTINGS_SECTIONS.map(([id, label], i) =>
       `<button type="button" data-settings-go="${id}"${i === 0 ? ' class="on" aria-current="true"' : ''}>${label}</button>`).join('')
-    + `</nav>`;
+    + `</div></nav>`;
+}
+
+/* Where the sideways strip should scroll so the lit button is in sight, or the
+   current position when it already is. A button cut off, or tucked under an
+   edge fade (within 16px of an end that has more beyond it), is centered, clamped to the strip.
+   Pure; all numbers are px inside the strip's own scroll space. */
+function settingsNavScrollTarget(chipLeft, chipWidth, scrollLeft, viewWidth, scrollWidth) {
+  const max = Math.max(0, scrollWidth - viewWidth);
+  if (max === 0) return 0;
+  // only a side with more beyond it has a fade to hide under
+  const leftEdge = scrollLeft > 2 ? 16 : 0;
+  const rightEdge = scrollLeft < max - 2 ? 16 : 0;
+  const seen = chipLeft >= scrollLeft + leftEdge
+    && chipLeft + chipWidth <= scrollLeft + viewWidth - rightEdge;
+  if (seen) return scrollLeft;
+  const centered = chipLeft + chipWidth / 2 - viewWidth / 2;
+  return Math.min(max, Math.max(0, Math.round(centered)));
+}
+
+/* Which sides of the strip have more buttons beyond them (fade shown there). */
+function settingsNavFades(scrollLeft, clientWidth, scrollWidth) {
+  return {
+    left: scrollLeft > 2,
+    right: scrollLeft + clientWidth < scrollWidth - 2,
+  };
 }
 
 /* Which section is in view: the last card whose top (relative to the
@@ -6746,6 +6791,13 @@ function settingsGo(id) {
   const reduce = window.matchMedia
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   card.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+}
+
+function paintSettingsFades(strip) {
+  const f = settingsNavFades(strip.scrollLeft, strip.clientWidth, strip.scrollWidth);
+  if (!strip.classList) return;
+  strip.classList.toggle('fade-l', f.left);
+  strip.classList.toggle('fade-r', f.right);
 }
 
 function wireSettingsNav() {
@@ -6779,14 +6831,31 @@ function wireSettingsNav() {
       if (i === active) btn.setAttribute('aria-current', 'true');
       else btn.removeAttribute('aria-current');
     });
+    const strip = nav.querySelector('.settings-strip') || nav;
     const lit = nav.querySelector('.on');
-    if (lit && nav.scrollWidth > nav.clientWidth) {
-      // the phone's menu scrolls sideways: keep the lit button in sight
-      const l = lit.offsetLeft, r = l + lit.offsetWidth;
-      if (l < nav.scrollLeft || r > nav.scrollLeft + nav.clientWidth) {
-        nav.scrollLeft = Math.max(0, l - 16);
+    const sRect = strip.getBoundingClientRect();
+    if (lit && strip.scrollWidth > strip.clientWidth) {
+      // the phone's menu scrolls sideways: keep the lit button in sight, and
+      // glide there (or jump, with reduced motion or on the first paint)
+      const lRect = lit.getBoundingClientRect();
+      const left = lRect.left - sRect.left + strip.scrollLeft;
+      const want = settingsNavScrollTarget(left, lRect.width, strip.scrollLeft,
+        strip.clientWidth, strip.scrollWidth);
+      if (want !== strip.scrollLeft) {
+        const reduce = window.matchMedia
+          && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const glide = !reduce && strip._settingsSeen === true;
+        if (strip.scrollTo) strip.scrollTo({ left: want, behavior: glide ? 'smooth' : 'auto' });
+        else strip.scrollLeft = want;
       }
     }
+    // the strip is replaced on every repaint: wire its own scroll once
+    if (!strip._settingsFades) {
+      strip._settingsFades = true;
+      strip.addEventListener('scroll', () => paintSettingsFades(strip), { passive: true });
+    }
+    paintSettingsFades(strip);
+    if (sRect.width > 0) strip._settingsSeen = true;   // laid out now: later moves may glide
   };
   if (!scroller._settingsNav) {
     scroller._settingsNav = true;
@@ -6798,6 +6867,13 @@ function wireSettingsNav() {
   }
   scroller._settingsNavPaint = paint;
   paint();   // a repaint mid-scroll lights the right section straight away
+  // The overlay is not laid out until it opens (a moment after this paints),
+  // so measure once more then, and again when the phone turns.
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => scroller._settingsNavPaint());
+  if (!scroller._settingsResize && window.addEventListener) {
+    scroller._settingsResize = true;
+    window.addEventListener('resize', () => scroller._settingsNavPaint());
+  }
 }
 
 /* What the help needs to know about this wall, from the last hub payload:

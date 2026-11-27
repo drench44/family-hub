@@ -2047,6 +2047,13 @@ function restoreTestDate(iso, nowMs) {
   return d.getFullYear() === now.getFullYear() ? day : `${day}, ${d.getFullYear()}`;
 }
 
+/* The clock time of an ISO time ("10:08 AM"), or '' when it can't be read. Pure. */
+function backupClock(iso) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  return new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
 /* Why backups are off, and what fixes it, by the server's why_off code. */
 const BACKUP_SEE_README = 'Set BACKUP_DIR on the hub box (see Backup in the README).';
 const BACKUP_OFF = {
@@ -2136,9 +2143,25 @@ function backupsCardHtml(st, nowMs) {
     files = 'Saved with the next backup.';
   }
   html += row('Settings files', escapeHtml(files));
-  if (st.settings_error) html += `<div class="hint bk-error">${escapeHtml(st.settings_error)}</div>`;
   const set = !!st.password_set;
-  html += `<div class="theme-ctl stack bk-pw">`
+  // With a password set, say so plainly, with the day it was set when known.
+  if (set) {
+    const day = restoreTestDate(st.password_set_at, now);
+    html += row('Backup password', day ? `Set ✓ on ${escapeHtml(day)}.` : 'Set ✓');
+  }
+  // What the newest settings copy holds, so "saved" is something you can check.
+  const held = set && st.settings && Array.isArray(st.settings.files) ? st.settings.files : [];
+  if (held.length) {
+    const clock = backupClock(st.settings.at);
+    html += `<div class="hint bk-held">Settings locked into the ${clock ? `${escapeHtml(clock)} ` : 'latest '}backup: `
+      + `${escapeHtml(held.join(', '))}.</div>`;
+  }
+  if (st.settings_error) html += `<div class="hint bk-error">${escapeHtml(st.settings_error)}</div>`;
+  // Set: the change form folds behind a button. Not set: the form is open.
+  if (set) {
+    html += `<button class="padmin-btn" type="button" data-bk-changepw="1">Change password</button>`;
+  }
+  html += `<div class="theme-ctl stack bk-pw${set ? ' hidden' : ''}" id="bk-pw-form">`
     + `<div class="settings-k">${set ? 'Change the backup password' : 'Set a backup password'}</div>`
     + `<div class="hint">It locks a copy of config.json, .env and the sign-ins into each backup.</div>`
     + `<input class="txt-input" type="password" name="bk_pw" autocomplete="new-password" placeholder="At least 8 characters" aria-label="Backup password">`
@@ -2146,8 +2169,9 @@ function backupsCardHtml(st, nowMs) {
     + `<div class="hint">Write this down. You need it to restore the settings files on a new box.</div>`
     + (set ? `<div class="hint">Copies saved before a change still need the old password.</div>` : '')
     + `<div class="form-error hidden" id="bk-pw-error"></div>`
-    + `<button class="padmin-btn" type="button" data-bk-savepw="1">Save password</button>`
-    + `</div>`;
+    + `<div class="bk-pw-btns"><button class="padmin-btn" type="button" data-bk-savepw="1">Save password</button>`
+    + (set ? `<button class="padmin-btn" type="button" data-bk-cancelpw="1">Cancel</button>` : '')
+    + `</div></div>`;
   return html;
 }
 

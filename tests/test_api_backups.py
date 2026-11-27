@@ -369,3 +369,27 @@ def test_health_full_notes_the_in_app_job_without_failing(client, app_mod):
     assert note["last_ok_at"] and note["last_error"] is None
     assert note["dir"] == "/mnt/nas/family-hub"
     assert not any("backup" in p for p in body.get("problems", []))
+
+
+def test_state_says_when_the_password_was_set(client, app_mod, tmp_path):
+    assert client.get("/api/backups").json()["password_set_at"] is None
+    r = client.post("/api/backups/password", json={"password": "family hub 2026"})
+    at = r.json()["password_set_at"]
+    assert at and abs((dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(at)).total_seconds()) < 60
+    assert client.get("/api/backups").json()["password_set_at"] == at
+
+
+def test_a_password_set_before_the_date_was_kept_falls_back_to_the_key_file(client, app_mod, tmp_path):
+    client.post("/api/backups/password", json={"password": "family hub 2026"})
+    fdb.kv_set(app_mod._db(), app_mod._BACKUP_PW_KEY, True)   # the old stored value
+    key = tmp_path / "data" / "backup.key"
+    os.utime(key, (1_700_000_000, 1_700_000_000))
+    at = client.get("/api/backups").json()["password_set_at"]
+    assert dt.datetime.fromisoformat(at).timestamp() == 1_700_000_000
+
+
+def test_the_state_carries_the_names_in_the_latest_settings_copy(client, app_mod):
+    _bulk(app_mod)
+    client.post("/api/backups/password", json={"password": "family hub 2026"})
+    st = client.post("/api/backups/run").json()["state"]
+    assert st["settings"]["files"] and "config.json" in st["settings"]["files"]

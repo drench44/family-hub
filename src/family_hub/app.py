@@ -2716,6 +2716,20 @@ async def backup_loop() -> None:
         await asyncio.sleep(BACKUP_EVERY_S)
 
 
+def _password_set_at(c) -> str | None:
+    """When the backup password was last set (ISO, UTC). Newer saves store the
+    time; an older one stored just True, so fall back to the key file's own
+    modified time (set_password rewrites it on every change)."""
+    at = fdb.kv_get(c, _BACKUP_PW_KEY)
+    if isinstance(at, str) and at:
+        return at
+    try:
+        mtime = os.path.getmtime(BACKUP_KEY_PATH)
+    except OSError:
+        return None
+    return dt.datetime.fromtimestamp(mtime, dt.timezone.utc).isoformat()
+
+
 def _backups_state(c) -> dict:
     """What Settings > Backups shows."""
     if DEMO:
@@ -2742,6 +2756,7 @@ def _backups_state(c) -> dict:
         "counts": counts, "counts_error": counts_error,
         "keep": {**fbackups.KEEP, "settings": fbackups.SETTINGS_KEEP},
         "password_set": key == "ok",
+        "password_set_at": _password_set_at(c) if key == "ok" else None,
         "password_problem": key in ("damaged", "unreadable")
         or (key == "unset" and bool(fdb.kv_get(c, _BACKUP_PW_KEY))),
         "restore_test": _restore_test_state(c),
@@ -2868,7 +2883,7 @@ def backups_set_password(body: BackupPassword, request: Request):
         fbackups.set_password(BACKUP_KEY_PATH, body.password)
     except ValueError as e:
         raise HTTPException(422, str(e).capitalize() + ".")
-    fdb.kv_set(c, _BACKUP_PW_KEY, True)
+    fdb.kv_set(c, _BACKUP_PW_KEY, dt.datetime.now(dt.timezone.utc).isoformat())
     log.info("backups: the backup password was set")
     return _backups_state(c)
 

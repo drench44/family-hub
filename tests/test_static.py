@@ -2845,6 +2845,20 @@ def test_settings_menu_sticks_and_stays_tappable():
     assert "closest('[data-settings-go]')" in HUB
 
 
+def test_settings_menu_on_a_phone_keeps_home_beside_the_strip():
+    """Phone Settings (2026-11-27): the Home pill shrinks to a 44px icon beside
+    the strip instead of overlapping it, the chips are sentence case, and the
+    strip snaps and fades at an edge that has more beyond it."""
+    strip = _css_rule(".settings-strip")
+    assert "overflow-x: auto" in strip and "scroll-snap-type: x" in strip
+    assert re.search(r"\.settings-nav button \{[^}]*scroll-snap-align", CSS)
+    assert re.search(r"\.overlay:has\(\.settings-panel\) > \.overlay-home \{[^}]*width: 44px; height: 44px", CSS)
+    assert re.search(r"\.settings-nav \{\s*margin: 0 -12px 0 64px", CSS)
+    assert re.search(r"\.settings-nav button \{\s*padding: 0 12px;[^}]*text-transform: none", CSS)
+    assert ".settings-strip.fade-r" in CSS and ".settings-strip.fade-l" in CSS
+    assert "function settingsNavScrollTarget(" in HUB and "function settingsNavFades(" in HUB
+
+
 def test_settings_menu_survives_a_repaint_and_needs_no_negative_offsets():
     """Review, 2026-11-26: renderSettingsFull replaces the menu on every
     repaint, so the scroll painter must find the live menu each time, not a

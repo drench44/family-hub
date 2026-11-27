@@ -13070,6 +13070,45 @@ test('settings menu: the section in view is the last one whose top has passed th
   assert.equal(sandbox.settingsNavActive([200, 900], 60), 0, 'before the first card, the first is lit');
 });
 
+test('settings menu: the strip centers a hidden active chip, and leaves a visible one alone', () => {
+  const { sandbox } = newHub();
+  const T = sandbox.settingsNavScrollTarget;
+  // a 300px strip over 700px of chips; a chip at 0..80 is already in view
+  assert.equal(T(0, 80, 0, 300, 700), 0);
+  // a chip at 500..600 is off to the right: center it (550 - 150 = 400), clamped to the end (400)
+  assert.equal(T(500, 100, 0, 300, 700), 400);
+  // a chip at 290..390 is cut off on the right: center it (340 - 150 = 190)
+  assert.equal(T(290, 100, 0, 300, 700), 190);
+  // scrolled right, a chip at 20..100 is off to the left: center it, never below 0
+  assert.equal(T(20, 80, 200, 300, 700), 0);
+  assert.equal(T(120, 80, 200, 300, 700), 10);
+  // a chip too near the edge (under the fade) counts as hidden
+  assert.equal(T(204, 80, 200, 300, 700), 94);
+  // a strip that fits has nothing to scroll
+  assert.equal(T(0, 80, 0, 700, 700), 0);
+});
+
+test('settings menu: the edge fades show only on a side that has more to scroll', () => {
+  const { sandbox } = newHub();
+  const F = sandbox.settingsNavFades;
+  assert.deepEqual(JSON.parse(JSON.stringify(F(0, 300, 700))), { left: false, right: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(F(150, 300, 700))), { left: true, right: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(F(400, 300, 700))), { left: true, right: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(F(0, 700, 700))), { left: false, right: false });
+});
+
+test('settings menu: the buttons sit in a scrolling strip inside the sticky menu', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  document.documentElement.getAttribute = () => null;
+  vm.runInContext("hubData = { integrations: [] };", sandbox);
+  sandbox.renderSettingsFull();
+  const html = document.getElementById('settings-full').innerHTML;
+  assert.match(html, /<nav class="settings-nav" aria-label="Settings sections"><div class="settings-strip">/);
+});
+
 test('settings menu: a tap scrolls that card into view', () => {
   const { document, sandbox, docListeners } = newHub();
   const card = document.createElement('div');
@@ -13238,6 +13277,43 @@ test('backupsClick: a good password goes through the parent-PIN path and repaint
   assert.deepEqual(JSON.parse(req.opts.body), { password: 'family hub 2026' });
   assert.match(req.msg, /parent/);
   assert.equal(painted, 1);
+  assert.match(document.getElementById('toast').textContent, /Write it down/);
+});
+
+test('backupsClick: Change password opens the folded form, Cancel folds it again', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'backups-ctl';
+  document.body.appendChild(host);
+  const cls = (hidden) => ({ hidden, toggle(c, force) { this.hidden = !!force; } });
+  const form = { classList: cls(true), querySelector: () => ({ focus() {} }) };
+  const btn = { classList: cls(false) };
+  host.querySelector = (sel) => ({ '#bk-pw-form': form, '[data-bk-changepw]': btn }[sel] || null);
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-changepw]' ? {} : null) } });
+  assert.equal(form.classList.hidden, false);
+  assert.equal(btn.classList.hidden, true);
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-cancelpw]' ? {} : null) } });
+  assert.equal(form.classList.hidden, true);
+  assert.equal(btn.classList.hidden, false);
+});
+
+test('backupsClick: a saved password paints the set state from the reply at once and toasts', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'backups-ctl';
+  document.body.appendChild(host);
+  const err = { textContent: '', classList: { add() {}, remove() {} } };
+  host.querySelector = (sel) => ({ '[name="bk_pw"]': { value: 'family hub 2026' },
+    '[name="bk_pw2"]': { value: 'family hub 2026' }, '#bk-pw-error': err }[sel] || null);
+  const state = { enabled: true, scheduled: true, dir: '/x', last_ok: null, keep: {}, counts: null,
+    password_set: true, password_set_at: new Date().toISOString(), settings: null };
+  sandbox.jParent = async () => state;
+  let refetched = 0;
+  sandbox.paintBackups = async () => { refetched++; };
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-savepw]' ? {} : null) } });
+  assert.match(host.innerHTML, /Set ✓/);
+  assert.match(host.innerHTML, /data-bk-changepw/);
+  assert.equal(refetched, 0, 'the reply already is the new state');
   assert.match(document.getElementById('toast').textContent, /Write it down/);
 });
 
