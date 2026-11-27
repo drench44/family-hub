@@ -12987,3 +12987,52 @@ test('rewardsClick: setting a PIN needs it typed twice the same', async () => {
   assert.equal(posted, 0);
   assert.match(document.getElementById('toast').textContent, /didn’t match/);
 });
+
+/* ---- review fixes (2026-11-26) ---- */
+
+test('personCardHtml: a broken wallet keeps the old streak chip and says it is unavailable', () => {
+  const { sandbox } = newHub();
+  const card = sandbox.personCardHtml({ ...WALLET_P, reward: { error: true } });
+  assert.match(card, /🔥 3<\/span>/);
+  assert.match(card, /Wallet unavailable/);
+  assert.doesNotMatch(card, /ws-saved|shield-/);
+});
+
+test('toggleChore: a wrong PIN on the retry says the PIN did not match', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.attemptToggle = async (id, done, date, headers) => {
+    sandbox.attemptToggle.lastPin = { pin: headers ? 'wrong' : 'required', wait_s: 0 };
+    return false;
+  };
+  sandbox.askParentPin = async () => '0000';
+  await sandbox.toggleChore(42, false);
+  assert.match(document.getElementById('toast').textContent, /PIN didn’t match/);
+});
+
+test('parent PIN memory: kept two minutes, forgotten after, and after a wrong one', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("parentPinCache = { pin: '2468', until: Date.now() + 60000 };", sandbox);
+  assert.deepEqual({ ...sandbox.parentPinHeaders() }, { 'X-Parent-Pin': '2468' });
+  vm.runInContext("parentPinCache = { pin: '2468', until: Date.now() - 1 };", sandbox);
+  assert.equal(sandbox.parentPinHeaders(), null);
+  vm.runInContext("parentPinCache = { pin: '2468', until: Date.now() + 60000 };", sandbox);
+  sandbox.forgetParentPin();
+  assert.equal(sandbox.parentPinHeaders(), null);
+});
+
+test('rewardsClick: Paid turns the button off while it saves, so a double tap pays once', async () => {
+  const { sandbox } = newHub();
+  const btn = { dataset: { rwPay: '7' }, disabled: false };
+  let calls = 0;
+  let release;
+  sandbox.jParent = () => { calls++; return new Promise((r) => { release = r; }); };
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  const ev = { target: { closest: (sel) => (sel === '[data-rw-pay]' ? btn : null) } };
+  const first = sandbox.rewardsClick(ev);
+  await sandbox.rewardsClick(ev);              // the second tap, mid-request
+  assert.equal(calls, 1);
+  assert.equal(btn.disabled, true);
+  release({ paid: { cents: 30 } });
+  await first;
+});

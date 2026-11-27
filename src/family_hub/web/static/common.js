@@ -1685,7 +1685,7 @@ const SHIELD_SVG = (on) => `<svg class="shield ${on ? 'shield-on' : 'shield-off'
 /* The card head when the wallet is on: the streak toward the next goal and
    one shield per save held (an outline for each still to earn). Pure. */
 function rewardHeadHtml(r) {
-  if (!r) return '';
+  if (!r || r.error) return '';
   const max = Math.max(0, Number(r.shield_max) || 0);
   const held = Math.min(max, Math.max(0, Number(r.shields) || 0));
   const shields = max
@@ -1699,6 +1699,8 @@ function rewardHeadHtml(r) {
 /* The wallet line under a card's chores. Pure. */
 function walletLineHtml(r) {
   if (!r) return '';
+  // the server could not work the wallet out: say so, never show a stale $0
+  if (r.error) return `<div class="wallet-line wallet-down">Wallet unavailable right now</div>`;
   let right = '';
   if (Number(r.bonus_today_cents) > 0) {
     right = `<span class="wallet-bonus">+${formatBonus(r.bonus_today_cents)} bonus today</span>`;
@@ -1831,7 +1833,9 @@ function projectionHtml(proj, people, unsaved) {
   const table = (label, pick) => `<div class="rw-proj-head">${label}</div>`
     + `<table class="rw-proj"><thead><tr><th></th><th>Week</th><th>Month</th><th>Year</th></tr></thead>`
     + `<tbody>${rows(label, pick)}</tbody></table>`;
+  const missing = (proj.partial || []).map(name).filter(Boolean);
   return `<div class="settings-k">Projected cost${unsaved ? ' <span class="rw-unsaved">not saved yet</span>' : ''}</div>`
+    + (missing.length ? `<div class="hint rw-partial">Not counted: ${escapeHtml(missing.join(', '))} (couldn’t read their chores just now).</div>` : '')
     + table('Perfect streak (the most it can cost)', 'perfect')
     + table('Usual pace, about (from the last 8 weeks)', 'usual');
 }

@@ -1800,3 +1800,16 @@ test('helpTopics: the chore wallet topic only when its switch is on', () => {
   const off = sandbox.helpTopics({ enabled: new Set(['chores']) });
   assert.ok(!off.some((t) => t.id === 'wallet'));
 });
+
+/* ---- review fixes (2026-11-26) ---- */
+
+test('walletLineHtml / rewardHeadHtml: a broken wallet says so', () => {
+  assert.match(sandbox.walletLineHtml({ error: true }), /Wallet unavailable/);
+  assert.equal(sandbox.rewardHeadHtml({ error: true }), '');
+});
+
+test('projectionHtml: names anyone it could not count', () => {
+  const proj = { children: [], total: { perfect: { week: 0, month: 0, year: 0 },
+    usual: { week: 0, month: 0, year: 0 } }, partial: [1] };
+  assert.match(sandbox.projectionHtml(proj, RW_STATE().people, false), /Not counted: Ava/);
+});

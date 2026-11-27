@@ -16,6 +16,40 @@ from . import db as fdb
 from . import rewards as rw
 
 LAUNCH_KEY = "rewards.launch"
+SHIELD_RULES_KEY = "rewards.shield_rules"
+MS_FLOOR_KEY = "rewards.ms_floor"
+
+
+def shield_rules(conn, settings: dict, launch: dict) -> list:
+    """The shield settings in force on each day since launch, oldest first:
+    [[from_day, on, every, max], ...]. A wallet launched before rules were
+    recorded uses today's settings from launch day."""
+    rules = fdb.kv_get(conn, SHIELD_RULES_KEY)
+    if rules:
+        return [tuple(r) for r in rules]
+    return [(launch["day"], bool(settings.get("shields_on", True)),
+             int(settings.get("shield_every", 20)),
+             int(settings.get("shield_max", 2)))]
+
+
+def record_shield_rule(conn, settings: dict, launch: dict, today: dt.date) -> None:
+    """New shield settings apply from today on; earlier days keep theirs."""
+    rules = [list(r) for r in shield_rules(conn, settings, launch)
+             if r[0] < today.isoformat()]
+    rules.append([today.isoformat(), bool(settings["shields_on"]),
+                  int(settings["shield_every"]), int(settings["shield_max"])])
+    fdb.kv_set(conn, SHIELD_RULES_KEY, rules)
+
+
+def record_milestone_floor(conn, pid: int, run) -> None:
+    """Milestones changed while this run was going: whatever the run already
+    passed is behind it, so only milestones still ahead can pay."""
+    floors = fdb.kv_get(conn, MS_FLOOR_KEY) or {}
+    if run.run_key:
+        floors[str(pid)] = [run.run_key, int(run.streak)]
+    else:
+        floors.pop(str(pid), None)
+    fdb.kv_set(conn, MS_FLOOR_KEY, floors)
 PACE_DAYS = 56
 
 
@@ -38,9 +72,7 @@ def person_run(conn, pid: int, today: dt.date, settings: dict, launch: dict,
         rows, done, start=dt.date.fromisoformat(start), today=today,
         away=away, served=fdb.served_between(conn, start, today.isoformat()),
         seed=seed, seed_key=seed_key,
-        shields_on=bool(settings.get("shields_on", True)),
-        shield_every=int(settings.get("shield_every", 20)),
-        shield_max=int(settings.get("shield_max", 2)))
+        shield_rules=shield_rules(conn, settings, launch))
 
 
 def _run_start(run_key: str, launch_day: str) -> str:
@@ -65,6 +97,9 @@ def award(conn, pid: int, run: rw.Run, settings: dict, today: dt.date) -> list:
     seed, seed_key = _seed(launch, pid)
     if run.run_key == seed_key:
         floor = max(floor, seed)
+    changed = (fdb.kv_get(conn, MS_FLOOR_KEY) or {}).get(str(pid))
+    if changed and changed[0] == run.run_key:
+        floor = max(floor, int(changed[1]))
     start = _run_start(run.run_key, launch["day"])
     taken = {r["at_streak"] for r in ledger if r["day"] >= start}
     paid = []
@@ -100,15 +135,30 @@ def balance_cents(conn, pid: int, launch_day: str) -> int:
 
 
 def pay_out(conn, pid: int, today: dt.date) -> dict | None:
+    """Pay out the whole balance. The read and the write are one IMMEDIATE
+    transaction, so two taps at once (two requests, two connections) see
+    one balance: the second waits, then finds $0 and pays nothing."""
     launch = fdb.kv_get(conn, LAUNCH_KEY)
     if not launch:
         return None
-    bal = balance_cents(conn, pid, launch["day"])
-    if bal <= 0:
-        return None
-    rid = fdb.add_ledger(conn, person_id=pid, kind="payout", cents=bal,
-                         day=today.isoformat(), note="Paid")
-    return {"id": rid, "kind": "payout", "cents": bal, "day": today.isoformat()}
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        bal = balance_cents(conn, pid, launch["day"])
+        if bal <= 0:
+            conn.rollback()
+            return None
+        cur = conn.execute(
+            "INSERT INTO ledger(person_id, kind, cents, run_key, at_streak, day, "
+            "created_at, note) VALUES(?, 'payout', ?, NULL, NULL, ?, ?, 'Paid')",
+            (pid, bal, today.isoformat(), fdb._now_iso()))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"id": int(cur.lastrowid), "kind": "payout", "cents": bal,
+            "day": today.isoformat()}
 
 
 def launch(conn, today: dt.date, settings: dict, seeds: dict) -> dict:
@@ -123,6 +173,10 @@ def launch(conn, today: dt.date, settings: dict, seeds: dict) -> dict:
     rec = {"day": today.isoformat(),
            "seeds": {str(pid): int(n) for pid, n in seeds.items()}}
     fdb.kv_set(conn, LAUNCH_KEY, rec)
+    fdb.kv_set(conn, SHIELD_RULES_KEY, [[rec["day"],
+                                         bool(settings.get("shields_on", True)),
+                                         int(settings.get("shield_every", 20)),
+                                         int(settings.get("shield_max", 2))]])
     if settings.get("bonus_on"):
         for pid, n in seeds.items():
             for at, cents in rw.milestones_crossed(

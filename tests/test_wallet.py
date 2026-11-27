@@ -185,3 +185,27 @@ def test_history_weeks_and_ledger(conn):
     assert h["weeks"] == [{"week_start": "2026-12-07", "earned_cents": 30},
                           {"week_start": "2026-11-30", "earned_cents": 30}]
     assert [r["kind"] for r in h["ledger"]] == ["payout"]
+
+
+def test_two_payouts_at_once_pay_once(conn, tmp_path):
+    """A double tap on Paid sends two requests on two connections; only one
+    may record the payout."""
+    import threading
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    path = conn.execute("PRAGMA database_list").fetchone()[2]
+    results, start = [], threading.Barrier(2)
+
+    def tap():
+        c = fdb.connect(path)
+        start.wait()
+        results.append(wallet.pay_out(c, pid, LAUNCH))
+        c.close()
+    threads = [threading.Thread(target=tap) for _ in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sorted(r is None for r in results) == [False, True]
+    assert [r["cents"] for r in fdb.ledger_for(conn, pid) if r["kind"] == "payout"] == [30]

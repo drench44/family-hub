@@ -1288,10 +1288,10 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
         if d == today:
             rows = _keep_done_rows(c, d_str, rows)
-        wallet_on = d == today and _rewards_on_safe(c)
-        priced_ok = True
+        wallet_on = _rewards_on_safe(c) if d == today else False
+        priced_ok = wallet_on is not None    # unknown state: don't freeze
         if wallet_on:
-            rows, priced_ok = _price_rows(c, rows, today, amap)
+            rows, priced_ok = _price_rows(c, rows, today)
         # Only freeze a plan built WITH the away overlay. A degraded build
         # treats everyone as present, and the log is permanent history: it
         # would record the wrong owner for good. The next healthy serve
@@ -1357,26 +1357,36 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         entry["away"] = pid in away_today
         entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
         entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
-    if d == today and _rewards_on_safe(c):
-        _add_rewards(c, plan, rows, today, amap)
+    if d == today and wallet_on:
+        _add_rewards(c, plan, rows, today, priced_ok)
     return plan, away_ok
 
 
-def _rewards_on_safe(c) -> bool:
+def _rewards_on_safe(c) -> bool | None:
+    """True / False, or None when the wallet's state can't be read (then the
+    caller shows the wall without it and does not freeze today)."""
     try:
         return rewards_active(c)
     except Exception:
-        log.error("chore wallet state unreadable; showing the wall without it",
-                  exc_info=True)
-        return False
+        log.error("chore wallet state unreadable; showing the wall without it "
+                  "and not saving today's chore log", exc_info=True)
+        return None
 
 
-def _price_rows(c, rows: list[dict], today: dt.date, amap: dict):
+def _wallet_away(c, launch_day: str, today: dt.date) -> dict:
+    """Away dates per person since launch (the wall's own away window only
+    reaches back about a year; the wallet walks back to launch)."""
+    amap = fdb.away_map(c, launch_day, today.isoformat())
+    return {pid: v.get("dates", set()) for pid, v in amap.items()}
+
+
+def _price_rows(c, rows: list[dict], today: dt.date):
     """Stamp what each of today's rows pays (house rows only). Returns
     (rows, ok); on a failure the rows come back unpriced and ok is False so
     the caller does not freeze a day that would then pay nothing for good."""
     try:
         settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
+        away_by = _wallet_away(c, launch["day"], today)
         rate: dict[int, int] = {}
         out = []
         for r in rows:
@@ -1384,9 +1394,8 @@ def _price_rows(c, rows: list[dict], today: dt.date, amap: dict):
             if (r.get("kind") or "house") == "house" and not r.get("locked"):
                 pid = r["person_id"]
                 if pid not in rate:
-                    away = amap.get(pid, {}).get("dates", set())
-                    rate[pid] = wallet.cents_for_today(c, pid, today, settings,
-                                                       launch, away)
+                    rate[pid] = wallet.cents_for_today(
+                        c, pid, today, settings, launch, away_by.get(pid, set()))
                 r["cents"] = rate[pid]
             elif r.get("locked"):
                 pass                     # a kept done row keeps its frozen pay
@@ -1426,20 +1435,32 @@ def _reward_block(c, pid: int, today: dt.date, settings: dict, launch: dict,
     }
 
 
-def _add_rewards(c, plan: list, rows: list, today: dt.date, amap: dict) -> None:
+def _add_rewards(c, plan: list, rows: list, today: dt.date,
+                 priced_ok: bool = True) -> None:
     """Add each child's wallet to today's plan, and what each row pays. A
-    failure for one child leaves that child's card as it was (no wallet line)
-    rather than failing the wall."""
-    settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
+    failure says so on the card ({"error": True}: "Wallet unavailable")
+    instead of failing the wall or quietly showing no wallet."""
+    failed = {"error": True}
+    try:
+        if not priced_ok:
+            raise RuntimeError("today's chores could not be priced")
+        settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
+        away_by = _wallet_away(c, launch["day"], today)
+    except Exception:
+        log.error("chore wallet unavailable; every card says so", exc_info=True)
+        for entry in plan:
+            entry["reward"] = dict(failed)
+        return
     by_id = {r["chore_id"]: r for r in rows}
     for entry in plan:
         pid = entry["person"]["id"]
         try:
-            away = amap.get(pid, {}).get("dates", set())
-            block = _reward_block(c, pid, today, settings, launch, away)
+            block = _reward_block(c, pid, today, settings, launch,
+                                  away_by.get(pid, set()))
         except Exception:
-            log.error("chore wallet failed for person %s; card shown without it",
+            log.error("chore wallet failed for person %s; card says so",
                       pid, exc_info=True)
+            entry["reward"] = dict(failed)
             continue
         entry["reward"] = block
         for ch in entry["chores"]:
@@ -1784,6 +1805,46 @@ def _guard_old_day(c, d: dt.date, request: Request) -> None:
         _pin_gate(c, request.headers.get(PIN_HEADER))
 
 
+def _fix_floor(c) -> dt.date:
+    """The oldest day anyone may still change without the PIN."""
+    now = _now_local()
+    y = now.date() - dt.timedelta(days=1)
+    return y if _edit_allowed(y, now, reward_settings(c)["fix_cutoff"]) else now.date()
+
+
+def _away_days(rows, lo: dt.date, hi: dt.date) -> set:
+    out = set()
+    for r in rows:
+        a = max(lo, dt.date.fromisoformat(r["start_date"]))
+        b = hi if not r.get("end_date") else min(hi, dt.date.fromisoformat(r["end_date"]))
+        while a <= b:
+            out.add((r["person_id"], a.isoformat()))
+            a += dt.timedelta(days=1)
+    return out
+
+
+def _guard_away(c, request: Request, *, inserts=(), updates=(), deletes=()) -> None:
+    """An away change that alters which OLD days (before the fix window,
+    since launch) count as away rewrites a wallet streak: with the wallet on,
+    it needs the parent PIN. Changes to today and later never do."""
+    if not rewards_active(c):
+        return
+    lo = dt.date.fromisoformat(fdb.kv_get(c, wallet.LAUNCH_KEY)["day"])
+    hi = _fix_floor(c) - dt.timedelta(days=1)
+    if hi < lo:
+        return
+    rows = {r["id"]: dict(r) for r in fdb.list_away_periods(c)}
+    before = _away_days(rows.values(), lo, hi)
+    for i in deletes:
+        rows.pop(i, None)
+    for i, fields in updates:
+        if i in rows:
+            rows[i].update(fields)
+    after = list(rows.values()) + [dict(r) for r in inserts]
+    if _away_days(after, lo, hi) != before:
+        _pin_gate(c, request.headers.get(PIN_HEADER))
+
+
 # --- chore wallet: parent PIN ---------------------------------------------
 
 PIN_HEADER = "X-Parent-Pin"
@@ -1912,9 +1973,25 @@ def rewards_get():
 
 @app.put("/api/rewards/settings")
 def rewards_put_settings(patch: dict, request: Request):
+    """Amounts apply from today on: earlier days keep the pay they were
+    frozen with, the shield rule they were judged by, and a milestone a run
+    has already passed is never paid by adding it now."""
     c = _db()
     require_parent(request)
-    fdb.kv_set(c, "rewards.settings", _validated_reward_settings(c, patch))
+    old = reward_settings(c)
+    new = _validated_reward_settings(c, patch)
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    today = _today()
+    if launch:
+        if any(old[k] != new[k] for k in ("shields_on", "shield_every", "shield_max")):
+            wallet.record_shield_rule(c, new, launch, today)
+        if old["bonus_on"] != new["bonus_on"] or old["milestones"] != new["milestones"]:
+            away_by = _wallet_away(c, launch["day"], today)
+            for p in fdb.list_people(c):
+                run = wallet.person_run(c, p["id"], today, old, launch,
+                                        away_by.get(p["id"], set()))
+                wallet.record_milestone_floor(c, p["id"], run)
+    fdb.kv_set(c, "rewards.settings", new)
     return _rewards_state(c)
 
 
@@ -1925,19 +2002,21 @@ def rewards_projection(draft: dict):
     settings = _validated_reward_settings(c, draft)
     today = _today()
     launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
-    kids = []
+    away_by = _wallet_away(c, launch["day"], today) if launch else {}
+    kids, partial = [], []
     for p in fdb.list_people(c):
-        pace = wallet.pace(c, p["id"], today)
-        streak = 0
-        if launch:
-            try:
-                streak = wallet.person_run(c, p["id"], today, settings, launch,
-                                           set()).streak
-            except Exception:
-                log.error("projection: no streak for person %s", p["id"],
-                          exc_info=True)
+        try:
+            pace = wallet.pace(c, p["id"], today)
+            streak = (wallet.person_run(c, p["id"], today, settings, launch,
+                                        away_by.get(p["id"], set())).streak
+                      if launch else 0)
+        except Exception:
+            log.error("projection: could not count person %s", p["id"],
+                      exc_info=True)
+            partial.append(p["id"])     # left out, and the card says who
+            continue
         kids.append({"id": p["id"], **pace, "streak": streak})
-    return rewards.project(kids, settings)
+    return {**rewards.project(kids, settings), "partial": partial}
 
 
 @app.post("/api/rewards/enable")
@@ -1948,7 +2027,12 @@ def rewards_enable(request: Request):
     require_parent(request)
     if not fdb.kv_get(c, wallet.LAUNCH_KEY):
         plan, _ = _people_day(c, _today())
-        seeds = {e["person"]["id"]: int(e.get("streak") or 0) for e in plan}
+        # The old count includes today once today is all done, and the new
+        # rules count launch day again: seed from the count as of yesterday.
+        seeds = {e["person"]["id"]: max(0, int(e.get("streak") or 0) - (
+                     1 if e.get("total") and e.get("done_count") == e.get("total")
+                     else 0))
+                 for e in plan}
         wallet.launch(c, _today(), reward_settings(c), seeds)
     return _rewards_state(c)
 
@@ -1959,8 +2043,10 @@ def rewards_payout(pid: int, request: Request):
     require_parent(request)
     if not any(p["id"] == pid for p in fdb.list_people(c, include_inactive=True)):
         raise HTTPException(404, "no such person")
-    paid = wallet.pay_out(c, pid, _today())
     launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    if not launch:
+        raise HTTPException(409, "the chore wallet is not on")
+    paid = wallet.pay_out(c, pid, _today())
     return {"paid": paid,
             "balance_cents": wallet.balance_cents(c, pid, launch["day"]) if launch else 0}
 
@@ -2110,11 +2196,17 @@ def integrations_list():
 
 
 @app.patch("/api/integrations/{iid}")
-def integrations_patch(iid: str, body: IntegrationPatch):
+def integrations_patch(iid: str, body: IntegrationPatch, request: Request):
     c = _db()
     avail = {i["id"]: i for i in _available_only()}
     if iid not in avail:
         raise HTTPException(404, "unknown integration")
+    # Switching the chore wallet off lifts its old-day lock, so once it has
+    # been turned on, the switch is a parent action in both directions.
+    if (iid == "rewards" and body.enabled is not None
+            and fdb.kv_get(c, wallet.LAUNCH_KEY)
+            and body.enabled != fdb.integration_enabled(c, iid)):
+        require_parent(request)
     # ensure a row exists (a never-toggled integration has none yet), then set it
     fdb.seed_integration(c, iid, avail[iid]["kind"])
     if body.enabled is not None:
@@ -2922,10 +3014,12 @@ def admin_away_list():
 
 
 @app.post("/api/admin/away")
-def admin_away_open(a: AwayIn):
+def admin_away_open(a: AwayIn, request: Request):
     c = _db()
     _person_row(c, a.person_id)                     # 404 if unknown
     start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
+    _guard_away(c, request, inserts=[{"person_id": a.person_id,
+                                      "start_date": start, "end_date": None}])
     if a.backup_person_id is not None:
         _validate_backup(c, a.backup_person_id, a.person_id, (start, None))
     # No overlapping periods per person: a second "going away" that overlaps one
@@ -2942,13 +3036,16 @@ def admin_away_open(a: AwayIn):
 
 
 @app.post("/api/admin/away/everyone")
-def admin_away_everyone(a: AwayEveryoneIn):
+def admin_away_everyone(a: AwayEveryoneIn, request: Request):
     """API only since the wall's "Pause everyone" became the Trip sheet (which
     posts /api/trip). Kept for scripts and existing clients."""
     c = _db()
     start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
     open_pids = {r["person_id"] for r in fdb.list_away_periods(c)
                  if _spans_overlap(start, None, r["start_date"], r["end_date"])}
+    _guard_away(c, request, inserts=[
+        {"person_id": p["id"], "start_date": start, "end_date": None}
+        for p in fdb.list_people(c) if p["id"] not in open_pids])
     created = []
     for p in fdb.list_people(c):                    # active only
         if p["id"] in open_pids:
@@ -2958,7 +3055,7 @@ def admin_away_everyone(a: AwayEveryoneIn):
 
 
 @app.patch("/api/admin/away/{pid}")
-def admin_away_patch(pid: int, a: AwayPatch):
+def admin_away_patch(pid: int, a: AwayPatch, request: Request):
     c = _db()
     row = fdb.get_away_period(c, pid)
     if row is None:
@@ -2991,12 +3088,13 @@ def admin_away_patch(pid: int, a: AwayPatch):
     if effective_end is not None and effective_start is not None \
             and effective_end < effective_start:
         raise HTTPException(422, "end_date must not be before start_date")
+    _guard_away(c, request, updates=[(pid, fields)])
     fdb.update_away_period(c, pid, **fields)
     return {"ok": True}
 
 
 @app.post("/api/admin/away/{pid}/back")
-def admin_away_back(pid: int, a: AwayBackIn | None = None):
+def admin_away_back(pid: int, request: Request, a: AwayBackIn | None = None):
     c = _db()
     row = fdb.get_away_period(c, pid)
     if row is None:
@@ -3007,6 +3105,7 @@ def admin_away_back(pid: int, a: AwayBackIn | None = None):
         # yesterday, falls before the start, so the period never took effect.
         # Remove it instead of 422ing every tap. A trip planned for a LATER
         # start still 422s below: one tap must not quietly delete a plan.
+        _guard_away(c, request, deletes=[pid])
         fdb.delete_away_period(c, pid)
         return {"ok": True}
     end = (_valid_date(a.end_date) if explicit
@@ -3015,13 +3114,16 @@ def admin_away_back(pid: int, a: AwayBackIn | None = None):
     # away_map's a>b skip.
     if end < row["start_date"]:
         raise HTTPException(422, "end_date must not be before start_date")
+    _guard_away(c, request, updates=[(pid, {"end_date": end})])
     fdb.close_away_period(c, pid, end)
     return {"ok": True}
 
 
 @app.delete("/api/admin/away/{pid}")
-def admin_away_delete(pid: int):
-    if not fdb.delete_away_period(_db(), pid):
+def admin_away_delete(pid: int, request: Request):
+    c = _db()
+    _guard_away(c, request, deletes=[pid])
+    if not fdb.delete_away_period(c, pid):
         raise HTTPException(404, "unknown away period")
     return {"ok": True}
 
@@ -3105,7 +3207,7 @@ def _periods_by_id(c, ids: list[int]) -> dict[int, dict]:
 
 
 @app.post("/api/trip")
-def trip_save(t: TripIn):
+def trip_save(t: TripIn, request: Request):
     """Start, plan or edit a trip in one transaction. Editing (ids given)
     keeps each staying traveller's row (history intact), ends the rows of
     anyone taken off the trip the way "back home" does, and adds rows for
@@ -3185,12 +3287,13 @@ def trip_save(t: TripIn):
             deletes.append(change[1])
         elif change:
             updates.append(change[1])
+    _guard_away(c, request, inserts=inserts, updates=updates, deletes=deletes)
     fdb.apply_away_changes(c, inserts=inserts, updates=updates, deletes=deletes)
     return {"trips": _trip_rows(c, today)}
 
 
 @app.post("/api/trip/end")
-def trip_end(t: TripEndIn):
+def trip_end(t: TripEndIn, request: Request):
     """Back early, or cancel a planned trip: every named period ends the way
     "back home" does (see _end_period_change), all in one transaction."""
     c = _db()
@@ -3204,6 +3307,7 @@ def trip_end(t: TripEndIn):
             deletes.append(change[1])
         elif change:
             updates.append(change[1])
+    _guard_away(c, request, updates=updates, deletes=deletes)
     fdb.apply_away_changes(c, updates=updates, deletes=deletes)
     return {"trips": _trip_rows(c, today)}
 

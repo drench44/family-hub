@@ -46,13 +46,28 @@ def _counts(row: dict) -> bool:
 def run_state(rows_by_date: dict, done: set, *, start: dt.date, today: dt.date,
               away: set, served: set, seed: int = 0,
               seed_key: str | None = None, shield_every: int = 20,
-              shield_max: int = 2, shields_on: bool = True) -> Run:
+              shield_max: int = 2, shields_on: bool = True,
+              shield_rules: list | None = None) -> Run:
     """Walk ``start`` .. ``today`` and return the run as of today.
 
     ``rows_by_date`` maps 'YYYY-MM-DD' -> the child's frozen rows that day
     (each with ``chore_id`` and ``kind``); ``done`` holds (chore_id, date)
     pairs that were completed. ``seed`` is a streak carried in from before
-    ``start`` (the launch carry-over); its run is keyed ``seed_key``."""
+    ``start`` (the launch carry-over); its run is keyed ``seed_key``.
+
+    ``shield_rules`` (optional) is [(from 'YYYY-MM-DD', on, every, max), ...]:
+    each day is judged by the newest rule on or before it, so changing the
+    shield settings never rewrites a day already behind it. Without it the
+    shields_on / shield_every / shield_max arguments apply to every day."""
+    rules = sorted(shield_rules or [(start.isoformat(), shields_on,
+                                     shield_every, shield_max)])
+
+    def rule_on(ds):
+        cur = rules[0]
+        for r in rules:
+            if r[0] <= ds:
+                cur = r
+        return bool(cur[1]), max(1, int(cur[2])), max(0, int(cur[3]))
     streak = seed
     run_key = seed_key if seed else None
     kept_in_run = shields = 0
@@ -72,15 +87,15 @@ def run_state(rows_by_date: dict, done: set, *, start: dt.date, today: dt.date,
         if not kept and ds == today.isoformat():
             outcomes[ds] = OPEN
             break
+        on, every, cap = rule_on(ds)
         if kept:
             outcomes[ds] = KEPT
             streak += 1
             kept_in_run += 1
             run_key = run_key or ds
-            if shields_on and kept_in_run % shield_every == 0 \
-                    and shields < shield_max:
+            if on and kept_in_run % every == 0 and shields < cap:
                 shields += 1
-        elif shields:
+        elif on and shields:
             outcomes[ds] = SAVED
             shields -= 1
         else:

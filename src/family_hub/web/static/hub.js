@@ -514,7 +514,8 @@ function personCardHtml(p, opts = {}) {
   // streak keeps showing even while away — it hasn't broken, it's paused.
   // With the chore wallet on, the head shows the wallet streak (calendar
   // days toward the next goal, plus shields) instead, from p.reward.
-  const streak = p.reward ? rewardHeadHtml(p.reward)
+  const wallet = p.reward && !p.reward.error;
+  const streak = wallet ? rewardHeadHtml(p.reward)
     : p.streak >= 2
       ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
         + `🔥 ${p.streak}</span>` : '';
@@ -549,7 +550,7 @@ function personCardHtml(p, opts = {}) {
     + `<div class="person-head">`
     + `<span class="person-name" style="color:${safeColor(p.person.color)}">${escapeHtml(p.person.name)}</span>`
     + streak
-    + weekStripHtml(p.week, p.reward && p.reward.outcomes7)
+    + weekStripHtml(p.week, wallet ? p.reward.outcomes7 : null)
     + `</div>`
     + rows
     + addRow
@@ -4753,7 +4754,7 @@ async function withParentPin(write, refusalOf, message) {
     if (!pin) return { ok: false, why: 'cancelled' };
     ok = await write({ 'X-Parent-Pin': pin });
     r = ok ? null : refusalOf();
-    if (r && r.pin === 'wrong') forgetParentPin();
+    if (r && r.pin === 'wrong') { forgetParentPin(); return { ok: false, why: 'wrong' }; }
   }
   if (r && r.pin === 'locked') return { ok: false, why: 'locked', wait_s: r.wait_s };
   return { ok, why: ok ? '' : 'failed' };
@@ -4774,6 +4775,7 @@ async function jParent(url, opts, message) {
   const res = await withParentPin(write, () => pinRefusal(lastErr), message);
   if (res.ok) return result;
   if (res.why === 'locked') throw new Error(pinLockMessage(res.wait_s));
+  if (res.why === 'wrong') throw new Error('That PIN didn’t match. Nothing was changed.');
   if (res.why === 'cancelled') throw new Error('Not saved. That change needs a parent.');
   throw lastErr || new Error('Couldn’t save. Check the hub and try again.');
 }
@@ -4822,6 +4824,7 @@ async function toggleChore(id, done, rowDay) {
   // retry, so don't tell anyone to tap again: say the day has ended.
   if (res.why === 'locked') showToast(pinLockMessage(res.wait_s));
   else if (res.why === 'cancelled') showToast('Not changed. That day needs a parent.');
+  else if (res.why === 'wrong') showToast('That PIN didn’t match. Nothing was changed.');
   else if (!ok) {
     showToast(choreToggleMessage(attemptToggle.lastError,
       Boolean(shown && data_date && data_date !== shown)));
@@ -6250,6 +6253,7 @@ async function toggleIntegration(id) {
 let rwState = null;      // the last /api/rewards answer
 let rwDraftOn = false;   // the form holds unsaved edits
 let rwProjTimer = null;
+let rwProjSeq = 0;       // only the newest projection request may paint
 
 async function paintRewards() {
   const host = document.getElementById('rewards-ctl');
@@ -6257,6 +6261,7 @@ async function paintRewards() {
   try {
     rwState = await j('/api/rewards');
   } catch (e) {
+    rwState = null;            // nothing below may act on a stale copy
     host.innerHTML = `<div class="hint">Couldn’t load the chore wallet. ${escapeHtml(e.message || '')}</div>`;
     return;
   }
@@ -6303,15 +6308,21 @@ function refreshProjection() {
   rwProjTimer = setTimeout(async () => {
     const box = document.getElementById('rw-projection');
     if (!box || !rwState) return;
+    const seq = ++rwProjSeq;
     let draft;
-    try { draft = readRewardsForm(); } catch (e) { return; }
+    try { draft = readRewardsForm(); } catch (e) {
+      box.innerHTML = `<div class="hint">Can’t read the amounts above. Check each box has a number.</div>`;
+      return;
+    }
     try {
       const proj = await j('/api/rewards/projection', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(draft),
       });
+      if (seq !== rwProjSeq || !rwState) return;   // a newer edit is on its way
       box.innerHTML = projectionHtml(proj, rwState.people || [], rwDraftOn);
     } catch (e) {
+      if (seq !== rwProjSeq) return;
       // a draft the server refuses (a step out of order) says why, in place
       box.innerHTML = `<div class="hint">${escapeHtml(e.message || 'Can’t work out the cost yet.')}</div>`;
     }
@@ -6388,6 +6399,7 @@ async function rewardsClick(e) {
   const pay = t.closest('[data-rw-pay]');
   if (pay && !pay.disabled) {
     const pid = Number(pay.dataset.rwPay);
+    pay.disabled = true;       // a double tap must not send a second payout
     try {
       const r = await jParent(`/api/rewards/payout/${pid}`, { method: 'POST' },
         'Marking a wallet paid needs a parent.');

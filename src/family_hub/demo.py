@@ -50,7 +50,8 @@ _SEEDED_TABLES = ("completions", "occurrence_log", "served_days", "ledger",
                   "todos", "events", "chores", "away_periods", "people")
 # The chore wallet's kv keys the demo writes (its PIN, settings, launch).
 _SEEDED_KV = ("calendar_status", "calendar_colors", "rewards.pin",
-              "rewards.pin_lock", "rewards.settings", "rewards.launch")
+              "rewards.pin_lock", "rewards.settings", "rewards.launch",
+              "rewards.shield_rules", "rewards.ms_floor")
 # The demo's parent PIN, so anyone trying the demo can open every money
 # setting. Printed in the README's demo section; never a real wall's PIN.
 DEMO_PIN = "1234"

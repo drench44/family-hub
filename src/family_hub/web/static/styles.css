@@ -1241,6 +1241,8 @@ body {
 .wallet-amt b { font-size: 18px; color: var(--ink); margin-left: 4px; }
 .wallet-next, .wallet-bonus { margin-left: auto; text-align: right; }
 .wallet-bonus { color: var(--good); font-weight: 700; }
+.wallet-down { color: var(--warn); }
+.rw-partial { color: var(--warn); }
 .chore-row { position: relative; }
 .money-float {
   position: absolute; right: 16px; top: 4px;

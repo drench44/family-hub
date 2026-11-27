@@ -191,3 +191,16 @@ def test_format_cents():
     assert rw.format_cents(100) == "$1.00"
     assert rw.format_cents(0) == "$0.00"
     assert rw.format_cents(-250) == "-$2.50"
+
+
+def test_shield_rules_apply_from_their_own_day():
+    """Shields earned and spent under one rule stay that way when a later
+    rule turns them off: each day is judged by the rule in force that day."""
+    spec = "k" * 20 + "m" + "k" * 5
+    on = [(D0.isoformat(), True, 20, 2)]
+    later_off = on + [((D0 + dt.timedelta(days=23)).isoformat(), False, 20, 2)]
+    a = _run(spec, shield_rules=on)
+    b = _run(spec, shield_rules=later_off)
+    assert a.streak == b.streak == 25
+    # off from the start: the miss ends the run
+    assert _run(spec, shield_rules=[(D0.isoformat(), False, 20, 2)]).streak == 5
