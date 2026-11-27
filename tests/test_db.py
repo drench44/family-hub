@@ -428,9 +428,10 @@ def _row(cid, pid, title="Dishes", icon="", rot=0, covering_for=None):
 def test_occurrence_log_replace_and_read(conn):
     fdb.replace_day_log(conn, "2026-08-14", [_row(1, 7), _row(2, 8, "Trash")])
     assert fdb.day_log(conn, "2026-08-14") == [
-        {"date": "2026-08-14", **_row(1, 7), "cents": 0, "kind": "house", "earner": None},
+        {"date": "2026-08-14", **_row(1, 7), "cents": 0, "kind": "house", "earner": None,
+         "earning": 1},
         {"date": "2026-08-14", **_row(2, 8, "Trash"), "cents": 0, "kind": "house",
-         "earner": None},
+         "earner": None, "earning": 1},
     ]
     # replace fully supersedes the day's rows
     fdb.replace_day_log(conn, "2026-08-14", [_row(3, 7, "Cat")])
@@ -475,11 +476,61 @@ def test_covering_for_migration_is_idempotent_and_keeps_old_rows(tmp_path):
     assert fdb.day_log(c, "2026-08-10") == [
         {"date": "2026-08-10", "chore_id": 1, "person_id": 7, "title": "Dishes",
          "icon": "", "rot": 0, "covering_for": None, "cents": 0, "kind": "house",
-         "earner": None}]
+         "earner": None, "earning": 1}]
     fdb.ensure_schema(c)                      # second boot: no-op, no crash
     fdb.replace_day_log(c, "2026-08-11", [_row(2, 8, covering_for=7)])
     assert fdb.day_log(c, "2026-08-11")[0]["covering_for"] == 7
     c.close()
+
+
+def test_earns_money_migration_leaves_everyone_earning(tmp_path):
+    """The per-person "Earns money" switch and the log's frozen ``earning``
+    land on an EXISTING db by additive ALTER, defaulting to 1: after an
+    upgrade every person still earns and every frozen row still pays, so
+    nothing about an existing household changes. A second boot is a no-op."""
+    path = str(tmp_path / "old.db")
+    c = fdb.connect(path)
+    c.executescript("""
+      CREATE TABLE people(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+        color TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1, reminder_list_id TEXT);
+      INSERT INTO people(name, color) VALUES('Ava', '#5BC9F0');
+      INSERT INTO people(name, color, active) VALUES('Ben', '#F05B5B', 0);
+      CREATE TABLE occurrence_log(
+        date TEXT NOT NULL, chore_id INTEGER NOT NULL, person_id INTEGER NOT NULL,
+        title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+        rot INTEGER NOT NULL DEFAULT 0, covering_for INTEGER,
+        cents INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'house',
+        earner INTEGER, PRIMARY KEY(date, chore_id));
+      INSERT INTO occurrence_log(date, chore_id, person_id, title, cents, earner)
+        VALUES('2026-11-20', 1, 1, 'Dishes', 30, 1);""")
+    c.commit()
+    fdb.ensure_schema(c)
+    people = fdb.list_people(c, include_inactive=True)
+    assert [(p["name"], p["earns"]) for p in people] == [("Ava", 1), ("Ben", 1)]
+    row = fdb.day_log(c, "2026-11-20")[0]
+    assert (row["cents"], row["earner"], row["earning"]) == (30, 1, 1)
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    assert fdb.day_log(c, "2026-11-20")[0]["earning"] == 1
+    # a person added after the upgrade earns too
+    pid = fdb.add_person(c, "Cy", "#5BF08A")
+    assert fdb.get_person_earns(c, pid) is True
+    c.close()
+
+
+def test_set_person_earns_round_trip(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    assert fdb.get_person_earns(conn, pid) is True
+    assert fdb.set_person_earns(conn, pid, False) is True
+    assert fdb.get_person_earns(conn, pid) is False
+    assert fdb.list_people(conn)[0]["earns"] == 0
+    assert fdb.set_person_earns(conn, pid, True) is True
+    assert fdb.get_person_earns(conn, pid) is True
+    assert fdb.set_person_earns(conn, 999, False) is False
+    # the people editor's generic update can never flip it (it is PIN-guarded)
+    fdb.update_person(conn, pid, earns=0)
+    assert fdb.get_person_earns(conn, pid) is True
 
 
 def test_cal_objects_local_rev_migration_keeps_old_rows(tmp_path):

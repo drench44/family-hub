@@ -33,7 +33,7 @@ import httpx
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from . import access_log
 from . import backups as fbackups
@@ -1296,7 +1296,8 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
         # kind and cents too: re-tagging a chore today must re-freeze today
         return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"],
                 r.get("covering_for"), r.get("kind") or "house",
-                int(r.get("cents") or 0), r.get("earner"))
+                int(r.get("cents") or 0), r.get("earner"),
+                0 if r.get("earning", 1) in (0, False) else 1)
     if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
             sorted(key(r) for r in rows):
         fdb.replace_day_log(c, d_str, rows)
@@ -1457,6 +1458,9 @@ def _price_rows(c, rows: list[dict], today: dt.date):
     try:
         settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
         away_by = _wallet_away(c, launch["day"], today)
+        # "Earns money" per person: off is streak only (rows serve at 0)
+        earns = {p["id"]: bool(p["earns"])
+                 for p in fdb.list_people(c, include_inactive=True)}
         d_str = today.isoformat()
         done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
         served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)} if done else {}
@@ -1478,9 +1482,18 @@ def _price_rows(c, rows: list[dict], today: dt.date):
                 # unsettles it: the next serve prices it afresh. A row with no
                 # earner was frozen while the wallet was off (or before this
                 # rule): it is priced below like any other.
+                # The same goes for the Earns money switch: a chore ticked
+                # while earning keeps its pay after the switch goes off, and
+                # one ticked while streak only stays unpaid after it is back on.
                 r["kind"] = was.get("kind") or "house"
                 r["earner"] = was["earner"]
                 r["cents"] = int(was.get("cents") or 0) if r["kind"] == "house" else 0
+                r["earning"] = 0 if was.get("earning", 1) in (0, False) else 1
+            elif (r.get("kind") or "house") == "house" and not earns.get(
+                    r["person_id"], False):
+                r["cents"] = 0            # streak only: counts, never pays
+                r["earning"] = 0
+                r["earner"] = r["person_id"]
             elif (r.get("kind") or "house") == "house":
                 pid = r["person_id"]
                 if pid not in rate:
@@ -1488,9 +1501,11 @@ def _price_rows(c, rows: list[dict], today: dt.date):
                                             away_by.get(pid, set()))
                     rate[pid] = _rate_today(run, today, settings)
                 r["cents"] = rate[pid]
+                r["earning"] = 1
                 r["earner"] = pid        # priced: who this row pays if done now
             else:
                 r["cents"] = 0
+                r["earning"] = 1
                 r["earner"] = r["person_id"]
             out.append(r)
         return out, True
@@ -1508,24 +1523,35 @@ def _rate_today(run, today: dt.date, settings: dict) -> int:
 
 def _reward_block(c, pid: int, today: dt.date, settings: dict, launch: dict,
                   away: set) -> dict:
+    """One card's wallet. ``earns`` False is streak only: the streak, goal
+    and shields as usual, and no money at all (no rate, bonus or bonus
+    progress; the card draws no wallet line). ``wallet_cents`` is still the
+    true balance: what was earned before the switch went off stays owed,
+    and Settings shows it until it is paid."""
+    earns = wallet.earns(c, pid)
     run = wallet.person_run(c, pid, today, settings, launch, away)
-    wallet.award(c, pid, run, settings, today)
+    if earns:
+        wallet.award(c, pid, run, settings, today)
     ts = today.isoformat()
     kept_today = run.outcomes.get(ts) == rewards.KEPT
     bonus_today = sum(r["cents"] for r in fdb.ledger_for(c, pid)
-                      if r["kind"] == "bonus" and r["day"] == ts)
+                      if r["kind"] == "bonus" and r["day"] == ts) if earns else 0
+    # streak only: the goal is the plain one, never a bonus or pay step
+    goal_settings = settings if earns else {**settings, "bonus_on": False,
+                                             "levels_on": False}
     nb = (rewards.next_milestone(run.streak, settings.get("milestones") or [])
-          if settings.get("bonus_on") else None)
-    nl = rewards.next_level(run.streak, settings)
+          if settings.get("bonus_on") and earns else None)
+    nl = rewards.next_level(run.streak, settings) if earns else None
     days = [(today - dt.timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
     return {
+        "earns": earns,
         "streak": run.streak,
-        "goal": rewards.goal_for(run.streak, settings),
+        "goal": rewards.goal_for(run.streak, goal_settings),
         "shields": run.shields,
         "shield_max": int(settings["shield_max"]) if settings.get("shields_on") else 0,
         "wallet_cents": wallet.balance_cents(c, pid, launch["day"]),
         "rate_cents": rewards.rate_for(run.streak - (1 if kept_today else 0),
-                                       settings),
+                                       settings) if earns else 0,
         "next_bonus": {"at": nb[0], "cents": nb[1]} if nb else None,
         "next_level": {"at": nl[0], "cents": nl[1]} if nl else None,
         "bonus_today_cents": bonus_today,
@@ -2270,15 +2296,20 @@ def _wallet_people(c, today: dt.date) -> list[dict]:
     out = []
     for p in fdb.list_people(c, include_inactive=True):
         item = {"id": p["id"], "name": p["name"], "color": p["color"],
-                "active": bool(p["active"]),
+                "active": bool(p["active"]), "earns": bool(p["earns"]),
                 "pace": wallet.pace(c, p["id"], today)}
-        if launch:
+        if launch and item["earns"]:
             # what came in since the last payout. The balance shown is its
             # total, read once, so the two can never disagree.
             item["summary"] = wallet.summary(
                 c, p["id"], launch["day"],
                 _summary_streak(c, p["id"], today, launch, away_by))
             item["balance_cents"] = item["summary"]["total_cents"]
+            item["history"] = wallet.history(c, p["id"], launch["day"])
+        elif launch:
+            # streak only: no summary. Any balance from before the switch
+            # went off is still owed, and shows until it is paid.
+            item["balance_cents"] = wallet.balance_cents(c, p["id"], launch["day"])
             item["history"] = wallet.history(c, p["id"], launch["day"])
         else:
             item["balance_cents"], item["history"] = 0, {"weeks": [], "ledger": []}
@@ -2342,6 +2373,8 @@ def rewards_projection(draft: dict):
     away_by = _wallet_away(c, launch["day"], today) if launch else {}
     kids, partial = [], []
     for p in fdb.list_people(c):
+        if not p["earns"]:
+            continue                    # streak only: costs nothing
         try:
             pace = wallet.pace(c, p["id"], today)
             streak = (wallet.person_run(c, p["id"], today, settings, launch,
@@ -2354,6 +2387,41 @@ def rewards_projection(draft: dict):
             continue
         kids.append({"id": p["id"], **pace, "streak": streak})
     return {**rewards.project(kids, settings), "partial": partial}
+
+
+class EarnsBody(BaseModel):
+    earns: StrictBool
+
+
+@app.put("/api/rewards/people/{pid}/earns")
+def rewards_set_earns(pid: int, body: EarnsBody, request: Request):
+    """The per-person "Earns money" switch, a parent action like amounts and
+    payouts. Off is streak only from now on: the run keeps counting, their
+    chores add no money and no bonus pays. What they already earned stays
+    owed (Settings shows it until Paid), and a chore done before the switch
+    keeps its pay. Back on, chores from now pay, and a milestone the run
+    passed while off never does. Today is re-priced at once, so a tick
+    before the wall's next refresh can't land at the old price."""
+    c = _db()
+    require_parent(request)
+    was = fdb.get_person_earns(c, pid)
+    if was is None:
+        raise HTTPException(404, "no such person")
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    today = _today()
+    if body.earns and not was and launch:
+        away_by = _wallet_away(c, launch["day"], today)
+        run = wallet.person_run(c, pid, today, reward_settings(c), launch,
+                                away_by.get(pid, set()))
+        wallet.record_earning_on(c, pid, run)
+    fdb.set_person_earns(c, pid, body.earns)
+    if body.earns != was and rewards_active(c):
+        try:
+            _people_day(c, today)
+        except Exception:
+            log.error("earns switch saved, but today could not be re-priced "
+                      "now; the wall's next refresh does it", exc_info=True)
+    return _rewards_state(c)
 
 
 @app.post("/api/rewards/enable")

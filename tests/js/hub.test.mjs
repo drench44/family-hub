@@ -2042,6 +2042,59 @@ test('helpTopics: the chore wallet topic only when its switch is on', () => {
 
 /* ---- review fixes (2026-11-26) ---- */
 
+test('walletLineHtml / rewardHeadHtml: streak only shows the streak and shields, no money', () => {
+  const r = { ...R, earns: false, rate_cents: 0, next_bonus: null, next_level: null, wallet_cents: 0 };
+  assert.equal(sandbox.walletLineHtml(r), '');
+  // money earned before the switch went off is not drawn on the card either
+  assert.equal(sandbox.walletLineHtml({ ...r, wallet_cents: 90 }), '');
+  const head = sandbox.rewardHeadHtml(r);
+  assert.match(head, /47 \/ 100/);
+  assert.equal((head.match(/shield-on/g) || []).length, 2);
+  // earning (or an older answer with no earns at all) keeps its wallet line
+  assert.match(sandbox.walletLineHtml({ ...R, earns: true }), /Wallet <b class="num">\$18\.50/);
+  assert.match(sandbox.walletLineHtml(R), /\$18\.50/);
+});
+
+test('rewardsCardHtml: each wallet has an Earns money switch, with its tip once', () => {
+  const st = RW_STATE({ today: '2026-12-03' });
+  st.people[0].earns = true;
+  st.people[0].summary = SUM({ total_cents: 1850, chore_cents: 1850, chores: 62 });
+  st.people[1] = { ...st.people[1], active: true, earns: false, balance_cents: 0 };
+  const h = sandbox.rewardsCardHtml(st);
+  assert.equal((h.match(/data-tip="Earns money"/g) || []).length, 1);
+  assert.equal((h.match(/id="tip-earns-money"/g) || []).length, 1);
+  assert.match(h, /data-rw-earns="1" data-rw-val="1" class="on" aria-pressed="true">On/);
+  assert.match(h, /data-rw-earns="2" data-rw-val="0" class="on" aria-pressed="true">Off/);
+  assert.match(h, /aria-label="Earns money for Ben"/);
+  // the streak-only wallet: no amount, no Paid, no summary
+  assert.match(h, /rw-streak-only[\s\S]*Streak only</);
+  assert.doesNotMatch(h, /data-rw-pay="2"/);
+  assert.match(h, /data-rw-pay="1"/);
+  assert.equal((h.match(/class="rw-sum"/g) || []).length, 1);
+});
+
+test('rewardsCardHtml: streak only with money left from before keeps it and Paid', () => {
+  const st = RW_STATE();
+  st.people[1] = { ...st.people[1], active: true, earns: false, balance_cents: 90,
+    summary: SUM({ total_cents: 90, chore_cents: 90, chores: 3 }) };
+  const h = sandbox.rewardsCardHtml(st);
+  assert.match(h, /\$0\.90|90¢/);
+  assert.match(h, /data-rw-pay="2">Paid/);
+  assert.match(h, /Streak only now\. The 90¢ earned before stays in the wallet until you tap Paid\./);
+  assert.doesNotMatch(h, /Since [^<]*3 chores/);       // no summary for them
+  const neg = RW_STATE();
+  neg.people[1] = { ...neg.people[1], active: true, earns: false, balance_cents: -30 };
+  const n = sandbox.rewardsCardHtml(neg);
+  assert.match(n, /data-rw-pay="2" disabled/);
+  assert.match(n, /The wallet still shows -\$0\.30 from before\./);
+});
+
+test('walletHelpParas: says how streak only works', () => {
+  const w = { cents_per_chore: 30, bonus_on: true, milestones: [[100, 10000]], levels_on: false,
+    levels: [], shields_on: true, shield_every: 20, shield_max: 2, fix_cutoff: '09:00' };
+  assert.match(sandbox.walletHelpParas(w).join(' '), /streak only, with Earns money under Wallets/);
+});
+
 test('walletLineHtml / rewardHeadHtml: a broken wallet says so', () => {
   assert.match(sandbox.walletLineHtml({ error: true }), /Wallet unavailable/);
   assert.equal(sandbox.rewardHeadHtml({ error: true }), '');

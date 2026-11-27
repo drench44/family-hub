@@ -1824,11 +1824,14 @@ function rewardHeadHtml(r) {
     + `🔥 <span class="num">${Number(r.streak)} / ${Number(r.goal)}</span></span>` + shields;
 }
 
-/* The wallet line under a card's chores. Pure. */
+/* The wallet line under a card's chores. Someone set to streak only
+   (earns false) gets none: no amount and no bonus progress, only the
+   streak and shields in the card head. Pure. */
 function walletLineHtml(r) {
   if (!r) return '';
   // the server could not work the wallet out: say so, never show a stale $0
   if (r.error) return `<div class="wallet-line wallet-down">Wallet unavailable right now</div>`;
+  if (r.earns === false) return '';
   let right = '';
   if (Number(r.bonus_today_cents) > 0) {
     right = `<span class="wallet-bonus">+${formatBonus(r.bonus_today_cents)} bonus today</span>`;
@@ -1920,6 +1923,7 @@ const SETTING_TIPS = {
   'Fix yesterday until': 'Until this time each morning, yesterday’s chores can still be checked or unchecked without the PIN. For example, at 9:00 AM a chore forgotten last night can be fixed at breakfast. After that, changing yesterday needs the parent PIN, if one is set.',
   'Projected cost': 'What the wallet could cost each week, month and year with these amounts. Perfect streak is the most it can cost, and usual pace is a guess from each person’s last 8 weeks. It updates as you type, before you save.',
   'Wallets': 'What each person has earned since they were last paid. Pay them yourself, then tap Paid to set their wallet back to $0. History shows past weeks, streak bonuses and payouts.',
+  'Earns money': 'On, this person’s house chores add money to their wallet. Off is streak only, so their card still shows the streak and shields, but chores add no money and no streak bonus is paid. It applies from now on, and money already earned stays in the wallet until you tap Paid.',
   // Backups
   'Status': 'Whether the hourly copies are running. When they are off, it says what to fix.',
   'Folder': 'Where the copies are saved. Put this folder on a network drive, so the copies survive if the hub’s computer breaks.',
@@ -2057,18 +2061,43 @@ function payoutToastText(paid, today) {
   return `Paid${amt}${what}. The wallet is back to $0.`;
 }
 
+/* A person's "Earns money" On / Off. Pure. */
+function rwEarnsHtml(k) {
+  const on = k.earns !== false;
+  const btn = (v, label) => `<button type="button" data-rw-earns="${Number(k.id)}" data-rw-val="${v}"`
+    + ` class="${(v === '1') === on ? 'on' : ''}" aria-pressed="${(v === '1') === on ? 'true' : 'false'}">${label}</button>`;
+  return `<div class="rw-earns theme-ctl"><span class="rw-earns-k">Earns money</span>`
+    + `<div class="seg" role="group" aria-label="Earns money for ${escapeHtml(k.name)}">${btn('1', 'On')}${btn('0', 'Off')}</div></div>`;
+}
+
+/* One wallet row each. Someone on streak only shows "Streak only" in place
+   of an amount and has no summary or Paid, unless money earned before the
+   switch went off is still in the wallet: that shows, with Paid, until it
+   is paid. Pure. */
 function walletPeopleHtml(people, today) {
-  const row = (k) => `<div class="padmin-row rw-kid">`
+  const row = (k) => {
+    const earns = k.earns !== false;
+    const owed = Math.round(Number(k.balance_cents) || 0);
+    const money = earns || owed !== 0;
+    let note = '';
+    if (!earns && owed > 0) note = `Streak only now. The ${formatCents(owed)} earned before stays in the wallet until you tap Paid.`;
+    else if (!earns && owed < 0) note = `Streak only now. The wallet still shows ${formatCents(owed)} from before.`;
+    return `<div class="padmin-row rw-kid${earns ? '' : ' rw-streak-only'}">`
     + `<span class="padmin-name" style="color:${safeColor(k.color)}">${escapeHtml(k.name)}</span>`
-    + `<span class="rw-bal num">${formatCents(k.balance_cents)}</span>`
-    + `<button class="padmin-btn" type="button" data-rw-pay="${k.id}"${k.balance_cents > 0 ? '' : ' disabled'}>Paid</button>`
-    + (k.summary ? `<div class="rw-sum">${escapeHtml(walletSummaryText(k.summary, today))}</div>` : '')
+    + (money
+      ? `<span class="rw-bal num">${formatCents(k.balance_cents)}</span>`
+        + `<button class="padmin-btn" type="button" data-rw-pay="${k.id}"${k.balance_cents > 0 ? '' : ' disabled'}>Paid</button>`
+      : `<span class="rw-bal rw-tag">Streak only</span>`)
+    + rwEarnsHtml(k)
+    + (earns && k.summary ? `<div class="rw-sum">${escapeHtml(walletSummaryText(k.summary, today))}</div>` : '')
+    + (note ? `<div class="rw-sum">${escapeHtml(note)}</div>` : '')
     + `<details class="rw-hist"><summary>History</summary>`
     + ((k.history && (k.history.weeks.length || k.history.ledger.length))
       ? `<ul>${k.history.ledger.map((l) => `<li>${escapeHtml(l.day)}: ${l.kind === 'payout' ? 'paid out' : escapeHtml(l.note || 'streak bonus')} ${formatCents(l.cents)}</li>`).join('')}`
         + `${k.history.weeks.map((w) => `<li>Week of ${escapeHtml(w.week_start)}: chores earned ${formatCents(w.earned_cents)}</li>`).join('')}</ul>`
       : `<div class="hint">Nothing yet.</div>`)
     + `</details></div>`;
+  };
   const here = people.filter((k) => k.active);
   const gone = people.filter((k) => !k.active);
   return here.map(row).join('')
@@ -2119,6 +2148,8 @@ function rewardsCardHtml(st) {
     + `</div>`
     + `<div class="padmin rw-people"><div class="padmin-head">${tipHeadHtml('Wallets', '<span class="padmin-head-label">Wallets</span>', 'Wallets')}</div>`
     + tipBodyHtml('Wallets')
+    + `<div class="settings-row rw-earns-tip">${tipLabelHtml('Earns money')}`
+    + `<span class="hint">On or Off for each person below. Off is streak only.</span></div>`
     + walletPeopleHtml(st.people || [], st.today) + `</div>`;
 }
 
@@ -2884,6 +2915,7 @@ function walletHelpParas(w) {
     paras.push(`Shields keep one bad day from wiping out a streak. You earn one for every ${s.shield_every} good days, up to ${s.shield_max}. A missed day uses a shield instead of starting over.`);
   }
   paras.push(`Forgot to tap something? Yesterday can be fixed until ${cutoff}. After that a parent needs to enter the PIN.`);
+  paras.push('A parent can set someone to streak only, with Earns money under Wallets in Settings. Their streak and shields still count, but their chores add no money and no streak bonus is paid.');
   paras.push(pay);
   return paras;
 }

@@ -104,7 +104,11 @@ at one URL.
   payouts. Under each wallet it sums up what came in since the last payout
   ("Since Nov 26: 12 chores, $3.60. Streak 47 days."); tapping Paid zeroes
   the wallet and starts that summary over, so there is nothing else to
-  reset. An optional parent PIN guards the money settings, payouts and
+  reset. Each person has an **Earns money** switch (on by default): off is
+  streak only, for someone who keeps a streak but isn't paid. Their card
+  shows the streak and shields with no wallet, their chores add nothing, no
+  streak bonus pays, and they drop out of the projected cost. An optional
+  parent PIN guards the money settings, payouts, the Earns money switch and
   fixes to old days. Off until a parent turns it on in Settings.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
@@ -550,7 +554,12 @@ Bonuses and payouts are a ledger, and a bonus is paid once per run. Settings
 sums each wallet since its last payout; its total is the balance itself. With the
 wallet on, yesterday can be fixed until a morning cutoff (default 9:00) and
 anything older needs the parent PIN. Turning the wallet on keeps everyone's
-current streak and starts every wallet at $0. Rules: `rewards.py`; money:
+current streak and starts every wallet at $0. Turning a person's **Earns
+money** off never rewrites the past: each row is frozen with whether it
+earned, so chores already done keep their pay and the unpaid balance stays
+in Settings until it is paid. Their run keeps counting (shields and the
+fix-yesterday rule as usual). Turned back on, chores from then pay, and a
+streak bonus the run passed while off is never paid. Rules: `rewards.py`; money:
 `wallet.py`; PIN: `parent_pin.py`.
 
 ## Backup

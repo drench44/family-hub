@@ -8055,3 +8055,205 @@ def test_a_lost_key_cannot_be_used_to_remove_the_pin(client, app_mod, monkeypatc
     st = client.get("/api/rewards").json()
     assert st["pin_set"] is False and st["pin_key_missing"] is False
     assert client.post(f"/api/rewards/payout/{pid}").status_code in (200, 204)
+
+
+# --- chore wallet: the per-person "Earns money" switch ----------------------
+
+def _clock(app_mod, monkeypatch, start):
+    """A house clock the test can move: set box["now"]."""
+    box = {"now": start}
+    monkeypatch.setattr(app_mod, "_now_local", lambda: box["now"])
+    return box
+
+
+def _earns(client, pid, on, headers=PIN):
+    return client.put(f"/api/rewards/people/{pid}/earns", json={"earns": on},
+                      headers=headers)
+
+
+def _hub_person(client, pid):
+    return next(p for p in client.get("/api/hub").json()["people"]
+                if p["person"]["id"] == pid)
+
+
+def _bonus_rows(app_mod, pid):
+    return [r for r in fdb.ledger_for(app_mod._db(), pid) if r["kind"] == "bonus"]
+
+
+def test_everyone_earns_by_default(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    st = client.get("/api/rewards").json()
+    assert [p["earns"] for p in st["people"]] == [True]
+    assert "summary" in st["people"][0]
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    assert r["earns"] is True and r["rate_cents"] == 30
+
+
+def test_earns_switch_needs_the_parent_pin(client, app_mod):
+    pid, _, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    c = app_mod._db()
+    r = _earns(client, pid, False, headers={})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    r = _earns(client, pid, False, headers={"X-Parent-Pin": "0000"})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "wrong"}
+    assert fdb.get_person_earns(c, pid) is True               # refused: unchanged
+    r = _earns(client, pid, False)
+    assert r.status_code == 200
+    assert [p["earns"] for p in r.json()["people"]] == [False]
+    assert fdb.get_person_earns(c, pid) is False
+    for bad in ({"earns": "no"}, {"earns": 0}, {"earns": None}, {}):
+        assert client.put(f"/api/rewards/people/{pid}/earns", json=bad,
+                          headers=PIN).status_code == 422, bad
+    assert _earns(client, 999, True).status_code == 404
+    # the people editor has no way around the PIN
+    client.patch(f"/api/admin/people/{pid}", json={"earns": 1})
+    assert fdb.get_person_earns(c, pid) is False
+
+
+def test_earns_switch_goes_through_with_no_pin_set(client, app_mod):
+    pid, _, _ = _kid_with_history(client, app_mod)
+    assert client.post("/api/rewards/enable").status_code == 200   # no PIN
+    assert _earns(client, pid, False, headers={}).status_code == 200
+    assert fdb.get_person_earns(app_mod._db(), pid) is False
+
+
+def test_mixed_earners_on_one_rotation_chore(client, app_mod, monkeypatch):
+    """One chore taking turns between a child who earns and one on streak
+    only: each day's row pays its owner's way, and both streaks count."""
+    clock = _clock(app_mod, monkeypatch, _house_now(12))
+    ava, bay = _mk_person(client, "Ava"), _mk_person(client, "Bay")
+    cid = _rot_chore(client, [ava, bay], rotate_every="turn").json()["id"]
+    _enable(client)
+    assert _earns(client, bay, False).status_code == 200
+    owners = []
+    for day in range(4):
+        clock["now"] = _house_now(12) + dt.timedelta(days=day)
+        people = client.get("/api/hub").json()["people"]
+        owner = next(p for p in people if any(ch["id"] == cid for ch in p["chores"]))
+        row = next(ch for ch in owner["chores"] if ch["id"] == cid)
+        pid = owner["person"]["id"]
+        owners.append(pid)
+        assert row["kind"] == "house"
+        assert row["cents"] == (30 if pid == ava else 0)
+        assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert set(owners) == {ava, bay}, owners
+    assert _earned(app_mod, ava) == 30 * owners.count(ava)
+    assert _earned(app_mod, bay) == 0
+    a, b = _hub_person(client, ava)["reward"], _hub_person(client, bay)["reward"]
+    assert a["earns"] is True and b["earns"] is False
+    # each run starts on its first chore day, and every day since was kept
+    assert a["streak"] == 4 - owners.index(ava)
+    assert b["streak"] == 4 - owners.index(bay)
+    assert (b["wallet_cents"], b["rate_cents"]) == (0, 0)
+    assert b["next_bonus"] is None and b["next_level"] is None
+    assert a["wallet_cents"] == 30 * owners.count(ava)
+    assert a["next_bonus"] == {"at": 100, "cents": 10000}
+    st = {p["id"]: p for p in client.get("/api/rewards").json()["people"]}
+    assert st[ava]["summary"]["chores"] == owners.count(ava)
+    assert "summary" not in st[bay] and st[bay]["balance_cents"] == 0
+
+
+def test_streak_only_bonus_day_pays_nothing_and_the_streak_shows(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    c = app_mod._db()
+    _enable(client)
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["seeds"] = {str(pid): 99}
+    fdb.kv_set(c, "rewards.launch", rec)
+    assert _earns(client, pid, False).status_code == 200
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    assert r["earns"] is False and r["streak"] == 100
+    assert r["shield_max"] == 2 and "shields" in r          # shields still show
+    assert r["bonus_today_cents"] == 0 and r["wallet_cents"] == 0
+    assert r["next_bonus"] is None and r["next_level"] is None
+    assert _bonus_rows(app_mod, pid) == [] and _earned(app_mod, pid) == 0
+    # back on the same day: the 100 it passed while off is never paid, and
+    # the next one ahead is
+    assert _earns(client, pid, True).status_code == 200
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    assert r["earns"] is True and r["streak"] == 100
+    assert r["bonus_today_cents"] == 0
+    assert r["next_bonus"] == {"at": 200, "cents": 10000}
+    assert _bonus_rows(app_mod, pid) == []
+
+
+def test_streak_only_skips_more_per_chore_on_a_streak(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    c = app_mod._db()
+    _enable(client)
+    assert client.put("/api/rewards/settings", json={
+        "levels_on": True, "levels": [[2, 45]]}, headers=PIN).status_code == 200
+    assert client.get("/api/hub").json()["people"][0]["reward"]["rate_cents"] == 45
+    assert _earns(client, pid, False).status_code == 200
+    p = client.get("/api/hub").json()["people"][0]
+    assert p["reward"]["rate_cents"] == 0 and p["reward"]["next_level"] is None
+    assert next(ch for ch in p["chores"] if ch["id"] == cid)["cents"] == 0
+    assert fdb.log_row(c, cid, _today().isoformat())["cents"] == 0
+
+
+def test_turning_earning_off_keeps_what_was_earned_and_on_starts_from_then(
+        client, app_mod, monkeypatch):
+    """Off: chores already ticked keep their pay and the unpaid balance stays
+    (Settings shows it until Paid), new chores add nothing. On again: chores
+    from then on pay. The switch re-prices today at once, so a tick before
+    the wall's next refresh can't land at the old price."""
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    clock = _clock(app_mod, monkeypatch, _house_now(12))
+    c = app_mod._db()
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earned(app_mod, pid) == 30
+    assert _earns(client, pid, False).status_code == 200
+    assert _earned(app_mod, pid) == 30                     # ticked before: kept
+    # next day, streak only
+    clock["now"] = _house_now(12) + dt.timedelta(days=1)
+    p = client.get("/api/hub").json()["people"][0]
+    assert next(ch for ch in p["chores"] if ch["id"] == cid)["cents"] == 0
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earned(app_mod, pid) == 30
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    assert r["earns"] is False and r["streak"] == 2
+    item = client.get("/api/rewards").json()["people"][0]
+    assert item["earns"] is False and item["balance_cents"] == 30
+    assert "summary" not in item
+    paid = client.post(f"/api/rewards/payout/{pid}", headers=PIN).json()
+    assert paid["paid"]["cents"] == 30 and paid["balance_cents"] == 0
+    # back on before the next tick, with no serve between: the row pays
+    clock["now"] = _house_now(12) + dt.timedelta(days=2)
+    client.get("/api/hub")
+    assert fdb.log_row(c, cid, clock["now"].date().isoformat())["cents"] == 0
+    assert _earns(client, pid, True).status_code == 200
+    assert fdb.log_row(c, cid, clock["now"].date().isoformat())["cents"] == 30
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earned(app_mod, pid) == 60
+    # and off again before a tick: that tick earns nothing
+    clock["now"] = _house_now(12) + dt.timedelta(days=3)
+    client.get("/api/hub")
+    assert _earns(client, pid, False).status_code == 200
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earned(app_mod, pid) == 60
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    assert r["streak"] == 4                                # never broke
+    # the days behind keep what they paid, whichever way the switch is now
+    assert [fdb.log_row(c, cid, (_house_now(12) + dt.timedelta(days=n)).date()
+                        .isoformat())["cents"] for n in range(4)] == [30, 0, 30, 0]
+
+
+def test_projection_leaves_out_someone_not_earning(client, app_mod):
+    a, _, _ = _kid_with_history(client, app_mod)
+    b = _mk_person(client, "Bay")
+    client.post("/api/admin/chores", json={
+        "title": "Trash", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": b})
+    _enable(client)
+    both = client.post("/api/rewards/projection", json={}).json()
+    assert {k["id"] for k in both["children"]} == {a, b}
+    assert _earns(client, b, False).status_code == 200
+    one = client.post("/api/rewards/projection", json={}).json()
+    assert [k["id"] for k in one["children"]] == [a]
+    kid = one["children"][0]
+    assert one["total"] == {"perfect": kid["perfect"], "usual": kid["usual"]}

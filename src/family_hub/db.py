@@ -19,7 +19,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS people(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
-  reminder_list_id TEXT);   -- caldav:<slug> of this person's iCloud chore list (P2)
+  reminder_list_id TEXT,    -- caldav:<slug> of this person's iCloud chore list (P2)
+  earns INTEGER NOT NULL DEFAULT 1);  -- chore wallet: 0 = streak only, no money
 CREATE TABLE IF NOT EXISTS chores(
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
   schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('daily','days','once','interval')),
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS occurrence_log(
   cents INTEGER NOT NULL DEFAULT 0,      -- what this row pays when done, frozen
   kind TEXT NOT NULL DEFAULT 'house',    -- the chore's kind when served, frozen
   earner INTEGER,   -- who is paid for this done row (NULL: person_id); see app._price_rows
+  earning INTEGER NOT NULL DEFAULT 1,    -- 0: served while its owner was streak only, frozen
   PRIMARY KEY(date, chore_id));
 -- Days the wall actually served (today frozen with a healthy away overlay),
 -- even when nobody had anything that day. A day missing here was an outage:
@@ -356,6 +358,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if "earner" not in occ_cols:
         conn.execute("ALTER TABLE occurrence_log ADD COLUMN earner INTEGER")
         conn.commit()
+    # The chore wallet's per-person "Earns money" switch, and each served
+    # row's frozen copy of it. Both default to 1, so an upgraded household
+    # earns exactly as before and no row frozen earlier changes.
+    if "earning" not in occ_cols:
+        conn.execute("ALTER TABLE occurrence_log ADD COLUMN earning INTEGER "
+                     "NOT NULL DEFAULT 1")
+        conn.commit()
+    if "earns" not in {r["name"] for r in conn.execute("PRAGMA table_info(people)")}:
+        conn.execute("ALTER TABLE people ADD COLUMN earns INTEGER NOT NULL DEFAULT 1")
+        conn.commit()
     # A payout keeps the chore count it paid for, so the wallet summary can
     # count the chores since it (NULL on payouts made before this column).
     if "chores_n" not in {r["name"] for r in conn.execute("PRAGMA table_info(ledger)")}:
@@ -592,6 +604,23 @@ def update_person(conn, pid: int, **fields) -> None:
     with conn:
         conn.execute(f"UPDATE people SET {assignments} WHERE id = ?",
                      (*cols.values(), pid))
+
+
+def get_person_earns(conn, pid: int) -> bool | None:
+    """The chore wallet's "Earns money" switch for ``pid`` (None: no such
+    person). Off means streak only: no money, no bonus."""
+    row = conn.execute("SELECT earns FROM people WHERE id = ?", (pid,)).fetchone()
+    return None if row is None else bool(row["earns"])
+
+
+def set_person_earns(conn, pid: int, earns: bool) -> bool:
+    """Set the switch; False when there is no such person. Kept out of
+    update_person on purpose: changing it is a parent action (the PIN),
+    and the people editor has no PIN."""
+    with conn:
+        cur = conn.execute("UPDATE people SET earns = ? WHERE id = ?",
+                           (1 if earns else 0, pid))
+    return cur.rowcount > 0
 
 
 def delete_person(conn, pid: int) -> bool:
@@ -847,16 +876,18 @@ def _log_row(r: sqlite3.Row) -> dict:
 
 
 _LOG_INSERT = ("INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-               "icon, rot, covering_for, cents, kind, earner) "
-               "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+               "icon, rot, covering_for, cents, kind, earner, earning) "
+               "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 
 def _log_values(date: str, r: dict) -> tuple:
     """One log row's values. A caller that knows nothing of the wallet (the
-    legacy backfill, wallet off) writes an unpaid house row."""
+    legacy backfill, wallet off) writes an unpaid house row. ``earning`` 0
+    marks a row served while its owner was streak only."""
     return (date, r["chore_id"], r["person_id"], r["title"], r["icon"],
             r["rot"], r.get("covering_for"), int(r.get("cents") or 0),
-            r.get("kind") or "house", r.get("earner"))
+            r.get("kind") or "house", r.get("earner"),
+            0 if r.get("earning", 1) in (0, False) else 1)
 
 
 def replace_day_log(conn, date: str, rows: list[dict]) -> None:
