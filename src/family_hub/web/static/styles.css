@@ -2745,6 +2745,9 @@ body.integ-off-todos .todo-slot { display: none; }
 .backups-ctl .btn-primary { align-self: flex-start; }
 .bk-dir { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 .bk-error { color: var(--warn); }
+.backups-ctl > .padmin-btn { align-self: flex-start; }
+/* a failed restore test names backup files, which have no spaces to wrap at */
+.bk-test-error { overflow-wrap: anywhere; }
 .bk-pw { gap: 8px; margin-top: 6px; }
 .bk-pw .txt-input { max-width: 420px; }
 .bk-pw .padmin-btn { align-self: flex-start; }

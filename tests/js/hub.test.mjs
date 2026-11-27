@@ -1598,8 +1598,8 @@ test('help text: no em or en dashes, and no names, in every string the help can 
     'Calendar', 'Camera', 'Cameras', 'Changes', 'Changing', 'Check', 'Chores', 'D', 'Deactivate', 'Delete',
     'Each', 'Edit', 'Everyone', 'Everyone’s', 'Features', 'Finish', 'Fix', 'Fleet', 'From', 'Full', 'Going',
     'Green', 'Home', 'House', 'How', 'If', 'In', 'Items', 'It', 'Last', 'Later', 'Laundry', 'Loading', 'Month',
-    'New', 'No', 'Now', 'On', 'One', 'Only', 'Open', 'Past', 'People', 'Pick', 'Reminders', 'Right', 'Safari',
-    'Screen', 'Scroll', 'Servers', 'Settings', 'Share', 'Soon', 'Sync', 'Tap', 'That', 'The', 'This',
+    'New', 'No', 'Now', 'On', 'Once', 'One', 'Only', 'Open', 'Past', 'People', 'Pick', 'Reminders', 'Right', 'Safari',
+    'Screen', 'Scroll', 'Servers', 'Settings', 'Share', 'Soon', 'Sync', 'Tap', 'Test', 'That', 'The', 'This',
     'To', 'To-Do', 'To-dos', 'Trip', 'UV', 'Untick', 'Use', 'Waiting', 'Weather', 'When', 'While', 'You', 'iCloud',
     'iPhone']);
   const words = text.match(/\b[A-Z][\w’-]*/g) || [];
@@ -2073,6 +2073,8 @@ test('helpTopics: the Backups topic points at Settings and the password', () => 
   const t = topic(ctxOf([]), 'backup').paras.join(' ');
   assert.match(t, /Settings, under Backups, shows where the copies go/);
   assert.match(t, /backup password/);
+  assert.match(t, /Once a month the hub also checks that its newest copy really opens/);
+  assert.match(t, /Test restore now/);
 });
 
 test('backups card text: no em or en dashes in any state', () => {
@@ -2092,4 +2094,64 @@ test('backupsCardHtml: a folder that lost its marker asks about the NAS and offe
   assert.match(html, /<button class="padmin-btn" type="button" data-bk-adopt="1">Use this folder<\/button>/);
   assert.match(html, /data-bk-run="1" disabled>/);
   assert.ok(!/data-bk-adopt/.test(sandbox.backupsCardHtml(BK(), NOW_MS)), 'no adopt button when all is well');
+});
+
+/* ------------------------------------------------------ backups: restore test */
+
+// local wall-clock instants, so the dates read the same under TZ=UTC
+const localIso = (y, m, d, h = 12) => new Date(y, m - 1, d, h).toISOString();
+const localMs = (y, m, d, h = 12) => new Date(y, m - 1, d, h).getTime();
+
+test('restoreTestDate: a plain date, the year only when it is not this one', () => {
+  const now = localMs(2026, 11, 27);
+  assert.equal(sandbox.restoreTestDate(localIso(2026, 11, 3), now), 'November 3');
+  assert.equal(sandbox.restoreTestDate(localIso(2025, 12, 30), now), 'December 30, 2025');
+  assert.equal(sandbox.restoreTestDate('garbage', now), null);
+  assert.equal(sandbox.restoreTestDate(null, now), null);
+});
+
+test('backupsCardHtml: no restore test yet says when the first one runs', () => {
+  const html = sandbox.backupsCardHtml(BK({ restore_test: null }), NOW_MS);
+  assert.match(html, /Restore test<\/span><span class="hint">Not tested yet\. The first test runs a day after the first backup\./);
+  assert.match(html, /<button class="padmin-btn" type="button" data-bk-test="1">Test restore now<\/button>/);
+});
+
+test('backupsCardHtml: a passed restore test shows its date', () => {
+  const html = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 3), ok: true,
+    snapshot: 'hub-20261103-0930.db', reason: null } }), localMs(2026, 11, 27));
+  assert.match(html, /Restore test<\/span><span class="hint">Last restore test passed November 3\./);
+  assert.ok(!/bk-test-error/.test(html));
+});
+
+test('backupsCardHtml: a failed restore test shows the reason, escaped', () => {
+  const html = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 26), ok: false,
+    snapshot: 'hub-x.db', reason: 'The newest backup (hub-x.db) has <b>2</b> people.' } }), localMs(2026, 11, 27));
+  assert.match(html, /Last restore test failed November 26\./);
+  assert.match(html, /<div class="hint bk-error bk-test-error" role="status">The newest backup \(hub-x\.db\) has &lt;b&gt;2&lt;\/b&gt; people\.<\/div>/);
+  assert.ok(!html.includes('<b>2'));
+});
+
+test('backupsCardHtml: Test restore now is off with nothing to test, while busy, or when off', () => {
+  assert.match(sandbox.backupsCardHtml(BK({ last_ok: null }), NOW_MS), /data-bk-test="1" disabled>Test restore now/);
+  assert.match(sandbox.backupsCardHtml(BK({ running: true }), NOW_MS), /data-bk-test="1" disabled>Test restore now/);
+  assert.match(sandbox.backupsCardHtml(BK({ enabled: false, why_off: 'switched_off' }), NOW_MS),
+    /data-bk-test="1" disabled>Test restore now/);
+});
+
+test('backupsCardHtml: a restore test time the hub could not read still says pass or fail', () => {
+  const html = sandbox.backupsCardHtml(BK({ restore_test: { at: 'garbage', ok: false, reason: 'r' } }), NOW_MS);
+  assert.match(html, /Last restore test failed on a date the hub could not read\./);
+});
+
+test('restore test text: no em or en dashes, balanced divs', () => {
+  const now = localMs(2026, 11, 27);
+  const states = [BK({ restore_test: null }),
+    BK({ restore_test: { at: localIso(2026, 11, 3), ok: true, reason: null } }),
+    BK({ restore_test: { at: localIso(2026, 11, 3), ok: false, reason: 'x' } })];
+  for (const s of states) {
+    const html = sandbox.backupsCardHtml(s, now);
+    assert.ok(!html.includes(String.fromCharCode(0x2014)), 'no em dashes');
+    assert.ok(!html.includes(String.fromCharCode(0x2013)), 'no en dashes');
+    assert.equal((html.match(/<div/g) || []).length, (html.match(/<\/div>/g) || []).length);
+  }
 });

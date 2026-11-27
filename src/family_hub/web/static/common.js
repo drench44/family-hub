@@ -1909,6 +1909,19 @@ function backupAgo(iso, nowMs) {
   return plural(Math.floor(s / 86400), 'day');
 }
 
+/* The day of a restore test in plain words ("November 3", with the year
+   when it is not this year), or null for a time that can't be read. Pure. */
+const RESTORE_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+  'August', 'September', 'October', 'November', 'December'];
+function restoreTestDate(iso, nowMs) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t);
+  const day = `${RESTORE_MONTHS[d.getMonth()]} ${d.getDate()}`;
+  const now = new Date(Number.isFinite(nowMs) ? nowMs : Date.now());
+  return d.getFullYear() === now.getFullYear() ? day : `${day}, ${d.getFullYear()}`;
+}
+
 /* Why backups are off, and what fixes it, by the server's why_off code. */
 const BACKUP_SEE_README = 'Set BACKUP_DIR on the hub box (see Backup in the README).';
 const BACKUP_OFF = {
@@ -1965,6 +1978,20 @@ function backupsCardHtml(st, nowMs) {
   const busy = !!st.running;
   html += `<button class="btn-primary" type="button" data-bk-run="1"${st.enabled && !busy ? '' : ' disabled'}>`
     + `${busy ? 'Backing up…' : 'Back up now'}</button>`;
+  // The monthly restore test: proof the newest copy really opens.
+  const rt = st.restore_test;
+  if (rt) {
+    const day = restoreTestDate(rt.at, now);
+    const when = day || 'on a date the hub could not read';
+    html += row('Restore test', `Last restore test ${rt.ok ? 'passed' : 'failed'} ${escapeHtml(when)}.`);
+    if (!rt.ok && rt.reason) {
+      html += `<div class="hint bk-error bk-test-error" role="status">${escapeHtml(rt.reason)}</div>`;
+    }
+  } else {
+    html += row('Restore test', 'Not tested yet. The first test runs a day after the first backup.');
+  }
+  html += `<button class="padmin-btn" type="button" data-bk-test="1"${st.enabled && !busy && ok ? '' : ' disabled'}>`
+    + 'Test restore now</button>';
   // The settings files: only with a backup password, encrypted with it.
   let files;
   if (st.password_problem) {
@@ -2733,6 +2760,7 @@ function helpTopics(ctx) {
   topics.push({ id: 'backup', title: 'Backups', paras: [helpBackupLine(c.backup),
     'The hub saves a copy of all the chores, streaks, to-dos and history on its own. Everyone’s progress can be put back from a copy if something goes wrong.',
     'Settings, under Backups, shows where the copies go and when the last one was made. Back up now makes one right away.',
+    'Once a month the hub also checks that its newest copy really opens and holds the hub’s data. Settings shows when that last passed, and Test restore now checks it right away.',
     'A backup password also locks a copy of the hub’s settings files into each backup. Only someone with the password can open them, so write it down.',
     'If a copy fails or gets too old, a ⚠ backup warning shows at the top of the screen.'] });
   return topics;
