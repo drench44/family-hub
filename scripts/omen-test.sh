@@ -6,11 +6,12 @@
 # the repo's own files (README, .gitignore, tracked files, git history) and
 # skip themselves when there is no .git. A copy without .git silently skipped
 # them, so a README-check failure passed there and then stopped a landing in CI
-# (2026-11-27). This script pushes the branch, checks that exact commit out
+# (2026-11-27). This script checks the pushed commit out
 # with `git worktree add` on the box, and sets FH_REQUIRE_ENGINE_CHECKS=1 so a
 # tree without .git fails instead of skipping. See docs/adding-a-feature.md.
 #
-# Usage (from the branch's worktree, committed; uncommitted edits are not run):
+# Usage (from the branch's worktree; commit and push it first, because only the
+# pushed commit is run):
 #   FH_TEST_HOST=<ssh alias of the box> scripts/omen-test.sh
 #
 # Environment:
@@ -50,8 +51,15 @@ case "$branch" in
 esac
 sha=$(git rev-parse HEAD)
 
-echo "omen-test: pushing $branch at ${sha:0:12}" >&2
-git push --quiet origin HEAD
+# The branch must already be pushed, with an explicit refspec (a push
+# guard refuses a script that pushes a variable refspec, so this one never
+# pushes). The box fetches it and checks that the SHA matches.
+remote_sha=$(git ls-remote --heads origin "$branch" | cut -f1)
+if [ "$remote_sha" != "$sha" ]; then
+  echo "omen-test: origin/$branch is not at ${sha:0:12}; push it first:" >&2
+  echo "  git push origin HEAD:refs/heads/$branch" >&2
+  exit 64
+fi
 
 runner=${FH_TEST_RUNNER:-"ssh -o ConnectTimeout=10 $host bash -l -s"}
 echo "omen-test: running the suites on the box" >&2

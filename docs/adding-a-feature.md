@@ -154,8 +154,8 @@ gate below. A feature absent from demo is invisible everywhere that matters.*
       local wall-clock components. (Three laundry tests turned CI red.)
 - [ ] Verify the suites genuinely RUN — a skip is not a pass.
 - [ ] **Run the full suites on the heavy test box with `scripts/omen-test.sh`,
-      never an rsync copy.** It pushes the branch, checks that exact commit out
-      as a real git worktree beside the box's clone, runs pytest (which runs the
+      never an rsync copy.** It runs the pushed commit (push the branch first; it
+      refuses if origin differs), checked out as a real git worktree beside the box's clone, runs pytest (which runs the
       JS suite) twice (box timezone, then `TZ=UTC`), lists every skip loudly,
       prints the counts and exits nonzero on any failure. Set `FH_TEST_HOST` to
       the box's ssh alias, and set `FH_TEST_RUNNER` if a lock wrapper must hold
