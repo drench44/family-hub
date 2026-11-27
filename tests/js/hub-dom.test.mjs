@@ -13053,10 +13053,11 @@ test('settings menu: one button per Settings section, each pointing at a real ca
     'the menu sits above the first card');
   const targets = [...html.matchAll(/data-settings-go="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(targets, ['settings-display', 'settings-looks', 'settings-screen',
-    'settings-features', 'rewards-card', 'help-card']);
+    'settings-features', 'rewards-card', 'backups-card', 'help-card']);
   for (const id of targets) assert.match(html, new RegExp(`id="${id}"`), `${id} card exists`);
   const labels = [...html.matchAll(/data-settings-go="[^"]+"[^>]*>([^<]+)</g)].map((m) => m[1]);
-  assert.deepEqual(labels, ['Display', 'Looks', 'This screen', 'Features', 'Chore wallet', 'How it works']);
+  assert.deepEqual(labels, ['Display', 'Looks', 'This screen', 'Features', 'Chore wallet', 'Backups',
+    'How it works']);
 });
 
 test('settings menu: the section in view is the last one whose top has passed the menu', () => {
@@ -13125,4 +13126,98 @@ test('rewardsClick: Remove PIN asks for the PIN and deletes it', async () => {
   await sandbox.rewardsClick(rwEvent('data-rw-clearpin'));
   assert.deepEqual(calls[0].slice(0, 2), ['/api/rewards/pin', 'DELETE']);
   assert.match(document.getElementById('toast').textContent, /PIN removed/);
+});
+
+
+// --- Settings > Backups (2026-11-27) ---
+
+test('backupsClick: Back up now turns the button off while it runs, so a double tap runs once', async () => {
+  const { document, sandbox } = newHub();
+  const btn = { dataset: { bkRun: '1' }, disabled: false };
+  let calls = 0;
+  let release;
+  sandbox.j = (url, opts) => {
+    calls++;
+    assert.equal(url, '/api/backups/run');
+    assert.equal(opts.method, 'POST');
+    return new Promise((r) => { release = r; });
+  };
+  let painted = 0;
+  sandbox.paintBackups = async () => { painted++; };
+  const ev = { target: { closest: (sel) => (sel === '[data-bk-run]' ? btn : null) } };
+  const first = sandbox.backupsClick(ev);
+  await sandbox.backupsClick(ev);
+  assert.equal(calls, 1);
+  assert.equal(btn.disabled, true);
+  release({ result: { ok: true }, state: {} });
+  await first;
+  assert.equal(painted, 1);
+  assert.match(document.getElementById('toast').textContent, /Backed up/);
+});
+
+test('backupsClick: a failed run says so instead of "backed up"', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.j = async () => ({ result: { ok: false, error: 'The copy came out too small.' }, state: {} });
+  sandbox.paintBackups = async () => {};
+  const btn = { dataset: { bkRun: '1' }, disabled: false };
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-run]' ? btn : null) } });
+  assert.match(document.getElementById('toast').textContent, /The backup failed\. The copy came out too small\./);
+});
+
+function backupsHost(document, a, b) {
+  const host = document.createElement('div');
+  host._id = 'backups-ctl';
+  document.body.appendChild(host);
+  const err = { textContent: '', classList: { hidden: true, add() { this.hidden = true; }, remove() { this.hidden = false; } } };
+  host.querySelector = (sel) => ({ '[name="bk_pw"]': { value: a }, '[name="bk_pw2"]': { value: b },
+    '#bk-pw-error': err }[sel] || null);
+  return err;
+}
+
+test('backupsClick: a mismatched password says so and sends nothing', async () => {
+  const { document, sandbox } = newHub();
+  const err = backupsHost(document, 'family hub 2026', 'family hub 2027');
+  let sent = 0;
+  sandbox.jParent = async () => { sent++; };
+  const ev = { target: { closest: (sel) => (sel === '[data-bk-savepw]' ? {} : null) } };
+  await sandbox.backupsClick(ev);
+  assert.equal(sent, 0);
+  assert.equal(err.classList.hidden, false);
+  assert.match(err.textContent, /didn’t match/);
+});
+
+test('backupsClick: a good password goes through the parent-PIN path and repaints', async () => {
+  const { document, sandbox } = newHub();
+  backupsHost(document, 'family hub 2026', 'family hub 2026');
+  let req = null;
+  sandbox.jParent = async (url, opts, msg) => { req = { url, opts, msg }; return {}; };
+  let painted = 0;
+  sandbox.paintBackups = async () => { painted++; };
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-savepw]' ? {} : null) } });
+  assert.equal(req.url, '/api/backups/password');
+  assert.equal(req.opts.method, 'POST');
+  assert.deepEqual(JSON.parse(req.opts.body), { password: 'family hub 2026' });
+  assert.match(req.msg, /parent/);
+  assert.equal(painted, 1);
+  assert.match(document.getElementById('toast').textContent, /Write it down/);
+});
+
+test('paintBackups: a load that fails says so in the card, and an older reply never paints over a newer one', async () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div');
+  host._id = 'backups-ctl';
+  document.body.appendChild(host);
+  sandbox.j = async () => { throw new Error('hub down'); };
+  await sandbox.paintBackups();
+  assert.match(host.innerHTML, /Couldn’t load the backup status\. hub down/);
+  const replies = [];
+  sandbox.j = () => new Promise((r) => replies.push(r));
+  const a = sandbox.paintBackups();
+  const b = sandbox.paintBackups();
+  replies[1]({ enabled: true, dir: 'NEWER', counts: null, keep: {}, last_ok: null });
+  await b;
+  replies[0]({ enabled: true, dir: 'OLDER', counts: null, keep: {}, last_ok: null });
+  await a;
+  assert.match(host.innerHTML, /NEWER/);
+  assert.ok(!/OLDER/.test(host.innerHTML));
 });
