@@ -1925,6 +1925,9 @@ def _pin_gate(c, pin, source: str = "") -> None:
     required (no PIN sent), wrong; 429 locked with the wait in seconds."""
     if not parent_pin.is_set(c):
         raise HTTPException(403, {"pin": "not_set"})
+    if parent_pin.key_missing(c):
+        # fail closed, and say why: no PIN can be checked without pin.key
+        raise HTTPException(403, {"pin": "key_missing"})
     ok, wait = parent_pin.check(c, pin, _now_local(), source=source)
     if wait:
         raise HTTPException(429, {"pin": "locked", "wait_s": wait})
@@ -2028,6 +2031,7 @@ def _rewards_state(c) -> dict:
     today = _today()
     return {"settings": reward_settings(c),
             "pin_set": parent_pin.is_set(c),
+            "pin_key_missing": parent_pin.key_missing(c),
             "feature_on": _integration_on(c, "rewards"),
             "launch": fdb.kv_get(c, wallet.LAUNCH_KEY),
             "active": rewards_active(c),

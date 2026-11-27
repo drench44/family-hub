@@ -13098,3 +13098,21 @@ test('demo camera tiles show their still photo, full screen too', () => {
   assert.match(ph.className, /cam-demo-photo/);
   assert.equal(ph.dataset.still, 'driveway');
 });
+
+test('jParent: a lost PIN key file says so instead of asking for the PIN again', async () => {
+  const { sandbox } = newHub();
+  sandbox.j = async () => { const e = new Error('403'); e.status = 403; e.detail = { pin: 'key_missing' }; throw e; };
+  let asked = 0;
+  sandbox.askParentPin = async () => { asked++; return '1234'; };
+  await assert.rejects(sandbox.jParent('/api/rewards/payout/7', { method: 'POST' }, 'needs a parent'),
+    /can’t be checked on this hub/);
+  assert.equal(asked, 0);
+});
+
+test('toggleChore: a lost PIN key on an old-day tick shows the fix, not a retry', async () => {
+  const { sandbox, document } = newHub();
+  sandbox.withParentPin = async () => ({ ok: false, why: 'key_missing' });
+  sandbox.poll = async () => {};
+  await sandbox.toggleChore(7, false);
+  assert.match(document.getElementById('toast').textContent, /can’t be checked on this hub/);
+});

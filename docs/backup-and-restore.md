@@ -62,6 +62,18 @@ docker compose start web
 curl -s http://127.0.0.1:8138/health      # {"status":"ok"}
 ```
 
+**The parent PIN on a new box.** The PIN's secret key lives in `data/pin.key`,
+beside `hub.db` but not inside it, so a copy of the database alone cannot be
+used to guess the PIN. The snapshots above copy only `hub.db`, so the key
+survives a restore only when the box's `data/` folder did. Restoring onto a
+new box (or after losing `data/`) leaves the chore wallet's money actions
+locked, and the wall and the log say why. Clear the PIN and set a new one in
+Settings:
+
+```sh
+docker compose exec web python -m family_hub.parent_pin --clear
+```
+
 Clearing `hub.db-wal`/`hub.db-shm` before the copy is essential: the live db
 runs in WAL mode, and leaving an old write-ahead log next to the restored file
 lets SQLite replay stale frames onto it on the next open — silently reverting or

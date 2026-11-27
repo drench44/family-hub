@@ -1726,8 +1726,13 @@ function choreMoneyHtml(ch) {
   return '';
 }
 
+/* Shown when the hub's PIN key file is gone (a restore onto a new box): no
+   PIN can be checked until it is cleared on the box. */
+const PIN_KEY_MISSING = 'The parent PIN can’t be checked on this hub right now. '
+  + 'Clear it on the hub box (docs/backup-and-restore.md) and set a new one.';
+
 /* The parent-PIN refusal on a failed write, or null for any other failure:
-   {pin: 'required'|'wrong'|'not_set'|'locked', wait_s}. Pure. */
+   {pin: 'required'|'wrong'|'not_set'|'locked'|'key_missing', wait_s}. Pure. */
 function pinRefusal(err) {
   if (!err || (err.status !== 403 && err.status !== 429)) return null;
   const d = err.detail;
@@ -1780,6 +1785,9 @@ function rewardsCardHtml(st) {
   const intro = `<div class="settings-sub">Each chore adds money to the child’s wallet on their card, with extra for a long streak. You pay them and tap Paid.</div>`;
   if (!st.feature_on) {
     return intro + `<div class="hint">The chore wallet is switched off in Features &amp; integrations above.</div>`;
+  }
+  if (st.pin_key_missing) {
+    return intro + `<div class="hint">${PIN_KEY_MISSING}</div>`;
   }
   if (!st.pin_set) {
     return intro + `<div class="hint">First pick a parent PIN. It keeps the money settings, payouts and fixes to old days for grown-ups.</div>`
