@@ -791,7 +791,9 @@ def sync_once(client, conn, cfg, now: dt.datetime) -> dict:
             from . import chore_mirror
             # iOS check-offs -> local completions (streaks) first, then project
             # the plan (which keeps completed reminders and prunes stale ones).
-            chore_mirror.reconcile_completions(conn, now)
+            from . import wallet
+            chore_mirror.reconcile_completions(
+                conn, now, oldest=wallet.edit_floor(conn, now))
             # only trust prune decisions for VTODO lists that pulled OK this tick
             synced_vtodo = {"caldav:" + c["id"] for c in collections
                             if c.get("comp") == "VTODO"} - set(vtodo_failed)

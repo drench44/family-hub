@@ -13,11 +13,29 @@ from __future__ import annotations
 import datetime as dt
 
 from . import db as fdb
+from . import parent_pin
 from . import rewards as rw
 
 LAUNCH_KEY = "rewards.launch"
 SHIELD_RULES_KEY = "rewards.shield_rules"
 MS_FLOOR_KEY = "rewards.ms_floor"
+SETTINGS_KEY = "rewards.settings"
+FIX_CUTOFF_DEFAULT = "09:00"
+
+
+def edit_floor(conn, now: dt.datetime) -> dt.date | None:
+    """The oldest day a tick may still change without the parent PIN, or
+    None when the wallet is off (then any day may change, as before). Today,
+    or yesterday until the morning cutoff. For callers outside the web app
+    (the iPhone reminder sync); the app's own guards use the same rule."""
+    if not (fdb.kv_get(conn, LAUNCH_KEY) and parent_pin.is_set(conn)
+            and fdb.integration_enabled(conn, "rewards", default=True)):
+        return None
+    cut = ((fdb.kv_get(conn, SETTINGS_KEY) or {}).get("fix_cutoff")
+           or FIX_CUTOFF_DEFAULT)
+    hh, mm = (int(x) for x in cut.split(":"))
+    y = now.date() - dt.timedelta(days=1)
+    return y if (now.hour, now.minute) < (hh, mm) else now.date()
 
 
 def shield_rules(conn, settings: dict, launch: dict) -> list:
@@ -58,19 +76,63 @@ def _seed(launch: dict, pid: int) -> tuple[int, str]:
             "seed:" + launch["day"])
 
 
+PAUSED_KEY = "rewards.paused"
+
+
+def record_active_change(conn, pid: int, active: bool, today: dt.date) -> None:
+    """A person switched off from ``today`` (or back on from ``today``). The
+    days they were off count like away days: their chores left the wall, so
+    those days must not count as kept rest days."""
+    paused = fdb.kv_get(conn, PAUSED_KEY) or {}
+    spans = [list(s) for s in paused.get(str(pid), [])]
+    ts = today.isoformat()
+    if not active:
+        if not (spans and spans[-1][1] is None):
+            spans.append([ts, None])
+    elif spans and spans[-1][1] is None:
+        end = (today - dt.timedelta(days=1)).isoformat()
+        if end < spans[-1][0]:
+            spans.pop()                  # off and back on the same day
+        else:
+            spans[-1][1] = end
+    paused[str(pid)] = spans
+    fdb.kv_set(conn, PAUSED_KEY, paused)
+
+
+def paused_days(conn, pid: int, today: dt.date) -> set:
+    out = set()
+    for lo, hi in (fdb.kv_get(conn, PAUSED_KEY) or {}).get(str(pid), []):
+        d, end = dt.date.fromisoformat(lo), dt.date.fromisoformat(hi) if hi else today
+        while d <= min(end, today):
+            out.add(d.isoformat())
+            d += dt.timedelta(days=1)
+    return out
+
+
 def person_run(conn, pid: int, today: dt.date, settings: dict, launch: dict,
                away: set) -> rw.Run:
+    """The run as of today. A run only starts once a person has house chores:
+    someone with none yet (added after launch, personal goals only, a parent
+    on the wall) has no streak until their first house chore day, so empty
+    days before it never count as kept. A seeded run starts on launch day."""
     start = launch["day"]
     rows: dict[str, list] = {}
     for r in fdb.logs_between(conn, start, today.isoformat()):
         if r["person_id"] == pid:
             rows.setdefault(r["date"], []).append(r)
+    seed, seed_key = _seed(launch, pid)
+    if not seed:
+        house = sorted(ds for ds, rs in rows.items()
+                       if any((r.get("kind") or "house") == "house" for r in rs))
+        if not house:
+            return rw.Run(0, 0, None, {})
+        start = house[0]
     done = {(r["chore_id"], r["date"])
             for r in fdb.completions_between(conn, start, today.isoformat())}
-    seed, seed_key = _seed(launch, pid)
     return rw.run_state(
         rows, done, start=dt.date.fromisoformat(start), today=today,
-        away=away, served=fdb.served_between(conn, start, today.isoformat()),
+        away=set(away) | paused_days(conn, pid, today),
+        served=fdb.served_between(conn, start, today.isoformat()),
         seed=seed, seed_key=seed_key,
         shield_rules=shield_rules(conn, settings, launch))
 
@@ -173,6 +235,9 @@ def launch(conn, today: dt.date, settings: dict, seeds: dict) -> dict:
     rec = {"day": today.isoformat(),
            "seeds": {str(pid): int(n) for pid, n in seeds.items()}}
     fdb.kv_set(conn, LAUNCH_KEY, rec)
+    for p in fdb.list_people(conn, include_inactive=True):
+        if not p["active"]:
+            record_active_change(conn, p["id"], False, today)
     fdb.kv_set(conn, SHIELD_RULES_KEY, [[rec["day"],
                                          bool(settings.get("shields_on", True)),
                                          int(settings.get("shield_every", 20)),

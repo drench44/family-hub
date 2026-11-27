@@ -1344,6 +1344,10 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         who = owner.get((r["date"], r["chore_id"]), r["person_id"])
         by_day = cbd_by_pid.setdefault(who, {})
         by_day.setdefault(r["date"], set()).add(r["chore_id"])
+    # With the wallet on, the old chore-day streak is a different count from
+    # the wallet streak on today's card, so other days show none (audit,
+    # 2026-11-26). Today's card carries the wallet streak in "reward".
+    old_streak = d == today or not _rewards_on_safe(c)
     for entry in plan:
         pid = entry["person"]["id"]
         occ = occ_by_pid.get(pid, {})
@@ -1356,7 +1360,8 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         cbd = cbd_by_pid.get(pid, {})
         away_dates = amap.get(pid, {}).get("dates", set())
         entry["away"] = pid in away_today
-        entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
+        entry["streak"] = (chlogic.streak(occ, cbd, d, away_dates)
+                           if old_streak else 0)
         entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
     if d == today and wallet_on:
         _add_rewards(c, plan, rows, today, priced_ok)
@@ -1796,7 +1801,7 @@ REWARD_DEFAULTS = {
     "bonus_on": True, "milestones": [[100, 10000]],
     "levels_on": False, "levels": [[25, 35], [50, 40], [100, 45]],
     "shields_on": True, "shield_every": 20, "shield_max": 2,
-    "fix_cutoff": "09:00",
+    "fix_cutoff": wallet.FIX_CUTOFF_DEFAULT,
 }
 
 
@@ -2742,14 +2747,25 @@ def admin_patch_person(pid: int, p: PersonPatch):
         if fields["reminder_list_id"] not in vtodo:
             raise HTTPException(422, "unknown reminder list")
     fdb.update_person(c, pid, **fields)
+    if ("active" in fields and bool(fields["active"]) != bool(row["active"])
+            and fdb.kv_get(c, wallet.LAUNCH_KEY)):
+        # Days switched off count like away days on the wallet (audit,
+        # 2026-11-26), so a child switched back on gets no free kept days.
+        wallet.record_active_change(c, pid, bool(fields["active"]), _today())
     return _person_row(c, pid)
 
 
 @app.delete("/api/admin/people/{pid}")
-def admin_delete_person(pid: int):
+def admin_delete_person(pid: int, request: Request):
     """Hard-delete a person (history-safe — see db.delete_person). Distinct from
     the deactivate path (PATCH active=0), which keeps the row for reactivation."""
     c = _db()
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    if (launch and rewards_active(c)
+            and wallet.balance_cents(c, pid, launch["day"]) != 0):
+        # Deleting drops their earnings for good: with money still owed (or
+        # owing), that needs the parent PIN (audit, 2026-11-26).
+        require_parent(request)
     if not fdb.delete_person(c, pid):
         raise HTTPException(404, "unknown person")
     return {"ok": True}

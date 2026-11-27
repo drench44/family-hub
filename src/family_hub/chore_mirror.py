@@ -160,7 +160,7 @@ class _OwnerResolver:
         return self._live(diso).get(chore_id, ledger_person_id)
 
 
-def reconcile_completions(conn, now: dt.datetime) -> int:
+def reconcile_completions(conn, now: dt.datetime, oldest: dt.date | None = None) -> int:
     """iOS check-offs -> local completions (P4, direction iOS -> wall). ADD-ONLY:
     a reminder marked done in iOS records the local completion (so streaks stay
     right); reopening in iOS does NOT un-complete on the wall. Add-only is
@@ -201,6 +201,15 @@ def reconcile_completions(conn, now: dt.datetime) -> int:
                     dt.datetime.now(dt.timezone.utc).isoformat())
                 log.info("chore %s: a future day (%s) was ticked on the phone; "
                          "reopened it", m["chore_id"], m["date"])
+                continue
+            if oldest is not None and m["date"] < oldest.isoformat():
+                # With the chore wallet on, a day older than the fix window
+                # changes money and needs the parent PIN on the wall, so a
+                # phone tick left over from an iCloud outage is not recorded
+                # (audit, 2026-11-26).
+                log.info("chore %s: an old day (%s) was ticked on the phone; "
+                         "left for a parent to fix on the wall",
+                         m["chore_id"], m["date"])
                 continue
             if not fdb.completion_exists(conn, m["chore_id"], m["date"]):
                 pid = owners.owner_of(m["chore_id"], m["date"], m["person_id"])

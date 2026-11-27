@@ -531,6 +531,13 @@ keyed by person, run and streak length so it can never pay twice).
 old-day edits, money settings and payouts on it, and adds a `reward` block
 to the wall payload only while the wallet is on.
 
+A run starts on a person's first house-chore day, so someone with no house
+chores (added after launch, personal goals only, a parent on the wall) has no
+streak. Days a person is switched off are kept in kv `rewards.paused` and
+count like away days. The iPhone reminder sync records no tick older than the
+fix window (`wallet.edit_floor`), and deleting someone with money still owed
+needs the PIN.
+
 ---
 
 ## 9. Widget Slot / Plugin Architecture (PRD §6, FR#8)

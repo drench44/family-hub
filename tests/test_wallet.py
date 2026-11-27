@@ -209,3 +209,108 @@ def test_two_payouts_at_once_pay_once(conn, tmp_path):
         th.join()
     assert sorted(r is None for r in results) == [False, True]
     assert [r["cents"] for r in fdb.ledger_for(conn, pid) if r["kind"] == "payout"] == [30]
+
+
+# --- Audit 2026-11-26: nobody earns a streak without house chores ---------
+
+def _served_only(conn, n):
+    fdb.mark_served(conn, _day(n))
+
+
+def test_no_house_chores_ever_earns_no_streak(conn):
+    kid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    parent = fdb.add_person(conn, "Mom", "#F0A05B")
+    _launch(conn, {kid: 5})
+    for n in range(120):
+        _serve(conn, kid, n)
+    run = _run(conn, parent, 119)
+    assert (run.streak, run.shields, run.run_key) == (0, 0, None)
+    assert wallet.award(conn, parent, run, SET,
+                        LAUNCH + dt.timedelta(days=119)) == []
+
+
+def test_personal_goals_only_earn_no_streak(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {})
+    for n in range(120):
+        _serve(conn, pid, n, kind="personal", cents=0)
+    run = _run(conn, pid, 119)
+    assert (run.streak, run.run_key) == (0, None)
+
+
+def test_person_added_after_launch_starts_on_first_house_day(conn):
+    kid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {kid: 5})
+    for n in range(100):
+        _served_only(conn, n)
+    late = fdb.add_person(conn, "Bo", "#5BF07A")
+    for n in range(100, 103):
+        _serve(conn, late, n, cid=2)
+    run = _run(conn, late, 102)
+    assert run.streak == 3 and run.run_key == _day(100)
+
+
+def test_switched_off_days_count_as_away(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 10})
+    for n in range(5):
+        _serve(conn, pid, n)
+    wallet.record_active_change(conn, pid, False, LAUNCH + dt.timedelta(days=5))
+    for n in range(5, 15):
+        _served_only(conn, n)       # off: no rows on the wall
+    wallet.record_active_change(conn, pid, True, LAUNCH + dt.timedelta(days=15))
+    _serve(conn, pid, 15)
+    run = _run(conn, pid, 15)
+    assert run.streak == 16
+    assert all(run.outcomes[_day(n)] == "away" for n in range(5, 15))
+
+
+def test_switched_off_still_off_counts_as_away(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 10})
+    _serve(conn, pid, 0)
+    wallet.record_active_change(conn, pid, False, LAUNCH + dt.timedelta(days=1))
+    for n in range(1, 40):
+        _served_only(conn, n)
+    assert _run(conn, pid, 39).streak == 11
+
+
+def test_off_and_on_same_day_leaves_no_gap(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 10})
+    day = LAUNCH + dt.timedelta(days=2)
+    wallet.record_active_change(conn, pid, False, day)
+    wallet.record_active_change(conn, pid, True, day)
+    for n in range(4):
+        _serve(conn, pid, n)
+    assert _run(conn, pid, 3).streak == 14
+
+
+def test_launch_starts_a_pause_for_people_already_switched_off(conn):
+    on = fdb.add_person(conn, "Ava", "#5BC9F0")
+    off = fdb.add_person(conn, "Bo", "#5BF07A")
+    fdb.update_person(conn, off, active=0)
+    _launch(conn, {on: 3, off: 8})
+    for n in range(10):
+        _served_only(conn, n)
+    wallet.record_active_change(conn, off, True, LAUNCH + dt.timedelta(days=10))
+    _serve(conn, off, 10, cid=2)
+    assert _run(conn, off, 10).streak == 9
+
+
+def test_edit_floor_only_with_the_wallet_on(conn):
+    from family_hub import parent_pin
+    now = dt.datetime(2026, 12, 10, 8, 0)
+    assert wallet.edit_floor(conn, now) is None            # never launched
+    _launch(conn, {})
+    assert wallet.edit_floor(conn, now) is None            # no PIN yet
+    parent_pin.set_pin(conn, "2468", current=None)
+    assert wallet.edit_floor(conn, now) == dt.date(2026, 12, 9)   # before 9:00
+    assert wallet.edit_floor(conn, now.replace(hour=9, minute=5)) == \
+        dt.date(2026, 12, 10)
+    fdb.kv_set(conn, "rewards.settings", {"fix_cutoff": "10:00"})
+    assert wallet.edit_floor(conn, now.replace(hour=9, minute=5)) == \
+        dt.date(2026, 12, 9)
+    fdb.seed_integration(conn, "rewards", "feature")
+    fdb.set_integration_enabled(conn, "rewards", False)
+    assert wallet.edit_floor(conn, now) is None            # switched off
