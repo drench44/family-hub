@@ -13116,3 +13116,13 @@ test('toggleChore: a lost PIN key on an old-day tick shows the fix, not a retry'
   await sandbox.toggleChore(7, false);
   assert.match(document.getElementById('toast').textContent, /can’t be checked on this hub/);
 });
+
+test('rewardsClick: Remove PIN asks for the PIN and deletes it', async () => {
+  const { sandbox, document } = newHub();
+  const calls = [];
+  sandbox.jParent = async (url, opts, msg) => { calls.push([url, opts.method, msg]); return null; };
+  sandbox.paintRewards = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-clearpin'));
+  assert.deepEqual(calls[0].slice(0, 2), ['/api/rewards/pin', 'DELETE']);
+  assert.match(document.getElementById('toast').textContent, /PIN removed/);
+});

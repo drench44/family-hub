@@ -6361,6 +6361,15 @@ async function rewardsClick(e) {
     await paintRewards();
     return;
   }
+  if (t.closest('[data-rw-clearpin]')) {
+    try {
+      await jParent('/api/rewards/pin', { method: 'DELETE' }, 'Removing the PIN needs the PIN.');
+      forgetParentPin();
+      showToast('PIN removed. Nothing asks for one now.');
+    } catch (err) { showToast(err.message); }
+    await paintRewards();
+    return;
+  }
   if (t.closest('[data-rw-enable]')) {
     try {
       await jParent('/api/rewards/enable', { method: 'POST' }, 'Turning on the wallet needs a parent.');

@@ -7174,10 +7174,11 @@ def test_chore_kind_round_trips_through_admin_api(client, app_mod):
 
 
 def test_parent_pin_routes(client, app_mod):
-    """The PIN is set once, changed only with the current PIN, and checked
-    from the X-Parent-Pin header; a lockout answers 429 with the wait."""
-    r = client.post("/api/rewards/pin/check")
-    assert r.status_code == 403 and r.json()["detail"] == {"pin": "not_set"}
+    """The PIN is optional (the owner, 2026-11-27: "I don't even need the
+    pin"): with none set, nothing asks for one. Once set, it is changed only
+    with the current PIN and checked from the X-Parent-Pin header; a lockout
+    answers 429 with the wait."""
+    assert client.post("/api/rewards/pin/check").status_code == 204
     assert client.post("/api/rewards/pin", json={"pin": "12"}).status_code == 422
     assert client.post("/api/rewards/pin", json={"pin": "2468"}).status_code == 204
     # changing needs the current PIN
@@ -7306,10 +7307,11 @@ def test_hub_has_no_reward_when_off(client, app_mod):
     assert "reward" not in client.get("/api/hub").json()["people"][0]
 
 
-def test_enable_requires_pin_and_seeds(client, app_mod):
+def test_enable_needs_no_pin_when_none_is_set_and_seeds(client, app_mod):
     pid, _, _ = _kid_with_history(client, app_mod)
     r = client.post("/api/rewards/enable")
-    assert r.status_code == 403 and r.json()["detail"] == {"pin": "not_set"}
+    assert r.status_code == 200 and r.json()["launch"]["seeds"] == {str(pid): 3}
+    assert "reward" in client.get("/api/hub").json()["people"][0]   # on, with no PIN
     rec = _enable(client)
     assert rec["launch"] == {"day": _today().isoformat(), "seeds": {str(pid): 3}}
     # a second tap changes nothing
@@ -7936,3 +7938,32 @@ def test_a_lost_pin_key_fails_closed_and_says_so(client, app_mod, monkeypatch, t
     r = client.post(f"/api/rewards/payout/{pid}", headers=PIN)
     assert r.status_code == 403 and r.json()["detail"] == {"pin": "key_missing"}
     assert client.get("/api/rewards").json()["pin_key_missing"] is True
+
+
+def test_with_no_pin_the_wallet_runs_and_nothing_asks_for_one(client, app_mod, monkeypatch):
+    """The PIN is optional (the owner, 2026-11-27). Without one, payouts,
+    settings and fixes to old days just go through."""
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    assert client.request("DELETE", "/api/rewards/pin", headers=PIN).status_code == 204
+    st = client.get("/api/rewards").json()
+    assert st["pin_set"] is False and st["active"] is True
+    old = (now.date() - dt.timedelta(days=3)).isoformat()
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": old}).status_code == 200
+    assert client.put("/api/rewards/settings", json={"cents_per_chore": 40}).status_code == 200
+    assert client.post(f"/api/rewards/payout/{pid}").status_code == 200
+    assert "reward" in client.get("/api/hub").json()["people"][0]
+
+
+def test_removing_the_pin_needs_the_pin(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    r = client.request("DELETE", "/api/rewards/pin")
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    r = client.request("DELETE", "/api/rewards/pin", headers={"X-Parent-Pin": "0000"})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "wrong"}
+    assert client.get("/api/rewards").json()["pin_set"] is True
+    assert client.request("DELETE", "/api/rewards/pin", headers=PIN).status_code == 204
+    assert client.get("/api/rewards").json()["pin_set"] is False
+    # and one can be set again, from scratch
+    assert client.post("/api/rewards/pin", json={"pin": "1357"}).status_code == 204
+    assert client.post("/api/rewards/pin/check", headers={"X-Parent-Pin": "1357"}).status_code == 204
