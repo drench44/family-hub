@@ -178,10 +178,13 @@ def award(conn, pid: int, run: rw.Run, settings: dict, today: dt.date) -> list:
 
 
 def earned_cents(conn, pid: int, launch_day: str) -> int:
+    """Done house chores pay their earner: who owned the row when it was
+    ticked (``earner``), else its owner (``person_id``)."""
     row = conn.execute(
         "SELECT COALESCE(SUM(o.cents), 0) FROM occurrence_log o "
         "JOIN completions c ON c.chore_id = o.chore_id AND c.date = o.date "
-        "WHERE o.person_id = ? AND o.kind = 'house' AND o.date >= ?",
+        "WHERE COALESCE(o.earner, o.person_id) = ? AND o.kind = 'house' "
+        "AND o.date >= ?",
         (pid, launch_day)).fetchone()
     return int(row[0])
 
@@ -283,7 +286,8 @@ def history(conn, pid: int, launch_day: str) -> dict:
     for ds, cents in conn.execute(
             "SELECT o.date, o.cents FROM occurrence_log o "
             "JOIN completions c ON c.chore_id = o.chore_id AND c.date = o.date "
-            "WHERE o.person_id = ? AND o.kind = 'house' AND o.date >= ?",
+            "WHERE COALESCE(o.earner, o.person_id) = ? AND o.kind = 'house' "
+            "AND o.date >= ?",
             (pid, launch_day)):
         d = dt.date.fromisoformat(ds)
         wk = (d - dt.timedelta(days=d.weekday())).isoformat()

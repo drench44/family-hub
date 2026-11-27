@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS occurrence_log(
   covering_for INTEGER,   -- the away person this row is standing in for (P5)
   cents INTEGER NOT NULL DEFAULT 0,      -- what this row pays when done, frozen
   kind TEXT NOT NULL DEFAULT 'house',    -- the chore's kind when served, frozen
+  earner INTEGER,   -- who is paid for this done row (NULL: person_id); see app._price_rows
   PRIMARY KEY(date, chore_id));
 -- Days the wall actually served (today frozen with a healthy away overlay),
 -- even when nobody had anything that day. A day missing here was an outage:
@@ -350,6 +351,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
                      "NOT NULL DEFAULT 'house'")
         conn.execute("INSERT OR IGNORE INTO served_days(date) "
                      "SELECT DISTINCT date FROM occurrence_log")
+        conn.commit()
+    if "earner" not in occ_cols:
+        conn.execute("ALTER TABLE occurrence_log ADD COLUMN earner INTEGER")
         conn.commit()
     # Seed the local_rev counter once, above any revision already stored.
     conn.execute("INSERT OR IGNORE INTO cal_rev(id, n) "
@@ -837,8 +841,8 @@ def _log_row(r: sqlite3.Row) -> dict:
 
 
 _LOG_INSERT = ("INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-               "icon, rot, covering_for, cents, kind) "
-               "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+               "icon, rot, covering_for, cents, kind, earner) "
+               "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 
 def _log_values(date: str, r: dict) -> tuple:
@@ -846,7 +850,7 @@ def _log_values(date: str, r: dict) -> tuple:
     legacy backfill, wallet off) writes an unpaid house row."""
     return (date, r["chore_id"], r["person_id"], r["title"], r["icon"],
             r["rot"], r.get("covering_for"), int(r.get("cents") or 0),
-            r.get("kind") or "house")
+            r.get("kind") or "house", r.get("earner"))
 
 
 def replace_day_log(conn, date: str, rows: list[dict]) -> None:

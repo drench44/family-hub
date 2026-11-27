@@ -1234,7 +1234,7 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
         # kind and cents too: re-tagging a chore today must re-freeze today
         return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"],
                 r.get("covering_for"), r.get("kind") or "house",
-                int(r.get("cents") or 0))
+                int(r.get("cents") or 0), r.get("earner"))
     if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
             sorted(key(r) for r in rows):
         fdb.replace_day_log(c, d_str, rows)
@@ -1395,21 +1395,41 @@ def _price_rows(c, rows: list[dict], today: dt.date):
     try:
         settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
         away_by = _wallet_away(c, launch["day"], today)
+        d_str = today.isoformat()
+        done = {r["chore_id"] for r in fdb.completions_between(c, d_str, d_str)}
+        served = {r["chore_id"]: r for r in fdb.day_log(c, d_str)} if done else {}
         rate: dict[int, int] = {}
         out = []
         for r in rows:
             r = dict(r)
-            if (r.get("kind") or "house") == "house" and not r.get("locked"):
+            was = served.get(r["chore_id"]) if r["chore_id"] in done else None
+            if r.get("locked"):
+                pass                     # a kept done row keeps its frozen pay and earner
+            elif was is not None and was.get("earner") is not None:
+                # A done chore that was priced with the wallet on is SETTLED: it
+                # pays its earner (whoever the wall showed it for when it was
+                # ticked), as the kind it was and at the price shown then. A
+                # later re-plan (an owner back from a trip the same day), a
+                # retag or a rate change moves only its streak owner
+                # (person_id), never its pay; so a payout that counted it stays
+                # right (owner, 2026-11-27, wallet known limits). Unticking
+                # unsettles it: the next serve prices it afresh. A row with no
+                # earner was frozen while the wallet was off (or before this
+                # rule): it is priced below like any other.
+                r["kind"] = was.get("kind") or "house"
+                r["earner"] = was["earner"]
+                r["cents"] = int(was.get("cents") or 0) if r["kind"] == "house" else 0
+            elif (r.get("kind") or "house") == "house":
                 pid = r["person_id"]
                 if pid not in rate:
                     run = wallet.person_run(c, pid, today, settings, launch,
                                             away_by.get(pid, set()))
                     rate[pid] = _rate_today(run, today, settings)
                 r["cents"] = rate[pid]
-            elif r.get("locked"):
-                pass                     # a kept done row keeps its frozen pay
+                r["earner"] = pid        # priced: who this row pays if done now
             else:
                 r["cents"] = 0
+                r["earner"] = r["person_id"]
             out.append(r)
         return out, True
     except Exception:
@@ -1482,7 +1502,10 @@ def _add_rewards(c, plan: list, rows: list, today: dt.date,
         for ch in entry["chores"]:
             r = by_id.get(ch["id"], {})
             ch["kind"] = r.get("kind") or "house"
-            ch["cents"] = int(r.get("cents") or 0)
+            # a chore settled to someone else (the backup who did it before
+            # this owner came back) shows no pay on this card: it isn't theirs
+            mine = (r.get("earner") or pid) == pid
+            ch["cents"] = int(r.get("cents") or 0) if mine else 0
 
 
 def _backup_status(last_success, now, stale_s, remote=None):

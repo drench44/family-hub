@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from family_hub import db as fdb
 from family_hub import tiles as ftiles
 from family_hub import todos as tdlogic
+from family_hub import wallet
 
 
 def _write_cfg(tmp_path):
@@ -7664,8 +7665,9 @@ def test_hub_wallet_rules_say_when_they_cannot_be_read(client, app_mod, monkeypa
 
 
 def test_reassigning_a_paid_chore_done_today_needs_the_pin(client, app_mod):
-    """Moving a chore that was done and paid today to someone else moves
-    its pay, so with the wallet on it is a parent action."""
+    """Moving a chore that was done today to someone else moves whose card and
+    streak it counts for, so with the wallet on it is a parent action. Its pay
+    stays with whoever did it (settled, 2026-11-27)."""
     pid, cid, _ = _kid_with_history(client, app_mod)
     other = _mk_person(client, "Ben")
     _enable(client)
@@ -7681,6 +7683,31 @@ def test_reassigning_a_paid_chore_done_today_needs_the_pin(client, app_mod):
                         ).status_code == 200
     assert client.patch(f"/api/admin/chores/{cid}", json={"fixed_person_id": other},
                         headers=PIN).status_code == 200
+    client.get("/api/hub")
+    c = app_mod._db()
+    launch = fdb.kv_get(c, "rewards.launch")["day"]
+    assert wallet.earned_cents(c, other, launch) == 0       # the pay did not move
+    assert wallet.earned_cents(c, pid, launch) > 0
+
+
+def test_switching_the_wallet_off_and_on_mid_day_keeps_a_done_chores_pay(
+        client, app_mod, monkeypatch):
+    """Review 2026-11-27: with the wallet off the wall freezes today unpriced
+    (0, no earner). Turned back on, a chore done earlier is priced again, not
+    settled at 0."""
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    c = app_mod._db()
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert _earned(app_mod, pid) == 30
+    launch = fdb.kv_get(c, "rewards.launch")
+    fdb.kv_set(c, "rewards.launch", None)                  # off
+    client.get("/api/hub")
+    fdb.kv_set(c, "rewards.launch", launch)                # back on
+    client.get("/api/hub")
+    assert _earned(app_mod, pid) == 30
 
 
 def test_switching_a_person_off_and_on_records_the_days_off(client, app_mod, monkeypatch):
@@ -7730,3 +7757,169 @@ def test_past_days_show_no_old_streak_with_the_wallet_on(client, app_mod, monkey
     fdb.kv_set(c, "rewards.launch", None)            # wallet off: old chip back
     people = client.get(f"/api/chores/day?date={y}").json()["people"]
     assert [p["streak"] for p in people if p["person"]["id"] == pid] == [3]
+
+
+def _earned(app_mod, pid):
+    c = app_mod._db()
+    return wallet.earned_cents(c, pid, fdb.kv_get(c, "rewards.launch")["day"])
+
+
+def test_a_done_chore_pays_whoever_did_it_when_its_owner_returns_the_same_day(
+        client, app_mod, monkeypatch):
+    """Known limit closed 2026-11-27: the backup does the away owner's chore in
+    the morning, the owner comes back the same day, and the re-frozen row moves
+    to the owner (so their streak counts it). The pay must stay with the backup,
+    who did the work, at the rate it paid when ticked."""
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(8))
+    c = app_mod._db()
+    backup = _mk_person(client, "Ben")
+    today = _house_now(8).date()
+    period = fdb.add_away_period(c, pid, (today - dt.timedelta(days=2)).isoformat(),
+                                 None, backup)
+    client.get("/api/hub")                                  # today frozen onto the backup
+    assert fdb.log_row(c, cid, today.isoformat())["person_id"] == backup
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    paid = _earned(app_mod, backup)
+    assert paid > 0 and _earned(app_mod, pid) == 0
+    assert client.post(f"/api/admin/away/{period}/back").status_code == 200
+    client.get("/api/hub")                                  # re-frozen onto the owner
+    assert fdb.log_row(c, cid, today.isoformat())["person_id"] == pid   # streak follows the plan
+    assert _earned(app_mod, backup) == paid                 # pay stays with who did it
+    assert _earned(app_mod, pid) == 0
+
+
+def test_a_rate_change_after_a_payout_never_reprices_a_chore_already_done(
+        client, app_mod, monkeypatch):
+    """Known limit closed 2026-11-27: a payout counts today's done chores; a
+    later rate change used to reprice them, so the wallet showed money that
+    was already paid (or owed back). A ticked chore keeps the rate it was
+    ticked at; one not done yet takes the new rate."""
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    before = _earned(app_mod, pid)
+    assert before > 0
+    assert client.post(f"/api/rewards/payout/{pid}", headers=PIN).status_code == 200
+    r = client.put("/api/rewards/settings", json={"cents_per_chore": 75}, headers=PIN)
+    assert r.status_code == 200
+    client.get("/api/hub")                                  # today re-priced
+    assert _earned(app_mod, pid) == before
+    c = app_mod._db()
+    launch = fdb.kv_get(c, "rewards.launch")["day"]
+    assert wallet.balance_cents(c, pid, launch) == 0
+    # unticked, the chore is open again and takes today's rate when redone
+    assert client.delete(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert fdb.log_row(c, cid, _house_now(12).date().isoformat())["cents"] == 75
+
+
+def _today_row(app_mod, cid, now):
+    return fdb.log_row(app_mod._db(), cid, now.date().isoformat())
+
+
+def test_a_retick_before_the_next_serve_pays_the_price_the_wall_showed(
+        client, app_mod, monkeypatch):
+    """Untick and re-tick with no serve in between, after a rate change: the
+    chore pays the price on the card when it was ticked (the frozen row), not a
+    rate the wall never showed. The next untick and serve then reprice it."""
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.put("/api/rewards/settings", json={"cents_per_chore": 75}, headers=PIN)
+    assert client.delete(f"/api/chores/{cid}/complete").status_code == 200
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert _today_row(app_mod, cid, now)["cents"] == 30
+    assert _earned(app_mod, pid) == 30
+
+
+def test_retagging_a_done_chore_never_changes_what_it_paid(client, app_mod, monkeypatch):
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    paid = _earned(app_mod, pid)
+    assert paid == 30
+    assert client.patch(f"/api/admin/chores/{cid}", json={"kind": "personal"},
+                        headers=PIN).status_code == 200
+    client.get("/api/hub")
+    assert _earned(app_mod, pid) == paid                 # done as a house chore: still pays
+    assert _today_row(app_mod, cid, now)["kind"] == "house"
+    # and a personal goal done today does not start paying when made a house chore
+    goal = client.post("/api/admin/chores", json={
+        "title": "Vitamins", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid, "kind": "personal"}).json()["id"]
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{goal}/complete").status_code == 200
+    client.get("/api/hub")
+    assert client.patch(f"/api/admin/chores/{goal}", json={"kind": "house"},
+                        headers=PIN).status_code == 200
+    client.get("/api/hub")
+    assert _earned(app_mod, pid) == paid
+    # tomorrow the new kinds apply as usual (only done rows are settled)
+
+
+def test_a_chore_ticked_before_the_wallet_was_on_is_priced_once_it_is(
+        client, app_mod, monkeypatch):
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    c = app_mod._db()
+    launch = fdb.kv_get(c, "rewards.launch")
+    fdb.kv_set(c, "rewards.launch", None)                # wallet not on yet
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert _today_row(app_mod, cid, now)["cents"] == 0
+    fdb.kv_set(c, "rewards.launch", launch)              # switched on mid-day
+    client.get("/api/hub")
+    assert _today_row(app_mod, cid, now)["cents"] == 30
+    assert _earned(app_mod, pid) == 30
+
+
+def test_the_owners_card_shows_no_pay_for_a_chore_the_backup_was_paid_for(
+        client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(8))
+    c = app_mod._db()
+    backup = _mk_person(client, "Ben")
+    today = _house_now(8).date()
+    period = fdb.add_away_period(c, pid, (today - dt.timedelta(days=2)).isoformat(),
+                                 None, backup)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    assert client.post(f"/api/admin/away/{period}/back").status_code == 200
+    hub = client.get("/api/hub").json()
+    cards = {p["person"]["id"]: p for p in hub["people"]}
+    owner_row = [ch for ch in cards[pid]["chores"] if ch["id"] == cid]
+    assert owner_row and owner_row[0]["done"] and owner_row[0]["cents"] == 0
+    assert cards[backup]["reward"]["wallet_cents"] == 30
+    assert cards[pid]["reward"]["wallet_cents"] == 0
+
+
+def test_a_kept_done_row_keeps_its_pay_and_is_not_rewritten_each_serve(
+        client, app_mod, monkeypatch):
+    """A done chore the plan drops (its owner switched off) is kept, locked,
+    with the earner and pay it had; the wall's polling must not churn it."""
+    now = _house_now(12)
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, now)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    before = _today_row(app_mod, cid, now)
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": False}).status_code == 200
+    client.get("/api/hub")
+    kept = _today_row(app_mod, cid, now)
+    assert (kept["earner"], kept["cents"]) == (before["earner"], before["cents"]) == (pid, 30)
+    calls = []
+    real = fdb.replace_day_log
+    monkeypatch.setattr(fdb, "replace_day_log", lambda *a, **k: calls.append(1) or real(*a, **k))
+    client.get("/api/hub")
+    client.get("/api/hub")
+    assert calls == []
+    assert _earned(app_mod, pid) == 30
