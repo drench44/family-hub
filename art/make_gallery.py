@@ -9,6 +9,7 @@ starts the demo itself on 127.0.0.1:8141 (--port to change) and stops it after.
 It writes, all from the same demo:
   docs/hub.png                     the full page at 1920 px wide
   docs/phone.png                   the phone home screen in a phone frame
+  docs/seasons.jpg                 the seasonal-looks sheet (Christmas and Halloween)
   docs/gallery/<name>.jpg          each shot of art/gallery.json on its kitchen screen
   docs/gallery/<name>-thumb.jpg    the small copy the README strip shows
 
@@ -121,6 +122,18 @@ def phone_frame(shot):
     return body
 
 
+def sheet(images, cols, gap, bg=(16, 18, 22)):
+    """Lay same-size images out in a grid, `gap` px apart (and around)."""
+    w, h = images[0].size
+    rows = -(-len(images) // cols)
+    out = Image.new("RGB", (cols * w + (cols + 1) * gap, rows * h + (rows + 1) * gap), bg)
+    for i, im in enumerate(images):
+        if im.size != (w, h):
+            raise ValueError("every image on a sheet must be the same size")
+        out.paste(im, (gap + (i % cols) * (w + gap), gap + (i // cols) * (h + gap)))
+    return out
+
+
 # ---- capture ----
 
 def prefs_script(theme, look):
@@ -231,6 +244,14 @@ def main():
                 capture(browser, url, cfg["page_width"], 1080, "grey", None, zone,
                         full_page=True).save(DOCS / "hub.png")
                 print("docs/hub.png")
+            se = cfg["seasons"]
+            if want("seasons"):
+                pw, ph_ = se["page"]
+                shots = [capture(browser, url, pw, ph_, s["theme"], s["look"], zone) for s in se["shots"]]
+                pic = sheet(shots, se["cols"], se["gap"])
+                pic.resize((se["out_width"], round(se["out_width"] * pic.height / pic.width)),
+                           Image.LANCZOS).save(DOCS / "seasons.jpg", quality=84)
+                print("docs/seasons.jpg")
             ph = cfg["phone"]
             if want(ph["name"]):
                 shot = capture(browser, url, ph["width"], ph["height"], ph["theme"], ph["look"], zone,

@@ -13,5 +13,15 @@
   {"name": "halloween", "label": "Halloween", "scene": "evening-b", "theme": "dark", "look": "halloween-moonrise"},
   {"name": "thanksgiving", "label": "Thanksgiving", "scene": "wall-mount-b", "theme": "grey", "look": "thanksgiving-golden-hour"}
  ],
+ "seasons": {
+  "about": "docs/seasons.jpg, the README's seasonal-looks picture: a 2x2 sheet of the wall in its best looks. The owner: 'Our seasonal one should really showcase the best, which is Christmas and Halloween.'",
+  "cols": 2, "gap": 12, "out_width": 1940, "page": [1920, 1080],
+  "shots": [
+   {"theme": "dark", "look": "christmas-santa-moon"},
+   {"theme": "light", "look": "christmas-snow-globe"},
+   {"theme": "dark", "look": "halloween-two-lanterns"},
+   {"theme": "grey", "look": "halloween-purple-pines"}
+  ]
+ },
  "phone": {"name": "phone", "label": "Phone", "theme": "dark", "look": null, "width": 390, "height": 844, "scale": 3}
 }
