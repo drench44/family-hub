@@ -1,0 +1,84 @@
+{
+ "what": "christmas-looks",
+ "generator": {
+  "model": "FLUX.2 klein 4B (gen.py klein)",
+  "width": 1536,
+  "height": 864,
+  "upscale": "SeedVR2 7B (gen.py upscale), seed 1"
+ },
+ "finish": "Seasonal look backgrounds. Finish: scripts/prep-season-photo.py (webp plus glass copy).",
+ "pictures": [
+  {
+   "output": "christmas-santa-moon",
+   "candidate": "christmas2-santa-moon-b",
+   "seed": 2001,
+   "prompt": "A snowy village of cozy cottages all strung with colorful Christmas lights at night, a giant glowing full moon with the small silhouette of Santa's sleigh and reindeer flying across it, snow-covered pines, glowing windows, wreaths on every door. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-north-pole",
+   "candidate": "christmas2-north-pole-village-b",
+   "seed": 2011,
+   "prompt": "Santa's North Pole village at night: red and white candy-striped workshop with glowing windows, a tall candy cane pole, snow-covered gingerbread-style cottages trimmed with colorful lights, a huge lit Christmas tree in the square, wrapped presents in the snow, aurora borealis in green and violet overhead. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-morning",
+   "candidate": "christmas2-christmas-morning-a",
+   "seed": 9939,
+   "prompt": "A cozy living room on Christmas morning: a tall fully decorated Christmas tree glowing with lights, red and gold ornaments, a shining star on top, heaps of wrapped presents in red, green and gold paper with big bows, red stockings hung on a stone fireplace with a crackling fire, garland and candles on the mantel, frosted window with falling snow. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos. Only one single fireplace in the whole room, exactly one stone hearth."
+  },
+  {
+   "output": "christmas-stockings",
+   "candidate": "christmas2-fireplace-stockings-a",
+   "seed": 2030,
+   "prompt": "A crackling fireplace hung with plump red and white knit stockings, the mantel overflowing with evergreen garland, red berries, pine cones, glowing candles and twinkling lights, a plate of cookies and a glass of milk for Santa on the hearth, a decorated tree glowing nearby. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-main-street",
+   "candidate": "christmas2-main-street-a",
+   "seed": 2040,
+   "prompt": "A small-town main street on Christmas Eve, snow-covered shops with glowing windows, every storefront trimmed with garland, wreaths and colorful lights, strings of lights crisscrossing above the street, a giant decorated tree at the end of the street, old-fashioned lamp posts wrapped like candy canes, fresh snow on the road. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-gingerbread",
+   "candidate": "christmas2-gingerbread-house-a",
+   "seed": 2050,
+   "prompt": "An elaborate gingerbread house covered in icing snow, gumdrops, peppermint candies and candy canes, glowing with tiny warm lights inside, on a table surrounded by Christmas cookies, a mug of hot cocoa with marshmallows, and a blurred decorated tree with colorful lights behind. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-santas-sleigh",
+   "candidate": "christmas2-sleigh-reindeer-a",
+   "seed": 9979,
+   "prompt": "A shiny red Santa's sleigh piled high with wrapped presents and a big sack of toys, parked in deep snow in a glowing pine forest, harness bells and lanterns glowing, trees covered in twinkling lights, magical golden sparkles drifting in the air. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos. The sleigh is a classic Santa sleigh sitting on two curved metal runners like skis, no wheels at all, and plain brown sacks with no print or writing."
+  },
+  {
+   "output": "christmas-ornament",
+   "candidate": "christmas2-ornament-closeup-a",
+   "seed": 2070,
+   "prompt": "Close-up of shiny red and gold glass Christmas ornaments hanging on a snowy evergreen branch with twinkling lights, a tiny reflection of a glowing fireplace in the ornament, rich red and green bokeh background full of sparkle. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-snow-globe",
+   "candidate": "christmas2-snow-globe-b",
+   "seed": 2081,
+   "prompt": "A large glass snow globe on a windowsill containing a tiny snowy Christmas village with a lit tree, snow swirling inside, glowing with warm light, behind it a window with a snowy night and colorful Christmas lights on the houses outside. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-toy-train",
+   "candidate": "christmas2-toy-train-tree-a",
+   "seed": 2090,
+   "prompt": "A vintage red and green toy train circling under a big sparkling Christmas tree covered in colorful lights and ornaments, surrounded by wrapped presents, nutcracker soldiers and teddy bears, warm glow, cozy living room at night. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-lit-house",
+   "candidate": "christmas2-lit-house-night-a",
+   "seed": 2100,
+   "prompt": "A family house completely covered in festive Christmas lights in red, green and warm white, lit wreaths on every window, a glowing star on the roof, lit candy cane lights along the walkway, a light-up snowman in the snowy yard, falling snow, deep blue night sky with stars. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  },
+  {
+   "output": "christmas-cabin-eve",
+   "candidate": "christmas2-cabin-christmas-eve-a",
+   "seed": 2110,
+   "prompt": "A snow-covered log cabin on Christmas Eve, its roofline and porch wrapped in colorful twinkling lights, a big wreath with a red bow on the door, a decorated Christmas tree glowing in the front window, lanterns along the path, pines strung with lights, a starry sky with a shooting star. Magical Christmas Eve atmosphere, joyful and festive, glowing with holiday spirit, classic red, green and warm gold colors, countless twinkling Christmas lights, gentle sparkling snowfall, enchanting storybook wonder, cinematic photograph, rich detail, wide 16:9 landscape, soft glowing background in the upper area, no people, no text, no logos."
+  }
+ ]
+}

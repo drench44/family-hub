@@ -13,13 +13,19 @@ expand to your full dashboards on a tap, and a laundry card that counts a
 washer or dryer cycle down and remembers when the load finished, all in a
 light or dark theme with an accent color you pick.
 
-![family-hub](docs/hub.png)
+<p align="center"><a href="docs/gallery/dark.jpg"><img src="docs/gallery/dark.jpg" alt="family-hub on a kitchen all-in-one: chores, calendar, cameras, weather and laundry" width="100%"></a></p>
 
-*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, at-a-glance weather + per-room climate, the laundry portholes, and the Fleet Console status card. Shown in the default grey theme with a green accent and sample data.*
+<p align="center">
+<a href="docs/gallery/dark.jpg"><img src="docs/gallery/dark-thumb.jpg" alt="Blue theme" width="15.5%"></a>
+<a href="docs/gallery/light.jpg"><img src="docs/gallery/light-thumb.jpg" alt="Light theme" width="15.5%"></a>
+<a href="docs/gallery/christmas.jpg"><img src="docs/gallery/christmas-thumb.jpg" alt="Christmas look" width="15.5%"></a>
+<a href="docs/gallery/halloween.jpg"><img src="docs/gallery/halloween-thumb.jpg" alt="Halloween look" width="15.5%"></a>
+<a href="docs/gallery/thanksgiving.jpg"><img src="docs/gallery/thanksgiving-thumb.jpg" alt="Thanksgiving look" width="15.5%"></a>
+<a href="docs/phone.png"><img src="docs/gallery/phone-thumb.jpg" alt="On a phone" width="15.5%"></a>
+<br><sub><b>Blue</b> · <b>Light</b> · <b>Christmas</b> · <b>Halloween</b> · <b>Thanksgiving</b> · <b>Phone</b>. Tap one to see it full size.</sub>
+</p>
 
-![family-hub on a phone](docs/phone.png)
-
-*The same page, reflowed to six phone tabs, carrying the same theme. The Chores tab is shown here.*
+*The kitchen wall: one card system across chores, the shared calendar with to-dos, cameras, at-a-glance weather + per-room climate, the laundry portholes and the 3D printer, shown with the demo's sample data. On a phone the same page reflows to six tabs. The full page is in [`docs/hub.png`](docs/hub.png). Every picture here is rebuilt by one script, [`art/make_gallery.py`](art/README.md).*
 
 Runs on any always-on Linux box with Docker. No cloud service of its own, no
 accounts, no telemetry: it lives on your LAN and only talks out to the
@@ -47,6 +53,9 @@ at one URL.
   takes November with **Pumpkin Patch** (the default), **Golden Hour**,
   **Cranberry Bog**, **Cranberry Harvest**, **Corn Shocks**, **Vine Rows** and **Hudson Autumn**: leaves fall in
   each photo's colours and a skein of birds crosses the sky now and then.
+  **Christmas** takes December with twelve festive scenes, **Santa and the
+  Moon** (the default), North Pole, Christmas Morning, a gingerbread house, a
+  snow globe and more: windows and string lights twinkle and snow drifts past.
   Each look is picked per device under **All settings → Seasonal looks**
   from live preview tiles, and none is locked to its dates: **Calendar**
   follows them, while tapping any look (**Pick one**) keeps it all year. Each of the five themes keeps its own glass: Light and

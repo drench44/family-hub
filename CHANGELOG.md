@@ -10,6 +10,15 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- The README opens on the wall shown on a kitchen all-in-one, with a strip of pictures to tap through: Blue, Light, Christmas, Halloween, Thanksgiving and phone. One script, `art/make_gallery.py`, rebuilds all of them (and `docs/hub.png` and `docs/phone.png`) from the demo, so they stay current when the app changes.
+- `art/` keeps the recipe (prompt and seed) of every made picture, the owner's kitchen scenes, and the requirements and lessons for making more.
+
+### Fixed
+
+- The README now mentions the Christmas looks.
+
 ## [1.20.0] — 2026-11-26
 
 ### Added

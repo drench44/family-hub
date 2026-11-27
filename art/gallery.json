@@ -1,0 +1,16 @@
+{
+ "about": "The README gallery: each shot is the demo in one look, pasted onto the screen of one kitchen scene. art/make_gallery.py reads this. Scenes and their screen corners live in art/kitchen/.",
+ "zoom": 0.5,
+ "hour": 13,
+ "out_width": 1600,
+ "thumb_width": 480,
+ "page_width": 1920,
+ "shots": [
+  {"name": "dark", "label": "Blue", "scene": "counter-a", "theme": "dark", "look": null},
+  {"name": "light", "label": "Light", "scene": "wall-mount-b", "theme": "light", "look": null},
+  {"name": "christmas", "label": "Christmas", "scene": "evening-b", "theme": "dark", "look": "christmas-santa-moon"},
+  {"name": "halloween", "label": "Halloween", "scene": "evening-b", "theme": "dark", "look": "halloween-moonrise"},
+  {"name": "thanksgiving", "label": "Thanksgiving", "scene": "counter-a", "theme": "grey", "look": "thanksgiving-golden-hour"}
+ ],
+ "phone": {"name": "phone", "label": "Phone", "theme": "dark", "look": null, "width": 390, "height": 844, "scale": 3}
+}

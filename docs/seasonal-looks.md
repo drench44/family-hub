@@ -505,6 +505,10 @@ This repo is public and MIT licensed, so every file must be redistributable.
   and its upscaler, and write both in the CREDITS.md row with the date.
 - The owner always picks from a contact sheet. Never ship a generated
   picture they have not chosen.
+- The prompt and seed of every kept picture are in
+  [`art/recipes/`](../art/recipes/), and [`art/README.md`](../art/README.md)
+  has the requirements (festive, red, green and gold, lit windows) and the
+  steps to remake or add one.
 - Check every image for AI flaws before it goes on the sheet: no people, no
   text or logos, no duplicated or impossible objects (extra legs, melted
   hands, mugs that merge into the table, a lamp with two bulbs).
