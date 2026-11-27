@@ -24,7 +24,73 @@ def test_pin_hash_not_plaintext(conn):
     raw = conn.execute("SELECT value FROM kv WHERE key = 'rewards.pin'").fetchone()[0]
     assert "4826" not in raw
     stored = fdb.kv_get(conn, "rewards.pin")
-    assert set(stored) == {"salt", "hash"}
+    assert set(stored) == {"v", "salt", "hash"} and stored["v"] == 2
+
+
+def test_a_stolen_database_alone_cannot_check_a_pin(conn, tmp_path, monkeypatch):
+    """The PIN hash mixes in a secret key kept in a file beside the database,
+    not in it: with only a copy of hub.db, trying all 4-6 digit PINs gets
+    nowhere (the known limit in the wallet audit, closed 2026-11-27)."""
+    import hashlib
+    import hmac
+    pp.set_pin(conn, "4826", current=None)
+    key = tmp_path / "pin.key"
+    assert key.exists() and len(key.read_bytes()) == 32
+    assert oct(key.stat().st_mode & 0o777) == "0o600"
+    stored = fdb.kv_get(conn, "rewards.pin")
+    salt = bytes.fromhex(stored["salt"])
+    # an attacker's guess without the key, under every hash this module uses
+    for guess in ("4826",):
+        assert hashlib.pbkdf2_hmac("sha256", guess.encode(), salt, 200_000).hex() != stored["hash"]
+        assert hashlib.scrypt(guess.encode(), salt=salt, n=2 ** 14, r=8, p=1,
+                              dklen=32).hex() != stored["hash"]
+        assert hmac.new(b"", guess.encode(), "sha256").hexdigest() != stored["hash"]
+    # a different key file (the db restored onto another box) cannot check it
+    monkeypatch.setattr(pp, "KEY_PATH", str(tmp_path / "other.key"))
+    (tmp_path / "other.key").write_bytes(b"x" * 32)
+    assert pp.check(conn, "4826", T0) == (False, 0)
+
+
+def test_an_old_pin_hash_still_works_and_is_upgraded_on_first_use(conn, tmp_path):
+    import hashlib
+    import secrets
+    salt = secrets.token_bytes(16)
+    fdb.kv_set(conn, "rewards.pin", {"salt": salt.hex(), "hash": hashlib.pbkdf2_hmac(
+        "sha256", b"2468", salt, 200_000).hex()})          # what v1.21 stored
+    assert pp.check(conn, "1111", T0) == (False, 0)
+    assert fdb.kv_get(conn, "rewards.pin").get("v") is None   # a wrong try changes nothing
+    assert pp.check(conn, "2468", T0) == (True, 0)
+    assert fdb.kv_get(conn, "rewards.pin")["v"] == 2         # upgraded with the right PIN
+    assert pp.check(conn, "2468", T0) == (True, 0)
+
+
+def test_a_missing_key_file_fails_closed_loudly_and_can_be_cleared(conn, tmp_path, caplog):
+    pp.set_pin(conn, "4826", current=None)
+    (tmp_path / "pin.key").unlink()
+    with caplog.at_level("ERROR"):
+        assert pp.check(conn, "4826", T0) == (False, 0)
+    assert "pin.key" in caplog.text
+    assert pp.key_missing(conn)
+    assert not (tmp_path / "pin.key").exists()               # never re-made under a set PIN
+    pp.clear(conn)                                           # the box-side reset
+    assert not pp.is_set(conn) and not pp.key_missing(conn)
+    pp.set_pin(conn, "1357", current=None)
+    assert pp.check(conn, "1357", T0) == (True, 0)
+
+
+def test_the_box_command_clears_the_pin(tmp_path, monkeypatch, capsys):
+    db = str(tmp_path / "hub.db")
+    c = fdb.connect(db)
+    fdb.ensure_schema(c)
+    pp.set_pin(c, "4826", current=None)
+    c.close()
+    monkeypatch.setenv("DB_PATH", db)
+    assert pp.main(["--clear"]) == 0
+    assert "cleared" in capsys.readouterr().out
+    c = fdb.connect(db)
+    assert not pp.is_set(c)
+    c.close()
+    assert pp.main([]) == 2                        # no flag: usage, nothing changed
 
 
 def test_change_needs_current(conn):

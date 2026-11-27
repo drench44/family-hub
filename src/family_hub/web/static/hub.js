@@ -4771,6 +4771,7 @@ async function withParentPin(write, refusalOf, message) {
     if (r && r.pin === 'wrong') { forgetParentPin(); return { ok: false, why: 'wrong' }; }
   }
   if (r && r.pin === 'locked') return { ok: false, why: 'locked', wait_s: r.wait_s };
+  if (r && r.pin === 'key_missing') return { ok: false, why: 'key_missing' };
   return { ok, why: ok ? '' : 'failed' };
 }
 
@@ -4791,6 +4792,7 @@ async function jParent(url, opts, message) {
   if (res.why === 'locked') throw new Error(pinLockMessage(res.wait_s));
   if (res.why === 'wrong') throw new Error('That PIN didn’t match. Nothing was changed.');
   if (res.why === 'cancelled') throw new Error('Not saved. That change needs a parent.');
+  if (res.why === 'key_missing') throw new Error(PIN_KEY_MISSING);
   throw lastErr || new Error('Couldn’t save. Check the hub and try again.');
 }
 

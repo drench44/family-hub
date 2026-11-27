@@ -7923,3 +7923,16 @@ def test_a_kept_done_row_keeps_its_pay_and_is_not_rewritten_each_serve(
     client.get("/api/hub")
     assert calls == []
     assert _earned(app_mod, pid) == 30
+
+
+def test_a_lost_pin_key_fails_closed_and_says_so(client, app_mod, monkeypatch, tmp_path):
+    """A hub restored onto a new box without data/pin.key: money actions are
+    refused with a reason the wall can show, and the status says so."""
+    import os
+    from family_hub import parent_pin
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    assert client.post(f"/api/rewards/payout/{pid}", headers=PIN).status_code in (200, 204)
+    os.remove(parent_pin.KEY_PATH)
+    r = client.post(f"/api/rewards/payout/{pid}", headers=PIN)
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "key_missing"}
+    assert client.get("/api/rewards").json()["pin_key_missing"] is True

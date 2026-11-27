@@ -527,7 +527,10 @@ levels and cost projections. `wallet.py` reads the frozen
 `occurrence_log` (which now stores each row's `kind` and `cents`), the
 `served_days` table and the `ledger` table (bonuses and payouts, a bonus
 keyed by person, run and streak length so it can never pay twice).
-`parent_pin.py` holds the hashed PIN and its lockout; `app.py` gates
+`parent_pin.py` holds the hashed PIN and its lockout (scrypt over an HMAC
+keyed by `pin.key`, a 32-byte owner-only file beside `hub.db`, so a copy of
+the database alone cannot be used to try PINs; a lost key fails closed and
+`python -m family_hub.parent_pin --clear` resets the PIN); `app.py` gates
 old-day edits, money settings and payouts on it, and adds a `reward` block
 to the wall payload only while the wallet is on.
 
