@@ -210,3 +210,40 @@ def format_cents(c: int) -> str:
     sign = "-" if c < 0 else ""
     c = abs(c)
     return f"{sign}${c // 100}.{c % 100:02d}"
+
+
+def since_payout(ledger: list, *, chores_done: int, balance_cents: int,
+                 launch_day: str, streak, legacy_chores: int | None = None) -> dict:
+    """What a wallet holds now, counted from the last payout (or from launch
+    when nobody has been paid yet). Paid takes the wallet to $0, so this
+    starts over by itself: there is nothing else to reset.
+
+    ``ledger`` is the person's bonus and payout rows, oldest first.
+    ``chores_done`` is every done house chore this person has earned since
+    launch; a payout row keeps that count as it stood when it was paid
+    (``chores_n``), so the chores since are the difference. An old-day fix
+    after a payout moves both the count and the money. ``legacy_chores`` is
+    the count for a payout recorded before the count was kept.
+
+    The money comes from the balance itself: the bonuses since the payout
+    are the bonus rows after it, and the chores are the rest. So the total
+    is always the balance the card shows, never a second sum that can drift.
+    """
+    payouts = [r for r in ledger if r["kind"] == "payout"]
+    last = max(payouts, key=lambda r: r["id"]) if payouts else None
+    after = last["id"] if last else 0
+    bonus = sum(int(r["cents"]) for r in ledger
+                if r["kind"] == "bonus" and r["id"] > after)
+    if last is None:
+        chores = int(chores_done)
+    elif last.get("chores_n") is not None:
+        chores = int(chores_done) - int(last["chores_n"])
+    else:
+        chores = int(legacy_chores or 0)
+    return {"since": last["day"] if last else launch_day,
+            "paid_before": last is not None,
+            "chores": chores,
+            "chore_cents": int(balance_cents) - bonus,
+            "bonus_cents": bonus,
+            "total_cents": int(balance_cents),
+            "streak": streak}

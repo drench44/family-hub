@@ -1762,11 +1762,80 @@ function rwStepsHtml(kind, steps) {
     + `<button class="padmin-btn" type="button" data-rw-add="${kind}">+ Add a step</button></div>`;
 }
 
-function walletPeopleHtml(people) {
+/* "Nov 26", "today", or "Dec 30, 2026" in another year. Pure. */
+function rwSinceLabel(since, today) {
+  if (since === today) return 'today';
+  const [y, m, d] = String(since).split('-').map(Number);
+  if (!y || !m || !d) return String(since || '');
+  const short = `${MONTH_SHORT[m - 1]} ${d}`;
+  return String(today).slice(0, 4) === String(y) ? short : `${short}, ${y}`;
+}
+
+const rwPlural = (n, one) => `${n} ${one}${Math.abs(n) === 1 ? '' : 's'}`;
+
+/* One wallet's summary since the last payout (or since the wallet started),
+   in plain words: "Since Nov 26: 12 chores, $3.60. Streak 47 days." Its
+   total is the wallet balance (the server splits the balance itself). A
+   number that is missing or broken is left out, never shown as $0.00, and
+   a streak the server could not read (null) says so instead of "0 days".
+   Pure. */
+function walletSummaryText(s, today) {
+  if (!s) return '';
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const n = num(s.chores) === null ? null : Math.round(s.chores);
+  const chore = num(s.chore_cents);
+  const bonus = num(s.bonus_cents);
+  const total = num(s.total_cents);
+  let body = null;
+  if (n !== null && chore !== null) {
+    if (n === 0 && chore === 0) body = bonus ? 'no chores' : 'no chores yet';
+    else if (n < 0) body = `${rwPlural(-n, 'chore')} taken back, ${formatCents(chore)}`;
+    else body = `${rwPlural(n, 'chore')}, ${formatCents(chore)}`;
+  } else if (n !== null) {
+    body = n < 0 ? `${rwPlural(-n, 'chore')} taken back` : rwPlural(n, 'chore');
+  } else if (chore !== null) {
+    body = `${formatCents(chore)} from chores`;
+  }
+  const hasBonus = bonus !== null && bonus > 0;
+  const showTotal = total !== null && (hasBonus || bonus === null || chore === null);
+  const head = s.since ? `Since ${rwSinceLabel(s.since, today)}` : 'Since the last payout';
+  let out;
+  if (body === null && !hasBonus) {
+    out = total !== null ? `${head}: total ${formatCents(total)}.` : `${head}: summary unavailable.`;
+  } else {
+    out = `${head}: ${body === null ? `a ${formatBonus(bonus)} streak bonus`
+      : body + (hasBonus ? `, plus a ${formatBonus(bonus)} streak bonus` : '')}.`;
+    if (showTotal) out += ` Total ${formatCents(total)}.`;
+  }
+  if ('streak' in s) {
+    const st = num(s.streak);
+    out += st === null ? ' Streak unavailable.' : ` Streak ${rwPlural(Math.round(st), 'day')}.`;
+  }
+  return out;
+}
+
+/* The message after Paid: what the money was for. Pure. */
+function payoutToastText(paid, today) {
+  if (!paid) return 'Nothing to pay.';
+  const s = paid.summary;
+  let what = '';
+  if (s) {
+    const n = Math.round(Number(s.chores) || 0);
+    const parts = [];
+    if (n > 0) parts.push(rwPlural(n, 'chore'));
+    if (Number(s.bonus_cents) > 0) parts.push(`a ${formatBonus(s.bonus_cents)} streak bonus`);
+    what = (parts.length ? ` for ${parts.join(' and ')}` : '') + ` since ${rwSinceLabel(s.since, today)}`;
+  }
+  const amt = typeof paid.cents === 'number' && Number.isFinite(paid.cents) ? ` ${formatCents(paid.cents)}` : '';
+  return `Paid${amt}${what}. The wallet is back to $0.`;
+}
+
+function walletPeopleHtml(people, today) {
   const row = (k) => `<div class="padmin-row rw-kid">`
     + `<span class="padmin-name" style="color:${safeColor(k.color)}">${escapeHtml(k.name)}</span>`
     + `<span class="rw-bal num">${formatCents(k.balance_cents)}</span>`
     + `<button class="padmin-btn" type="button" data-rw-pay="${k.id}"${k.balance_cents > 0 ? '' : ' disabled'}>Paid</button>`
+    + (k.summary ? `<div class="rw-sum">${escapeHtml(walletSummaryText(k.summary, today))}</div>` : '')
     + `<details class="rw-hist"><summary>History</summary>`
     + ((k.history && (k.history.weeks.length || k.history.ledger.length))
       ? `<ul>${k.history.ledger.map((l) => `<li>${escapeHtml(l.day)}: ${l.kind === 'payout' ? 'paid out' : escapeHtml(l.note || 'streak bonus')} ${formatCents(l.cents)}</li>`).join('')}`
@@ -1822,7 +1891,7 @@ function rewardsCardHtml(st) {
     + `<button class="btn-primary" type="button" data-rw-save="1">Save amounts</button>`
     + `</div>`
     + `<div class="padmin rw-people"><div class="padmin-head"><span class="padmin-head-label">Wallets</span></div>`
-    + walletPeopleHtml(st.people || []) + `</div>`;
+    + walletPeopleHtml(st.people || [], st.today) + `</div>`;
 }
 
 /* ---- Settings > Backups (pure renderers, wired in hub.js) ---- */

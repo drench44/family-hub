@@ -7412,6 +7412,56 @@ def test_payout_route(client, app_mod):
     assert client.post("/api/rewards/payout/999", headers=PIN).status_code == 404
 
 
+def test_rewards_lists_each_wallet_summary_and_payout_starts_it_over(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    st = client.get("/api/rewards").json()
+    assert st["today"] == _today().isoformat()        # for "Since today"
+    me = next(k for k in st["people"] if k["id"] == pid)
+    s = me["summary"]
+    assert s["since"] == fdb.kv_get(app_mod._db(), "rewards.launch")["day"]
+    assert (s["chores"], s["chore_cents"], s["bonus_cents"]) == (1, 30, 0)
+    assert s["total_cents"] == me["balance_cents"] == 30
+    assert s["streak"] == 4 and s["paid_before"] is False
+    r = client.post(f"/api/rewards/payout/{pid}", headers=PIN).json()
+    assert r["paid"]["summary"]["chores"] == 1
+    assert r["paid"]["summary"]["total_cents"] == r["paid"]["cents"] == 30
+    me = next(k for k in client.get("/api/rewards").json()["people"] if k["id"] == pid)
+    assert (me["summary"]["chores"], me["summary"]["total_cents"]) == (0, 0)
+    assert me["summary"]["paid_before"] is True and me["summary"]["streak"] == 4
+
+
+def test_rewards_summary_streak_failure_is_fail_soft(client, app_mod, monkeypatch):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+
+    def boom(*a, **k):
+        raise RuntimeError("bad run")
+    monkeypatch.setattr(app_mod.wallet, "person_run", boom)
+    r = client.get("/api/rewards")
+    assert r.status_code == 200
+    me = next(k for k in r.json()["people"] if k["id"] == pid)
+    # the money still shows; only the streak is left out
+    assert me["summary"]["total_cents"] == 30 and me["summary"]["streak"] is None
+
+
+def test_rewards_summary_for_an_inactive_person(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    client.patch(f"/api/admin/people/{pid}", json={"active": 0})
+    r = client.get("/api/rewards")
+    assert r.status_code == 200
+    me = next(k for k in r.json()["people"] if k["id"] == pid)
+    assert me["summary"]["chores"] == 1
+    assert me["summary"]["total_cents"] == me["balance_cents"] == 30
+
+
 def test_inactive_person_keeps_balance(client, app_mod):
     pid, cid, _ = _kid_with_history(client, app_mod)
     _enable(client)

@@ -6429,7 +6429,7 @@ async function rewardsClick(e) {
     try {
       const r = await jParent(`/api/rewards/payout/${pid}`, { method: 'POST' },
         'Marking a wallet paid needs a parent.');
-      showToast(r && r.paid ? `Paid ${formatCents(r.paid.cents)}. The wallet is back to $0.` : 'Nothing to pay.');
+      showToast(payoutToastText(r && r.paid, rwState && rwState.today));
     } catch (ex) { showToast(ex.message); }
     await paintRewards();
     await poll();

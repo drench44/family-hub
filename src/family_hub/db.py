@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS ledger(
   day TEXT NOT NULL,       -- the house day it was paid on
   created_at TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
+  chores_n INTEGER,        -- payout: done house chores earned since launch, as paid
   UNIQUE(person_id, run_key, at_streak));
 CREATE TABLE IF NOT EXISTS events(
   id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
@@ -354,6 +355,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
     if "earner" not in occ_cols:
         conn.execute("ALTER TABLE occurrence_log ADD COLUMN earner INTEGER")
+        conn.commit()
+    # A payout keeps the chore count it paid for, so the wallet summary can
+    # count the chores since it (NULL on payouts made before this column).
+    if "chores_n" not in {r["name"] for r in conn.execute("PRAGMA table_info(ledger)")}:
+        conn.execute("ALTER TABLE ledger ADD COLUMN chores_n INTEGER")
         conn.commit()
     # Seed the local_rev counter once, above any revision already stored.
     conn.execute("INSERT OR IGNORE INTO cal_rev(id, n) "
