@@ -12,7 +12,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Added
 
-- The chore wallet (in progress): each chore can be a house chore or a personal goal, and every day's chore record now keeps what each chore paid, so changing amounts later never rewrites the past. Streaks for the wallet count calendar days, a missed day can use up a shield instead of ending the run, and the streak reward can be a bonus at set days, higher pay per chore, or both.
+- The chore wallet (in progress): each chore can be a house chore or a personal goal, and every day's chore record now keeps what each chore paid, so changing amounts later never rewrites the past. Streaks for the wallet count calendar days, a missed day can use up a shield instead of ending the run, and the streak reward can be a bonus at set days, higher pay per chore, or both. A parent PIN guards the money settings; five wrong tries lock it for five minutes.
 
 ### Changed
 

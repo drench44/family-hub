@@ -7170,3 +7170,26 @@ def test_chore_kind_round_trips_through_admin_api(client, app_mod):
     kinds = {r["chore_id"]: r["kind"] for r in fdb.day_log(app_mod._db(), today)}
     assert kinds == {house["id"]: "personal", goal["id"]: "personal"}
     assert today in fdb.served_between(app_mod._db(), today, today)
+
+
+def test_parent_pin_routes(client, app_mod):
+    """The PIN is set once, changed only with the current PIN, and checked
+    from the X-Parent-Pin header; a lockout answers 429 with the wait."""
+    r = client.post("/api/rewards/pin/check")
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "not_set"}
+    assert client.post("/api/rewards/pin", json={"pin": "12"}).status_code == 422
+    assert client.post("/api/rewards/pin", json={"pin": "2468"}).status_code == 204
+    # changing needs the current PIN
+    assert client.post("/api/rewards/pin", json={"pin": "1357"}).status_code == 403
+    assert client.post("/api/rewards/pin", json={"pin": "1357", "current": "2468"}
+                       ).status_code == 204
+    assert client.post("/api/rewards/pin/check").json()["detail"] == {"pin": "required"}
+    assert client.post("/api/rewards/pin/check",
+                       headers={"X-Parent-Pin": "0000"}).json()["detail"] == {"pin": "wrong"}
+    assert client.post("/api/rewards/pin/check",
+                       headers={"X-Parent-Pin": "1357"}).status_code == 204
+    for _ in range(5):
+        client.post("/api/rewards/pin/check", headers={"X-Parent-Pin": "0000"})
+    r = client.post("/api/rewards/pin/check", headers={"X-Parent-Pin": "1357"})
+    assert r.status_code == 429
+    assert r.json()["detail"]["pin"] == "locked" and r.json()["detail"]["wait_s"] > 0

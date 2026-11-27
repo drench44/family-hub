@@ -41,6 +41,7 @@ from . import db as fdb
 from . import demo as fdemo
 from . import go2rtc_proxy
 from . import integrations as fintegrations
+from . import parent_pin
 from . import reminders as remlogic
 from . import tiles
 from . import todos as tdlogic
@@ -1643,6 +1644,51 @@ def uncomplete(chore_id: int, date: str | None = None):
     chore_mirror.push_completion(c, chore_id, date_str, False,
                                  expected_person_id=owner)
     return {"ok": True}
+
+
+# --- chore wallet: parent PIN ---------------------------------------------
+
+PIN_HEADER = "X-Parent-Pin"
+
+
+def _pin_gate(c, pin) -> None:
+    """Raise the PIN refusal for ``pin`` unless it is right: 403 not_set,
+    required (no PIN sent), wrong; 429 locked with the wait in seconds."""
+    if not parent_pin.is_set(c):
+        raise HTTPException(403, {"pin": "not_set"})
+    ok, wait = parent_pin.check(c, pin, _now_local())
+    if wait:
+        raise HTTPException(429, {"pin": "locked", "wait_s": wait})
+    if ok:
+        return
+    raise HTTPException(403, {"pin": "required" if not pin else "wrong"})
+
+
+def require_parent(request: Request) -> None:
+    _pin_gate(_db(), request.headers.get(PIN_HEADER))
+
+
+class PinBody(BaseModel):
+    pin: str
+    current: str | None = None
+
+
+@app.post("/api/rewards/pin", status_code=204)
+def rewards_set_pin(body: PinBody):
+    c = _db()
+    if parent_pin.is_set(c):
+        _pin_gate(c, body.current)
+    try:
+        parent_pin.set_pin(c, body.pin, current=body.current)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return Response(status_code=204)
+
+
+@app.post("/api/rewards/pin/check", status_code=204)
+def rewards_check_pin(request: Request):
+    require_parent(request)
+    return Response(status_code=204)
 
 
 # --- todos ----------------------------------------------------------------
