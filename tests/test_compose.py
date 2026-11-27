@@ -162,3 +162,40 @@ def test_web_service_is_hardened():
     assert web.get("cap_drop") == ["ALL"]
     assert "cap_add" not in web
     assert not web.get("privileged")
+
+
+def test_web_mounts_the_backup_folder_and_the_project_folder_read_only():
+    """The hub's own backup job writes to /backups, mounted from BACKUP_DIR
+    (default ./backups; a NAS is any folder the host has mounted). The
+    settings bundle needs .env, which is read from the project folder mounted
+    read-only at /host."""
+    web = _services()["web"]
+    assert "${BACKUP_DIR:-./backups}:/backups" in web["volumes"]
+    assert ".:/host:ro" in web["volumes"]
+    env = web["environment"]
+    assert "SETTINGS_ENV_PATH=/host/.env" in env
+    # only a label for the Settings card: the host path, which the container can't see
+    assert "BACKUP_DIR=${BACKUP_DIR:-./backups}" in env
+
+
+def test_no_bind_mount_of_a_file_that_may_be_missing():
+    """Docker makes a missing bind source as an empty root-owned FOLDER. A
+    `./.env:/app/.env` mount on a clone with no .env (checked 2026-11-27,
+    compose v5) left a root-owned `.env/` directory behind, and the owner
+    could no longer create the file there. So
+    .env is read through the read-only project folder instead, and no
+    optional single file is bind-mounted."""
+    for name, svc in _services().items():
+        for v in svc.get("volumes", []):
+            src = v.split(":", 1)[0]
+            assert src not in ("./.env", ".env"), (name, v)
+
+
+def test_the_default_backup_folder_ships_in_the_repo():
+    """Docker would make a missing ./backups owned by root, which the hub's
+    non-root user can't write. A tracked placeholder means a clone already
+    has the folder, owned by whoever cloned it."""
+    root = COMPOSE.parent
+    assert (root / "backups" / ".gitkeep").is_file()
+    ignore = (root / ".gitignore").read_text().splitlines()
+    assert "backups/*" in ignore and "!backups/.gitkeep" in ignore
