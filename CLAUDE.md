@@ -55,7 +55,7 @@ Seasonal and holiday looks (fall, Halloween and Thanksgiving today;
 Christmas to come)
 follow [`docs/seasonal-looks.md`](docs/seasonal-looks.md): the owner's bar,
 what failed and why (home-made illustrations were rejected three times; only
-real public-domain photos and art ship), what comparable products do, the
+real public-domain photos and art ship, plus the owner-picked AI Christmas looks made with an Apache 2.0 model, section 5), what comparable products do, the
 glass and readability standards, which sources and licences are allowed in
 this public repo, the step-by-step for a new look, and the lessons from the
 fall and Halloween builds. Don't draw scenes in code, and don't fake an

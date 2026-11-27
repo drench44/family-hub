@@ -13,7 +13,7 @@ before adding Halloween, Christmas, winter, spring, or anything else.
 
 **Shipped so far:** fall (Sep 1 to Nov 30, nine looks), Halloween (Oct 1
 to Oct 31, five looks), Thanksgiving (Nov 1 to Nov 30, seven looks) and
-Christmas (Dec 1 to Dec 31, eight looks).
+Christmas (Dec 1 to Dec 31, twenty looks: eight real photos and paintings, and twelve AI-made pictures, see section 5).
 **What's next:** nothing is scheduled; a winter or spring season would
 follow the checklist at the end of section 2. A holiday that sits inside
 a broad season (Halloween and Thanksgiving inside fall) is listed in
@@ -383,7 +383,7 @@ the cards, kept few, small and slow (see Motion below).
 ## 4. Visual standards
 
 **Image**
-- A real photograph or public-domain artwork, never generated.
+- A real photograph or public-domain artwork. The one exception is the twelve AI-made Christmas looks (section 5), picked by the owner.
 - Calm and happy: the season shown through subject and light. Sunlit gold,
   soft fog, backlit leaves. No red washes, no gloom, no clip-art props.
 - Immersive: it fills the screen (`cover`), not a strip at the bottom.
@@ -494,6 +494,25 @@ This repo is public and MIT licensed, so every file must be redistributable.
   ship here as silhouettes: alpha only, so the look paints them. Game-icons
   (CC-BY 3.0) is fine too. OpenGameArt has CC0 sprite sheets, but most are
   pixel art and read as cheap on a 1920px wall.
+
+**AI-made pictures from a permissively licensed model (Christmas only so far)**
+- Allowed since 2026-11-26, made on the owner's request, because the
+  public-domain Christmas photos were not festive enough. The twelve looks
+  that begin `christmas-santa-moon` were made with FLUX.2 klein 4B (Black
+  Forest Labs, Apache 2.0) and upscaled with SeedVR2 (Apache 2.0), both run
+  locally. Only a model whose licence lets us redistribute its outputs
+  qualifies (Apache 2.0 or similar). Check the licence of the exact model
+  and its upscaler, and write both in the CREDITS.md row with the date.
+- The owner always picks from a contact sheet. Never ship a generated
+  picture they have not chosen.
+- Check every image for AI flaws before it goes on the sheet: no people, no
+  text or logos, no duplicated or impossible objects (extra legs, melted
+  hands, mugs that merge into the table, a lamp with two bulbs).
+- Credit line on the tile: "Made with FLUX.2 (AI)", so nobody mistakes it
+  for a photograph. Prepare, credit, register and style them exactly like
+  any other look (section 6); generated 3072px pictures still get the
+  2560px prep, and the `light` points are measured on the picture itself.
+- The older rule stands for everything else: never draw scenes in code.
 
 **Avoid**
 - Freepik and Vecteezy: their free licences forbid redistributing the file.
