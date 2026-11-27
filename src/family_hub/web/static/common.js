@@ -1983,12 +1983,19 @@ function backupsCardHtml(st, nowMs) {
   if (rt) {
     const day = restoreTestDate(rt.at, now);
     const when = day || 'on a date the hub could not read';
-    html += row('Restore test', `Last restore test ${rt.ok ? 'passed' : 'failed'} ${escapeHtml(when)}.`);
+    // A pass that could not open the settings files is only half a pass.
+    const text = rt.ok && rt.settings_checked === false
+      ? `Database restored ${day ? `on ${day}` : when}. Settings weren’t checked: ${rt.settings_skip || 'the hub did not say why'}.`
+      : `Last restore test ${rt.ok ? 'passed' : 'failed'} ${when}.`;
+    html += row('Restore test', escapeHtml(text));
     if (!rt.ok && rt.reason) {
       html += `<div class="hint bk-error bk-test-error" role="status">${escapeHtml(rt.reason)}</div>`;
     }
   } else {
     html += row('Restore test', 'Not tested yet. The first test runs a day after the first backup.');
+  }
+  if (st.restore_test_overdue) {
+    html += '<div class="hint bk-error" role="status">No restore test has passed in over 35 days. Check the hub’s log.</div>';
   }
   html += `<button class="padmin-btn" type="button" data-bk-test="1"${st.enabled && !busy && ok ? '' : ' disabled'}>`
     + 'Test restore now</button>';

@@ -16,6 +16,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The hourly backup runs the restore test once a month, right after its copy (the first one a day after the first good backup, and a failed test again each day until it passes). Test restore now runs it on demand and shares the backup lock. A failed test is logged once with the reason and never touches the wall's backup warning. `/health/full` notes the last result. A restore test that hangs on a stuck NAS is reported as a stuck run, like a backup.
 - The Backups card shows "Last restore test passed" with its date, or that it failed and why in plain words, and has a Test restore now button. How it works mentions the monthly check.
 - The restore test records whether it checked the settings files, and why not (no backup password, an unusable key, no settings backup yet), so a database-only pass never reads as a full one. A test that could not run at all is still saved as failed, so it retries in a day and shows on the card. A temp copy that cannot be removed is named in the log, a crash keeps its traceback, and no pass in 35 days while backups run is flagged as overdue on the card and in `/health/full`.
+- The Backups card says "Database restored on <date>. Settings weren't checked" with the reason when the restore test skipped the settings files, and warns when no restore test has passed in over 35 days.
 
 ## [1.24.0] — 2026-11-27
 

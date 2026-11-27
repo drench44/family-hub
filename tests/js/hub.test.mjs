@@ -2143,6 +2143,26 @@ test('backupsCardHtml: a restore test time the hub could not read still says pas
   assert.match(html, /Last restore test failed on a date the hub could not read\./);
 });
 
+test('backupsCardHtml: a pass that skipped the settings says so, not a full pass', () => {
+  const html = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 27), ok: true,
+    reason: null, settings_checked: false, settings_skip: 'no backup password set' } }), localMs(2026, 11, 27, 18));
+  assert.match(html, /Restore test<\/span><span class="hint">Database restored on November 27\. Settings weren’t checked: no backup password set\./);
+  assert.ok(!/Last restore test passed/.test(html));
+  const full = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 27), ok: true,
+    reason: null, settings_checked: true, settings_skip: null } }), localMs(2026, 11, 27, 18));
+  assert.match(full, /Last restore test passed November 27\./);
+  const esc = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 27), ok: true,
+    settings_checked: false, settings_skip: '<i>x</i>' } }), localMs(2026, 11, 27, 18));
+  assert.ok(esc.includes('&lt;i&gt;x&lt;/i&gt;') && !esc.includes('<i>x'));
+});
+
+test('backupsCardHtml: an overdue restore test is flagged', () => {
+  const html = sandbox.backupsCardHtml(BK({ restore_test_overdue: true, restore_test: {
+    at: agoIso(40 * 86400), ok: true, settings_checked: true } }), NOW_MS);
+  assert.match(html, /<div class="hint bk-error" role="status">No restore test has passed in over 35 days\. Check the hub’s log\.<\/div>/);
+  assert.ok(!/over 35 days/.test(sandbox.backupsCardHtml(BK(), NOW_MS)));
+});
+
 test('restore test text: no em or en dashes, balanced divs', () => {
   const now = localMs(2026, 11, 27);
   const states = [BK({ restore_test: null }),

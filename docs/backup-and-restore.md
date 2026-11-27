@@ -109,10 +109,14 @@ copy read-only. Then:
    memory with the key in `data/backup.key` and must hold every file the last
    backup recorded (`backups.in_app.settings.files`). Nothing decrypted is
    written anywhere. A bundle made with an older password fails with that
-   reason; the next backup writes a new one. With no usable key the bundle
-   check is skipped, since the card already says the key needs setting again.
+   reason; the next backup writes a new one. When the bundle can't be checked
+   (no backup password set, a key that can't be used, no settings backup
+   yet), the test still passes on the database, but the card says so: "Database
+   restored on November 27. Settings weren't checked: no backup password set."
 
-It never touches `data/hub.db` or the files in the backup folder.
+It never touches `data/hub.db` or the files in the backup folder. If the temp
+folder can't be removed afterwards, the log names it: it holds a full copy of
+the database, so delete it by hand.
 
 **When.** From the hourly run, right after its copy, so it tests a copy
 minutes old: the first test a day after the first good backup
@@ -127,6 +131,13 @@ reason in plain words. The log says so once for each new reason. It never
 moves the backup heartbeat (`backup_status`), so the wall's stale badge stays
 about whether copies are being made. `/health/full` lists the last result
 under `notes.backups_restore_test` (information only, never a failing status).
+A test that could not run at all (the live database unreadable, say) is saved
+as failed too, so it shows and retries in a day.
+
+**Overdue.** If no test has passed in 35 days while backups are on and the
+hourly job runs, the card says "No restore test has passed in over 35 days"
+and the note carries `overdue: true`, so a schedule that never fires can't
+look like quiet success.
 
 ### The settings bundle and backup.key
 
