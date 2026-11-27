@@ -53,9 +53,10 @@ at one URL.
   takes November with **Pumpkin Patch** (the default), **Golden Hour**,
   **Cranberry Bog**, **Cranberry Harvest**, **Corn Shocks**, **Vine Rows** and **Hudson Autumn**: leaves fall in
   each photo's colours and a skein of birds crosses the sky now and then.
-  **Christmas** takes December with twelve festive scenes, **Santa and the
-  Moon** (the default), North Pole, Christmas Morning, a gingerbread house, a
-  snow globe and more: windows and string lights twinkle and snow drifts past.
+  **Christmas** takes December with twenty looks, from festive scenes like
+  **Santa and the Moon** (the default), North Pole, Christmas Morning, a
+  gingerbread house and a snow globe to quiet cabins and firesides: windows
+  and string lights twinkle and snow drifts past.
   Each look is picked per device under **All settings → Seasonal looks**
   from live preview tiles, and none is locked to its dates: **Calendar**
   follows them, while tapping any look (**Pick one**) keeps it all year. Each of the five themes keeps its own glass: Light and

@@ -28,7 +28,7 @@ import tempfile
 import time
 import urllib.request
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ART = ROOT / "art"
@@ -90,8 +90,13 @@ def zoom_box(size, quad, fill):
     return round(left), round(top), round(left + cw), round(top + ch)
 
 
-def paste_on_screen(scene, shot, quad):
-    """Warp `shot` onto the screen corners of `scene` (both PIL images)."""
+def paste_on_screen(scene, shot, quad, glow=1.0):
+    """Warp `shot` onto the screen corners of `scene` (both PIL images).
+    `glow` brightens the shot: a lit screen reads brighter than the room in a
+    photo, and the dark themes looked murky pasted in as-is (the owner: "those
+    look kind of dark")."""
+    if glow != 1.0:
+        shot = ImageEnhance.Brightness(shot).enhance(glow)
     W, H = scene.size
     w, h = shot.size
     warped = shot.transform((W, H), Image.PERSPECTIVE,
@@ -160,23 +165,42 @@ def capture(browser, url, width, height, theme, look, zone, full_page=False, sca
 
 
 def serve_demo(port, zone):
-    """Start the demo on 127.0.0.1:port in `zone`, wait until it answers, return the process."""
+    """Start the demo on 127.0.0.1:port in `zone`, wait until it answers, return the process.
+    A port that already answers is refused: the shots would come from that
+    other server, in its own time zone."""
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+        raise SystemExit(f"something already answers on port {port}; stop it or pass --port")
+    except OSError:
+        pass
     tmp = tempfile.mkdtemp(prefix="fh-gallery-")
     env = {**os.environ, "DEMO": "1", "DISABLE_SYNC": "1", "DB_PATH": f"{tmp}/demo.db",
            "CONFIG_PATH": str(ROOT / "config.demo.json"), "PYTHONPATH": str(ROOT / "src"), "TZ": zone}
-    log = open(f"{tmp}/demo.log", "w")
-    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "family_hub.app:app", "--host", "127.0.0.1",
-                             "--port", str(port)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
-    for _ in range(60):
-        if proc.poll() is not None:
-            raise SystemExit(f"the demo stopped at start; see {tmp}/demo.log")
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
-            return proc
-        except OSError:
-            time.sleep(0.5)
+    with open(f"{tmp}/demo.log", "w") as log:
+        proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "family_hub.app:app", "--host", "127.0.0.1",
+                                 "--port", str(port)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        for _ in range(60):
+            if proc.poll() is not None:
+                raise SystemExit(f"the demo stopped at start; see {tmp}/demo.log")
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+                return proc
+            except OSError:
+                time.sleep(0.5)
+        raise SystemExit(f"the demo did not answer in 30 s; see {tmp}/demo.log")
+    except BaseException:   # includes Ctrl-C while waiting: never leave the demo running
+        stop_demo(proc)
+        raise
+
+
+def stop_demo(proc):
     proc.terminate()
-    raise SystemExit(f"the demo did not answer in 30 s; see {tmp}/demo.log")
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 def save_shot(pic, gal, name, cfg):
@@ -198,8 +222,8 @@ def main():
     want = (lambda n: not a.only or n in a.only)
     zone = daytime_zone(datetime.datetime.now(datetime.timezone.utc), cfg["hour"])
     url = f"http://127.0.0.1:{a.port}/"
+    from playwright.sync_api import sync_playwright   # before the demo starts, so a missing install leaves nothing running
     demo = serve_demo(a.port, zone)
-    from playwright.sync_api import sync_playwright
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -227,12 +251,12 @@ def main():
                 vw, vh = viewport_for(quad, cfg["page_width"])
                 shot = capture(browser, url, vw, vh, s["theme"], s["look"], zone)
                 scene = Image.open(ART / "kitchen" / f"{s['scene']}.jpg").convert("RGB")
-                save_shot(paste_on_screen(scene, shot, quad).crop(zoom_box(scene.size, quad, cfg["zoom"])),
+                save_shot(paste_on_screen(scene, shot, quad, s.get("glow", cfg["glow"])).crop(zoom_box(scene.size, quad, cfg["zoom"])),
                           gal, s["name"], cfg)
                 print(f"docs/gallery/{s['name']}.jpg")
             browser.close()
     finally:
-        demo.terminate()
+        stop_demo(demo)
 
 
 if __name__ == "__main__":

@@ -9,12 +9,6 @@
  "finish": "Demo camera stills. Finish: art/finish_cameras.py (center 70%, 16:9, 1280 px webp).",
  "pictures": [
   {
-   "output": "front-door",
-   "candidate": "cam-front-door-b",
-   "seed": 10920,
-   "prompt": "Looking down from above a front door onto a covered porch of a modern suburban house: welcome mat, potted plants, a small package on the step, the front walkway and lawn beyond, a quiet street in the background. Realistic home security camera still frame, high mounted wide-angle lens with slight fisheye distortion, slightly soft focus and mild sensor noise like a real surveillance camera, natural daylight, 16:9, no people, no animals, no readable text, no timestamp, no logos, no license plates, no house numbers. The doormat is a plain solid-color coir mat with no pattern, no writing, no letters and no symbols."
-  },
-  {
    "output": "back-yard",
    "candidate": "cam-back-yard-b",
    "seed": 3011,

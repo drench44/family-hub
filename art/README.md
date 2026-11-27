@@ -41,7 +41,15 @@ What the script holds to, and why:
   late-evening run is not gray, and relative times (the washer's minutes left)
   stay right. Pinning the browser's clock instead made the washer read "553
   min". The script stops if the page is still dimmed.
-- **Real camera pictures** show in the camera cards (the demo stills).
+- **Real camera pictures** show in the camera cards (the demo stills), led
+  by the driveway. A camera looking out from inside the front door looked
+  odd to the owner, so that still was retired.
+- **A lit screen.** The shot is brightened a little (`glow`), since a screen
+  reads brighter than the room; pasted as-is the dark themes looked murky.
+  The light theme gets none (`"glow": 1.0` on its shot): brightened, its
+  cards wash out.
+- **A light theme on a dark frame.** Light on the white wall-mount scene
+  did not read as a screen at all, so light themes go on the counter scene.
 
 ## Remaking or adding a generated picture
 

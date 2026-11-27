@@ -369,12 +369,14 @@ def demo_cameras() -> list[dict]:
     """Camera link entries shaped like ``_links()`` cameras but each flagged
     ``demo: True`` (no go2rtc URLs). The frontend renders a static gradient
     placeholder tile for these and skips the liveness probe. ``tone`` steers the
-    placeholder's gradient (cool for the front door, warm for the back yard);
+    placeholder's gradient (cool for the driveway, warm for the back yard);
     ``still`` names a made-up camera photo in static/demo-cams/ that the tile
-    shows instead, so the README screenshot looks like a real wall."""
+    shows instead, so the README screenshot looks like a real wall. The wall
+    leads with the driveway: the old front-door still looked out from inside
+    the door, which the owner found odd."""
     return [
-        {"src": "demo-front", "label": "Front Door", "demo": True, "tone": "cool",
-         "still": "front-door"},
+        {"src": "demo-drive", "label": "Driveway", "demo": True, "tone": "cool",
+         "still": "driveway"},
         {"src": "demo-yard", "label": "Back Yard", "demo": True, "tone": "warm",
          "still": "back-yard"},
     ]

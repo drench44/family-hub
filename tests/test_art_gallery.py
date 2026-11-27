@@ -62,6 +62,21 @@ def test_the_shot_lands_inside_the_screen_and_nowhere_else():
     assert out.getpixel((1550, 1200)) == (200, 200, 200)
 
 
+def test_glow_brightens_the_screen_only():
+    scene = Image.new("RGB", (3072, 1728), (200, 200, 200))
+    shot = Image.new("RGB", (1920, 1152), (40, 50, 60))
+    out = mg.paste_on_screen(scene, shot, QUAD, glow=1.5)
+    assert out.getpixel((1550, 730)) == (60, 75, 90)
+    assert out.getpixel((900, 730)) == (200, 200, 200)
+
+
+def test_a_light_theme_never_sits_on_a_white_scene_where_it_does_not_read_as_a_screen():
+    cfg = json.loads((ART / "gallery.json").read_text())
+    for s in cfg["shots"]:
+        if s["theme"] in ("light", "soft"):
+            assert s["scene"] != "wall-mount-b", s
+
+
 def test_the_phone_frame_keeps_the_screenshot_and_has_clear_corners():
     shot = Image.new("RGB", (390, 844), (0, 128, 0))
     framed = mg.phone_frame(shot)

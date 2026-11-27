@@ -149,7 +149,7 @@ def test_demo_calendar_window_vouches_for_the_demo_days(demo_client):
 def test_demo_links_are_placeholder_cameras(demo_client):
     links = demo_client.get("/api/hub").json()["links"]
     cams = links["cameras"]
-    assert [c["label"] for c in cams] == ["Front Door", "Back Yard"]
+    assert [c["label"] for c in cams] == ["Driveway", "Back Yard"]
     assert all(c["demo"] is True for c in cams)
     assert all("tile" not in c for c in cams)   # no go2rtc URLs in demo
 
@@ -554,9 +554,13 @@ def test_demo_cameras_show_a_still_photo(demo_client):
     credits = (static / "demo-cams" / "CREDITS.md").read_text()
     css = (static / "styles.css").read_text()
     stills = {c["label"]: c["still"] for c in links["cameras"] + links["camera_page"]}
-    assert stills == {"Front Door": "front-door", "Back Yard": "back-yard",
-                      "Driveway": "driveway", "Mailbox": "mailbox",
-                      "Side Gate": "side-gate"}
+    assert stills == {"Back Yard": "back-yard", "Driveway": "driveway",
+                      "Mailbox": "mailbox", "Side Gate": "side-gate"}
+    # the front-door still (a camera looking out from inside the door) was
+    # retired at the owner's word: "It looks weird having a camera inside the
+    # front door." No file, credit or style for it may linger.
+    assert not (static / "demo-cams" / "front-door.webp").exists()
+    assert "front-door" not in credits and "front-door" not in css
     for still in stills.values():
         assert re.fullmatch(r"[a-z0-9-]+", still)
         assert (static / "demo-cams" / f"{still}.webp").is_file()
