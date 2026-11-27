@@ -1848,6 +1848,9 @@ const BACKUP_OFF = {
   not_mounted: `No backup folder is mounted into the hub. ${BACKUP_SEE_README}`,
   not_writable: 'The hub can’t write to the backup folder. It must belong to the hub’s user on the box (see Backup in the README).',
   demo: 'Off in the demo.',
+  // the folder lost the marker the first good run left there: most likely
+  // the NAS share dropped and the box's empty mount folder is showing
+  marker_missing: 'The backup folder isn’t the one backups went to before. Is the NAS mounted?',
 };
 
 /* What is wrong with a new backup password and its second copy, or null.
@@ -1871,6 +1874,10 @@ function backupsCardHtml(st, nowMs) {
       : 'On. A copy every hour.')
     : (BACKUP_OFF[st.why_off] || st.why_off_text || 'Off.');
   html += row('Status', escapeHtml(status));
+  if (st.why_off === 'marker_missing') {
+    html += `<div class="hint">If you moved backups to a new folder on purpose, tap Use this folder.</div>`
+      + `<button class="padmin-btn" type="button" data-bk-adopt="1">Use this folder</button>`;
+  }
   if (st.dir) html += row('Folder', `<span class="bk-dir">${escapeHtml(st.dir)}</span>`);
   const ok = st.last_ok;
   html += row('Last good backup', ok ? escapeHtml(backupAgo(ok.at, now)) : 'None yet');

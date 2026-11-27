@@ -560,3 +560,151 @@ def test_list_shows_the_newest_backups(tmp_path, capsys):
 def test_usage_on_bad_arguments(capsys):
     assert fb.main([]) == 2
     assert "restore-settings" in capsys.readouterr().out
+
+
+# --- review fixes (2026-11-27) ------------------------------------------------
+
+def test_first_good_run_marks_the_folder(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_db(db).close()
+    r = _run(tmp_path, db)
+    assert r["ok"] and r["marker"]
+    assert (tmp_path / "out" / fb.MARKER_NAME).read_text() == r["marker"]
+    again = _run(tmp_path, db, now=NOW.replace(hour=11), marker=r["marker"])
+    assert again["ok"] and again["marker"] is None
+    assert (tmp_path / "out" / fb.MARKER_NAME).read_text() == r["marker"]
+
+
+def test_a_folder_without_our_marker_is_refused(tmp_path):
+    """A bind mount always looks mounted from inside the container, so a
+    dropped NAS share (the box's empty mount folder) is caught by the marker
+    the first good run left there."""
+    d = tmp_path / "nas"
+    d.mkdir()
+    assert fb.folder_problem(str(d), must_be_mount=False, marker="abc") == "marker_missing"
+    (d / fb.MARKER_NAME).write_text("someone-else")
+    assert fb.folder_problem(str(d), must_be_mount=False, marker="abc") == "marker_missing"
+    (d / fb.MARKER_NAME).write_text("abc")
+    assert fb.folder_problem(str(d), must_be_mount=False, marker="abc") is None
+    assert fb.folder_problem(str(d), must_be_mount=False, marker=None) is None
+
+
+def test_adopt_folder_writes_a_fresh_id(tmp_path):
+    a = fb.adopt_folder(str(tmp_path))
+    b = fb.adopt_folder(str(tmp_path))
+    assert a != b and len(a) >= 16
+    assert (tmp_path / fb.MARKER_NAME).read_text() == b
+    assert not [p for p in tmp_path.iterdir() if p.name != fb.MARKER_NAME]
+
+
+def test_record_keeps_the_marker_id(tmp_path):
+    db = tmp_path / "hub.db"
+    _make_db(db).close()
+    r = _run(tmp_path, db)
+    conn = fdb.connect(str(db))
+    fb.record(conn, r, dt.datetime(2026, 8, 18, 16, 30, tzinfo=dt.timezone.utc), "x")
+    assert fdb.kv_get(conn, fb.MARKER_KEY) == r["marker"]
+    conn.close()
+
+
+def test_a_settings_file_gone_since_the_last_bundle_is_named_not_dropped(tmp_path, caplog):
+    db = tmp_path / "hub.db"
+    _make_db(db).close()
+    fb.set_password(str(tmp_path / "backup.key"), "family hub 2026")
+    src = _sources(tmp_path, **{"config.json": b"{}", "env": b"A=1", "pin.key": b"k" * 32})
+    first = _run(tmp_path, db, sources=src, now=NOW.replace(hour=1))
+    os.remove(src["env"])
+    os.remove(src["pin.key"])
+    fb._warned.clear()
+    with caplog.at_level(logging.ERROR, logger="family_hub"):
+        for h in (2, 3):
+            r = _run(tmp_path, db, sources=src, now=NOW.replace(hour=h))
+    assert r["ok"] is True and r["settings_file"] is None
+    assert ".env" in r["settings_error"] and "pin.key" in r["settings_error"]
+    assert sorted(p.name for p in (tmp_path / "out/settings").glob("settings-*.fhb")) == \
+        [first["settings_file"]]
+    assert sum(".env" in m for m in caplog.messages) == 1
+
+
+def test_a_bundle_write_failing_midway_leaves_no_partial_and_keeps_old_ones(tmp_path, monkeypatch):
+    db = tmp_path / "hub.db"
+    _make_db(db).close()
+    fb.set_password(str(tmp_path / "backup.key"), "family hub 2026")
+    src = _sources(tmp_path, **{"config.json": b"{}"})
+    first = _run(tmp_path, db, sources=src, now=NOW.replace(hour=1))
+    Path(src["config.json"]).write_bytes(b'{"changed": 1}')
+
+    def half(path, data):
+        Path(path).write_bytes(data[:10])
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(fb, "_write_private", half)
+    r = _run(tmp_path, db, sources=src, now=NOW.replace(hour=2))
+    assert r["ok"] is True
+    assert r["settings_file"] is None and "No space left" in r["settings_error"]
+    names = sorted(p.name for p in (tmp_path / "out/settings").iterdir())
+    assert names == [first["settings_file"]]
+
+
+def test_tiers_across_a_week_and_a_month_boundary(tmp_path):
+    db = tmp_path / "hub.db"
+    c = _make_db(db, rows=1)
+
+    def at(when):
+        c.execute("insert into todos (title) values ('x')")
+        c.commit()
+        assert _run(tmp_path, db, now=when)["ok"]
+
+    at(dt.datetime(2026, 8, 30, 22, 0))    # Sunday, ISO week 35: 2 rows
+    at(dt.datetime(2026, 8, 30, 23, 0))    # same week, later: 3 rows
+    at(dt.datetime(2026, 8, 31, 0, 30))    # Monday, week 36, still August: 4 rows
+    at(dt.datetime(2026, 9, 1, 0, 30))     # September: 5 rows
+    c.close()
+    out = tmp_path / "out" / "db"
+
+    def rows(tier, stamp):
+        x = sqlite3.connect(out / tier / f"hub-{stamp}.db")
+        n = x.execute("select count(*) from todos").fetchone()[0]
+        x.close()
+        return n
+    assert sorted(p.name for p in (out / "weekly").glob("hub-*.db")) == \
+        ["hub-2026-W35.db", "hub-2026-W36.db"]
+    assert rows("weekly", "2026-W35") == 3 and rows("weekly", "2026-W36") == 5
+    assert sorted(p.name for p in (out / "monthly").glob("hub-*.db")) == \
+        ["hub-202608.db", "hub-202609.db"]
+    assert rows("monthly", "202608") == 4 and rows("monthly", "202609") == 5
+    assert rows("daily", "20260830") == 3 and rows("daily", "20260831") == 4
+
+
+def test_restore_failing_on_the_second_file_removes_the_first(tmp_path, monkeypatch, capsys):
+    p = _bundle(tmp_path, {"config.json": b"{}", "env": b"A=1\n"})
+    out = tmp_path / "restored"
+    real = fb.os.fdopen
+    calls = []
+
+    def flaky(fd, *a, **k):
+        calls.append(fd)
+        if len(calls) == 2:
+            os.close(fd)
+            raise OSError(28, "No space left on device")
+        return real(fd, *a, **k)
+    monkeypatch.setattr(fb.os, "fdopen", flaky)
+    rc = fb.main(["restore-settings", str(p), str(out)], ask_password=lambda _: "family hub 2026")
+    assert rc == 1
+    assert not out.exists() or not list(out.iterdir())
+    assert "No space left" in capsys.readouterr().err
+    monkeypatch.setattr(fb.os, "fdopen", real)
+    assert fb.main(["restore-settings", str(p), str(out)],
+                   ask_password=lambda _: "family hub 2026") == 0
+
+
+def test_restore_of_a_garbage_file_says_so(tmp_path, capsys):
+    p = tmp_path / "junk.fhb"
+    p.write_bytes(b"\x00garbage" * 50)
+    rc = fb.main(["restore-settings", str(p), str(tmp_path / "out")],
+                 ask_password=lambda _: "family hub 2026")
+    assert rc == 1
+    assert "not a family hub settings backup" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+    missing = fb.main(["restore-settings", str(tmp_path / "nope.fhb"), str(tmp_path / "out")],
+                      ask_password=lambda _: "x")
+    assert missing == 1

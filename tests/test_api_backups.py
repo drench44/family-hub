@@ -260,3 +260,112 @@ def test_demo_serves_a_live_shaped_card(app_mod, monkeypatch):
         assert client.post("/api/backups/run").status_code == 409
         assert client.post("/api/backups/password",
                            json={"password": "family hub 2026"}).status_code == 409
+
+
+# --- review fixes (2026-11-27) ------------------------------------------------
+
+def test_a_dropped_nas_is_caught_by_the_marker_and_the_badge_goes_stale(client, app_mod, tmp_path):
+    _bulk(app_mod)
+    assert client.post("/api/backups/run").json()["result"]["ok"]
+    c = app_mod._db()
+    marker = fdb.kv_get(c, "backups.marker")
+    assert marker and (tmp_path / "nas" / ".family-hub-backups").read_text() == marker
+    good_at = fdb.kv_get(c, "backup_status")["at"]
+    # the share drops: the box's mount folder is empty again
+    import shutil
+    shutil.rmtree(tmp_path / "nas")
+    (tmp_path / "nas").mkdir()
+    st = client.get("/api/backups").json()
+    assert st["enabled"] is False and st["why_off"] == "marker_missing"
+    assert app_mod._backup_tick() is None
+    beat = fdb.kv_get(c, "backup_status")
+    assert beat["at"] == good_at
+    assert "isn't the one backups went to before" in beat["in_app_error"]
+    assert not list((tmp_path / "nas").rglob("hub-*.db")), "nothing written to the wrong folder"
+    r = client.post("/api/backups/run")
+    assert r.status_code == 409 and "Is the NAS mounted?" in r.json()["detail"]
+
+
+def test_use_this_folder_adopts_a_new_folder_on_purpose(client, app_mod, tmp_path):
+    _bulk(app_mod)
+    client.post("/api/backups/run")
+    (tmp_path / "nas" / ".family-hub-backups").unlink()
+    r = client.post("/api/backups/adopt")
+    assert r.status_code == 200 and r.json()["enabled"] is True
+    new = fdb.kv_get(app_mod._db(), "backups.marker")
+    assert (tmp_path / "nas" / ".family-hub-backups").read_text() == new
+    assert client.post("/api/backups/run").json()["result"]["ok"]
+
+
+def test_use_this_folder_needs_the_pin_when_one_is_set(client):
+    client.post("/api/rewards/pin", json={"pin": "2468"})
+    assert client.post("/api/backups/adopt").status_code == 403
+    assert client.post("/api/backups/adopt", headers={"X-Parent-Pin": "2468"}).status_code == 200
+
+
+def test_use_this_folder_refuses_a_folder_that_is_not_there(app_mod, monkeypatch, tmp_path):
+    monkeypatch.setattr(app_mod, "BACKUPS_PATH", str(tmp_path / "gone"))
+    with TestClient(app_mod.app) as client:
+        r = client.post("/api/backups/adopt")
+        assert r.status_code == 409 and "No backup folder" in r.json()["detail"]
+
+
+def test_password_with_a_wrong_pin_is_refused(client):
+    client.post("/api/rewards/pin", json={"pin": "2468"})
+    r = client.post("/api/backups/password", json={"password": "family hub 2026"},
+                    headers={"X-Parent-Pin": "0000"})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "wrong"}
+    assert client.get("/api/backups").json()["password_set"] is False
+
+
+def test_the_tick_logs_once_when_the_skip_reason_changes(client, app_mod, caplog):
+    import logging
+    client.patch("/api/integrations/backups", json={"enabled": False})
+    with caplog.at_level(logging.INFO, logger="family_hub"):
+        app_mod._backup_tick()
+        app_mod._backup_tick()
+        assert sum("hourly backup skipped" in m for m in caplog.messages) == 1
+        client.patch("/api/integrations/backups", json={"enabled": True})
+        assert app_mod._backup_lock.acquire(blocking=False)
+        try:
+            app_mod._backup_tick()
+            app_mod._backup_tick()
+        finally:
+            app_mod._backup_lock.release()
+    msgs = [m for m in caplog.messages if "hourly backup skipped" in m]
+    assert len(msgs) == 2 and "running" in msgs[1]
+
+
+def test_a_run_stuck_over_twenty_minutes_is_recorded(client, app_mod):
+    import time
+    assert app_mod._backup_lock.acquire(blocking=False)
+    try:
+        app_mod._backup_started_at = time.monotonic() - 21 * 60
+        app_mod._backup_tick()
+    finally:
+        app_mod._backup_lock.release()
+    st = client.get("/api/backups").json()
+    assert "Backup stuck" in st["last_error"]["message"]
+    assert "Backup stuck" in fdb.kv_get(app_mod._db(), "backup_status")["in_app_error"]
+
+
+def test_back_up_now_reports_a_record_that_could_not_be_written(client, app_mod, monkeypatch):
+    _bulk(app_mod)
+
+    def boom(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(fb, "record", boom)
+    r = client.post("/api/backups/run")
+    assert r.status_code == 500
+    assert "couldn’t record it" in r.json()["detail"] and "database is locked" in r.json()["detail"]
+
+
+def test_health_full_notes_the_in_app_job_without_failing(client, app_mod):
+    _bulk(app_mod)
+    client.post("/api/backups/run")
+    body = client.get("/health/full").json()
+    note = body["notes"]["backups_in_app"]
+    assert note["enabled"] is True and note["why_off"] is None
+    assert note["last_ok_at"] and note["last_error"] is None
+    assert note["dir"] == "/mnt/nas/family-hub"
+    assert not any("backup" in p for p in body.get("problems", []))

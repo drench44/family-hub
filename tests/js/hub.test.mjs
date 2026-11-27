@@ -2008,3 +2008,11 @@ test('backups card text: no em or en dashes in any state', () => {
   assert.ok(!text.includes(String.fromCharCode(0x2014)), 'no em dashes');
   assert.ok(!text.includes(String.fromCharCode(0x2013)), 'no en dashes');
 });
+
+test('backupsCardHtml: a folder that lost its marker asks about the NAS and offers Use this folder', () => {
+  const html = sandbox.backupsCardHtml(BK({ enabled: false, why_off: 'marker_missing' }), NOW_MS);
+  assert.match(html, /The backup folder isn’t the one backups went to before\. Is the NAS mounted\?/);
+  assert.match(html, /<button class="padmin-btn" type="button" data-bk-adopt="1">Use this folder<\/button>/);
+  assert.match(html, /data-bk-run="1" disabled>/);
+  assert.ok(!/data-bk-adopt/.test(sandbox.backupsCardHtml(BK(), NOW_MS)), 'no adopt button when all is well');
+});

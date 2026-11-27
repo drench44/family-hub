@@ -13221,3 +13221,54 @@ test('paintBackups: a load that fails says so in the card, and an older reply ne
   assert.match(host.innerHTML, /NEWER/);
   assert.ok(!/OLDER/.test(host.innerHTML));
 });
+
+const httpErr = (status, detail) => Object.assign(new Error(typeof detail === 'string' ? detail : `HTTP ${status}`),
+  { status, detail });
+
+test('backupsClick: a refused run (409) shows the plain reason and the button works again', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.j = async () => { throw httpErr(409, 'A backup is already running.'); };
+  sandbox.paintBackups = async () => {};
+  const btn = { dataset: { bkRun: '1' }, disabled: false };
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-run]' ? btn : null) } });
+  assert.match(document.getElementById('toast').textContent, /A backup is already running\./);
+  assert.equal(btn.disabled, false, 'usable again');
+});
+
+test('backupsClick: a refused password (422 or 403) says why in the card and sends again on a retry', async () => {
+  for (const err of [httpErr(422, 'The backup password must be 8 to 1024 characters.'),
+    new Error('That PIN didn’t match. Nothing was changed.')]) {
+    const { document, sandbox } = newHub();
+    const box = backupsHost(document, 'family hub 2026', 'family hub 2026');
+    let calls = 0;
+    sandbox.jParent = async () => { calls++; throw err; };
+    sandbox.paintBackups = async () => {};
+    const ev = { target: { closest: (sel) => (sel === '[data-bk-savepw]' ? {} : null) } };
+    await sandbox.backupsClick(ev);
+    assert.equal(box.classList.hidden, false);
+    assert.equal(box.textContent, err.message);
+    await sandbox.backupsClick(ev);
+    assert.equal(calls, 2, 'the save button still works');
+  }
+});
+
+test('backupsClick: Use this folder goes through the parent-PIN path and repaints', async () => {
+  const { document, sandbox } = newHub();
+  let req = null;
+  sandbox.jParent = async (url, opts, msg) => { req = { url, opts, msg }; return {}; };
+  let painted = 0;
+  sandbox.paintBackups = async () => { painted++; };
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-adopt]' ? {} : null) } });
+  assert.equal(req.url, '/api/backups/adopt');
+  assert.equal(req.opts.method, 'POST');
+  assert.equal(painted, 1);
+  assert.match(document.getElementById('toast').textContent, /this folder/);
+});
+
+test('backupsClick: a refused Use this folder (409) says why', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.jParent = async () => { throw httpErr(409, 'No backup folder is set up.'); };
+  sandbox.paintBackups = async () => {};
+  await sandbox.backupsClick({ target: { closest: (sel) => (sel === '[data-bk-adopt]' ? {} : null) } });
+  assert.match(document.getElementById('toast').textContent, /No backup folder is set up\./);
+});

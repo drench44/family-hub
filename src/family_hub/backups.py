@@ -64,6 +64,14 @@ KEEP = {"hourly": 48, "daily": 14, "weekly": 8, "monthly": 12}
 SETTINGS_KEEP = 14
 MIN_BYTES = 8192            # the box script's floor: smaller is not a real hub.db
 STATE_KEY = "backups.in_app"   # this job's own record (the card reads it)
+MARKER_KEY = "backups.marker"  # the id written into the folder by the first good run
+# A file the first good run leaves in the backup folder, holding a random id
+# the hub also keeps. A bind mount always looks mounted from inside the
+# container, so when a NAS share drops (and the box's empty mount folder is
+# what the hub sees), this file being gone is the only sign.
+MARKER_NAME = ".family-hub-backups"
+MARKER_MISSING = ("The backup folder isn't the one backups went to before. "
+                  "Is the NAS mounted?")
 HEARTBEAT_KEY = "backup_status"  # shared with the box script (the wall's badge)
 
 MAGIC = b"FHB1"
@@ -126,17 +134,48 @@ def _sweep_partials(folder: Path) -> None:
 
 # --- the folder ------------------------------------------------------------------
 
-def folder_problem(path: str, *, must_be_mount: bool) -> str | None:
+def folder_problem(path: str, *, must_be_mount: bool, marker: str | None = None) -> str | None:
     """Why backups cannot go to `path`, or None. `must_be_mount` is for the
     default /backups: in the container it must be something mounted in, or
-    the copies would sit on the container's own disk and vanish with it."""
+    the copies would sit on the container's own disk and vanish with it.
+    `marker` is the id the first good run left in the folder: once there is
+    one, a folder without it (a dropped NAS share) is refused."""
     if not os.path.isdir(path):
         return "no_folder"
     if must_be_mount and not os.path.ismount(path):
         return "not_mounted"
     if not os.access(path, os.W_OK | os.X_OK):
         return "not_writable"
+    if marker and read_marker(path) != marker:
+        return "marker_missing"
     return None
+
+
+def read_marker(path: str) -> str | None:
+    try:
+        with open(os.path.join(path, MARKER_NAME), "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def adopt_folder(path: str) -> str:
+    """Write a fresh id into `path` (temp file, rename) and return it: the
+    first good run does this, and so does Use this folder after a deliberate
+    move."""
+    new = secrets.token_hex(16)
+    final = Path(path) / MARKER_NAME
+    tmp = Path(path) / f".partial-marker-{secrets.token_hex(4)}"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, final)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return new
 
 
 def counts(out_dir: str) -> dict:
@@ -408,6 +447,9 @@ def _save_settings(sources: dict, key_path: str, folder: Path, stamp: str,
     if state == "unset" and not password_expected:
         return None, None               # no password yet: nothing to encrypt with
     pair = read_key(key_path)
+    if pair is None and state == "unset":
+        _warn_once("key-gone", "backups: a backup password was set but %s is missing; "
+                   "set the password again in Settings", key_path)
     if pair is None:
         return None, ("The settings files were not saved. Set the backup password "
                       "again in Settings: its key file on the hub can't be used.")
@@ -422,10 +464,23 @@ def _save_settings(sources: dict, key_path: str, folder: Path, stamp: str,
     if have:
         try:
             last = unpack_settings(decrypt_bundle((folder / have[0]).read_bytes(), key=key))
+        except (BundleError, OSError):
+            last = None                 # an older password, or damaged: write a new one
+        if last is not None:
+            gone = sorted(set(last) - set(files))
+            if gone:
+                # A file that was saved before and is gone now (a deleted .env,
+                # a lost pin.key) is a problem to see, not a reason to quietly
+                # write a smaller bundle over the good one.
+                names = ", ".join(_display(n) for n in gone)
+                _warn_once(f"gone:{names}", "backups: %s was in the last settings "
+                           "backup and is missing now; no new settings backup is "
+                           "written until it is back", names)
+                return None, (f"{names} was in the last settings backup and is missing "
+                              "from the hub now, so no new copy was saved. Put it back, "
+                              "or set the backup password again to start fresh.")
             if last == files:
                 return have[0], None    # nothing changed since the newest one
-        except (BundleError, OSError):
-            pass                        # an older password, or damaged: write a new one
     blob = encrypt_bundle(pack_settings(files), key, salt)
     tmp = folder / f".partial-{stamp}.fhb"
     try:
@@ -442,14 +497,15 @@ def _save_settings(sources: dict, key_path: str, folder: Path, stamp: str,
 
 def run_once(now: dt.datetime, *, db_path: str, out_dir: str, sources: dict,
              key_path: str, keep: dict | None = None, settings_keep: int = SETTINGS_KEEP,
-             password_expected: bool = False) -> dict:
+             password_expected: bool = False, marker: str | None = None) -> dict:
     """One backup: the database snapshot into every tier, then the settings
     bundle. Never raises; each half reports its own failure:
-    {ok, snapshot, bytes, error, settings_file, settings_error}."""
+    {ok, snapshot, bytes, error, settings_file, settings_error, marker}.
+    With no `marker` yet, the folder gets one and `marker` is its new id."""
     keep = keep or KEEP
     st = stamps(now)
     out = {"ok": False, "snapshot": None, "bytes": None, "error": None,
-           "settings_file": None, "settings_error": None}
+           "settings_file": None, "settings_error": None, "marker": None}
     base = Path(out_dir)
     try:
         for tier in TIERS:
@@ -460,11 +516,14 @@ def run_once(now: dt.datetime, *, db_path: str, out_dir: str, sources: dict,
             _sweep_partials(d)
         if (base / "settings").is_dir():
             _sweep_partials(base / "settings")
+        _sweep_partials(base)
         snap, nbytes = _snapshot(db_path, tiers["hourly"], st["hourly"])
         for tier in ("daily", "weekly", "monthly"):
             _promote(snap, tiers[tier], st[tier])
         for tier in TIERS:
             _prune_dir(tiers[tier], keep[tier])
+        if not marker:                 # the first good run marks the folder
+            out["marker"] = adopt_folder(str(base))
         out.update(ok=True, snapshot=snap.name, bytes=nbytes)
     except Exception as e:      # noqa: BLE001 - reported, never raised
         msg = str(e) if isinstance(e, RuntimeError) else f"Couldn't write the backup ({e})."
@@ -477,7 +536,6 @@ def run_once(now: dt.datetime, *, db_path: str, out_dir: str, sources: dict,
     except Exception as e:      # noqa: BLE001 - reported, never raised
         out["settings_error"] = (str(e) if isinstance(e, RuntimeError)
                                  else f"Couldn't save the settings files ({e}).")
-    if out["settings_error"]:
         log.error("backups: %s", out["settings_error"])
     return out
 
@@ -507,11 +565,15 @@ def record(conn, result: dict, at: dt.datetime, dir_label: str) -> None:
         beat["in_app_error"] = state["last_error"]["message"]
     if result.get("settings_file"):
         state["settings"] = {"at": when, "file": result["settings_file"]}
-    state["settings_error"] = result.get("settings_error")
+    if "settings_error" in result:
+        state["settings_error"] = result.get("settings_error")
     beat["dir"] = dir_label
     beat["settings_at"] = (state.get("settings") or {}).get("at")
+    rows = [(STATE_KEY, state), (HEARTBEAT_KEY, beat)]
+    if result.get("marker"):
+        rows.append((MARKER_KEY, result["marker"]))
     with conn:
-        for key, value in ((STATE_KEY, state), (HEARTBEAT_KEY, beat)):
+        for key, value in rows:
             conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
                          (key, json.dumps(value)))
 
@@ -543,10 +605,20 @@ def _restore(path: str, out_dir: str, ask_password) -> int:
               "Pick an empty folder.", file=sys.stderr)
         return 1
     out.mkdir(parents=True, exist_ok=True)
-    for short in sorted(files):
-        fd = os.open(out / RESTORE_NAMES[short], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(files[short])
+    written = []
+    try:
+        for short in sorted(files):
+            target = out / RESTORE_NAMES[short]
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            written.append(target)
+            with os.fdopen(fd, "wb") as f:
+                f.write(files[short])
+    except OSError as e:
+        # all or nothing, so a rerun into the same folder works
+        for t in written:
+            t.unlink(missing_ok=True)
+        print(f"Couldn't write the restored files ({e}). Nothing was kept.", file=sys.stderr)
+        return 1
     print(f"Restored {len(files)} file(s) into {out_dir}:")
     for short in sorted(files):
         print(f"  {RESTORE_NAMES[short]:12} goes in {RESTORE_HOME[short]}")

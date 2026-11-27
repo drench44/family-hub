@@ -976,6 +976,11 @@ def _health_full_local() -> dict:
     except Exception:
         log.error("health: backup status read failed", exc_info=True)
         out["backup"] = None
+    try:
+        out["backups_in_app"] = _backups_health_note(c)
+    except Exception:
+        log.error("health: in-app backup state read failed", exc_info=True)
+        out["backups_in_app"] = None
     return out
 
 
@@ -1105,7 +1110,7 @@ async def health_full():
                                         local["config_now"], BUILD_INFO),
         db_ok=local["db_ok"], db_error=local["db_error"],
         settings=settings, sources=sources,
-        notes={"backup": local["backup"]})
+        notes={"backup": local["backup"], "backups_in_app": local.get("backups_in_app")})
 
 
 @app.get("/api/version")
@@ -2295,14 +2300,21 @@ BACKUP_DIR_LABEL = os.environ.get("BACKUP_DIR") or BACKUPS_PATH
 # The salt and key made from the backup password, beside hub.db (like pin.key).
 BACKUP_KEY_PATH = os.environ.get("BACKUP_KEY_PATH", os.path.join(
     os.path.dirname(DB_PATH) or ".", "backup.key"))
-# .env, for the settings bundle. compose mounts the project folder read-only
-# at /host and points this at /host/.env; outside docker it is ./.env.
+# .env, for the settings bundle. compose mounts it read-only at /app/.env
+# and points this there; outside docker it is ./.env.
 SETTINGS_ENV_PATH = os.environ.get("SETTINGS_ENV_PATH", ".env")
 BACKUP_FIRST_S = 300        # first run five minutes after start
 BACKUP_EVERY_S = 3600       # then hourly
 _BACKUP_PW_KEY = "backups.password_set"   # a password was set once (a lost key is then a problem)
 # One run at a time: the hourly task and Back up now share it.
 _backup_lock = threading.Lock()
+# When the run holding the lock started (monotonic), to spot a hung NAS.
+_backup_started_at = None
+_backup_stuck_noted = False      # the current stuck run was already recorded
+BACKUP_STUCK_S = 20 * 60
+BACKUP_STUCK_MSG = ("Backup stuck: a backup has been running for more than 20 "
+                    "minutes. Is the NAS hung?")
+_backup_last_skip = None         # the last reason an hourly run was skipped (logged once)
 
 _BACKUP_WHY = {
     "demo": "Backups are off in the demo.",
@@ -2310,6 +2322,8 @@ _BACKUP_WHY = {
     "no_folder": "No backup folder is set up.",
     "not_mounted": "No backup folder is mounted into the hub.",
     "not_writable": "The hub can't write to the backup folder.",
+    "marker_missing": fbackups.MARKER_MISSING,
+    "running": "A backup is already running.",
 }
 
 
@@ -2327,7 +2341,8 @@ def _backup_why_off(c) -> str | None:
         return "demo"
     if not _integration_on(c, "backups"):
         return "switched_off"
-    return fbackups.folder_problem(BACKUPS_PATH, must_be_mount=not _BACKUPS_PATH_SET)
+    return fbackups.folder_problem(BACKUPS_PATH, must_be_mount=not _BACKUPS_PATH_SET,
+                                   marker=fdb.kv_get(c, fbackups.MARKER_KEY))
 
 
 def _backup_loop_enabled() -> bool:
@@ -2336,32 +2351,75 @@ def _backup_loop_enabled() -> bool:
     return _sync_enabled()
 
 
-def _backup_run(c) -> dict:
-    """One backup and its record. The caller holds _backup_lock. Stamps use
-    house time, like the box script."""
-    result = fbackups.run_once(
-        _now_local().replace(tzinfo=None), db_path=DB_PATH, out_dir=BACKUPS_PATH,
-        sources=_backup_sources(), key_path=BACKUP_KEY_PATH,
-        password_expected=bool(fdb.kv_get(c, _BACKUP_PW_KEY)))
+def _backup_run(c) -> tuple[dict, Exception | None]:
+    """One backup and its record: (result, the record's failure or None).
+    The caller holds _backup_lock. Stamps use house time, like the box script."""
+    global _backup_started_at, _backup_stuck_noted
+    _backup_started_at, _backup_stuck_noted = time.monotonic(), False
+    try:
+        result = fbackups.run_once(
+            _now_local().replace(tzinfo=None), db_path=DB_PATH, out_dir=BACKUPS_PATH,
+            sources=_backup_sources(), key_path=BACKUP_KEY_PATH,
+            password_expected=bool(fdb.kv_get(c, _BACKUP_PW_KEY)),
+            marker=fdb.kv_get(c, fbackups.MARKER_KEY))
+    finally:
+        _backup_started_at = None
     try:
         fbackups.record(c, result, dt.datetime.now(dt.timezone.utc), BACKUP_DIR_LABEL)
-    except Exception:
-        # The copy itself is good. Without the record the wall's badge goes
-        # stale and the card shows the old time, so say it loudly here.
+    except Exception as e:
+        # The copy itself may be good. Without the record the wall's badge
+        # goes stale and the card shows the old time, so say it loudly here.
         log.error("backups: the run finished but its record could not be written "
                   "(the wall may show the backup as stale)", exc_info=True)
-    return result
+        return result, e
+    return result, None
+
+
+def _backup_note_failure(c, message: str) -> None:
+    """Record a run that could not happen (a dropped NAS, a stuck run): the
+    card and the heartbeat's in_app_error say so, and `at` stays put so the
+    wall's stale badge fires on time."""
+    try:
+        fbackups.record(c, {"ok": False, "error": message},
+                        dt.datetime.now(dt.timezone.utc), BACKUP_DIR_LABEL)
+    except Exception:
+        log.error("backups: could not record that %s", message, exc_info=True)
+
+
+def _backup_skip(reason: str | None) -> None:
+    """Log once each time the reason the hourly run is skipped changes."""
+    global _backup_last_skip
+    if reason == _backup_last_skip:
+        return
+    if reason:
+        log.warning("backups: hourly backup skipped: %s", _BACKUP_WHY.get(reason, reason))
+    elif _backup_last_skip:
+        log.info("backups: hourly backups are running again")
+    _backup_last_skip = reason
 
 
 def _backup_tick() -> dict | None:
     """One scheduled run, or None when it is off or a run is already going."""
+    global _backup_stuck_noted
     c = _db()
-    if _backup_why_off(c):
+    why = _backup_why_off(c)
+    if why:
+        _backup_skip(why)
+        if why == "marker_missing":
+            _backup_note_failure(c, fbackups.MARKER_MISSING)
         return None
     if not _backup_lock.acquire(blocking=False):
+        _backup_skip("running")
+        started = _backup_started_at
+        if (started is not None and not _backup_stuck_noted
+                and time.monotonic() - started > BACKUP_STUCK_S):
+            _backup_stuck_noted = True
+            log.error("backups: %s", BACKUP_STUCK_MSG)
+            _backup_note_failure(c, BACKUP_STUCK_MSG)
         return None
     try:
-        return _backup_run(c)
+        _backup_skip(None)
+        return _backup_run(c)[0]
     finally:
         _backup_lock.release()
 
@@ -2390,7 +2448,7 @@ def _backups_state(c) -> dict:
     rec = fdb.kv_get(c, fbackups.STATE_KEY)
     rec = rec if isinstance(rec, dict) else {}
     counts, counts_error = None, None
-    if why not in ("no_folder", "not_mounted"):
+    if why not in ("no_folder", "not_mounted", "marker_missing"):
         try:
             counts = fbackups.counts(BACKUPS_PATH)
         except OSError as e:
@@ -2428,10 +2486,39 @@ def backups_run():
     if not _backup_lock.acquire(blocking=False):
         raise HTTPException(409, "A backup is already running.")
     try:
-        result = _backup_run(c)
+        result, record_err = _backup_run(c)
     finally:
         _backup_lock.release()
+    if record_err is not None:
+        # never "ok" next to a state that still shows the old run
+        raise HTTPException(500, f"The backup ran, but the hub couldn’t record it ({record_err}).")
     return {"result": result, "state": _backups_state(c)}
+
+
+@app.post("/api/backups/adopt")
+def backups_adopt(request: Request):
+    """Use this folder: mark the current backup folder as the right one after
+    a deliberate move. Needs the parent PIN when one is set."""
+    if DEMO:
+        raise HTTPException(409, _BACKUP_WHY["demo"])
+    c = _db()
+    require_parent(request)
+    why = fbackups.folder_problem(BACKUPS_PATH, must_be_mount=not _BACKUPS_PATH_SET)
+    if why:
+        raise HTTPException(409, _BACKUP_WHY[why])
+    fdb.kv_set(c, fbackups.MARKER_KEY, fbackups.adopt_folder(BACKUPS_PATH))
+    log.warning("backups: %s is now the backup folder (Use this folder)", BACKUP_DIR_LABEL)
+    return _backups_state(c)
+
+
+def _backups_health_note(c) -> dict:
+    """The in-app job for /health/full's notes: information, never a problem."""
+    rec = fdb.kv_get(c, fbackups.STATE_KEY)
+    rec = rec if isinstance(rec, dict) else {}
+    why = _backup_why_off(c)
+    return {"enabled": why is None, "why_off": why, "dir": BACKUP_DIR_LABEL,
+            "last_ok_at": (rec.get("last_ok") or {}).get("at"),
+            "last_error": rec.get("last_error"), "running": _backup_lock.locked()}
 
 
 class BackupPassword(BaseModel):

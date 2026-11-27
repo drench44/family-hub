@@ -15,6 +15,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 - The hub backs itself up. Every hour it copies the database into a backup folder (`./backups` by default, or any folder you set with `BACKUP_DIR`, such as a NAS share the box has mounted), checked and kept in hourly, daily, weekly and monthly copies like the box backup script. With a backup password set in Settings, it also saves the settings files (`config.json`, `.env`, the PIN key, the Wyze and Google sign-ins), locked with that password. `python -m family_hub.backups restore-settings` puts them back.
 - Settings has a Backups card: where the copies go, when the last good one was made, how many are kept, the last failure in plain words, a Back up now button, and the backup password. How it works says where to find it.
 - A Backups switch under Features & integrations turns the hourly backup off. The wall's backup warning covers it: each good copy updates the same backup record the box script writes.
+- A dropped NAS share is caught: the first good copy leaves a marker file in the backup folder, and a folder without it is refused with "Is the NAS mounted?" on the card, while the wall's backup warning goes stale on time. Use this folder (with the parent PIN when one is set) accepts a deliberate move. A run stuck for over 20 minutes, a skipped hourly run and a settings file that went missing since the last copy are all reported instead of passing quietly, and `/health/full` notes the job.
+- `.env` must exist for `docker compose up` (the quick start creates it): it is mounted read-only on its own for the settings backup, never turned into a folder when missing.
 
 ## [1.22.0] — 2026-11-27
 

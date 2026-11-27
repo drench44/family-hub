@@ -6468,6 +6468,20 @@ async function backupsClick(e) {
       showToast(res.ok ? 'Backed up.' : `The backup failed. ${res.error || 'Settings says why.'}`);
     } catch (err) {
       showToast(err.message || 'Couldn’t start a backup.');
+    } finally {
+      run.disabled = false;   // a refusal leaves the button usable
+    }
+    await paintBackups();
+    return;
+  }
+  if (t.closest('[data-bk-adopt]')) {
+    try {
+      await jParent('/api/backups/adopt', { method: 'POST' },
+        'Changing the backup folder needs a parent.');
+      showToast('Backups go to this folder from now on.');
+    } catch (err) {
+      showToast(err.message || 'Couldn’t change the backup folder.');
+      return;
     }
     await paintBackups();
     return;
