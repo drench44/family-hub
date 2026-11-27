@@ -77,6 +77,29 @@ def test_a_light_theme_never_sits_on_a_white_scene_where_it_does_not_read_as_a_s
             assert s["scene"] != "wall-mount-b", s
 
 
+def test_a_sheet_lays_shots_in_a_grid_with_even_gaps():
+    a = Image.new("RGB", (100, 60), (255, 0, 0))
+    b = Image.new("RGB", (100, 60), (0, 255, 0))
+    out = mg.sheet([a, b, a, b], 2, 10)
+    assert out.size == (2 * 100 + 3 * 10, 2 * 60 + 3 * 10)
+    assert out.getpixel((15, 15)) == (255, 0, 0)
+    assert out.getpixel((125, 15)) == (0, 255, 0)
+    assert out.getpixel((5, 5)) == (16, 18, 22)
+    with pytest.raises(ValueError):
+        mg.sheet([a, Image.new("RGB", (50, 60))], 2, 10)
+
+
+def test_the_seasons_sheet_shows_only_christmas_and_halloween_looks_the_hub_knows():
+    # the owner: "Our seasonal one should really showcase the best, which is
+    # Christmas and Halloween."
+    cfg = json.loads((ART / "gallery.json").read_text())["seasons"]
+    theme_js = (ROOT / "src/family_hub/web/static/theme.js").read_text()
+    looks = [s["look"] for s in cfg["shots"]]
+    assert {l.split("-")[0] for l in looks} == {"christmas", "halloween"}
+    for s in cfg["shots"]:
+        assert f'id: "{s["look"]}"' in theme_js and f'"{s["theme"]}"' in theme_js, s
+
+
 def test_the_phone_frame_keeps_the_screenshot_and_has_clear_corners():
     shot = Image.new("RGB", (390, 844), (0, 128, 0))
     framed = mg.phone_frame(shot)

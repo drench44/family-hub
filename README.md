@@ -65,7 +65,7 @@ at one URL.
   CC-BY and MIT) ships inside the app.
   Adding a season or holiday follows [`docs/seasonal-looks.md`](docs/seasonal-looks.md).
 
-  ![Seasonal looks: Halloween, fall and Thanksgiving](docs/seasons.jpg)
+  ![Seasonal looks: Christmas (Santa and the Moon, Snow Globe) and Halloween (Lantern Night, Haunted Pines)](docs/seasons.jpg)
 - **Phone / tablet (≤1000px):** the same page reflows to bottom tabs —
   Chores / To-Dos / Calendar / Cameras / Weather / Laundry. On iPhone, open the
   hub in **Safari** and use Share → **Add to Home Screen** for a full-screen
