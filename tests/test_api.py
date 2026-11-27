@@ -8276,3 +8276,190 @@ def test_projection_leaves_out_someone_not_earning(client, app_mod):
     assert [k["id"] for k in one["children"]] == [a]
     kid = one["children"][0]
     assert one["total"] == {"perfect": kid["perfect"], "usual": kid["usual"]}
+
+
+# --- Earns money: review fixes (2026-11-27) ---------------------------------
+
+def test_streak_only_card_shows_no_pay_on_a_chore_ticked_while_earning(client, app_mod):
+    """Ticked at 30 cents, then switched off the same day: the row keeps its
+    frozen pay and the money stays owed, but the card shows no amount."""
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    c = app_mod._db()
+    _enable(client)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earns(client, pid, False).status_code == 200
+    p = client.get("/api/hub").json()["people"][0]
+    assert next(ch for ch in p["chores"] if ch["id"] == cid)["cents"] == 0
+    assert fdb.log_row(c, cid, _today().isoformat())["cents"] == 30
+    assert _earned(app_mod, pid) == 30
+    assert p["reward"]["wallet_cents"] == 30
+
+
+def test_earns_switch_says_when_today_could_not_be_repriced(client, app_mod, monkeypatch):
+    """Pricing fails (it logs and reports not ok): the switch is saved, but the
+    answer says today kept its old prices instead of claiming success."""
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    c = app_mod._db()
+    _enable(client)
+    client.get("/api/hub")
+    assert _earns(client, pid, True).json()["repriced"] is True    # no change: nothing to do
+    real = app_mod._price_rows
+    monkeypatch.setattr(app_mod, "_price_rows", lambda c_, rows, today: (rows, False))
+    r = _earns(client, pid, False)
+    assert r.status_code == 200 and r.json()["repriced"] is False
+    assert fdb.get_person_earns(c, pid) is False
+    assert fdb.log_row(c, cid, _today().isoformat())["cents"] == 30   # not re-frozen
+    monkeypatch.setattr(app_mod, "_price_rows", real)
+    r = _earns(client, pid, True)
+    assert r.json()["repriced"] is True
+
+
+def test_ticked_while_off_stays_unpaid_when_switched_back_on(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    assert _earns(client, pid, False).status_code == 200
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earns(client, pid, True).status_code == 200
+    p = client.get("/api/hub").json()["people"][0]
+    assert _earned(app_mod, pid) == 0
+    assert next(ch for ch in p["chores"] if ch["id"] == cid)["cents"] == 0
+
+
+def test_ticked_while_earning_then_off_then_on_keeps_its_pay_once(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earns(client, pid, False).status_code == 200
+    client.get("/api/hub")
+    assert _earns(client, pid, True).status_code == 200
+    p = client.get("/api/hub").json()["people"][0]
+    assert _earned(app_mod, pid) == 30
+    assert p["reward"]["wallet_cents"] == 30
+    assert next(ch for ch in p["chores"] if ch["id"] == cid)["cents"] == 30
+
+
+def _at_99(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    c = app_mod._db()
+    _enable(client)
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["seeds"] = {str(pid): 99}
+    fdb.kv_set(c, "rewards.launch", rec)
+    return pid, cid, c
+
+
+def test_sending_the_same_value_twice_changes_nothing(client, app_mod):
+    pid, cid, c = _at_99(client, app_mod)
+    client.get("/api/hub")
+    # already on: no floor is written, so the 100 reached next still pays once
+    assert _earns(client, pid, True).status_code == 200
+    assert fdb.kv_get(c, wallet.MS_FLOOR_KEY) in (None, {})
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    client.get("/api/hub")
+    assert len(_bonus_rows(app_mod, pid)) == 1
+
+
+def test_double_off_pays_a_reached_bonus_exactly_once(client, app_mod):
+    pid, cid, c = _at_99(client, app_mod)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earns(client, pid, False).status_code == 200
+    assert _earns(client, pid, False).status_code == 200
+    client.get("/api/hub")
+    assert [(r["at_streak"], r["cents"]) for r in _bonus_rows(app_mod, pid)] == [(100, 10000)]
+
+
+def test_back_on_at_199_pays_the_200_bonus_once(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    clock = _clock(app_mod, monkeypatch, _house_now(12))
+    c = app_mod._db()
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["seeds"] = {str(pid): 198}
+    fdb.kv_set(c, "rewards.launch", rec)
+    assert _earns(client, pid, False).status_code == 200
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200   # 199, off
+    assert _earns(client, pid, True).status_code == 200
+    clock["now"] = _house_now(12) + dt.timedelta(days=1)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200   # 200, on
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    client.get("/api/hub")
+    assert r["streak"] == 200 and r["bonus_today_cents"] == 10000
+    assert [(x["at_streak"], x["cents"]) for x in _bonus_rows(app_mod, pid)] == [(200, 10000)]
+
+
+def _covered(client, app_mod, monkeypatch, *, owner_earns, backup_earns):
+    """The owner is away and a backup does their chore today."""
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    c = app_mod._db()
+    backup = _mk_person(client, "Ben")
+    today = _house_now(12).date()
+    fdb.add_away_period(c, pid, (today - dt.timedelta(days=1)).isoformat(), None, backup)
+    assert _earns(client, pid, owner_earns).status_code == 200
+    assert _earns(client, backup, backup_earns).status_code == 200
+    p = _hub_person(client, backup)
+    assert next(ch for ch in p["chores"] if ch["id"] == cid)
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")
+    return pid, backup, cid
+
+
+def test_a_streak_only_backup_covering_an_earner_earns_nothing(client, app_mod, monkeypatch):
+    pid, backup, cid = _covered(client, app_mod, monkeypatch,
+                                owner_earns=True, backup_earns=False)
+    assert _earned(app_mod, backup) == 0 and _earned(app_mod, pid) == 0
+    assert _hub_person(client, backup)["reward"]["streak"] == 1
+
+
+def test_an_earning_backup_covering_a_streak_only_owner_is_paid(client, app_mod, monkeypatch):
+    pid, backup, cid = _covered(client, app_mod, monkeypatch,
+                                owner_earns=False, backup_earns=True)
+    assert _earned(app_mod, backup) == 30 and _earned(app_mod, pid) == 0
+
+
+def test_paying_out_a_streak_only_wallet_with_a_bonus_in_it(client, app_mod):
+    pid, cid, c = _at_99(client, app_mod)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    client.get("/api/hub")                                   # the 100 bonus pays
+    assert _earns(client, pid, False).status_code == 200
+    r = client.post(f"/api/rewards/payout/{pid}", headers=PIN).json()
+    assert r["paid"]["cents"] == 10030 and r["balance_cents"] == 0
+    assert client.post(f"/api/rewards/payout/{pid}", headers=PIN).json()["paid"] is None
+    item = client.get("/api/rewards").json()["people"][0]
+    assert item["balance_cents"] == 0 and "summary" not in item
+
+
+def test_an_inactive_streak_only_person_still_owed_stays_listed(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earns(client, pid, False).status_code == 200
+    assert client.patch(f"/api/admin/people/{pid}", json={"active": 0}).status_code == 200
+    people = client.get("/api/rewards").json()["people"]
+    item = next(p for p in people if p["id"] == pid)
+    assert item["active"] is False and item["earns"] is False
+    assert item["balance_cents"] == 30
+    paid = client.post(f"/api/rewards/payout/{pid}", headers=PIN).json()
+    assert paid["paid"]["cents"] == 30
+
+
+def test_yesterday_frozen_while_earning_still_pays_after_a_switch_off(
+        client, app_mod, monkeypatch):
+    """Ruling 2026-11-27: yesterday's row was served while earning, so ticking
+    it before the morning cutoff after a switch-off pays its frozen 30 cents.
+    The work was done while earning."""
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(20))
+    clock = _clock(app_mod, monkeypatch, _house_now(20))
+    client.get("/api/hub")                                   # yesterday frozen at 30
+    clock["now"] = _house_now(8, 30) + dt.timedelta(days=1)
+    assert _earns(client, pid, False).status_code == 200    # re-prices today only
+    y = _house_now(20).date().isoformat()
+    assert fdb.log_row(app_mod._db(), cid, y)["cents"] == 30
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": y}).status_code == 200
+    assert _earned(app_mod, pid) == 30

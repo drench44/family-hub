@@ -2048,7 +2048,10 @@ test('walletLineHtml / rewardHeadHtml: streak only shows the streak and shields,
   // money earned before the switch went off is not drawn on the card either
   assert.equal(sandbox.walletLineHtml({ ...r, wallet_cents: 90 }), '');
   const head = sandbox.rewardHeadHtml(r);
-  assert.match(head, /47 \/ 100/);
+  // the streak count alone: "/ 100" is bonus progress, and they earn no bonus
+  assert.match(head, /🔥 <span class="num">47<\/span>/);
+  assert.doesNotMatch(head, /\/ 100|toward/);
+  assert.match(head, /title="47 days in a row"/);
   assert.equal((head.match(/shield-on/g) || []).length, 2);
   // earning (or an older answer with no earns at all) keeps its wallet line
   assert.match(sandbox.walletLineHtml({ ...R, earns: true }), /Wallet <b class="num">\$18\.50/);

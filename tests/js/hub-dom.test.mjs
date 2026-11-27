@@ -12980,6 +12980,16 @@ test('rewardsClick: Earns money sends the switch through the parent PIN', async 
   assert.match(document.getElementById('toast').textContent, /earns money again from now on/);
 });
 
+test('rewardsClick: Earns money says so when today could not be re-priced', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.jParent = async () => ({ repriced: false });
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-earns', { rwEarns: '5', rwVal: '0' }));
+  assert.equal(document.getElementById('toast').textContent,
+    'Saved, but today’s prices could not be updated yet. Check again in a minute.');
+});
+
 test('rewardsClick: tapping the side already lit sends nothing', async () => {
   const { sandbox } = newHub();
   let sent = 0;

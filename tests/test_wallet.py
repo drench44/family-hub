@@ -644,3 +644,21 @@ def test_launch_pays_no_seed_bonus_to_someone_not_earning(conn):
     _launch(conn, {a: 30, b: 30}, custom)
     assert [r["at_streak"] for r in fdb.ledger_for(conn, a)] == [25]
     assert fdb.ledger_for(conn, b) == []
+
+
+def test_a_break_and_rebuild_to_100_pays_despite_an_old_floor(conn):
+    """The floor from switching back on belongs to that run. After a break
+    the new run starts clean, and its 100 pays."""
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 99})
+    _serve(conn, pid, 0)
+    run = _run(conn, pid, 0)
+    assert run.streak == 100
+    wallet.record_earning_on(conn, pid, run)          # floor at 100 on the seed run
+    _serve(conn, pid, 1, done=False)                  # missed: the run ends
+    for n in range(2, 102):
+        _serve(conn, pid, n)
+    run = _run(conn, pid, 101)
+    assert run.streak == 100 and run.run_key == _day(2)
+    paid = wallet.award(conn, pid, run, SET, LAUNCH + dt.timedelta(days=101))
+    assert [(r["at_streak"], r["cents"]) for r in paid] == [(100, 10000)]

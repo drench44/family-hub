@@ -1820,6 +1820,11 @@ function rewardHeadHtml(r) {
     ? `<span class="shields" title="${held} of ${max} saves: a missed day uses one instead of ending the streak">`
       + Array.from({ length: max }, (_, i) => SHIELD_SVG(i < held)).join('') + `</span>`
     : '';
+  // streak only (earns false): the count alone, since "/ goal" is bonus progress
+  if (r.earns === false) {
+    return `<span class="chip-streak chip-wallet" title="${Number(r.streak)} days in a row">`
+      + `🔥 <span class="num">${Number(r.streak)}</span></span>` + shields;
+  }
   return `<span class="chip-streak chip-wallet" title="${Number(r.streak)} days in a row toward ${Number(r.goal)}">`
     + `🔥 <span class="num">${Number(r.streak)} / ${Number(r.goal)}</span></span>` + shields;
 }

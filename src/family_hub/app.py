@@ -1326,7 +1326,7 @@ def _away_view(c, d: dt.date):
         return {}, {"ids": set(), "backup": {}}, False
 
 
-def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
+def _people_day(c, d: dt.date, report: dict | None = None) -> tuple[list[dict], bool]:
     """The per-person chore plan for date ``d`` — done flags, rotation tags,
     and streak/week computed AS OF that day. Shared by the hub home feed
     (d=today) and the full-screen chores day browser.
@@ -1336,7 +1336,10 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
     the future. Today is resolved live from current definitions and frozen
     into the log on each serve; future days are resolved live, never logged.
     A past day the wall never served (server down, pre-install) has no log
-    rows and reads as a rest day — streak-neutral by design."""
+    rows and reads as a rest day, streak-neutral by design.
+
+    ``report`` (optional) gets ``frozen``: whether today was written to the
+    log on this call (False when pricing or the away overlay failed)."""
     today = _today()
     d_str = d.isoformat()
     people = fdb.list_people(c)
@@ -1365,6 +1368,8 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
                         "failed); the next serve retries")
         elif d == today and away_ok:
             _freeze_day(c, d_str, rows)
+            if report is not None:
+                report["frozen"] = True
             # served even when nobody had anything today: the chore wallet
             # counts a rest day as kept, but an outage day as neither
             fdb.mark_served(c, d_str)
@@ -1593,7 +1598,9 @@ def _add_rewards(c, plan: list, rows: list, today: dt.date,
             # a chore settled to someone else (the backup who did it before
             # this owner came back) shows no pay on this card: it isn't theirs
             mine = (r.get("earner") or pid) == pid
-            ch["cents"] = int(r.get("cents") or 0) if mine else 0
+            # streak only: no amounts on the card, even on a chore ticked
+            # while still earning (its frozen pay is still owed)
+            ch["cents"] = int(r.get("cents") or 0) if mine and block["earns"] else 0
 
 
 def _backup_status(last_success, now, stale_s, remote=None):
@@ -2421,13 +2428,17 @@ def rewards_set_earns(pid: int, body: EarnsBody, request: Request):
             # no wall refreshed between the tick and the switch
             wallet.award(c, pid, run, settings, today)
     fdb.set_person_earns(c, pid, body.earns)
+    repriced = True                 # nothing to re-price unless it changed
     if body.earns != was and rewards_active(c):
-        try:
-            _people_day(c, today)
-        except Exception:
-            log.error("earns switch saved, but today could not be re-priced "
-                      "now; the wall's next refresh does it", exc_info=True)
-    return _rewards_state(c)
+        report = {"frozen": False}
+        _people_day(c, today, report)
+        repriced = report["frozen"]
+        if not repriced:
+            # _people_day has logged why; the wall's next healthy serve
+            # re-prices today, and the answer says so instead of "done"
+            log.warning("earns switch saved for person %s, but today's chores "
+                        "were not re-priced yet", pid)
+    return {**_rewards_state(c), "repriced": repriced}
 
 
 @app.post("/api/rewards/enable")
