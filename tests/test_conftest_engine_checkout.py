@@ -62,7 +62,7 @@ def test_staged_tree_skips_marked_test(tmp_path):
     """The deploy's staged tree has no .git and must keep skipping."""
     r = _run(tmp_path, git=False, require=None)
     assert r.returncode == 0, r.stdout
-    assert "1 passed, 1 skipped" in r.stdout
+    assert "1 passed" in r.stdout and "1 skipped" in r.stdout
 
 
 def test_requirement_unset_zero_or_empty_still_skips(tmp_path):
@@ -77,6 +77,6 @@ def test_requirement_unset_zero_or_empty_still_skips(tmp_path):
 def test_requirement_without_git_errors_not_skips(tmp_path):
     r = _run(tmp_path, git=False, require="1")
     assert r.returncode != 0, r.stdout
-    assert "1 passed, 1 error" in r.stdout
+    assert "1 passed" in r.stdout and "1 error" in r.stdout
     assert "FH_REQUIRE_ENGINE_CHECKS" in r.stdout
     assert "skipped" not in r.stdout
