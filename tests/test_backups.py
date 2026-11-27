@@ -471,7 +471,8 @@ def test_the_settings_time_is_recorded(tmp_path):
     fb.record(conn, r, t, "./backups")
     assert fdb.kv_get(conn, "backup_status")["settings_at"] == t.isoformat()
     mine = fdb.kv_get(conn, fb.STATE_KEY)
-    assert mine["settings"] == {"at": t.isoformat(), "file": r["settings_file"]}
+    assert mine["settings"] == {"at": t.isoformat(), "file": r["settings_file"],
+                                "files": ["config.json"]}
     conn.close()
 
 

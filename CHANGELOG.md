@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- A monthly restore test proves the newest backup really restores. It copies the newest database backup to a private temp folder, opens it read-only, checks it is sound, has the tables a hub needs and holds about as many people, chores, chore history and wallet rows as the live hub (a copy far behind fails as old or cut short). With a backup password set, it also opens the newest settings backup in memory with the stored key and checks it holds the files the last backup saved. Nothing in the live database or the backup folder is touched.
+
 ## [1.24.0] — 2026-11-27
 
 ### Added
