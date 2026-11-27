@@ -46,8 +46,14 @@ def _add_daily_fixed(conn, title, icon, person_id, epoch):
 
 # Every table seed_demo writes into; children (FK holders) before parents.
 # away_periods holds a NOT NULL FK to people, so it's deleted before people.
-_SEEDED_TABLES = ("completions", "occurrence_log", "todos", "events", "chores",
-                  "away_periods", "people")
+_SEEDED_TABLES = ("completions", "occurrence_log", "served_days", "ledger",
+                  "todos", "events", "chores", "away_periods", "people")
+# The chore wallet's kv keys the demo writes (its PIN, settings, launch).
+_SEEDED_KV = ("calendar_status", "calendar_colors", "rewards.pin",
+              "rewards.pin_lock", "rewards.settings", "rewards.launch")
+# The demo's parent PIN, so anyone trying the demo can open every money
+# setting. Printed in the README's demo section; never a real wall's PIN.
+DEMO_PIN = "1234"
 
 
 def is_unseeded(conn) -> bool:
@@ -89,7 +95,8 @@ def clear_demo(conn) -> None:
         for tbl in _SEEDED_TABLES:
             conn.execute(f"DELETE FROM {tbl}")
         conn.execute(
-            "DELETE FROM kv WHERE key IN ('calendar_status', 'calendar_colors')")
+            f"DELETE FROM kv WHERE key IN ({', '.join('?' * len(_SEEDED_KV))})",
+            _SEEDED_KV)
 
 
 def seed_demo(conn, today: dt.date) -> None:
@@ -105,6 +112,8 @@ def seed_demo(conn, today: dt.date) -> None:
     ava_laundry = _add_daily_fixed(conn, "Laundry", "🧺", ava, epoch)
     ava_cage = _add_daily_fixed(conn, "Clean rabbit cage", "🐰", ava, epoch)
     ava_workout = _add_daily_fixed(conn, "Workout", "🏃", ava, epoch)
+    # a personal goal: on her card, but it earns nothing in the chore wallet
+    fdb.update_chore(conn, ava_workout, kind="personal")
     ava_dog = _add_daily_fixed(conn, "Brush the dog", "🐶", ava, epoch)
 
     # Milo: two chores on weekdays that are NOT today (mask excludes today's
@@ -208,6 +217,8 @@ def seed_demo(conn, today: dt.date) -> None:
                     or r["chore_id"] == dishes or r["covering_for"] is not None:
                 fdb.set_completion(conn, r["chore_id"], d.isoformat(), r["person_id"])
 
+    _seed_wallet(conn, today, {ava: 45, ruby: 98, milo: 12})
+
     # Today's completions: three of Ava's four, and Ruby's plants (today's
     # occurrence log itself is written live by the hub on the first serve).
     today_str = today.isoformat()
@@ -217,6 +228,23 @@ def seed_demo(conn, today: dt.date) -> None:
 
     _seed_todos(conn)
     _seed_calendar(conn, today)
+
+
+def _seed_wallet(conn, today: dt.date, seeds: dict) -> None:
+    """Turn the chore wallet on for the demo, two days ago, with carried-over
+    streaks: Ava is part way to 100 (45, +2 kept days = 47), Ruby reached 100
+    yesterday so the first serve pays her $100 today, and Milo's 12 is paused
+    while he is away. The two days since launch pay 30 cents a house chore."""
+    from . import parent_pin, wallet
+    launch = today - dt.timedelta(days=2)
+    for i in range(1, 7):
+        fdb.mark_served(conn, (today - dt.timedelta(days=i)).isoformat())
+    with conn:
+        conn.execute("UPDATE occurrence_log SET cents = 30 "
+                     "WHERE kind = 'house' AND date >= ?", (launch.isoformat(),))
+    parent_pin.set_pin(conn, DEMO_PIN, current=None)
+    wallet.launch(conn, launch, {"bonus_on": True, "milestones": [[100, 10000]]},
+                  seeds)
 
 
 def _seed_todos(conn) -> None:

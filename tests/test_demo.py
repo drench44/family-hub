@@ -515,3 +515,29 @@ def test_demo_refresh_button_sync_is_a_noop(demo_client, demo_app, monkeypatch):
     assert r.status_code == 200
     assert r.json() == {"synced": False, "reason": "demo"}
     assert ran == []
+
+
+def test_demo_payload_has_rewards(demo_client):
+    """The demo wall shows the chore wallet on: a child part way to the
+    $100, one who reached 100 yesterday and is paid today, a personal goal,
+    and an away child whose streak is paused."""
+    hub = demo_client.get("/api/hub").json()
+    by = {p["person"]["name"]: p for p in hub["people"]}
+    ava, ruby, milo = by["Ava"]["reward"], by["Ruby"]["reward"], by["Milo"]["reward"]
+    assert ava["streak"] == 47 and ava["goal"] == 100 and ava["wallet_cents"] > 0
+    workout = next(c for c in by["Ava"]["chores"] if c["title"] == "Workout")
+    assert workout["kind"] == "personal" and workout["cents"] == 0
+    assert ruby["streak"] == 100 and ruby["bonus_today_cents"] == 10000
+    assert milo["streak"] == 12
+    # every PIN action works in the demo with the documented demo PIN
+    assert demo_client.post("/api/rewards/pin/check",
+                            headers={"X-Parent-Pin": "1234"}).status_code == 204
+
+
+def test_clear_demo_also_clears_the_wallet(demo_app):
+    c = demo_app._db()
+    demo.clear_demo(c)
+    assert db.kv_get(c, "rewards.launch") is None
+    assert db.kv_get(c, "rewards.pin") is None
+    assert db.ledger_for(c) == []
+    assert demo.is_unseeded(c)
