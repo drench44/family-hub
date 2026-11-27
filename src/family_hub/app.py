@@ -2409,11 +2409,17 @@ def rewards_set_earns(pid: int, body: EarnsBody, request: Request):
         raise HTTPException(404, "no such person")
     launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
     today = _today()
-    if body.earns and not was and launch:
+    if body.earns != was and launch:
         away_by = _wallet_away(c, launch["day"], today)
-        run = wallet.person_run(c, pid, today, reward_settings(c), launch,
+        settings = reward_settings(c)
+        run = wallet.person_run(c, pid, today, settings, launch,
                                 away_by.get(pid, set()))
-        wallet.record_earning_on(c, pid, run)
+        if body.earns:
+            wallet.record_earning_on(c, pid, run)
+        else:
+            # a milestone reached while still earning is theirs, even if
+            # no wall refreshed between the tick and the switch
+            wallet.award(c, pid, run, settings, today)
     fdb.set_person_earns(c, pid, body.earns)
     if body.earns != was and rewards_active(c):
         try:

@@ -8181,6 +8181,25 @@ def test_streak_only_bonus_day_pays_nothing_and_the_streak_shows(client, app_mod
     assert _bonus_rows(app_mod, pid) == []
 
 
+def test_switching_off_pays_a_milestone_already_reached_while_earning(client, app_mod):
+    """The tick that reached 100 came while earning, and the switch went off
+    before any wall refreshed: the bonus is still theirs, paid once."""
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    c = app_mod._db()
+    _enable(client)
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["seeds"] = {str(pid): 99}
+    fdb.kv_set(c, "rewards.launch", rec)
+    client.get("/api/hub")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    assert _earns(client, pid, False).status_code == 200    # no serve between
+    assert [(r["at_streak"], r["cents"]) for r in _bonus_rows(app_mod, pid)] == [(100, 10000)]
+    client.get("/api/hub")
+    assert len(_bonus_rows(app_mod, pid)) == 1
+    st = client.get("/api/rewards").json()["people"][0]
+    assert st["balance_cents"] == 10030
+
+
 def test_streak_only_skips_more_per_chore_on_a_streak(client, app_mod):
     pid, cid, _ = _kid_with_history(client, app_mod)
     c = app_mod._db()
