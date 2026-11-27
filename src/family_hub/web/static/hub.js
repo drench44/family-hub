@@ -2570,7 +2570,7 @@ function openOverlay(view) {
     if (cache) renderTodosPaint();           // instant paint from cache
     renderTodosFull();                       // then refresh from the API
   } else if (view === 'settings') {
-    content.innerHTML = `<div class="overlay-panel"><div id="settings-full"></div></div>`;
+    content.innerHTML = `<div class="overlay-panel settings-panel"><div id="settings-full"></div></div>`;
     caldavUi.formError = '';   // a stale validation message shouldn't outlive a reopen
     caldavUi.user = '';        // nor a half-typed Apple ID from an earlier visit
     renderSettingsFull();      // instant paint from cache (hubData / lastIntegrations)
@@ -6549,31 +6549,35 @@ function settingsGo(id) {
 }
 
 function wireSettingsNav() {
+  // Each open (and each repaint) starts fresh: a tap from an earlier visit
+  // must not steer the highlight now (review, 2026-11-26).
+  settingsGoAt = { id: '', t: 0 };
   const host = document.getElementById('settings-full');
   const scroller = host && host.parentElement;
-  const nav = host && host.querySelector && host.querySelector('.settings-nav');
-  if (!scroller || !nav || !scroller.addEventListener || scroller._settingsNav) return;
-  scroller._settingsNav = true;
-  let queued = false;
+  if (!scroller || !scroller.addEventListener) return;
+  // renderSettingsFull replaces the menu on every repaint, so the painter
+  // looks the live menu up each time instead of holding the first one.
   const paint = () => {
-    queued = false;
+    scroller._settingsNavQueued = false;
+    const live = document.getElementById('settings-full');
+    const nav = live && live.querySelector && live.querySelector('.settings-nav');
+    if (!nav || !scroller.getBoundingClientRect) return;
     const top = scroller.getBoundingClientRect().top;
     const navBottom = nav.getBoundingClientRect().bottom - top;
     const tops = SETTINGS_SECTIONS.map(([id]) => {
       const el = document.getElementById(id);
       return el ? el.getBoundingClientRect().top - top : Infinity;
     });
-    // at the very bottom the last short cards can never reach the menu: light the last
+    // at the very bottom the last short cards can never reach the menu
     const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
     const tapped = SETTINGS_SECTIONS.findIndex(([id]) => id === settingsGoAt.id);
     let active = settingsNavActive(tops, navBottom + 8);
     if (tapped >= 0 && Date.now() - settingsGoAt.t < 1500) active = tapped;
-    else if (atEnd && tapped > active) active = tapped;
-    else if (atEnd && tapped < 0) active = SETTINGS_SECTIONS.length - 1;
-    nav.querySelectorAll('[data-settings-go]').forEach((b, i) => {
-      b.classList.toggle('on', i === active);
-      if (i === active) b.setAttribute('aria-current', 'true');
-      else b.removeAttribute('aria-current');
+    else if (atEnd) active = tapped > active ? tapped : SETTINGS_SECTIONS.length - 1;
+    nav.querySelectorAll('[data-settings-go]').forEach((btn, i) => {
+      btn.classList.toggle('on', i === active);
+      if (i === active) btn.setAttribute('aria-current', 'true');
+      else btn.removeAttribute('aria-current');
     });
     const lit = nav.querySelector('.on');
     if (lit && nav.scrollWidth > nav.clientWidth) {
@@ -6584,11 +6588,16 @@ function wireSettingsNav() {
       }
     }
   };
-  scroller.addEventListener('scroll', () => {
-    if (queued) return;
-    queued = true;
-    requestAnimationFrame(paint);
-  }, { passive: true });
+  if (!scroller._settingsNav) {
+    scroller._settingsNav = true;
+    scroller.addEventListener('scroll', () => {
+      if (scroller._settingsNavQueued) return;
+      scroller._settingsNavQueued = true;
+      requestAnimationFrame(() => scroller._settingsNavPaint());
+    }, { passive: true });
+  }
+  scroller._settingsNavPaint = paint;
+  paint();   // a repaint mid-scroll lights the right section straight away
 }
 
 /* What the help needs to know about this wall, from the last hub payload:

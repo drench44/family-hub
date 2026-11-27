@@ -2693,8 +2693,9 @@ body.integ-off-todos .todo-slot { display: none; }
   /* full-screen views on a small screen */
   :root:not([data-layout="desktop"]) .overlay-panel { padding: 64px 12px 20px; }
   /* the Settings menu keeps the Home pill's row on the phone's narrower panel */
+  :root:not([data-layout="desktop"]) .overlay-panel.settings-panel { padding-top: 8px; }
   :root:not([data-layout="desktop"]) .settings-nav {
-    top: -56px; margin: -56px -12px 0 98px; padding: 8px 12px 10px 0;
+    margin: 0 -12px 0 98px; padding: 8px 12px 10px 0;
   }
   :root:not([data-layout="desktop"]) .cal-nav { flex-wrap: wrap; row-gap: 8px; }
   :root:not([data-layout="desktop"]) .cal-nav-title { font-size: 17px; }
@@ -4154,17 +4155,19 @@ body > .season .sn-web:nth-child(2) { --s: 520px; right: -220px; bottom: -210px;
    the cards scroll, and scrolls sideways on a phone. Solid ground, no blur:
    a blurred sticky bar drops taps on iOS. */
 .settings-nav {
-  /* sticky offsets count from the scroller's padding edge, so -60px holds it
-     on the Home pill's row (the panel's 68px top padding less 8px) */
-  position: sticky; top: -60px; z-index: 5;
+  position: sticky; top: 0; z-index: 5;
   display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto;
   scrollbar-width: none;
   /* it starts beside the Home pill, so its sideways scroll never slides under it */
-  margin: -60px -24px 0 80px; padding: 8px 24px 10px 0;
+  margin: 0 -24px 0 80px; padding: 8px 24px 10px 0;
   background: var(--ground); border-bottom: 1px solid var(--edge);
   /* paint the 8px strip above it too, so scrolled cards never peek over it */
   box-shadow: 0 -8px 0 var(--ground), -120px 0 0 var(--ground), -120px -8px 0 var(--ground);
 }
+/* Settings drops the panel's tall top padding (it cleared the Home pill):
+   the menu takes that row itself, so a plain top: 0 holds it in place in
+   every browser, with no negative offsets to read differently on iOS. */
+.overlay-panel.settings-panel { padding-top: 8px; }
 .settings-nav::-webkit-scrollbar { display: none; }
 .settings-nav button {
   flex: none; min-height: 44px; padding: 0 16px; border-radius: 999px;
