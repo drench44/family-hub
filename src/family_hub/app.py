@@ -1833,9 +1833,10 @@ def reward_settings(c) -> dict:
 
 
 def rewards_active(c) -> bool:
-    """The wallet is on: its feature switch is on, a parent PIN is set, and
-    it has been turned on (launched). Off, the wall is exactly as before."""
-    return (_integration_on(c, "rewards") and parent_pin.is_set(c)
+    """The wallet is on: its feature switch is on and it has been turned on
+    (launched). A parent PIN is optional (the owner, 2026-11-27: "I don't
+    even need the pin"). Off, the wall is exactly as before."""
+    return (_integration_on(c, "rewards")
             and bool(fdb.kv_get(c, wallet.LAUNCH_KEY)))
 
 
@@ -1921,10 +1922,11 @@ def _pin_source(request: Request | None) -> str:
 
 
 def _pin_gate(c, pin, source: str = "") -> None:
-    """Raise the PIN refusal for ``pin`` unless it is right: 403 not_set,
-    required (no PIN sent), wrong; 429 locked with the wait in seconds."""
+    """Raise the PIN refusal for ``pin`` unless it is right: 403 required (no
+    PIN sent), wrong, key_missing; 429 locked with the wait in seconds. With
+    no PIN set, the PIN is off and every action goes through."""
     if not parent_pin.is_set(c):
-        raise HTTPException(403, {"pin": "not_set"})
+        return
     if parent_pin.key_missing(c):
         # fail closed, and say why: no PIN can be checked without pin.key
         raise HTTPException(403, {"pin": "key_missing"})
@@ -1954,6 +1956,15 @@ def rewards_set_pin(body: PinBody, request: Request):
         parent_pin.set_pin(c, body.pin, current=body.current)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    return Response(status_code=204)
+
+
+@app.delete("/api/rewards/pin", status_code=204)
+def rewards_remove_pin(request: Request):
+    """Turn the PIN off (it is optional). Needs the PIN itself."""
+    c = _db()
+    require_parent(request)
+    parent_pin.clear(c)
     return Response(status_code=204)
 
 
@@ -2041,7 +2052,7 @@ def _rewards_state(c) -> dict:
 @app.get("/api/rewards")
 def rewards_get():
     """Read-only: settings, balances and history (the wall cards already
-    show each balance). Every change below needs the parent PIN."""
+    show each balance). Every change below needs the parent PIN when one is set."""
     return _rewards_state(_db())
 
 

@@ -1729,10 +1729,23 @@ const RW_STATE = (over) => ({
   ...over,
 });
 
-test('rewardsCardHtml: no PIN yet offers to set one, and nothing else', () => {
+test('rewardsCardHtml: no PIN is fine: it can turn on, and offers a PIN as optional', () => {
+  // the owner, 2026-11-27: "I don't even need the pin. Could we make that optional?"
   const h = sandbox.rewardsCardHtml(RW_STATE({ pin_set: false, launch: null, active: false }));
+  assert.match(h, /data-rw-enable/);
   assert.match(h, /data-rw-setpin/);
-  assert.doesNotMatch(h, /data-rw-enable|data-rw-save|data-rw-pay/);
+  assert.match(h, /optional/i);
+  assert.doesNotMatch(h, /data-rw-clearpin/);
+});
+
+test('rewardsCardHtml: the running wallet shows the PIN choice both ways', () => {
+  const off = sandbox.rewardsCardHtml(RW_STATE({ pin_set: false }));
+  assert.match(off, /data-rw-save/);
+  assert.match(off, /data-rw-setpin/);
+  assert.match(off, /anyone/i);
+  const on = sandbox.rewardsCardHtml(RW_STATE({ pin_set: true }));
+  assert.match(on, /data-rw-clearpin/);
+  assert.doesNotMatch(on, /data-rw-setpin/);
 });
 
 test('rewardsCardHtml: PIN set, not on yet, offers to turn it on and says what happens', () => {

@@ -25,7 +25,8 @@ FIX_CUTOFF_DEFAULT = "09:00"
 
 def edit_floor(conn, now: dt.datetime) -> dt.date | None:
     """The oldest day a tick may still change without the parent PIN, or
-    None when the wallet is off (then any day may change, as before). Today,
+    None when the wallet is off or no PIN is set (then any day may change,
+    as on the wall). Today,
     or yesterday until the morning cutoff. For callers outside the web app
     (the iPhone reminder sync); the app's own guards use the same rule."""
     if not (fdb.kv_get(conn, LAUNCH_KEY) and parent_pin.is_set(conn)

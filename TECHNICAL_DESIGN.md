@@ -532,7 +532,13 @@ keyed by `pin.key`, a 32-byte owner-only file beside `hub.db`, so a copy of
 the database alone cannot be used to try PINs; a lost key fails closed and
 `python -m family_hub.parent_pin --clear` resets the PIN); `app.py` gates
 old-day edits, money settings and payouts on it, and adds a `reward` block
-to the wall payload only while the wallet is on.
+to the wall payload only while the wallet is on. The PIN is optional (the
+owner, 2026-11-27): with none set, `_pin_gate` lets every action through
+and the wallet runs; `DELETE /api/rewards/pin` (which needs the PIN)
+turns it off. With no PIN, anyone at the wall can also set one; a PIN
+nobody knows is undone on the box with `python -m family_hub.parent_pin
+--clear`. Accepted: an open wall can already pay out, so a first-PIN check
+would guard less than it costs.
 
 A run starts on a person's first house-chore day, so someone with no house
 chores (added after launch, personal goals only, a parent on the wall) has no

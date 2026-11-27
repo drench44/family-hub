@@ -1729,10 +1729,10 @@ function choreMoneyHtml(ch) {
 /* Shown when the hub's PIN key file is gone (a restore onto a new box): no
    PIN can be checked until it is cleared on the box. */
 const PIN_KEY_MISSING = 'The parent PIN can’t be checked on this hub right now. '
-  + 'Clear it on the hub box (docs/backup-and-restore.md) and set a new one.';
+  + 'Clear it on the hub box (docs/backup-and-restore.md); a new one is optional.';
 
 /* The parent-PIN refusal on a failed write, or null for any other failure:
-   {pin: 'required'|'wrong'|'not_set'|'locked'|'key_missing', wait_s}. Pure. */
+   {pin: 'required'|'wrong'|'locked'|'key_missing', wait_s}. Pure. */
 function pinRefusal(err) {
   if (!err || (err.status !== 403 && err.status !== 429)) return null;
   const d = err.detail;
@@ -1789,16 +1789,23 @@ function rewardsCardHtml(st) {
   if (st.pin_key_missing) {
     return intro + `<div class="hint">${PIN_KEY_MISSING}</div>`;
   }
-  if (!st.pin_set) {
-    return intro + `<div class="hint">First pick a parent PIN. It keeps the money settings, payouts and fixes to old days for grown-ups.</div>`
-      + `<button class="btn-primary" type="button" data-rw-setpin="1">Set a parent PIN</button>`;
-  }
+  // The parent PIN is optional (the owner, 2026-11-27): one row says whether
+  // it is on, and offers to add or remove it.
+  const pinRow = st.pin_set
+    ? `<div class="settings-row"><span class="settings-k">Parent PIN</span>`
+      + `<span class="hint">On. Payouts, amounts and fixes to old days ask for it.</span>`
+      + `<button class="padmin-btn" type="button" data-rw-clearpin="1">Remove PIN</button></div>`
+    : `<div class="settings-row"><span class="settings-k">Parent PIN</span>`
+      + `<span class="hint">Off (optional). Anyone at the wall can pay out and change amounts.</span>`
+      + `<button class="padmin-btn" type="button" data-rw-setpin="1">Set a PIN</button></div>`;
   if (!st.launch) {
     return intro + `<div class="hint">When it turns on, each child keeps the streak they have now, and every wallet starts at $0.</div>`
-      + `<button class="btn-primary" type="button" data-rw-enable="1">Turn on the wallet</button>`;
+      + `<button class="btn-primary" type="button" data-rw-enable="1">Turn on the wallet</button>`
+      + pinRow;
   }
   const s = st.settings;
   return intro
+    + pinRow
     + `<div class="theme-ctl stack rw-form">`
     + `<div class="settings-row"><span class="settings-k">Each chore pays</span>`
     + `<div class="rw-inline"><input class="txt-input rw-num" type="number" min="0" max="500" inputmode="numeric" name="cents_per_chore" value="${Number(s.cents_per_chore)}" aria-label="Cents a chore"><span class="rw-word">¢ for each house chore done</span></div></div>`

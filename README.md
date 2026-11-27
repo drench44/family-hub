@@ -90,8 +90,8 @@ at one URL.
   let one missed day pass without starting over. Personal goals (reading,
   vitamins) stay on the card without earning. Settings shows the projected
   cost per week, month and year before you save, and keeps each child's
-  payouts. A parent PIN guards the money settings, payouts and fixes to old
-  days. Off until a parent sets a PIN and turns it on.
+  payouts. An optional parent PIN guards the money settings, payouts and
+  fixes to old days. Off until a parent turns it on in Settings.
 - **To-Dos:** one shared household list for the stuff that isn't a scheduled
   chore — anyone adds, anyone checks off. Grouped Now / Soon / Later, items
   carry over until done, a checked item stays struck-through for five minutes
