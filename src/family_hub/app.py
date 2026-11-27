@@ -2037,15 +2037,39 @@ def _validated_reward_settings(c, patch: dict) -> dict:
     return merged
 
 
+def _summary_streak(c, pid: int, today: dt.date, launch: dict, away_by) -> int | None:
+    """The streak for a wallet summary, or None (logged) when it can't be
+    worked out: the summary's money still shows, only the streak drops."""
+    try:
+        if away_by is None:
+            raise RuntimeError("away days could not be read")
+        return wallet.person_run(c, pid, today, reward_settings(c), launch,
+                                 away_by.get(pid, set())).streak
+    except Exception:
+        log.error("wallet summary: no streak for person %s", pid, exc_info=True)
+        return None
+
+
 def _wallet_people(c, today: dt.date) -> list[dict]:
     launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    away_by = None
+    if launch:
+        try:
+            away_by = _wallet_away(c, launch["day"], today)
+        except Exception:
+            log.error("wallet summary: away days unreadable", exc_info=True)
     out = []
     for p in fdb.list_people(c, include_inactive=True):
         item = {"id": p["id"], "name": p["name"], "color": p["color"],
                 "active": bool(p["active"]),
                 "pace": wallet.pace(c, p["id"], today)}
         if launch:
-            item["balance_cents"] = wallet.balance_cents(c, p["id"], launch["day"])
+            # what came in since the last payout. The balance shown is its
+            # total, read once, so the two can never disagree.
+            item["summary"] = wallet.summary(
+                c, p["id"], launch["day"],
+                _summary_streak(c, p["id"], today, launch, away_by))
+            item["balance_cents"] = item["summary"]["total_cents"]
             item["history"] = wallet.history(c, p["id"], launch["day"])
         else:
             item["balance_cents"], item["history"] = 0, {"weeks": [], "ledger": []}
