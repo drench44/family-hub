@@ -12,7 +12,7 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ### Fixed
 
-- Chore wallet: a chore already done keeps its pay. If its owner comes back from a trip the same day, the pay stays with whoever did it (the streak still counts it for the owner), and a rate change after a payout no longer reprices chores that were already paid.
+- Chore wallet: a chore already done keeps its pay. If its owner comes back from a trip the same day, the pay stays with whoever did it (the streak still counts it for the owner), and a rate change or retag after a payout no longer reprices chores that were already paid. The other person's card shows no pay for that chore, and chores done while the wallet was switched off are priced when it comes back on.
 
 ## [1.21.1] — 2026-11-26
 
