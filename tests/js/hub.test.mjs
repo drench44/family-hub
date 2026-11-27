@@ -2199,6 +2199,34 @@ test('backupsCardHtml: the settings files row for each password state', () => {
   assert.match(err, /Couldn’t read \.env &lt;x&gt;\./);
 });
 
+test('backupsCardHtml: with a password set, a clear status row, what the last copy holds, and the form folded away', () => {
+  const at = agoIso(3 * 86400);
+  const copy = agoIso(20 * 60);
+  const html = sandbox.backupsCardHtml(BK({ password_set: true, password_set_at: at,
+    settings: { at: copy, file: 'settings-x.fhb',
+      files: ['config.json', 'env', 'pin.key', 'token.json', 'wyze.env'] } }), NOW_MS);
+  const day = sandbox.restoreTestDate(at, NOW_MS);
+  assert.match(html, new RegExp(`Backup password</span><span class="hint">Set ✓ on ${day}\\.`));
+  const clock = sandbox.backupClock(copy);
+  assert.match(clock, /\d{1,2}:\d{2}/);
+  assert.ok(html.includes(`Settings locked into the ${clock} backup: config.json, env, pin.key, token.json, wyze.env.`));
+  assert.match(html, /<button class="padmin-btn" type="button" data-bk-changepw="1">Change password<\/button>/);
+  assert.match(html, /class="theme-ctl stack bk-pw hidden" id="bk-pw-form"/, 'the form starts folded');
+  assert.match(html, /type="password" name="bk_pw"/, 'still in the page, so the save wiring finds it');
+  assert.equal((html.match(/<div/g) || []).length, (html.match(/<\/div>/g) || []).length, 'balanced divs');
+});
+
+test('backupsCardHtml: a set password with no stored date still says Set, and an unset one keeps the open form', () => {
+  const noDate = sandbox.backupsCardHtml(BK({ password_set: true }), NOW_MS);
+  assert.match(noDate, /Backup password<\/span><span class="hint">Set ✓<\/span>/);
+  const unset = sandbox.backupsCardHtml(BK(), NOW_MS);
+  assert.ok(!/data-bk-changepw/.test(unset) && !/Set ✓/.test(unset));
+  assert.ok(!/bk-pw hidden/.test(unset), 'no folded form when nothing is set');
+  assert.match(unset, /Set a backup password/);
+  const bad = sandbox.backupsCardHtml(BK({ password_problem: true }), NOW_MS);
+  assert.ok(!/Set ✓/.test(bad) && !/bk-pw hidden/.test(bad), 'an unusable key still shows the open form');
+});
+
 test('backupsCardHtml: a running backup and an unreadable folder', () => {
   const html = sandbox.backupsCardHtml(BK({ running: true, counts: null,
     counts_error: 'Couldn’t read the backup folder (gone).' }), NOW_MS);
