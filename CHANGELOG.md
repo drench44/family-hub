@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- The chore wallet (in progress): each chore can be a house chore or a personal goal, and every day's chore record now keeps what each chore paid, so changing amounts later never rewrites the past.
+
 ### Changed
 
 - Comments and test wording now name the climate service generically. No behavior change.

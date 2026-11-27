@@ -7144,3 +7144,29 @@ def test_away_patch_checks_the_backup_against_the_periods_own_dates(
     assert client.patch(f"/api/admin/away/{pid}",
                         json={"end_date": "2026-12-21"}).status_code == 422
     assert fdb.get_away_period(app_mod._db(), pid)["end_date"] == "2026-11-30"
+
+
+def test_chore_kind_round_trips_through_admin_api(client, app_mod):
+    """A chore is a house chore (earns, counts for the wallet streak) unless
+    it is marked a personal goal; the kind is frozen into each day's log."""
+    pid = _mk_person(client, "Ava")
+    house = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()
+    assert house["kind"] == "house"
+    goal = client.post("/api/admin/chores", json={
+        "title": "Read 15 min", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid, "kind": "personal"}).json()
+    assert goal["kind"] == "personal"
+    assert client.post("/api/admin/chores", json={
+        "title": "x", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid, "kind": "chore"}).status_code == 422
+    assert client.patch(f"/api/admin/chores/{house['id']}",
+                        json={"kind": None}).status_code == 422
+    r = client.patch(f"/api/admin/chores/{house['id']}", json={"kind": "personal"})
+    assert r.status_code == 200 and r.json()["kind"] == "personal"
+    client.get("/api/hub")
+    today = _today().isoformat()
+    kinds = {r["chore_id"]: r["kind"] for r in fdb.day_log(app_mod._db(), today)}
+    assert kinds == {house["id"]: "personal", goal["id"]: "personal"}
+    assert today in fdb.served_between(app_mod._db(), today, today)

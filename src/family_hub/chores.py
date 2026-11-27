@@ -220,8 +220,18 @@ def plan_rows(chores: list[dict], people: list[dict], d: dt.date,
                      # switches weekly (the card says whose WEEK it is)
                      "rot": (0 if chore["assign_kind"] != "rotation"
                              else 2 if chore.get("rotate_every") == "week" else 1),
-                     "covering_for": covering_for})
+                     "covering_for": covering_for,
+                     "kind": frozen_kind(chore)})
     return rows
+
+
+def frozen_kind(chore: dict) -> str:
+    """The kind a served row is frozen with: 'house' (earns, counts for the
+    chore wallet's streak), 'personal' (a personal goal: neither), or 'once'
+    (a one-time item never earns or counts, whatever its chore kind)."""
+    if chore.get("schedule_kind") == "once":
+        return "once"
+    return "personal" if chore.get("kind") == "personal" else "house"
 
 
 def day_plan(rows: list[dict], people: list[dict], completions) -> list[dict]:

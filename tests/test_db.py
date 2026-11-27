@@ -428,8 +428,8 @@ def _row(cid, pid, title="Dishes", icon="", rot=0, covering_for=None):
 def test_occurrence_log_replace_and_read(conn):
     fdb.replace_day_log(conn, "2026-08-14", [_row(1, 7), _row(2, 8, "Trash")])
     assert fdb.day_log(conn, "2026-08-14") == [
-        {"date": "2026-08-14", **_row(1, 7)},
-        {"date": "2026-08-14", **_row(2, 8, "Trash")},
+        {"date": "2026-08-14", **_row(1, 7), "cents": 0, "kind": "house"},
+        {"date": "2026-08-14", **_row(2, 8, "Trash"), "cents": 0, "kind": "house"},
     ]
     # replace fully supersedes the day's rows
     fdb.replace_day_log(conn, "2026-08-14", [_row(3, 7, "Cat")])
@@ -473,7 +473,7 @@ def test_covering_for_migration_is_idempotent_and_keeps_old_rows(tmp_path):
     fdb.ensure_schema(c)
     assert fdb.day_log(c, "2026-08-10") == [
         {"date": "2026-08-10", "chore_id": 1, "person_id": 7, "title": "Dishes",
-         "icon": "", "rot": 0, "covering_for": None}]
+         "icon": "", "rot": 0, "covering_for": None, "cents": 0, "kind": "house"}]
     fdb.ensure_schema(c)                      # second boot: no-op, no crash
     fdb.replace_day_log(c, "2026-08-11", [_row(2, 8, covering_for=7)])
     assert fdb.day_log(c, "2026-08-11")[0]["covering_for"] == 7
@@ -1242,3 +1242,70 @@ def test_place_todos_sets_list_and_order(conn):
     fdb.place_todos(conn, "now", [c, b, a])
     assert _todo_ids(conn, "now") == [c, b, a]
     assert _todo_ids(conn, "later") == []
+
+
+def test_migration_adds_kind_cents_served_ledger(tmp_path):
+    """The chore wallet's columns land by additive ALTER on an EXISTING db:
+    old frozen rows read as unpaid house rows (cents 0, money starts at
+    launch), and every day the log already holds counts as served."""
+    path = str(tmp_path / "old.db")
+    c = fdb.connect(path)
+    c.executescript("""
+      CREATE TABLE occurrence_log(
+        date TEXT NOT NULL, chore_id INTEGER NOT NULL, person_id INTEGER NOT NULL,
+        title TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
+        rot INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(date, chore_id));
+      INSERT INTO occurrence_log(date, chore_id, person_id, title)
+        VALUES('2026-08-10', 1, 7, 'Dishes'), ('2026-08-11', 1, 7, 'Dishes'),
+              ('2026-08-11', 2, 8, 'Trash');""")
+    c.commit()
+    fdb.ensure_schema(c)
+    rows = fdb.day_log(c, "2026-08-11")
+    assert [(r["cents"], r["kind"]) for r in rows] == [(0, "house"), (0, "house")]
+    assert fdb.served_between(c, "2026-08-01", "2026-08-31") == {
+        "2026-08-10", "2026-08-11"}
+    chore_cols = {r["name"] for r in c.execute("PRAGMA table_info(chores)")}
+    assert "kind" in chore_cols
+    fdb.ensure_schema(c)                      # second boot: no-op, no crash
+    assert fdb.served_between(c, "2026-08-01", "2026-08-31") == {
+        "2026-08-10", "2026-08-11"}
+    c.close()
+
+
+def test_frozen_rows_keep_their_cents_and_kind(conn):
+    fdb.replace_day_log(conn, "2026-08-14", [
+        {**_row(1, 7), "cents": 30, "kind": "house"},
+        {**_row(2, 7, "Vitamins"), "cents": 0, "kind": "personal"}])
+    assert [(r["cents"], r["kind"]) for r in fdb.day_log(conn, "2026-08-14")] \
+        == [(30, "house"), (0, "personal")]
+    # a row from a caller that knows nothing of the wallet stays unpaid house
+    fdb.replace_day_log(conn, "2026-08-15", [_row(1, 7)])
+    assert (fdb.day_log(conn, "2026-08-15")[0]["cents"],
+            fdb.day_log(conn, "2026-08-15")[0]["kind"]) == (0, "house")
+
+
+def test_mark_served_is_idempotent(conn):
+    fdb.mark_served(conn, "2026-08-14")
+    fdb.mark_served(conn, "2026-08-14")
+    assert fdb.served_between(conn, "2026-08-14", "2026-08-14") == {"2026-08-14"}
+    assert fdb.served_between(conn, "2026-08-15", "2026-08-20") == set()
+
+
+def test_add_ledger_is_idempotent_on_run_and_streak(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    first = fdb.add_ledger(conn, person_id=pid, kind="bonus", cents=10000,
+                           day="2026-09-01", run_key="seed:2026-08-01",
+                           at_streak=100)
+    again = fdb.add_ledger(conn, person_id=pid, kind="bonus", cents=10000,
+                           day="2026-09-02", run_key="seed:2026-08-01",
+                           at_streak=100)
+    assert isinstance(first, int) and again is None
+    # payouts carry no run key and are never de-duplicated
+    p1 = fdb.add_ledger(conn, person_id=pid, kind="payout", cents=500,
+                        day="2026-09-03")
+    p2 = fdb.add_ledger(conn, person_id=pid, kind="payout", cents=500,
+                        day="2026-09-03")
+    assert p1 and p2 and p1 != p2
+    rows = fdb.ledger_for(conn, pid)
+    assert [r["kind"] for r in rows] == ["bonus", "payout", "payout"]
+    assert fdb.ledger_for(conn) == rows

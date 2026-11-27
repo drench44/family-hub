@@ -1228,8 +1228,10 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
         # already changes whenever the covering does, but including it keeps
         # the comparison exact (and catches a covering change that somehow
         # didn't move the assignee).
+        # kind and cents too: re-tagging a chore today must re-freeze today
         return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"],
-                r.get("covering_for"))
+                r.get("covering_for"), r.get("kind") or "house",
+                int(r.get("cents") or 0))
     if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
             sorted(key(r) for r in rows):
         fdb.replace_day_log(c, d_str, rows)
@@ -1289,6 +1291,9 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         # freezes the real plan.
         if d == today and away_ok:
             _freeze_day(c, d_str, rows)
+            # served even when nobody had anything today: the chore wallet
+            # counts a rest day as kept, but an outage day as neither
+            fdb.mark_served(c, d_str)
         elif d == today:
             log.warning("today's chore log not saved (away overlay failed); "
                         "if it keeps failing, %s drops out of chore history",
@@ -2084,6 +2089,9 @@ class ChoreIn(BaseModel):
     # When a rotation passes the turn on: 'turn' (every time it comes up) or
     # 'week' (one person all week, the next person next week).
     rotate_every: Literal["turn", "week"] = "turn"
+    # 'house' earns and counts for the chore wallet's streak; 'personal' is a
+    # personal goal (vitamins, reading): on the card, but neither.
+    kind: Literal["house", "personal"] = "house"
     # A one-time chore's single due date ('YYYY-MM-DD'); stored as rotation_epoch.
     # Ignored for daily/weekly chores (those anchor to today).
     date: str | None = None
@@ -2101,6 +2109,7 @@ class ChorePatch(BaseModel):
     fixed_person_id: int | None = None
     rotation_order: list[int] | None = None
     rotate_every: Literal["turn", "week"] | None = None
+    kind: Literal["house", "personal"] | None = None
     date: str | None = None
     sort: int | None = None
     active: Literal[0, 1] | None = None   # 0/1 only, as on PersonPatch
@@ -2117,7 +2126,8 @@ class ChorePatch(BaseModel):
 _PERSON_NONNULL_PATCH = {"name", "color", "sort", "active"}
 _CHORE_NONNULL_PATCH = {"title", "icon", "schedule_kind", "days_mask",
                         "week_interval", "due_times", "assign_kind",
-                        "rotation_order", "rotate_every", "sort", "active"}
+                        "rotation_order", "rotate_every", "kind", "sort",
+                        "active"}
 # interval_days is nullable (only set for the 'interval' kind), so it is NOT in
 # the non-null set — an explicit null clears it, which is correct.
 
@@ -2311,6 +2321,7 @@ def admin_add_chore(ch: ChoreIn):
         fixed_person_id=merged["fixed_person_id"] if merged["assign_kind"] == "fixed" else None,
         rotation_order=merged["rotation_order"] if merged["assign_kind"] == "rotation" else [],
         rotate_every=merged["rotate_every"] if merged["assign_kind"] == "rotation" else "turn",
+        kind=merged["kind"],
         rotation_epoch=epoch)
     return _chore_row(c, cid)
 

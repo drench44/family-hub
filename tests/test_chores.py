@@ -115,10 +115,19 @@ def test_plan_rows_flat_shape_and_omissions():
                         dt.date(2026, 8, 12))
     assert rows == [
         {"chore_id": 10, "person_id": 1, "title": "Dishes", "icon": "🍽️",
-         "rot": 0, "covering_for": None},
+         "rot": 0, "covering_for": None, "kind": "house"},
         {"chore_id": 12, "person_id": 1, "title": "Feed cat", "icon": "",
-         "rot": 1, "covering_for": None},
+         "rot": 1, "covering_for": None, "kind": "house"},
     ]
+
+
+def test_frozen_kind_house_personal_once():
+    assert ch.frozen_kind(C(id=1, rotation_epoch="2026-08-01")) == "house"
+    assert ch.frozen_kind(C(id=1, kind="personal",
+                            rotation_epoch="2026-08-01")) == "personal"
+    # a one-time item never earns or counts, whatever its kind
+    assert ch.frozen_kind(C(id=1, schedule_kind="once", kind="house",
+                            rotation_epoch="2026-08-01")) == "once"
 
 
 def test_plan_rows_rotation_skips_inactive_person():
