@@ -328,3 +328,125 @@ def test_edit_floor_only_with_the_wallet_on_and_a_pin(conn):
     fdb.seed_integration(conn, "rewards", "feature")
     fdb.set_integration_enabled(conn, "rewards", False)
     assert wallet.edit_floor(conn, now) is None            # switched off
+
+
+# --- the wallet summary: since the last payout (owner, 2026-11-27) -----------
+
+def _summary(conn, pid, streak=None):
+    """The summary, checked against the balance the card shows."""
+    s = wallet.summary(conn, pid, LAUNCH.isoformat(), streak)
+    assert s["total_cents"] == wallet.balance_cents(conn, pid, LAUNCH.isoformat())
+    assert s["chore_cents"] + s["bonus_cents"] == s["total_cents"]
+    return s
+
+
+def test_summary_never_paid_counts_from_launch(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    for n in range(3):
+        _serve(conn, pid, n)
+    _serve(conn, pid, 3, done=False)
+    _serve(conn, pid, 4, kind="personal", cents=0, cid=5)   # a goal never counts
+    s = _summary(conn, pid, streak=7)
+    assert (s["since"], s["paid_before"]) == (LAUNCH.isoformat(), False)
+    assert (s["chores"], s["chore_cents"], s["bonus_cents"]) == (3, 90, 0)
+    assert s["streak"] == 7
+
+
+def test_summary_paid_yesterday_starts_from_the_payout(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    _serve(conn, pid, 1, cid=2)
+    wallet.pay_out(conn, pid, LAUNCH + dt.timedelta(days=1))
+    _serve(conn, pid, 2, cid=3)
+    s = _summary(conn, pid)
+    assert (s["since"], s["paid_before"]) == (_day(1), True)
+    assert (s["chores"], s["chore_cents"], s["total_cents"]) == (1, 30, 30)
+
+
+def test_summary_payout_today_then_more_chores_today(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    ds = _day(0)
+    fdb.replace_day_log(conn, ds, [
+        {"chore_id": c, "person_id": pid, "title": "x", "icon": "", "rot": 0,
+         "cents": 30, "kind": "house"} for c in (1, 2)])
+    fdb.mark_served(conn, ds)
+    fdb.set_completion(conn, 1, ds, pid)
+    wallet.pay_out(conn, pid, LAUNCH)
+    s = _summary(conn, pid)
+    assert (s["since"], s["chores"], s["total_cents"]) == (ds, 0, 0)
+    fdb.set_completion(conn, 2, ds, pid)      # done after the tap on Paid
+    s = _summary(conn, pid)
+    assert (s["since"], s["chores"], s["total_cents"]) == (ds, 1, 30)
+
+
+def test_summary_counts_a_bonus_inside_the_span_only(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    custom = {**SET, "milestones": [[3, 500]]}
+    _launch(conn, {pid: 0}, custom)
+    for n in range(3):
+        _serve(conn, pid, n, cid=n + 1)
+    wallet.award(conn, pid, _run(conn, pid, 2, custom), custom,
+                 LAUNCH + dt.timedelta(days=2))
+    s = _summary(conn, pid)
+    assert (s["chores"], s["chore_cents"], s["bonus_cents"], s["total_cents"]) == \
+        (3, 90, 500, 590)
+    wallet.pay_out(conn, pid, LAUNCH + dt.timedelta(days=2))
+    _serve(conn, pid, 3, cid=4)
+    s = _summary(conn, pid)               # the bonus was paid with the rest
+    assert (s["chores"], s["chore_cents"], s["bonus_cents"]) == (1, 30, 0)
+
+
+def test_summary_old_day_fix_after_a_payout(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    _serve(conn, pid, 1, done=False, cid=2)
+    wallet.pay_out(conn, pid, LAUNCH + dt.timedelta(days=2))
+    fdb.set_completion(conn, 2, _day(1), pid)      # a parent fixes an old day
+    s = _summary(conn, pid)
+    assert (s["chores"], s["chore_cents"]) == (1, 30)
+    fdb.clear_completion(conn, 1, _day(0))          # and takes a paid one back
+    fdb.clear_completion(conn, 2, _day(1))
+    s = _summary(conn, pid)
+    assert (s["chores"], s["chore_cents"], s["total_cents"]) == (-1, -30, -30)
+
+
+def test_summary_pays_the_backup_who_did_it(conn):
+    a = fdb.add_person(conn, "Ava", "#5BC9F0")
+    b = fdb.add_person(conn, "Ben", "#F05B5B")
+    _launch(conn, {a: 0, b: 0})
+    ds = _day(0)
+    fdb.replace_day_log(conn, ds, [{"chore_id": 1, "person_id": a, "title": "Dishes",
+                                    "icon": "", "rot": 0, "cents": 30, "earner": b}])
+    fdb.set_completion(conn, 1, ds, b)
+    assert _summary(conn, b)["chores"] == 1 and _summary(conn, b)["chore_cents"] == 30
+    assert _summary(conn, a)["chores"] == 0 and _summary(conn, a)["total_cents"] == 0
+
+
+def test_payout_says_what_it_paid_for(conn):
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    _serve(conn, pid, 1, cid=2)
+    row = wallet.pay_out(conn, pid, LAUNCH + dt.timedelta(days=1))
+    assert row["summary"]["since"] == LAUNCH.isoformat()
+    assert (row["summary"]["chores"], row["summary"]["total_cents"]) == (2, 60)
+    assert row["summary"]["total_cents"] == row["cents"]
+    assert [r["chores_n"] for r in fdb.ledger_for(conn, pid)] == [2]
+
+
+def test_summary_after_an_old_style_payout_counts_by_time(conn):
+    """A payout written before payouts kept their chore count."""
+    pid = fdb.add_person(conn, "Ava", "#5BC9F0")
+    _launch(conn, {pid: 0})
+    _serve(conn, pid, 0)
+    conn.execute("UPDATE completions SET done_at = '2020-01-01T10:00:00+00:00'")
+    fdb.add_ledger(conn, person_id=pid, kind="payout", cents=30, day=_day(0))
+    conn.execute("UPDATE ledger SET created_at = '2020-01-01T12:00:00+00:00'")
+    conn.commit()
+    _serve(conn, pid, 1, cid=2)                     # done now, after the payout
+    s = _summary(conn, pid)
+    assert (s["chores"], s["total_cents"]) == (1, 30)

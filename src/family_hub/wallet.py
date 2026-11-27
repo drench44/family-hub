@@ -6,6 +6,8 @@
   that were done. Streak bonuses and payouts are ledger rows.
 - Wallet = all chore earnings + all bonuses - all payouts. An old-day edit
   after a payout (PIN-guarded) moves the wallet, even below zero.
+- The summary (``summary``) splits that same balance into what came in
+  since the last payout. Paid zeroes the wallet, so it starts over by itself.
 - A bonus is paid once per (child, run, streak length) and never clawed back.
 """
 from __future__ import annotations
@@ -178,16 +180,24 @@ def award(conn, pid: int, run: rw.Run, settings: dict, today: dt.date) -> list:
     return paid
 
 
-def earned_cents(conn, pid: int, launch_day: str) -> int:
-    """Done house chores pay their earner: who owned the row when it was
-    ticked (``earner``), else its owner (``person_id``)."""
-    row = conn.execute(
-        "SELECT COALESCE(SUM(o.cents), 0) FROM occurrence_log o "
-        "JOIN completions c ON c.chore_id = o.chore_id AND c.date = o.date "
-        "WHERE COALESCE(o.earner, o.person_id) = ? AND o.kind = 'house' "
-        "AND o.date >= ?",
+_EARNED = ("FROM occurrence_log o "
+           "JOIN completions c ON c.chore_id = o.chore_id AND c.date = o.date "
+           "WHERE COALESCE(o.earner, o.person_id) = ? AND o.kind = 'house' "
+           "AND o.date >= ?")
+
+
+def chores_earned(conn, pid: int, launch_day: str) -> tuple[int, int]:
+    """(how many, cents) of the done house chores this person earned since
+    launch. Done house chores pay their earner: who owned the row when it
+    was ticked (``earner``), else its owner (``person_id``)."""
+    n, cents = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(o.cents), 0) " + _EARNED,
         (pid, launch_day)).fetchone()
-    return int(row[0])
+    return int(n), int(cents)
+
+
+def earned_cents(conn, pid: int, launch_day: str) -> int:
+    return chores_earned(conn, pid, launch_day)[1]
 
 
 def balance_cents(conn, pid: int, launch_day: str) -> int:
@@ -200,10 +210,32 @@ def balance_cents(conn, pid: int, launch_day: str) -> int:
     return earned_cents(conn, pid, launch_day) + bonus - payout
 
 
+def summary(conn, pid: int, launch_day: str, streak) -> dict:
+    """What the wallet holds since the last payout (rewards.since_payout).
+    The total is ``balance_cents``, the number the card shows."""
+    ledger = fdb.ledger_for(conn, pid)
+    n, _ = chores_earned(conn, pid, launch_day)
+    payouts = [r for r in ledger if r["kind"] == "payout"]
+    legacy = None
+    if payouts and payouts[-1].get("chores_n") is None:
+        # paid before payouts kept their count: count the ones ticked since
+        legacy = int(conn.execute(
+            "SELECT COUNT(*) " + _EARNED + " AND c.done_at > ?",
+            (pid, launch_day, payouts[-1]["created_at"])).fetchone()[0])
+    return rw.since_payout(ledger, chores_done=n,
+                           balance_cents=balance_cents(conn, pid, launch_day),
+                           launch_day=launch_day, streak=streak,
+                           legacy_chores=legacy)
+
+
 def pay_out(conn, pid: int, today: dt.date) -> dict | None:
     """Pay out the whole balance. The read and the write are one IMMEDIATE
     transaction, so two taps at once (two requests, two connections) see
-    one balance: the second waits, then finds $0 and pays nothing."""
+    one balance: the second waits, then finds $0 and pays nothing.
+
+    The payout row keeps the chore count it paid for (``chores_n``), so the
+    summary starts over from it, and the result carries the summary of what
+    was paid (``summary``)."""
     launch = fdb.kv_get(conn, LAUNCH_KEY)
     if not launch:
         return None
@@ -211,20 +243,23 @@ def pay_out(conn, pid: int, today: dt.date) -> dict | None:
         conn.commit()
     conn.execute("BEGIN IMMEDIATE")
     try:
-        bal = balance_cents(conn, pid, launch["day"])
+        paid_for = summary(conn, pid, launch["day"], None)
+        bal = paid_for["total_cents"]
         if bal <= 0:
             conn.rollback()
             return None
+        n, _ = chores_earned(conn, pid, launch["day"])
         cur = conn.execute(
             "INSERT INTO ledger(person_id, kind, cents, run_key, at_streak, day, "
-            "created_at, note) VALUES(?, 'payout', ?, NULL, NULL, ?, ?, 'Paid')",
-            (pid, bal, today.isoformat(), fdb._now_iso()))
+            "created_at, note, chores_n) "
+            "VALUES(?, 'payout', ?, NULL, NULL, ?, ?, 'Paid', ?)",
+            (pid, bal, today.isoformat(), fdb._now_iso(), n))
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     return {"id": int(cur.lastrowid), "kind": "payout", "cents": bal,
-            "day": today.isoformat()}
+            "day": today.isoformat(), "summary": paid_for}
 
 
 def launch(conn, today: dt.date, settings: dict, seeds: dict) -> dict:

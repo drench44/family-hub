@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- Chore wallet summary. Settings shows, under each wallet, what came in since the last payout (or since the wallet started): how many chores, the money from them, any streak bonus, the total and the current streak, for example "Since Nov 26: 12 chores, $3.60. Streak 47 days." The total is always the wallet balance. Tapping Paid starts it over by itself, and the message after Paid says what was paid for.
+
 ## [1.23.0] — 2026-11-27
 
 ### Added

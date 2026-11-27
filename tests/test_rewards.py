@@ -204,3 +204,68 @@ def test_shield_rules_apply_from_their_own_day():
     assert a.streak == b.streak == 25
     # off from the start: the miss ends the run
     assert _run(spec, shield_rules=[(D0.isoformat(), False, 20, 2)]).streak == 5
+
+
+# --- the wallet summary: what a wallet holds since the last payout ---------
+# (owner, 2026-11-27: a summary per kid, "and an easy way to reset after
+# payout". Paid already zeroes the wallet, so the summary starts from it.)
+
+def _bonus(i, cents, day="2026-12-05"):
+    return {"id": i, "kind": "bonus", "cents": cents, "day": day,
+            "chores_n": None}
+
+
+def _payout(i, cents, day, chores_n):
+    return {"id": i, "kind": "payout", "cents": cents, "day": day,
+            "chores_n": chores_n}
+
+
+def test_since_payout_never_paid_counts_from_launch():
+    s = rw.since_payout([], chores_done=12, balance_cents=360,
+                        launch_day="2026-11-26", streak=47)
+    assert s == {"since": "2026-11-26", "paid_before": False, "chores": 12,
+                 "chore_cents": 360, "bonus_cents": 0, "total_cents": 360,
+                 "streak": 47}
+
+
+def test_since_payout_starts_at_the_last_payout():
+    ledger = [_payout(1, 300, "2026-12-01", 10), _payout(2, 150, "2026-12-08", 15)]
+    s = rw.since_payout(ledger, chores_done=19, balance_cents=120,
+                        launch_day="2026-11-26", streak=20)
+    assert (s["since"], s["paid_before"], s["chores"]) == ("2026-12-08", True, 4)
+    assert (s["chore_cents"], s["bonus_cents"], s["total_cents"]) == (120, 0, 120)
+
+
+def test_since_payout_counts_only_bonuses_after_the_payout():
+    ledger = [_bonus(1, 10000, "2026-11-30"), _payout(2, 10300, "2026-12-01", 10),
+              _bonus(3, 2500, "2026-12-03")]
+    s = rw.since_payout(ledger, chores_done=13, balance_cents=2590,
+                        launch_day="2026-11-26", streak=50)
+    assert (s["chores"], s["chore_cents"], s["bonus_cents"], s["total_cents"]) == \
+        (3, 90, 2500, 2590)
+
+
+def test_since_payout_total_is_always_the_balance():
+    # the money parts are split from the balance itself, so they can never
+    # add up to anything else, even when a fix took money back
+    ledger = [_payout(1, 300, "2026-12-01", 10), _bonus(2, 500)]
+    for bal in (-30, 0, 470, 530, 12345):
+        s = rw.since_payout(ledger, chores_done=9, balance_cents=bal,
+                            launch_day="2026-11-26", streak=0)
+        assert s["total_cents"] == bal
+        assert s["chore_cents"] + s["bonus_cents"] == bal
+    assert s["chores"] == -1          # a chore taken back after the payout
+
+
+def test_since_payout_old_payout_without_a_count_uses_the_fallback():
+    # a payout recorded before the count was kept on the payout row
+    ledger = [_payout(1, 300, "2026-12-01", None)]
+    s = rw.since_payout(ledger, chores_done=40, balance_cents=60,
+                        launch_day="2026-11-26", streak=3, legacy_chores=2)
+    assert s["chores"] == 2 and s["total_cents"] == 60
+
+
+def test_since_payout_streak_may_be_unknown():
+    s = rw.since_payout([], chores_done=0, balance_cents=0,
+                        launch_day="2026-11-26", streak=None)
+    assert s["streak"] is None and s["chores"] == 0
