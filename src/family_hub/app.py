@@ -1282,6 +1282,7 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
     amap, away_view, away_ok = _away_view(c, d)
     away_today = away_view["ids"]
 
+    wallet_on = False
     if d < today:
         rows = fdb.day_log(c, d_str)
     else:
@@ -1358,10 +1359,7 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
         entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
     if d == today and wallet_on:
-        try:
-            _add_rewards(c, plan, rows, today, priced_ok)
-        finally:
-            _poll_runs.pop(id(c), None)
+        _add_rewards(c, plan, rows, today, priced_ok)
     return plan, away_ok
 
 
@@ -1386,12 +1384,13 @@ def _wallet_away(c, launch_day: str, today: dt.date) -> dict:
 def _price_rows(c, rows: list[dict], today: dt.date):
     """Stamp what each of today's rows pays (house rows only). Returns
     (rows, ok); on a failure the rows come back unpriced and ok is False so
-    the caller does not freeze a day that would then pay nothing for good."""
+    the caller does not freeze a day that would then pay nothing for good.
+    (The cards work out their own runs after today is frozen; sharing this
+    run with them read the log before the freeze. Review, 2026-11-26.)"""
     try:
         settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
         away_by = _wallet_away(c, launch["day"], today)
         rate: dict[int, int] = {}
-        runs = _poll_runs.setdefault(id(c), {})
         out = []
         for r in rows:
             r = dict(r)
@@ -1400,7 +1399,6 @@ def _price_rows(c, rows: list[dict], today: dt.date):
                 if pid not in rate:
                     run = wallet.person_run(c, pid, today, settings, launch,
                                             away_by.get(pid, set()))
-                    runs[pid] = run
                     rate[pid] = _rate_today(run, today, settings)
                 r["cents"] = rate[pid]
             elif r.get("locked"):
@@ -1414,12 +1412,6 @@ def _price_rows(c, rows: list[dict], today: dt.date):
         return rows, False
 
 
-# Runs worked out while pricing today's rows, reused for the cards in the
-# same poll (keyed by connection, cleared at the end of each build), so each
-# child's history since launch is walked once per poll, not twice.
-_poll_runs: dict = {}
-
-
 def _rate_today(run, today: dt.date, settings: dict) -> int:
     """Pay per chore today: the rate for the streak as it stood at the end of
     yesterday (wallet.cents_for_today, from a run already in hand)."""
@@ -1429,8 +1421,7 @@ def _rate_today(run, today: dt.date, settings: dict) -> int:
 
 def _reward_block(c, pid: int, today: dt.date, settings: dict, launch: dict,
                   away: set) -> dict:
-    run = _poll_runs.get(id(c), {}).pop(pid, None) or wallet.person_run(
-        c, pid, today, settings, launch, away)
+    run = wallet.person_run(c, pid, today, settings, launch, away)
     wallet.award(c, pid, run, settings, today)
     ts = today.isoformat()
     kept_today = run.outcomes.get(ts) == rewards.KEPT
@@ -1605,6 +1596,7 @@ def _hub_payload() -> dict:
                 "shields_on", "shield_every", "shield_max", "fix_cutoff")}
     except Exception:
         log.error("chore wallet rules unreadable for the help text", exc_info=True)
+        wallet_rules = {"error": True}   # the help says so, never guesses
     extra = {"wallet": wallet_rules} if wallet_rules else {}
     return {
         **extra,

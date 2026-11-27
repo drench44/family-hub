@@ -90,4 +90,8 @@ def test_guessing_stays_slow_after_a_lockout(conn):
         pp.check(conn, "0000", T0)
     assert pp.check(conn, "1111", T0 + dt.timedelta(seconds=35)) == (False, 0)
     ok, wait = pp.check(conn, "1234", T0 + dt.timedelta(seconds=36))
-    assert not ok and wait > 0
+    assert not ok and 0 < wait <= 30
+    # once the pause passes, the right PIN works and clears the count
+    assert pp.check(conn, "1234", T0 + dt.timedelta(seconds=70)) == (True, 0)
+    assert pp.check(conn, "0000", T0 + dt.timedelta(seconds=71)) == (False, 0)
+    assert pp.check(conn, "1234", T0 + dt.timedelta(seconds=72)) == (True, 0)

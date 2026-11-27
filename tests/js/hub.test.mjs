@@ -1831,3 +1831,16 @@ test('helpTopics: the wallet topic uses this wall’s own numbers', () => {
   assert.doesNotMatch(t2, /Shields keep/);
   assert.match(t2, /9:00/);
 });
+
+
+test('walletHelpParas: off or unreadable says so instead of guessing numbers', () => {
+  const none = sandbox.walletHelpParas(null).join(' ');
+  assert.match(none, /turns it on in Settings/);
+  assert.doesNotMatch(none, /9:00|30¢|20 good days/);
+  const bad = sandbox.walletHelpParas({ error: true }).join(' ');
+  assert.match(bad, /can’t be read right now/);
+  const junk = sandbox.walletHelpParas({ cents_per_chore: 30, fix_cutoff: null, shields_on: true,
+    shield_every: 20, shield_max: 2, bonus_on: true, milestones: null, levels: [] }).join(' ');
+  assert.match(junk, /can’t be read right now/);
+  assert.doesNotMatch(junk, /NaN/);
+});

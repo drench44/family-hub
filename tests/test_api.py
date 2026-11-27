@@ -7617,7 +7617,8 @@ def test_removing_a_paid_chore_done_today_needs_the_pin(client, app_mod):
     assert client.patch(f"/api/admin/chores/{cid}", json={"active": 0}).status_code == 403
     assert client.patch(f"/api/admin/chores/{cid}", json={
         "schedule_kind": "once", "date": _today().isoformat()}).status_code == 403
-    # a chore that earned nothing today (the personal goal) needs no PIN
+    # a chore done today that earned nothing (the personal goal) needs no PIN
+    client.post(f"/api/chores/{goal}/complete")
     assert client.delete(f"/api/admin/chores/{goal}").status_code == 200
     assert client.delete(f"/api/admin/chores/{cid}", headers=PIN).status_code == 200
 
@@ -7634,15 +7635,28 @@ def test_hub_carries_the_wallet_rules_for_the_help(client, app_mod):
     assert w["milestones"] == [[100, 10000]]
 
 
-def test_each_childs_run_is_worked_out_once_per_poll(client, app_mod, monkeypatch):
-    pid, cid, _ = _kid_with_history(client, app_mod)
+def test_card_reads_today_after_it_is_saved(client, app_mod):
+    """The first poll of a day saves today and the card already counts it:
+    a rest day today shows as kept on that same poll (review, 2026-11-26)."""
+    pid, cid, goal = _kid_with_history(client, app_mod)
     _enable(client)
-    real = app_mod.wallet.person_run
-    calls = []
+    client.patch(f"/api/admin/chores/{cid}", json={"active": 0}, headers=PIN)
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    assert r["outcomes7"][-1] == "kept"
 
-    def counting(*a, **k):
-        calls.append(a[1])
-        return real(*a, **k)
-    monkeypatch.setattr(app_mod.wallet, "person_run", counting)
-    client.get("/api/hub")
-    assert calls.count(pid) == 1
+
+
+def test_hub_wallet_rules_say_when_they_cannot_be_read(client, app_mod, monkeypatch):
+    _kid_with_history(client, app_mod)
+    _enable(client)
+    real = app_mod.reward_settings
+    calls = {"n": 0}
+
+    def flaky(c):
+        # pricing and the cards read settings first; the help block is last
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise RuntimeError("bad settings")
+        return real(c)
+    monkeypatch.setattr(app_mod, "reward_settings", flaky)
+    assert client.get("/api/hub").json()["wallet"] == {"error": True}

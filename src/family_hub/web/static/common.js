@@ -2385,9 +2385,21 @@ const HELP_STATUS_IDS = new Set(['laundry', 'google_calendar', 'icloud_caldav'])
 /* The chore wallet's help, in this wall's own numbers (the hub payload's
    `wallet` rules; the defaults until it loads). Pure. */
 function walletHelpParas(w) {
-  const s = { cents_per_chore: 30, bonus_on: true, milestones: [[100, 10000]],
-    levels_on: false, levels: [], shields_on: true, shield_every: 20, shield_max: 2,
-    fix_cutoff: '09:00', ...(w || {}) };
+  const pay = 'When you pay someone, open Settings, find Chore wallet and tap Paid. Their wallet goes back to $0 and the payout is kept in their history.';
+  const int = (v) => Number.isInteger(v) && v >= 0;
+  const steps = (v) => Array.isArray(v) && v.every((x) => Array.isArray(x) && x.length === 2 && int(x[0]) && int(x[1]));
+  const ok = w && !w.error && int(w.cents_per_chore) && int(w.shield_every) && int(w.shield_max)
+    && steps(w.milestones) && steps(w.levels || []) && /^\d{2}:\d{2}$/.test(String(w.fix_cutoff));
+  if (!ok) {
+    // Not turned on yet, or its numbers can't be read: say so, never guess.
+    return [
+      'Each house chore can add money to a wallet on that person’s card, with extra for a long streak. A personal goal stays on the card but doesn’t earn money or count for the streak.',
+      w ? 'This wall’s wallet amounts can’t be read right now. Settings, under Chore wallet, shows them.'
+        : 'A parent turns it on in Settings, under Chore wallet, and the amounts show here once it is on.',
+      pay,
+    ];
+  }
+  const s = { levels: [], ...w };
   const [hh, mm] = String(s.fix_cutoff).split(':').map(Number);
   const cutoff = `${hh % 12 || 12}:${String(mm || 0).padStart(2, '0')} ${hh < 12 ? 'in the morning' : 'pm'}`;
   const bonuses = s.bonus_on && s.milestones.length
@@ -2400,7 +2412,7 @@ function walletHelpParas(w) {
     paras.push(`Shields keep one bad day from wiping out a streak. You earn one for every ${s.shield_every} good days, up to ${s.shield_max}. A missed day uses a shield instead of starting over.`);
   }
   paras.push(`Forgot to tap something? Yesterday can be fixed until ${cutoff}. After that a parent needs to enter the PIN.`);
-  paras.push('When you pay someone, open Settings, find Chore wallet and tap Paid. Their wallet goes back to $0 and the payout is kept in their history.');
+  paras.push(pay);
   return paras;
 }
 

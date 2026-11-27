@@ -6,8 +6,9 @@ child from quietly changing money on the shared wall. It is 4 to 6 digits,
 stored as a salted PBKDF2 hash in kv ``rewards.pin``, and never logged. Five
 wrong tries inside five minutes pause PIN checks for 30 seconds; after that,
 each wrong try pauses them again until the right PIN goes in. Guessing runs
-at one try per 30 seconds at best (days for 4 digits), while a child who
-guesses on purpose can only hold a parent up for 30 seconds.
+at one try per 30 seconds at best (days for 4 digits). A child guessing on
+purpose can keep re-pausing it, 30 seconds at a time, so a parent may have
+to wait out one pause; the right PIN works as soon as it ends.
 """
 from __future__ import annotations
 
