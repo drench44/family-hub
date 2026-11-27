@@ -36,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import access_log
+from . import backups as fbackups
 from . import chores as chlogic
 from . import db as fdb
 from . import demo as fdemo
@@ -384,9 +385,21 @@ async def _lifespan(_app):
             or log.error("laundry watch: task exited (real-time lane dead; "
                          "tile route falls back to inline fetch)",
                          exc_info=t.exception()))
+    # The hourly backup (backups.py), armored and cancelled the same way.
+    backup_task = None
+    if _backup_loop_enabled():
+        backup_task = asyncio.create_task(backup_loop())
+        backup_task.add_done_callback(
+            lambda t: t.cancelled()
+            or log.error("backups: the hourly task exited (no more scheduled "
+                         "backups until a restart)", exc_info=t.exception()))
     try:
         yield
     finally:
+        if backup_task is not None:
+            backup_task.cancel()
+            with contextlib.suppress(BaseException):
+                await backup_task
         # aclose() must run even if shutdown itself raises — and awaiting a
         # crashed (already-done) task re-raises its stored exception, which
         # is NOT a CancelledError, so keep that from eating the cleanup too.
@@ -2265,6 +2278,181 @@ def todos_set_source(body: TodoSourceIn):   # /api/todos/{tid:int} route (422s)
         raise HTTPException(422, "source must be 'local' or 'icloud'")
     fdb.kv_set(_db(), "todo_source", body.source)
     return {"source": body.source}
+
+
+# --- backups: the hub's own hourly job (backups.py) ----------------------
+
+# The folder the copies go to. In the container that is /backups, which
+# docker-compose.yml mounts from the host's BACKUP_DIR (default ./backups).
+# The default only counts when something is mounted there (a folder baked
+# into the image would vanish with the container); a path set on purpose
+# with BACKUPS_PATH (a hub run outside docker) just has to be writable.
+BACKUPS_PATH = os.environ.get("BACKUPS_PATH") or "/backups"
+_BACKUPS_PATH_SET = bool(os.environ.get("BACKUPS_PATH"))
+# What the card calls that folder: the host path compose mounted, when it
+# says (the container's own /backups means nothing to the owner).
+BACKUP_DIR_LABEL = os.environ.get("BACKUP_DIR") or BACKUPS_PATH
+# The salt and key made from the backup password, beside hub.db (like pin.key).
+BACKUP_KEY_PATH = os.environ.get("BACKUP_KEY_PATH", os.path.join(
+    os.path.dirname(DB_PATH) or ".", "backup.key"))
+# .env, for the settings bundle. compose mounts the project folder read-only
+# at /host and points this at /host/.env; outside docker it is ./.env.
+SETTINGS_ENV_PATH = os.environ.get("SETTINGS_ENV_PATH", ".env")
+BACKUP_FIRST_S = 300        # first run five minutes after start
+BACKUP_EVERY_S = 3600       # then hourly
+_BACKUP_PW_KEY = "backups.password_set"   # a password was set once (a lost key is then a problem)
+# One run at a time: the hourly task and Back up now share it.
+_backup_lock = threading.Lock()
+
+_BACKUP_WHY = {
+    "demo": "Backups are off in the demo.",
+    "switched_off": "Backups are switched off in Features & integrations.",
+    "no_folder": "No backup folder is set up.",
+    "not_mounted": "No backup folder is mounted into the hub.",
+    "not_writable": "The hub can't write to the backup folder.",
+}
+
+
+def _backup_sources() -> dict:
+    data_dir = os.path.dirname(DB_PATH) or "."
+    return {"config.json": CONFIG_PATH, "env": SETTINGS_ENV_PATH,
+            "pin.key": parent_pin.KEY_PATH,
+            "wyze.env": os.path.join(data_dir, "wyze.env"),
+            "token.json": TOKEN_PATH}
+
+
+def _backup_why_off(c) -> str | None:
+    """Why the job can't run on this hub now, or None."""
+    if DEMO:
+        return "demo"
+    if not _integration_on(c, "backups"):
+        return "switched_off"
+    return fbackups.folder_problem(BACKUPS_PATH, must_be_mount=not _BACKUPS_PATH_SET)
+
+
+def _backup_loop_enabled() -> bool:
+    """The hourly task runs where the calendar sync would (not in DEMO, not
+    under DISABLE_SYNC). Back up now works either way."""
+    return _sync_enabled()
+
+
+def _backup_run(c) -> dict:
+    """One backup and its record. The caller holds _backup_lock. Stamps use
+    house time, like the box script."""
+    result = fbackups.run_once(
+        _now_local().replace(tzinfo=None), db_path=DB_PATH, out_dir=BACKUPS_PATH,
+        sources=_backup_sources(), key_path=BACKUP_KEY_PATH,
+        password_expected=bool(fdb.kv_get(c, _BACKUP_PW_KEY)))
+    try:
+        fbackups.record(c, result, dt.datetime.now(dt.timezone.utc), BACKUP_DIR_LABEL)
+    except Exception:
+        # The copy itself is good. Without the record the wall's badge goes
+        # stale and the card shows the old time, so say it loudly here.
+        log.error("backups: the run finished but its record could not be written "
+                  "(the wall may show the backup as stale)", exc_info=True)
+    return result
+
+
+def _backup_tick() -> dict | None:
+    """One scheduled run, or None when it is off or a run is already going."""
+    c = _db()
+    if _backup_why_off(c):
+        return None
+    if not _backup_lock.acquire(blocking=False):
+        return None
+    try:
+        return _backup_run(c)
+    finally:
+        _backup_lock.release()
+
+
+async def backup_loop() -> None:
+    """The hourly backup, on the app's loop like the laundry watcher. The work
+    runs in a thread so a slow NAS never holds up the wall. Every run is
+    armored: a crash is logged and the next hour tries again. CancelledError
+    passes through (it is the lifespan's shutdown)."""
+    await asyncio.sleep(BACKUP_FIRST_S)
+    while True:
+        try:
+            await asyncio.to_thread(_backup_tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("backups: the hourly run crashed; trying again next hour")
+        await asyncio.sleep(BACKUP_EVERY_S)
+
+
+def _backups_state(c) -> dict:
+    """What Settings > Backups shows."""
+    if DEMO:
+        return fdemo.demo_backups()
+    why = _backup_why_off(c)
+    rec = fdb.kv_get(c, fbackups.STATE_KEY)
+    rec = rec if isinstance(rec, dict) else {}
+    counts, counts_error = None, None
+    if why not in ("no_folder", "not_mounted"):
+        try:
+            counts = fbackups.counts(BACKUPS_PATH)
+        except OSError as e:
+            counts_error = f"Couldn't read the backup folder ({e})."
+            log.warning("backups: %s", counts_error)
+    key = fbackups.key_state(BACKUP_KEY_PATH)
+    return {
+        "enabled": why is None, "why_off": why,
+        "why_off_text": _BACKUP_WHY.get(why) if why else None,
+        "switch_on": _integration_on(c, "backups"),
+        "scheduled": _backup_loop_enabled(), "every_s": BACKUP_EVERY_S,
+        "dir": BACKUP_DIR_LABEL, "running": _backup_lock.locked(),
+        "last_ok": rec.get("last_ok"), "last_error": rec.get("last_error"),
+        "settings": rec.get("settings"), "settings_error": rec.get("settings_error"),
+        "counts": counts, "counts_error": counts_error,
+        "keep": {**fbackups.KEEP, "settings": fbackups.SETTINGS_KEEP},
+        "password_set": key == "ok",
+        "password_problem": key in ("damaged", "unreadable")
+        or (key == "unset" and bool(fdb.kv_get(c, _BACKUP_PW_KEY))),
+    }
+
+
+@app.get("/api/backups")
+def backups_get():
+    return _backups_state(_db())
+
+
+@app.post("/api/backups/run")
+def backups_run():
+    """Back up now. 409 when backups are off or a run is already going."""
+    c = _db()
+    why = _backup_why_off(c)
+    if why:
+        raise HTTPException(409, _BACKUP_WHY[why])
+    if not _backup_lock.acquire(blocking=False):
+        raise HTTPException(409, "A backup is already running.")
+    try:
+        result = _backup_run(c)
+    finally:
+        _backup_lock.release()
+    return {"result": result, "state": _backups_state(c)}
+
+
+class BackupPassword(BaseModel):
+    password: str
+
+
+@app.post("/api/backups/password")
+def backups_set_password(body: BackupPassword, request: Request):
+    """Set or change the backup password (never stored; backup.key holds the
+    key made from it). Needs the parent PIN when one is set."""
+    if DEMO:
+        raise HTTPException(409, _BACKUP_WHY["demo"])
+    c = _db()
+    require_parent(request)
+    try:
+        fbackups.set_password(BACKUP_KEY_PATH, body.password)
+    except ValueError as e:
+        raise HTTPException(422, str(e).capitalize() + ".")
+    fdb.kv_set(c, _BACKUP_PW_KEY, True)
+    log.info("backups: the backup password was set")
+    return _backups_state(c)
 
 
 # --- integrations (the settings menu / extension toggles) -----------------
