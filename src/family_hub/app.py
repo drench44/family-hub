@@ -2459,13 +2459,19 @@ def _backup_tick() -> dict | None:
 
 def _restore_test_run(c) -> dict:
     """One restore test of the newest backup, and its record. The caller
-    holds _backup_lock. Only the test's own kv row is written."""
+    holds _backup_lock. Only the test's own kv row is written. It reads the
+    NAS like a backup does, so a hung read shows as a stuck run too."""
+    global _backup_started_at, _backup_stuck_noted
     rec = fdb.kv_get(c, fbackups.STATE_KEY)
     rec = rec if isinstance(rec, dict) else {}
     files = (rec.get("settings") or {}).get("files")
-    result = fbackups.restore_test(
-        BACKUPS_PATH, live=fbackups.live_counts(c), key_path=BACKUP_KEY_PATH,
-        settings_files=files if isinstance(files, list) else None)
+    _backup_started_at, _backup_stuck_noted = time.monotonic(), False
+    try:
+        result = fbackups.restore_test(
+            BACKUPS_PATH, live=fbackups.live_counts(c), key_path=BACKUP_KEY_PATH,
+            settings_files=files if isinstance(files, list) else None)
+    finally:
+        _backup_started_at = None
     fbackups.record_restore_test(c, result, dt.datetime.now(dt.timezone.utc))
     return result
 

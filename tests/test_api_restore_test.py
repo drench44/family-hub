@@ -209,6 +209,20 @@ def test_a_failed_scheduled_test_logs_once(client, app_mod, monkeypatch, caplog)
     assert fdb.kv_get(app_mod._db(), fb.RESTORE_TEST_KEY)["at"] != rt["at"]
 
 
+def test_a_hung_restore_test_counts_as_a_stuck_run(client, app_mod, monkeypatch):
+    _backed_up(client, app_mod)
+    seen = []
+    real = fb.restore_test
+
+    def spy(out_dir, **kw):
+        seen.append(app_mod._backup_started_at)
+        return real(out_dir, **kw)
+    monkeypatch.setattr(fb, "restore_test", spy)
+    assert client.post("/api/backups/restore-test").json()["result"]["ok"] is True
+    assert seen and seen[0] is not None, "the stuck-run clock runs during the test"
+    assert app_mod._backup_started_at is None
+
+
 # --- /health/full ----------------------------------------------------------------------
 
 def test_health_full_notes_the_restore_test_without_failing(client, app_mod, tmp_path):
