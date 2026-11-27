@@ -1733,12 +1733,25 @@ function tileCamera(cam) {
 /* Demo mode: no go2rtc stream to embed, so paint a static gradient placeholder
    with a small "DEMO VIEW" marker in the same tile chrome. The tile still opens
    full-screen (a matching full-bleed placeholder); the probe skips it. */
+/* A demo camera's still photo (static/demo-cams/<name>.webp, styled per name
+   in styles.css), or '' to keep the gradient. Only a plain slug is trusted. */
+function demoStill(cam) {
+  return typeof cam.still === 'string' && /^[a-z0-9-]+$/.test(cam.still) ? cam.still : '';
+}
+
+function demoCamClass(cam) {
+  const still = demoStill(cam);
+  if (still) return { cls: 'cam-demo cam-demo-photo', still };
+  return { cls: `cam-demo cam-demo-${cam.tone === 'warm' ? 'warm' : 'cool'}`, still: '' };
+}
+
 function tileCameraDemo(cam) {
   const src = escapeHtml(cam.src);
-  const tone = cam.tone === 'warm' ? 'warm' : 'cool';
+  const { cls, still } = demoCamClass(cam);
+  const stillAttr = still ? ` data-still="${still}"` : '';
   return `<button class="card tile tile-camera" type="button" data-overlay="camera:${src}" data-cam="${src}">`
     + `<div class="tile-label">${escapeHtml(cam.label)}</div>`
-    + `<div class="cam-demo cam-demo-${tone}"><span class="cam-demo-mark">Demo view</span></div>`
+    + `<div class="${cls}"${stillAttr}><span class="cam-demo-mark">Demo view</span></div>`
     + `<span class="tile-live">● LIVE</span>`
     + `</button>`;
 }
@@ -2440,10 +2453,11 @@ function dropFittedRefit() {
    the base so a single stream decodes. */
 function openCameraFull(content, cam, view) {
   if (cam.demo) {
-    // No stream to full-screen; show the same gradient placeholder full-bleed.
-    const tone = cam.tone === 'warm' ? 'warm' : 'cool';
+    // No stream to full-screen; show the same still (or gradient) full-bleed.
+    const { cls, still } = demoCamClass(cam);
     const ph = document.createElement('div');
-    ph.className = `cam-demo cam-demo-${tone} cam-demo-full`;
+    ph.className = `${cls} cam-demo-full`;
+    if (still) ph.dataset.still = still;
     ph.innerHTML = '<span class="cam-demo-mark">Demo view</span>';
     content.appendChild(ph);
     return;

@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- Demo mode shows realistic (made-up) camera pictures in the camera tiles instead of color blocks, so the demo and the README screenshot look like a real wall.
+
 ## [1.19.0] — 2026-11-26
 
 ### Added

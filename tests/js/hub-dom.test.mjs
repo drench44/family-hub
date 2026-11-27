@@ -13082,3 +13082,19 @@ test('settings menu: a tap scrolls that card into view', () => {
   assert.ok(scrolled, 'the card was scrolled to');
   assert.equal(scrolled.block, 'start');
 });
+
+test('demo camera tiles show their still photo, full screen too', () => {
+  const { sandbox, document } = newHub();
+  const html = sandbox.tileCameraDemo({ src: 'demo-front', label: 'Front Door', demo: true, still: 'front-door' });
+  assert.match(html, /class="cam-demo cam-demo-photo" data-still="front-door"/);
+  assert.match(html, /Demo view/);
+  // an unsafe name falls back to the gradient
+  const bad = sandbox.tileCameraDemo({ src: 'x', label: 'X', demo: true, still: 'a"b' });
+  assert.ok(!/cam-demo-photo/.test(bad));
+  assert.match(bad, /cam-demo-cool/);
+  const content = document.createElement('div');
+  sandbox.openCameraFull(content, { demo: true, still: 'driveway' }, 'full');
+  const ph = content.children[0];
+  assert.match(ph.className, /cam-demo-photo/);
+  assert.equal(ph.dataset.still, 'driveway');
+});
