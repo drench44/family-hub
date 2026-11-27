@@ -10,6 +10,8 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.17.2] — 2026-11-26
+
 ### Changed
 
 - Chore wallet: a PIN pause now holds only on the screen that was guessing (the kitchen wall), never on a parent's own phone, and moving a chore that was done and paid today to someone else needs the parent PIN.
