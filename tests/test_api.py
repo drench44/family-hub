@@ -7560,15 +7560,15 @@ def test_turning_shields_off_does_not_rewrite_a_saved_day(client, app_mod):
 def test_pricing_failure_does_not_freeze_today_unpaid(client, app_mod, monkeypatch):
     pid, cid, _ = _kid_with_history(client, app_mod)
     _enable(client)
-    real = app_mod.wallet.cents_for_today
+    real = app_mod._rate_today
 
     def boom(*a, **k):
         raise RuntimeError("bad pricing")
-    monkeypatch.setattr(app_mod.wallet, "cents_for_today", boom)
+    monkeypatch.setattr(app_mod, "_rate_today", boom)
     p = client.get("/api/hub").json()["people"][0]
     assert p["reward"] == {"error": True}
     today = _today().isoformat()
-    monkeypatch.setattr(app_mod.wallet, "cents_for_today", real)
+    monkeypatch.setattr(app_mod, "_rate_today", real)
     client.get("/api/hub")
     assert {r["chore_id"]: r["cents"] for r in fdb.day_log(app_mod._db(), today)
             }[cid] == 30
@@ -7601,3 +7601,48 @@ def test_settings_reject_wrong_types(client, app_mod):
                 {"fix_cutoff": None}, {"levels": "none"}):
         assert client.put("/api/rewards/settings", json=bad,
                           headers=PIN).status_code == 422, bad
+
+
+
+# --- wallet leftovers (2026-11-26) ----------------------------------------------
+
+def test_removing_a_paid_chore_done_today_needs_the_pin(client, app_mod):
+    """Deleting, turning off or making one-time a chore already done (and
+    paid) today drops that pay, so with the wallet on it is a parent action."""
+    pid, cid, goal = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    assert client.delete(f"/api/admin/chores/{cid}").status_code == 403
+    assert client.patch(f"/api/admin/chores/{cid}", json={"active": 0}).status_code == 403
+    assert client.patch(f"/api/admin/chores/{cid}", json={
+        "schedule_kind": "once", "date": _today().isoformat()}).status_code == 403
+    # a chore that earned nothing today (the personal goal) needs no PIN
+    assert client.delete(f"/api/admin/chores/{goal}").status_code == 200
+    assert client.delete(f"/api/admin/chores/{cid}", headers=PIN).status_code == 200
+
+
+def test_hub_carries_the_wallet_rules_for_the_help(client, app_mod):
+    _kid_with_history(client, app_mod)
+    assert "wallet" not in client.get("/api/hub").json()
+    _enable(client)
+    client.put("/api/rewards/settings", headers=PIN,
+               json={"fix_cutoff": "08:30", "shield_every": 10, "shield_max": 1})
+    w = client.get("/api/hub").json()["wallet"]
+    assert w["fix_cutoff"] == "08:30" and w["shield_every"] == 10
+    assert w["shield_max"] == 1 and w["cents_per_chore"] == 30
+    assert w["milestones"] == [[100, 10000]]
+
+
+def test_each_childs_run_is_worked_out_once_per_poll(client, app_mod, monkeypatch):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    real = app_mod.wallet.person_run
+    calls = []
+
+    def counting(*a, **k):
+        calls.append(a[1])
+        return real(*a, **k)
+    monkeypatch.setattr(app_mod.wallet, "person_run", counting)
+    client.get("/api/hub")
+    assert calls.count(pid) == 1

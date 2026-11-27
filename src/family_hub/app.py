@@ -1358,7 +1358,10 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
         entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
     if d == today and wallet_on:
-        _add_rewards(c, plan, rows, today, priced_ok)
+        try:
+            _add_rewards(c, plan, rows, today, priced_ok)
+        finally:
+            _poll_runs.pop(id(c), None)
     return plan, away_ok
 
 
@@ -1388,14 +1391,17 @@ def _price_rows(c, rows: list[dict], today: dt.date):
         settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
         away_by = _wallet_away(c, launch["day"], today)
         rate: dict[int, int] = {}
+        runs = _poll_runs.setdefault(id(c), {})
         out = []
         for r in rows:
             r = dict(r)
             if (r.get("kind") or "house") == "house" and not r.get("locked"):
                 pid = r["person_id"]
                 if pid not in rate:
-                    rate[pid] = wallet.cents_for_today(
-                        c, pid, today, settings, launch, away_by.get(pid, set()))
+                    run = wallet.person_run(c, pid, today, settings, launch,
+                                            away_by.get(pid, set()))
+                    runs[pid] = run
+                    rate[pid] = _rate_today(run, today, settings)
                 r["cents"] = rate[pid]
             elif r.get("locked"):
                 pass                     # a kept done row keeps its frozen pay
@@ -1408,9 +1414,23 @@ def _price_rows(c, rows: list[dict], today: dt.date):
         return rows, False
 
 
+# Runs worked out while pricing today's rows, reused for the cards in the
+# same poll (keyed by connection, cleared at the end of each build), so each
+# child's history since launch is walked once per poll, not twice.
+_poll_runs: dict = {}
+
+
+def _rate_today(run, today: dt.date, settings: dict) -> int:
+    """Pay per chore today: the rate for the streak as it stood at the end of
+    yesterday (wallet.cents_for_today, from a run already in hand)."""
+    kept_today = run.outcomes.get(today.isoformat()) == rewards.KEPT
+    return rewards.rate_for(run.streak - (1 if kept_today else 0), settings)
+
+
 def _reward_block(c, pid: int, today: dt.date, settings: dict, launch: dict,
                   away: set) -> dict:
-    run = wallet.person_run(c, pid, today, settings, launch, away)
+    run = _poll_runs.get(id(c), {}).pop(pid, None) or wallet.person_run(
+        c, pid, today, settings, launch, away)
     wallet.award(c, pid, run, settings, today)
     ts = today.isoformat()
     kept_today = run.outcomes.get(ts) == rewards.KEPT
@@ -1576,7 +1596,18 @@ def _hub_payload() -> dict:
     except Exception:
         log.error("backup status read failed; serving unknown", exc_info=True)
         backup_block = _backup_status(None, dt.datetime.now(dt.timezone.utc), BACKUP_STALE_S)
+    wallet_rules = None
+    try:
+        if rewards_active(c):
+            s = reward_settings(c)
+            wallet_rules = {k: s[k] for k in (
+                "cents_per_chore", "bonus_on", "milestones", "levels_on", "levels",
+                "shields_on", "shield_every", "shield_max", "fix_cutoff")}
+    except Exception:
+        log.error("chore wallet rules unreadable for the help text", exc_info=True)
+    extra = {"wallet": wallet_rules} if wallet_rules else {}
     return {
+        **extra,
         "date": today.isoformat(),
         "people": people,
         # Mirrors todos_ok: False when the away overlay build threw and the wall
@@ -1803,6 +1834,19 @@ def _guard_old_day(c, d: dt.date, request: Request) -> None:
     if (d < _today() and rewards_active(c) and not _edit_allowed(
             d, _now_local(), reward_settings(c)["fix_cutoff"])):
         _pin_gate(c, request.headers.get(PIN_HEADER))
+
+
+def _guard_paid_today(c, cid: int, request: Request) -> None:
+    """A chore already done today, and paid, drops out of today's pay if it
+    is deleted, turned off or made one-time: with the wallet on, that needs
+    the parent PIN. A chore that earned nothing today needs none."""
+    if not rewards_active(c):
+        return
+    today = _today().isoformat()
+    row = fdb.log_row(c, cid, today)
+    if (row and int(row.get("cents") or 0) > 0
+            and fdb.completion_exists(c, cid, today)):
+        require_parent(request)
 
 
 def _fix_floor(c) -> dt.date:
@@ -2749,6 +2793,10 @@ def admin_patch_chore(cid: int, ch: ChorePatch, request: Request):
     if ("kind" in fields and fields["kind"] != row.get("kind", "house")
             and rewards_active(c)):
         require_parent(request)
+    # Turning it off, or into a one-time item, drops what it paid today.
+    if fields.get("active") == 0 or (fields.get("schedule_kind") == "once"
+                                     and row["schedule_kind"] != "once"):
+        _guard_paid_today(c, cid, request)
     merged = {**row, **fields}
     kind = merged["schedule_kind"]
     # Converting a daily/weekly chore to one-time needs a real due date. Its
@@ -2951,9 +2999,10 @@ def admin_preview_chore(ch: ChorePreviewIn):
 
 
 @app.delete("/api/admin/chores/{cid}")
-def admin_delete_chore(cid: int):
+def admin_delete_chore(cid: int, request: Request):
     c = _db()
     _chore_row(c, cid)  # raises 404 if it doesn't exist (existing helper behavior)
+    _guard_paid_today(c, cid, request)
     fdb.delete_chore(c, cid)
     return {"ok": True}
 

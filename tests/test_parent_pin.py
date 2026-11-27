@@ -50,7 +50,7 @@ def test_lockout_after_five(conn):
         ok, _ = pp.check(conn, "0000", T0 + dt.timedelta(seconds=i))
         assert not ok
     ok, wait = pp.check(conn, "1234", T0 + dt.timedelta(seconds=10))
-    assert not ok and 0 < wait <= 300
+    assert not ok and 0 < wait <= 30
     assert pp.check(conn, "1234", T0 + dt.timedelta(minutes=6)) == (True, 0)
 
 
@@ -69,3 +69,25 @@ def test_right_pin_clears_the_count(conn):
     for i in range(4):
         pp.check(conn, "0000", T0)
     assert pp.check(conn, "1234", T0)[0]
+
+
+def test_a_lockout_lasts_seconds_not_minutes(conn):
+    """Guessing can't keep a parent out for long: after five wrong tries the
+    PIN pauses for 30 seconds, then the right PIN works again."""
+    pp.set_pin(conn, "1234", current=None)
+    for i in range(5):
+        pp.check(conn, "0000", T0 + dt.timedelta(seconds=i))
+    ok, wait = pp.check(conn, "1234", T0 + dt.timedelta(seconds=10))
+    assert not ok and 0 < wait <= 30
+    assert pp.check(conn, "1234", T0 + dt.timedelta(seconds=40)) == (True, 0)
+
+
+def test_guessing_stays_slow_after_a_lockout(conn):
+    """After a lockout ends, ONE more wrong try locks again (not five), so
+    guessing runs at one try per 30 seconds at best."""
+    pp.set_pin(conn, "1234", current=None)
+    for i in range(5):
+        pp.check(conn, "0000", T0)
+    assert pp.check(conn, "1111", T0 + dt.timedelta(seconds=35)) == (False, 0)
+    ok, wait = pp.check(conn, "1234", T0 + dt.timedelta(seconds=36))
+    assert not ok and wait > 0

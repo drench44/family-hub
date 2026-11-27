@@ -1813,3 +1813,21 @@ test('projectionHtml: names anyone it could not count', () => {
     usual: { week: 0, month: 0, year: 0 } }, partial: [1] };
   assert.match(sandbox.projectionHtml(proj, RW_STATE().people, false), /Not counted: Ava/);
 });
+
+
+test('helpTopics: the wallet topic uses this wall’s own numbers', () => {
+  const t = sandbox.helpTopics({ enabled: new Set(['chores', 'rewards']),
+    wallet: { cents_per_chore: 25, fix_cutoff: '08:30', shields_on: true,
+      shield_every: 10, shield_max: 1, bonus_on: true, milestones: [[50, 5000]] } });
+  const text = t.find((x) => x.id === 'wallet').paras.join(' ');
+  assert.match(text, /8:30/);
+  assert.match(text, /every 10 good days, up to 1\b/);
+  assert.match(text, /25¢/);
+  assert.match(text, /\$50 at 50 days/);
+  const off = sandbox.helpTopics({ enabled: new Set(['chores', 'rewards']),
+    wallet: { cents_per_chore: 30, fix_cutoff: '09:00', shields_on: false,
+      shield_every: 20, shield_max: 2, bonus_on: false, milestones: [] } });
+  const t2 = off.find((x) => x.id === 'wallet').paras.join(' ');
+  assert.doesNotMatch(t2, /Shields keep/);
+  assert.match(t2, /9:00/);
+});

@@ -2382,6 +2382,28 @@ const HELP_UNREACHABLE = 'The hub could not be reached, so this list may be miss
 // The integrations that report a health status (app.py _integ_status).
 const HELP_STATUS_IDS = new Set(['laundry', 'google_calendar', 'icloud_caldav']);
 
+/* The chore wallet's help, in this wall's own numbers (the hub payload's
+   `wallet` rules; the defaults until it loads). Pure. */
+function walletHelpParas(w) {
+  const s = { cents_per_chore: 30, bonus_on: true, milestones: [[100, 10000]],
+    levels_on: false, levels: [], shields_on: true, shield_every: 20, shield_max: 2,
+    fix_cutoff: '09:00', ...(w || {}) };
+  const [hh, mm] = String(s.fix_cutoff).split(':').map(Number);
+  const cutoff = `${hh % 12 || 12}:${String(mm || 0).padStart(2, '0')} ${hh < 12 ? 'in the morning' : 'pm'}`;
+  const bonuses = s.bonus_on && s.milestones.length
+    ? s.milestones.map(([d, c]) => `${formatBonus(c)} at ${d} days`).join(', ') : '';
+  const paras = [
+    `Each house chore adds ${formatCents(s.cents_per_chore)} to the wallet on that person’s card${s.levels_on && s.levels.length ? ', and more on a long streak' : ''}. The row shows what it pays. A personal goal stays on the card but doesn’t earn money or count for the streak.`,
+    `The 🔥 line counts days in a row where every house chore got done. A day with nothing due counts too, and away days are skipped.${bonuses ? ` The streak bonus pays ${bonuses}, and starts again after.` : ''}`,
+  ];
+  if (s.shields_on && s.shield_max > 0) {
+    paras.push(`Shields keep one bad day from wiping out a streak. You earn one for every ${s.shield_every} good days, up to ${s.shield_max}. A missed day uses a shield instead of starting over.`);
+  }
+  paras.push(`Forgot to tap something? Yesterday can be fixed until ${cutoff}. After that a parent needs to enter the PIN.`);
+  paras.push('When you pay someone, open Settings, find Chore wallet and tap Paid. Their wallet goes back to $0 and the payout is kept in their history.');
+  return paras;
+}
+
 function helpTopics(ctx) {
   const c = ctx || {};
   const on = (id) => !!(c.enabled && c.enabled.has(id));
@@ -2409,16 +2431,7 @@ function helpTopics(ctx) {
       ],
     });
     if (on('rewards')) {
-      topics.push({
-        id: 'wallet', title: 'The chore wallet',
-        paras: [
-          'Each house chore adds money to the wallet on that person’s card. The row shows what it pays. A personal goal, like reading or vitamins, stays on the card but doesn’t earn money or count for the streak.',
-          'The 🔥 line counts days in a row where every house chore got done. A day with nothing due counts too, and away days are skipped. Hitting the number on the right pays the streak bonus.',
-          'Shields keep one bad day from wiping out a streak. You earn one for every 20 good days, up to 2. A missed day uses a shield instead of starting over.',
-          'Forgot to tap something? Yesterday can be fixed until 9 in the morning. After that a parent needs to enter the PIN.',
-          'When you pay someone, open Settings, find Chore wallet and tap Paid. Their wallet goes back to $0 and the payout is kept in their history.',
-        ],
-      });
+      topics.push({ id: 'wallet', title: 'The chore wallet', paras: walletHelpParas(c.wallet) });
     }
     topics.push({
       id: 'trips', title: 'Going out of town',
