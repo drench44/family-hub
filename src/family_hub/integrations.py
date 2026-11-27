@@ -89,6 +89,10 @@ def available_integrations(cfg, env: dict | None = None,
     # wall down. Listed first so they seed with the lowest sort and head the
     # Settings "Features" group.
     add("chores", "chores", "Chores", True, group="feature")
+    # The chore wallet: money for chores and a streak reward. Listed (and
+    # seeded on) everywhere, but it stays off until a parent sets a PIN and
+    # turns it on in Settings, so the wall is unchanged until then.
+    add("rewards", "rewards", "Chore wallet", True, group="feature")
     add("todos", "todos", "To-Dos", True, group="feature")
     add("google_calendar", "calendar", "Google Calendar",
         any(c.get("kind", "google") == "google" for c in cals))

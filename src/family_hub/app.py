@@ -42,6 +42,7 @@ from . import demo as fdemo
 from . import go2rtc_proxy
 from . import integrations as fintegrations
 from . import parent_pin
+from . import wallet
 from . import reminders as remlogic
 from . import tiles
 from . import todos as tdlogic
@@ -1521,7 +1522,7 @@ class CompleteBody(BaseModel):
 
 
 @app.post("/api/chores/{chore_id}/complete")
-def complete(chore_id: int, body: CompleteBody | None = None):
+def complete(chore_id: int, request: Request, body: CompleteBody | None = None):
     c = _db()
     body = body or CompleteBody()
     date_str = body.date or _today().isoformat()
@@ -1536,6 +1537,7 @@ def complete(chore_id: int, body: CompleteBody | None = None):
         # The wall shows future days read-only; a future check-off would make
         # that day start already done (review, 2026-09-22).
         raise HTTPException(422, "can't check off a day that hasn't come yet")
+    _guard_old_day(c, d, request)
     person_id = body.person_id
     if d < today:
         # Frozen day: the occurrence log is the truth about what occurred and
@@ -1614,7 +1616,7 @@ def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
 
 
 @app.delete("/api/chores/{chore_id}/complete")
-def uncomplete(chore_id: int, date: str | None = None):
+def uncomplete(chore_id: int, request: Request, date: str | None = None):
     c = _db()
     date_str = date or _today().isoformat()
     # Same checks as complete(): the wall sends the day it is showing.
@@ -1624,6 +1626,7 @@ def uncomplete(chore_id: int, date: str | None = None):
         raise HTTPException(422, "bad date")
     if abs((d - _today()).days) > 366:
         raise HTTPException(422, "date out of range")
+    _guard_old_day(c, d, request)
     if d == _today() and fdb.completion_exists(c, chore_id, date_str):
         _, away_view, away_ok = _away_view(c, d)
         if not away_ok:
@@ -1644,6 +1647,45 @@ def uncomplete(chore_id: int, date: str | None = None):
     chore_mirror.push_completion(c, chore_id, date_str, False,
                                  expected_person_id=owner)
     return {"ok": True}
+
+
+# --- chore wallet: settings, on/off, the old-day lock ----------------------
+
+REWARD_DEFAULTS = {
+    "cents_per_chore": 30,
+    "bonus_on": True, "milestones": [[100, 10000]],
+    "levels_on": False, "levels": [[25, 35], [50, 40], [100, 45]],
+    "shields_on": True, "shield_every": 20, "shield_max": 2,
+    "fix_cutoff": "09:00",
+}
+
+
+def reward_settings(c) -> dict:
+    return {**REWARD_DEFAULTS, **(fdb.kv_get(c, "rewards.settings") or {})}
+
+
+def rewards_active(c) -> bool:
+    """The wallet is on: its feature switch is on, a parent PIN is set, and
+    it has been turned on (launched). Off, the wall is exactly as before."""
+    return (_integration_on(c, "rewards") and parent_pin.is_set(c)
+            and bool(fdb.kv_get(c, wallet.LAUNCH_KEY)))
+
+
+def _edit_allowed(d: dt.date, now: dt.datetime, cutoff: str) -> bool:
+    """Today, or yesterday before the morning cutoff (house time)."""
+    if d == now.date():
+        return True
+    hh, mm = (int(x) for x in cutoff.split(":"))
+    return (d == now.date() - dt.timedelta(days=1)
+            and (now.hour, now.minute) < (hh, mm))
+
+
+def _guard_old_day(c, d: dt.date, request: Request) -> None:
+    """With the wallet on, ticking or unticking an older day changes money,
+    so it needs the parent PIN. Off, the old rules stand."""
+    if (d < _today() and rewards_active(c) and not _edit_allowed(
+            d, _now_local(), reward_settings(c)["fix_cutoff"])):
+        _pin_gate(c, request.headers.get(PIN_HEADER))
 
 
 # --- chore wallet: parent PIN ---------------------------------------------

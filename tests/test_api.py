@@ -7193,3 +7193,68 @@ def test_parent_pin_routes(client, app_mod):
     r = client.post("/api/rewards/pin/check", headers={"X-Parent-Pin": "1357"})
     assert r.status_code == 429
     assert r.json()["detail"]["pin"] == "locked" and r.json()["detail"]["wait_s"] > 0
+
+
+def _wallet_on(client, app_mod, monkeypatch, now):
+    """A hub with the chore wallet on, a clock frozen at ``now`` (house
+    time), one child with a daily chore and frozen rows for the last 3 days."""
+    monkeypatch.setattr(app_mod, "_now_local", lambda: now)
+    pid = _mk_person(client, "Ava")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    c = app_mod._db()
+    for back in (1, 2, 3):
+        ds = (now.date() - dt.timedelta(days=back)).isoformat()
+        fdb.replace_day_log(c, ds, [{"chore_id": cid, "person_id": pid,
+                                     "title": "Dishes", "icon": "", "rot": 0,
+                                     "cents": 30}])
+    assert client.post("/api/rewards/pin", json={"pin": "2468"}).status_code == 204
+    fdb.kv_set(c, "rewards.launch", {"day": (now.date() - dt.timedelta(days=3)).isoformat(),
+                                     "seeds": {}})
+    return pid, cid
+
+
+def _house_now(h, m=0):
+    import family_hub.app as appmod
+    return dt.datetime(2026, 12, 10, h, m, tzinfo=appmod.TZ)
+
+
+def test_yesterday_editable_until_cutoff(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(8, 59))
+    y = (_house_now(8).date() - dt.timedelta(days=1)).isoformat()
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": y}).status_code == 200
+    assert client.delete(f"/api/chores/{cid}/complete?date={y}").status_code == 200
+
+
+def test_cutoff_passes_while_open(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(9, 1))
+    y = (_house_now(9).date() - dt.timedelta(days=1)).isoformat()
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": y})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": y},
+                       headers={"X-Parent-Pin": "2468"}).status_code == 200
+    r = client.delete(f"/api/chores/{cid}/complete?date={y}")
+    assert r.status_code == 403
+    assert fdb.completion_exists(app_mod._db(), cid, y)      # refused: kept
+
+
+def test_older_day_needs_pin(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(7))
+    old = (_house_now(7).date() - dt.timedelta(days=3)).isoformat()
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": old})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    assert not fdb.completion_exists(app_mod._db(), cid, old)
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": old},
+                       headers={"X-Parent-Pin": "0000"}).status_code == 403
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": old},
+                       headers={"X-Parent-Pin": "2468"}).status_code == 200
+    # today never asks
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+
+
+def test_lock_off_when_rewards_off(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    fdb.kv_set(app_mod._db(), "rewards.launch", None)      # never turned on
+    old = (_house_now(12).date() - dt.timedelta(days=3)).isoformat()
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": old}).status_code == 200
