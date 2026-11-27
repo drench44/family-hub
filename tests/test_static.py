@@ -2902,3 +2902,49 @@ def test_dim_hours_live_in_the_display_card_not_this_screen():
     i_looks = HUB.index('id="settings-looks"')
     i_dim = HUB.index('id="dim-ctl"')
     assert i_disp < i_dim < i_looks
+
+
+# --- Settings info tips -----------------------------------------------------
+
+def test_every_settings_label_goes_through_the_info_tip_helper():
+    """Every Settings label carries a tap-to-explain button (common.js
+    tipLabelHtml). A label written by hand would ship without one, so the raw
+    class may only appear inside the helper itself."""
+    raw = [line for line in ALL_JS.splitlines()
+           if 'class="settings-k"' in line or "class='settings-k'" in line]
+    assert len(raw) == 1, ("a settings label written without tipLabelHtml: "
+                           f"{raw}")
+    helper = COMMON[COMMON.index("function tipLabelHtml"):]
+    helper = helper[:helper.index("\n}\n")]
+    assert 'class="settings-k"' in helper
+
+
+def test_every_integration_switch_has_an_info_tip():
+    """A new integration in the registry needs its own tip text, or its
+    switch in Settings would have nothing to explain it."""
+    reg = (STATIC.parents[1] / "integrations.py").read_text()
+    ids = re.findall(r'^\s+add\("([a-z0-9_]+)"', reg, re.M)
+    assert len(ids) >= 14, ids
+    tips = COMMON[COMMON.index("const SETTING_TIPS = {"):]
+    tips = tips[:tips.index("\n};\n")]
+    missing = [i for i in ids if f"'integ:{i}':" not in tips]
+    assert not missing, f"integrations with no info tip: {missing}"
+
+
+def test_info_tip_button_is_a_44px_target_without_a_taller_row():
+    btn = _css_rule(".tip-btn")
+    assert "width: 18px" in btn and "height: 18px" in btn
+    # the button takes no height in the label row: 18px drawn, -4px each side
+    assert "margin: -4px 0" in btn
+    before = _css_rule(".tip-btn::before")
+    m = re.search(r"inset:\s*-(\d+)px\s+-(\d+)px\s+-(\d+)px", before)
+    assert m, before
+    top, side, bottom = map(int, m.groups())
+    assert 18 + top + bottom >= 44 and 18 + 2 * side >= 44, "tap area under 44px"
+    assert "var(--accent)" in _css_rule('.tip-btn[aria-expanded="true"]'), \
+        "the open tip shows it is open"
+    # in the flow, never a hover popover that can run off-screen
+    body = _css_rule(".tip-body")
+    assert "position: absolute" not in body and "position: fixed" not in body
+    assert ".tip-btn:hover" not in CSS
+    assert "display: none" in _css_rule(".tip-body[hidden]")

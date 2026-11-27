@@ -13589,3 +13589,84 @@ test('dim settings: a refused save says why and puts the stored time back', asyn
   assert.match(document.getElementById('toast').textContent, /can't be the same/);
   assert.equal(picker.value, '22:00', 'the picker shows what is really saved');
 });
+
+/* ------------------------------------------------ Settings info tips */
+
+// Every integration the registry can list (src/family_hub/integrations.py).
+const ALL_INTEGS = [
+  ['chores', 'Chores', 'feature'], ['rewards', 'Chore wallet', 'feature'], ['todos', 'To-Dos', 'feature'],
+  ['backups', 'Backups', 'feature'], ['google_calendar', 'Google Calendar'], ['ics_calendar', 'Shared / ICS calendars'],
+  ['icloud_caldav', 'iCloud (CalDAV)'], ['cameras', 'Cameras'], ['weather', 'Weather'], ['climate', 'Climate'],
+  ['laundry', 'Laundry'], ['away_dim', 'Dim when nobody is home'], ['fleet', 'Fleet status'], ['printer', '3D printer'],
+].map(([id, name, group]) => ({ id, kind: id, name, enabled: true, group: group || 'integration' }));
+
+test('renderIntegrations: every switch has its own ⓘ beside the name, outside the switch button', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("infoTipOpen = ''", sandbox);
+  sandbox.renderIntegrations({ integrations: ALL_INTEGS });
+  const html = sandbox.document.getElementById('integrations-ctl').innerHTML;
+  for (const it of ALL_INTEGS) {
+    assert.match(html, new RegExp(`data-tip="integ:${it.id}"`), `${it.id} has a tip`);
+    assert.match(html, new RegExp(`aria-label="What is ${it.name.replace(/[()]/g, '\\$&')}\\?"`), `${it.id} reads its name`);
+    assert.match(html, new RegExp(`id="tip-integ-${it.id.replace(/_/g, '-')}"[^>]*hidden>`), `${it.id} starts closed`);
+  }
+  // a button is never inside another button: the switch closes before the next tip
+  for (const chunk of html.split('<button').slice(1)) {
+    assert.ok(chunk.indexOf('</button>') < (chunk.indexOf('<button') === -1 ? Infinity : chunk.indexOf('<button')));
+  }
+  assert.equal((html.match(/class="integ-row"/g) || []).length, ALL_INTEGS.length, 'one switch per row');
+  // the switch still says what it turns on and off, with its warning
+  sandbox.renderIntegrations({ integrations: [{ id: 'laundry', kind: 'laundry', name: 'Laundry', enabled: true, status: 'needs_auth' }] });
+  const one = sandbox.document.getElementById('integrations-ctl').innerHTML;
+  assert.match(one, /role="switch" aria-checked="true" aria-label="Laundry \(reconnect\)" data-integ-toggle="laundry"/);
+  assert.match(one, /<span class="integ-name" data-integ-toggle="laundry">Laundry<span class="integ-warn">reconnect<\/span><\/span>/,
+    'a tap on the name still flips the switch');
+});
+
+test('info tips: a tap opens one, a 60 s repaint keeps it open, a second tap closes it', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("infoTipOpen = ''", sandbox);
+  sandbox.toggleInfoTip('integ:weather');
+  sandbox.renderIntegrations({ integrations: ALL_INTEGS });
+  let html = sandbox.document.getElementById('integrations-ctl').innerHTML;
+  assert.match(html, /data-tip="integ:weather" aria-expanded="true"/);
+  assert.match(html, /id="tip-integ-weather" data-tip-body="integ:weather">/);
+  assert.equal((html.match(/aria-expanded="true"/g) || []).length, 1);
+  sandbox.toggleInfoTip('integ:cameras');    // another tip: it moves there
+  sandbox.renderIntegrations({ integrations: ALL_INTEGS });
+  html = sandbox.document.getElementById('integrations-ctl').innerHTML;
+  assert.match(html, /data-tip="integ:cameras" aria-expanded="true"/);
+  assert.match(html, /data-tip="integ:weather" aria-expanded="false"/);
+  sandbox.toggleInfoTip('integ:cameras');    // the same tip: it closes
+  assert.equal(vm.runInContext('infoTipOpen', sandbox), '');
+});
+
+test('info tips: opening Settings starts with every tip closed', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("infoTipOpen = 'Theme'", sandbox);
+  sandbox.openOverlay('settings');
+  assert.equal(vm.runInContext('infoTipOpen', sandbox), '');
+});
+
+test('renderSettingsFull: Display, Seasonal looks and This screen labels each carry a tip', () => {
+  const { document, sandbox } = newHub();
+  vm.runInContext("infoTipOpen = ''", sandbox);
+  const host = document.createElement('div');
+  host._id = 'settings-full';
+  document.body.appendChild(host);
+  sandbox.renderSettingsFull();
+  const html = host.innerHTML;
+  for (const k of ['Theme', 'Accent', 'Columns', 'Dim hours', 'Mode', 'Layout', 'Auto-return']) {
+    assert.match(html, new RegExp(`<span class="settings-k">${k}</span><button class="tip-btn" type="button" data-tip="${k}"`), k);
+  }
+});
+
+test('renderTodoSourcePicker: the To-Do list label carries a tip', () => {
+  const { document, sandbox } = newHub();
+  const host = document.createElement('div'); host._id = 'todo-source-ctl';
+  document.body.appendChild(host);
+  vm.runInContext("infoTipOpen = ''; hubData = { todo_source: 'local', integrations: [{ id: 'icloud_caldav', name: 'iCloud (CalDAV)', enabled: true, readonly: true }] };", sandbox);
+  sandbox.renderTodoSourcePicker();
+  const html = host.innerHTML;
+  assert.match(html, /<span class="settings-k">To-Do list<\/span><button class="tip-btn" type="button" data-tip="To-Do list"/);
+});

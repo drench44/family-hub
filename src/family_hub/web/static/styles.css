@@ -2440,6 +2440,44 @@ body.kiosk-cursor-hidden, body.kiosk-cursor-hidden * { cursor: none !important; 
   outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px;
 }
 .integ-empty { font-size: 13px; color: var(--faint); padding: 6px 2px; }
+/* A switch row with its ⓘ tip (hub.js renderIntegrations): the name and the
+   tip sit outside the switch button, which fills the rest of the row, so a
+   tap on the name or the empty middle still flips it. */
+.integ-item + .integ-item { border-top: 1px solid var(--edge-soft); }
+.integ-line { display: flex; align-items: stretch; min-height: 44px; }
+.integ-line > .tip-head, .integ-line > .integ-name { align-self: center; }
+.integ-line .integ-name { cursor: pointer; padding: 6px 0 6px 2px; }
+.integ-line > .integ-row { flex: 1 1 auto; width: auto; min-width: 56px; justify-content: flex-end; }
+.integ-item > .tip-body { margin: 0 0 10px; }
+.rw-people > .tip-body { margin: -2px 0 10px; }
+
+/* ---- Settings: the ⓘ info tips (common.js SETTING_TIPS / tipLabelHtml) ----
+   A small round button right after a setting's label. Tapping it shows the
+   explanation in the flow, right under the label, pushing the rest down:
+   no hover and no floating popover, so it works the same with a finger, the
+   wall's mouse-style touchscreen and a keyboard, and can't run off-screen.
+   The button draws 18px and takes no extra height in the label row (negative
+   margin); a transparent ::before grows its tap area to 44px. */
+.tip-head { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; max-width: 100%; }
+.tip-btn {
+  position: relative; z-index: 1; flex: none;
+  width: 18px; height: 18px; margin: -4px 0; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--edge); background: var(--surface-2);
+  color: var(--dim); font: italic 700 11px/1 Georgia, "Times New Roman", serif;
+  letter-spacing: 0; text-transform: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tip-btn::before { content: ""; position: absolute; inset: -18px -13px -8px; }
+.tip-btn[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tip-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tip-body {
+  max-width: 62ch; padding: 10px 12px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--edge-soft); border-left: 3px solid var(--accent);
+  font-size: 13.5px; line-height: 1.45; color: var(--ink);
+  text-transform: none; letter-spacing: normal; font-family: inherit; font-weight: 400;
+}
+.tip-body[hidden] { display: none; }
 
 /* ---- full Settings overlay (openOverlay('settings'), hub.js renderSettingsFull) ---- */
 /* Two .card sections (Display, Integrations): the one card + .shead system
@@ -2839,7 +2877,7 @@ body.integ-off-todos .todo-slot { display: none; }
    The reusable add/edit form (common.js buildChoreForm + buildPersonForm),
    opened from the all-chores overlay's edit mode. */
 .field { display: flex; flex-direction: column; gap: 6px; }
-.field > label {
+.field > label, .field > .tip-head > label {
   font-family: var(--mono); font-size: 12px;
   letter-spacing: 0.06em; color: var(--dim);
 }

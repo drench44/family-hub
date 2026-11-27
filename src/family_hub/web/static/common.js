@@ -387,7 +387,7 @@ function dimCardHtml(data) {
   const words = h.on ? `Every screen in the house dims from ${dimHoursWords(h)}.`
     : 'No screen dims for the time of day.';
   const awayLine = dimAwayLine(away);
-  return '<div class="settings-row"><span class="settings-k">Dim hours</span>'
+  return `<div class="settings-row">${tipLabelHtml('Dim hours')}`
     + '<div class="seg" role="group" aria-label="Dim hours">'
     + `<button type="button" data-dim-set="on"${h.on ? ' class="on"' : ''}>On</button>`
     + `<button type="button" data-dim-set="off"${h.on ? '' : ' class="on"'}>Off</button>`
@@ -1870,6 +1870,108 @@ function pinLockMessage(waitS) {
   return `Too many wrong tries. Try again in ${mins === 1 ? 'a minute' : `${mins} minutes`}.`;
 }
 
+/* ---- Settings: the ⓘ info tips ----
+   Every setting label in Settings carries a small ⓘ button. A tap opens a
+   short plain explanation right under the label (pushing the rest down), a
+   second tap or a tap on another tip closes it. All the words live in this
+   one map so they are easy to edit. Keys are the label text, or
+   'integ:<id>' for a Features & integrations switch (integrations.py).
+   Examples are worded "for example" so they stay true whatever a parent
+   sets. A test fails any label drawn without a tip here, and
+   test_static.py fails any settings label written without tipLabelHtml.
+   Checked against the code when written: change a behavior, change its tip. */
+const SETTING_TIPS = {
+  // Display
+  'Theme': 'Sets the colors of this screen, from bright Light to dark Black. Each screen keeps its own choice, so a phone can be Light while the wall stays Black.',
+  'Accent': 'The highlight color for buttons, checkmarks and headings on this screen. While a seasonal look is showing, the look picks this color instead.',
+  'Columns': 'How the wall’s columns are set apart. None keeps it plain, Wells puts each column on a soft panel, and Lines draws a thin line between them.',
+  'Dim hours': 'Every screen in the house dims during these hours, and the seasonal look stops moving. For example, 10pm to 6am dims the screens overnight. This one setting is shared by every screen.',
+  // Seasonal looks
+  'Mode': 'Off shows the plain theme. Calendar changes the look with the dates, for example a Halloween photo from Oct 1 to Oct 31. Pick one keeps the look you tap all year, and each screen keeps its own choice.',
+  // This screen
+  'Layout': 'Auto uses the phone layout on a narrow screen and the full wall on a wide one. Desktop always shows the full wall, which helps a TV that gets the phone layout by mistake.',
+  'Auto-return': 'On, this screen goes back to the main page when nobody taps for a while. That is a minute and a half on most pages, three minutes on the calendar, and five on a camera or in Settings. Turn it off on a personal phone or TV.',
+  // Features & integrations: one per switch
+  'integ:chores': 'Shows each person’s chore card, with checkmarks and streaks, on the wall and phones. Off hides the chores, and nothing is deleted.',
+  'integ:rewards': 'Lets each finished house chore add money to a wallet on that person’s card. It stays off until a parent turns it on under Chore wallet below.',
+  'integ:todos': 'Shows the shared To-Do list. Off hides the card, and the list is kept.',
+  'integ:backups': 'Lets the hub save a copy of its data every hour. It only runs once a backup folder is set up, and the Backups section below says what is wrong if it can’t.',
+  'integ:google_calendar': 'Shows events from this hub’s Google calendars on the Calendar card. They update every five minutes.',
+  'integ:ics_calendar': 'Shows events from shared calendar links, such as a school or team schedule, on the Calendar card. They update every five minutes.',
+  'integ:icloud_caldav': 'Connects an iCloud account so its calendars and Reminders can show here. Pick which ones under Calendars below.',
+  'integ:cameras': 'Shows the home cameras on the wall. Tap one to see it full size.',
+  'integ:weather': 'Shows the weather now, the next day’s temperatures, and the next five days.',
+  'integ:climate': 'Shows each room’s temperature and humidity. A room turns amber or red when it runs hot or its sensor stops reporting.',
+  'integ:laundry': 'Shows the washer and dryer, how long each has left, and when a load finished. A finished wash that sits turns amber and says Waiting.',
+  'integ:away_dim': 'Dims the wall while nobody is home, using Home Assistant. It checks once a minute and dims after hearing nobody is home twice in a row, and stays bright when it can’t tell. Phones don’t dim for this.',
+  'integ:fleet': 'Shows whether the home servers and the internet are up.',
+  'integ:printer': 'Shows how far along a 3D print is, when it will be done, the temperatures, and each spool in its real color.',
+  'To-Do list': 'Where the To-Do card’s list lives. On this hub keeps it here, and iCloud shows your iCloud Reminders so they match your phone. With iCloud, set Sync direction to 2-way to check items off here.',
+  'Sync direction': '1-way only reads from iCloud, so nothing done here changes your iCloud data. 2-way sends changes back, so checking off a reminder here checks it off on your phone too.',
+  'Calendars': 'The iCloud calendars and reminder lists the hub found. Tap one to show it on the wall or hide it.',
+  'Apple ID': 'The Apple ID the hub signs in with. A separate Apple ID just for the hub, with your calendars shared to it, is the safest choice.',
+  'App-specific password': 'Not your normal Apple password. Make an app-specific password in your Apple account settings and paste it here.',
+  // Chore wallet
+  'Parent PIN': 'An optional 4 to 6 digit code. When it is set, paying out, changing amounts and fixing older days ask for it. Without it, anyone at the wall can do those.',
+  'Each chore pays': 'What each finished house chore adds to that person’s wallet. For example, at 40¢ a chore, 3 chores is $1.20 that day. Personal goals and one-time items don’t earn money.',
+  'Streak bonus': 'A one-time payment when a streak reaches a set number of days, for example $100 at 100 days. After the biggest step the steps start over, so the same streak pays again at 200 days.',
+  'More per chore on a streak': 'Pays more for each chore once a streak is long enough. For example, if 25 days or more pays 35¢, someone on a 30 day streak earns 35¢ a chore. The highest step reached counts, and a broken streak goes back to the usual amount.',
+  'Shields': 'A shield saves the streak from one missed day. Shields are earned for good days in a row, as the line below says, and a missed day uses one by itself. A saved day doesn’t add to the streak, but it doesn’t end it either.',
+  'Fix yesterday until': 'Until this time each morning, yesterday’s chores can still be checked or unchecked without the PIN. For example, at 9:00 AM a chore forgotten last night can be fixed at breakfast. After that, changing yesterday needs the parent PIN, if one is set.',
+  'Projected cost': 'What the wallet could cost each week, month and year with the amounts above. Perfect streak is the most it can cost, and usual pace is a guess from each person’s last 8 weeks. It updates as you type, before you save.',
+  'Wallets': 'What each person has earned since they were last paid. Pay them yourself, then tap Paid to set their wallet back to $0. History shows past weeks, streak bonuses and payouts.',
+  // Backups
+  'Status': 'Whether the hourly copies are running. When they are off, it says what to fix.',
+  'Folder': 'Where the copies are saved. Put this folder on a NAS or another drive, so the copies survive if the hub box breaks.',
+  'Last good backup': 'How long ago the newest good copy was made. With hourly copies it should never be much more than an hour.',
+  'Copies kept': 'The hub keeps 48 hourly copies, 14 daily, 8 weekly and 12 monthly, and deletes older ones by itself. So you can go back two days hour by hour, or a year month by month.',
+  'Restore test': 'Once a month the hub checks that its newest copy really opens and holds the hub’s data, without touching anything in use. Test restore now runs that check right away.',
+  'Settings files': 'With a backup password set, each backup also keeps a locked copy of the hub’s settings files, such as config.json and .env. A new copy is saved only when they change, and the last 14 are kept.',
+  'Backup password': 'Locks the settings files inside each backup. You need it to restore them on a new box, so write it down.',
+  'Set a backup password': 'Pick a password of at least 8 characters to lock the settings files into each backup. You need it to restore them on a new box, so write it down.',
+  'Change the backup password': 'Type a new password twice and save it. New backups use it, and copies made before still open only with the password they were made with.',
+};
+
+let infoTipOpen = '';    // the one open tip's key ('' none), kept across repaints
+
+/* 'tip-fix-yesterday-until' from a key: a safe, stable element id. Pure. */
+function infoTipId(key) {
+  return 'tip-' + String(key).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/* Which tip is open after a tap on `key`: the same one closes, another
+   one moves the open tip there. Pure. */
+function infoTipNextOpen(cur, key) {
+  return cur === key ? '' : key;
+}
+
+/* A label with its ⓘ button beside it. `labelHtml` is the label element,
+   already escaped; `name` is what the button reads aloud ("What is
+   Shields?"). A key with no text draws the label alone (the tests fail it). */
+function tipHeadHtml(key, labelHtml, name) {
+  if (!SETTING_TIPS[key]) return labelHtml;
+  const open = infoTipOpen === key;
+  return `<span class="tip-head">${labelHtml}`
+    + `<button class="tip-btn" type="button" data-tip="${escapeHtml(key)}" aria-expanded="${open ? 'true' : 'false'}"`
+    + ` aria-controls="${infoTipId(key)}" aria-label="What is ${escapeHtml(name || key)}?">`
+    + '<span aria-hidden="true">i</span></button></span>';
+}
+
+/* The explanation, right under its label: hidden until its button opens it. */
+function tipBodyHtml(key) {
+  const text = SETTING_TIPS[key];
+  if (!text) return '';
+  return `<div class="tip-body" id="${infoTipId(key)}" data-tip-body="${escapeHtml(key)}"${infoTipOpen === key ? '' : ' hidden'}>`
+    + `${escapeHtml(text)}</div>`;
+}
+
+/* The usual Settings label: the label, its ⓘ, and its explanation. `text`
+   (escaped HTML) is the label's words when they differ from the key. */
+function tipLabelHtml(key, text) {
+  const words = text === undefined ? escapeHtml(key) : text;
+  return tipHeadHtml(key, `<span class="settings-k">${words}</span>`, key) + tipBodyHtml(key);
+}
+
 /* ---- chore wallet: the Settings card (pure renderers, wired in hub.js) ---- */
 
 const RW_ONOFF = (name, on) => `<div class="seg" role="group" aria-label="${name}">`
@@ -1986,10 +2088,10 @@ function rewardsCardHtml(st) {
   // The parent PIN is optional (the owner, 2026-11-27): one row says whether
   // it is on, and offers to add or remove it.
   const pinRow = st.pin_set
-    ? `<div class="settings-row"><span class="settings-k">Parent PIN</span>`
+    ? `<div class="settings-row">${tipLabelHtml('Parent PIN')}`
       + `<span class="hint">On. Payouts, amounts and fixes to old days ask for it.</span>`
       + `<button class="padmin-btn" type="button" data-rw-clearpin="1">Remove PIN</button></div>`
-    : `<div class="settings-row"><span class="settings-k">Parent PIN</span>`
+    : `<div class="settings-row">${tipLabelHtml('Parent PIN')}`
       + `<span class="hint">Off (optional). Anyone at the wall can pay out and change amounts.</span>`
       + `<button class="padmin-btn" type="button" data-rw-setpin="1">Set a PIN</button></div>`;
   if (!st.launch) {
@@ -2001,21 +2103,22 @@ function rewardsCardHtml(st) {
   return intro
     + pinRow
     + `<div class="theme-ctl stack rw-form">`
-    + `<div class="settings-row"><span class="settings-k">Each chore pays</span>`
+    + `<div class="settings-row">${tipLabelHtml('Each chore pays')}`
     + `<div class="rw-inline"><input class="txt-input rw-num" type="number" min="0" max="500" inputmode="numeric" name="cents_per_chore" value="${Number(s.cents_per_chore)}" aria-label="Cents a chore"><span class="rw-word">¢ for each house chore done</span></div></div>`
-    + `<div class="settings-row"><span class="settings-k">Streak bonus</span>${RW_ONOFF('bonus_on', s.bonus_on)}</div>`
+    + `<div class="settings-row">${tipLabelHtml('Streak bonus')}${RW_ONOFF('bonus_on', s.bonus_on)}</div>`
     + `<div class="rw-sub${s.bonus_on ? '' : ' hidden'}" data-rw-for="bonus_on">${rwStepsHtml('ms', s.milestones)}</div>`
-    + `<div class="settings-row"><span class="settings-k">More per chore on a streak</span>${RW_ONOFF('levels_on', s.levels_on)}</div>`
+    + `<div class="settings-row">${tipLabelHtml('More per chore on a streak')}${RW_ONOFF('levels_on', s.levels_on)}</div>`
     + `<div class="rw-sub${s.levels_on ? '' : ' hidden'}" data-rw-for="levels_on">${rwStepsHtml('lv', s.levels)}</div>`
-    + `<div class="settings-row"><span class="settings-k">Shields</span>${RW_ONOFF('shields_on', s.shields_on)}`
+    + `<div class="settings-row">${tipLabelHtml('Shields')}${RW_ONOFF('shields_on', s.shields_on)}`
     + `<span class="hint">One for every ${Number(s.shield_every)} good days, up to ${Number(s.shield_max)}. A missed day uses one.</span></div>`
-    + `<div class="settings-row"><span class="settings-k">Fix yesterday until</span>`
+    + `<div class="settings-row">${tipLabelHtml('Fix yesterday until')}`
     + `<input class="txt-input rw-time" type="time" name="fix_cutoff" value="${escapeHtml(s.fix_cutoff)}" aria-label="Fix yesterday until"></div>`
     + `<div id="rw-projection" class="rw-projection" aria-live="polite"></div>`
     + `<div class="form-error hidden" id="rw-error"></div>`
     + `<button class="btn-primary" type="button" data-rw-save="1">Save amounts</button>`
     + `</div>`
-    + `<div class="padmin rw-people"><div class="padmin-head"><span class="padmin-head-label">Wallets</span></div>`
+    + `<div class="padmin rw-people"><div class="padmin-head">${tipHeadHtml('Wallets', '<span class="padmin-head-label">Wallets</span>', 'Wallets')}</div>`
+    + tipBodyHtml('Wallets')
     + walletPeopleHtml(st.people || [], st.today) + `</div>`;
 }
 
@@ -2081,7 +2184,7 @@ function backupPasswordProblem(a, b) {
 function backupsCardHtml(st, nowMs) {
   if (!st) return `<div class="hint">Loading…</div>`;
   const now = Number.isFinite(nowMs) ? nowMs : Date.now();
-  const row = (k, v) => `<div class="settings-row"><span class="settings-k">${k}</span><span class="hint">${v}</span></div>`;
+  const row = (k, v) => `<div class="settings-row">${tipLabelHtml(k)}<span class="hint">${v}</span></div>`;
   let html = `<div class="settings-sub">The hub saves a copy of its database every hour into a backup folder. Put that folder on a NAS and the copies leave the box.</div>`;
   const status = st.enabled
     ? (st.scheduled === false ? 'Hourly copies are paused on this hub. Back up now still works.'
@@ -2162,7 +2265,7 @@ function backupsCardHtml(st, nowMs) {
     html += `<button class="padmin-btn" type="button" data-bk-changepw="1">Change password</button>`;
   }
   html += `<div class="theme-ctl stack bk-pw${set ? ' hidden' : ''}" id="bk-pw-form">`
-    + `<div class="settings-k">${set ? 'Change the backup password' : 'Set a backup password'}</div>`
+    + (set ? tipLabelHtml('Change the backup password') : tipLabelHtml('Set a backup password'))
     + `<div class="hint">It locks a copy of config.json, .env and the sign-ins into each backup.</div>`
     + `<input class="txt-input" type="password" name="bk_pw" autocomplete="new-password" placeholder="At least 8 characters" aria-label="Backup password">`
     + `<input class="txt-input" type="password" name="bk_pw2" autocomplete="new-password" placeholder="The same again" aria-label="The same password again">`
@@ -2202,7 +2305,7 @@ function projectionHtml(proj, people, unsaved) {
     + `<table class="rw-proj"><thead><tr><th></th><th>Week</th><th>Month</th><th>Year</th></tr></thead>`
     + `<tbody>${rows(label, pick)}</tbody></table>`;
   const missing = (proj.partial || []).map(name).filter(Boolean);
-  return `<div class="settings-k">Projected cost${unsaved ? ' <span class="rw-unsaved">not saved yet</span>' : ''}</div>`
+  return tipLabelHtml('Projected cost', `Projected cost${unsaved ? ' <span class="rw-unsaved">not saved yet</span>' : ''}`)
     + (missing.length ? `<div class="hint rw-partial">Not counted: ${escapeHtml(missing.join(', '))} (couldn’t read their chores just now).</div>` : '')
     + table('Perfect streak (the most it can cost)', 'perfect')
     + table('Usual pace, about (from the last 8 weeks)', 'usual');
@@ -2446,11 +2549,11 @@ function caldavPanelHtml(integ, ui) {
   // false positive for an HTML attribute that merely looks the same shape.
   const dis = (b) => (b ? 'disabled' : '');
   if (!integ) {
-    return `<div class="field"><label>Apple ID</label>`
+    return `<div class="field">${tipHeadHtml('Apple ID', '<label for="caldav-user-input">Apple ID</label>', 'Apple ID')}${tipBodyHtml('Apple ID')}`
       + `<input class="txt-input" id="caldav-user-input" type="text" `
       + `value="${escapeHtml(st.user || '')}" `
       + `autocomplete="off" autocapitalize="off" spellcheck="false" ${dis(st.connecting)}></div>`
-      + `<div class="field"><label>App-specific password</label>`
+      + `<div class="field">${tipHeadHtml('App-specific password', '<label for="caldav-pw-input">App-specific password</label>', 'an App-specific password')}${tipBodyHtml('App-specific password')}`
       + `<input class="txt-input" id="caldav-pw-input" type="password" `
       + `autocomplete="off" ${dis(st.connecting)}></div>`
       + (st.formError ? `<div class="form-error">${escapeHtml(st.formError)}</div>` : '')
@@ -2505,7 +2608,7 @@ function caldavPanelHtml(integ, ui) {
     + pendingNote
     + parkedNote
     + `<div class="settings-row">`
-    + `<span class="settings-k">Sync direction</span>`
+    + tipLabelHtml('Sync direction')
     + `<div class="segmented" role="group" aria-label="Sync direction">`
     + `<button class="seg-btn${readonly ? ' active' : ''}" type="button" data-caldav-readonly="1">1-way (read-only)</button>`
     + `<button class="seg-btn${readonly ? '' : ' active'}" type="button" data-caldav-readonly="0">2-way (write back)</button>`
@@ -2517,7 +2620,7 @@ function caldavPanelHtml(integ, ui) {
     + `</div>`
     + (resultMsg ? `<div class="caldav-test-result${resultCls}">${escapeHtml(resultMsg)}</div>` : '')
     + `<div class="caldav-collections">`
-    + `<div class="settings-k">Calendars</div>`
+    + tipLabelHtml('Calendars')
     + `<div class="hint">Pick which iCloud calendars and reminder lists show on the wall.</div>`
     + `<div class="caldav-collections-list">`
     + `${caldavCollectionsHtml(st.collections, { error: st.collectionsError })}</div>`

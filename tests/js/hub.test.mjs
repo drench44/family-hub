@@ -987,7 +987,7 @@ test('caldavPanelHtml: connected embeds the Calendars section with its caption a
   const html = caldavPanelHtml(
     { id: 'icloud_caldav', account: 'a@b.com', enabled: true },
     { collections: [{ id: 'caldav:ab12', name: 'Family', color: null, comp_type: 'VEVENT', enabled: true }] });
-  assert.match(html, /<div class="settings-k">Calendars<\/div>/);
+  assert.match(html, /<span class="settings-k">Calendars<\/span><button class="tip-btn"/);
   assert.match(html, /Pick which iCloud calendars and reminder lists show on the wall\./);
   assert.match(html, /data-caldav-collection-toggle="caldav:ab12"/);
 });
@@ -2140,7 +2140,7 @@ test('backupsCardHtml: loading, then the working state with every row', () => {
   const html = sandbox.backupsCardHtml(BK(), NOW_MS);
   assert.match(html, /On\. A copy every hour\./);
   assert.match(html, /\/mnt\/nas\/family-hub/);
-  assert.match(html, /Last good backup<\/span><span class="hint">20 minutes ago/);
+  assert.match(html, /Last good backup<\/span><button class="tip-btn"[^]*?<\/div><span class="hint">20 minutes ago/);
   assert.match(html, /12 hourly, 1 daily, 1 weekly and 1 monthly\. It keeps up to 48, 14, 8 and 12\./);
   assert.match(html, /<button class="btn-primary" type="button" data-bk-run="1">Back up now<\/button>/);
   assert.match(html, /Set a backup password/);
@@ -2206,7 +2206,7 @@ test('backupsCardHtml: with a password set, a clear status row, what the last co
     settings: { at: copy, file: 'settings-x.fhb',
       files: ['config.json', 'env', 'pin.key', 'token.json', 'wyze.env'] } }), NOW_MS);
   const day = sandbox.restoreTestDate(at, NOW_MS);
-  assert.match(html, new RegExp(`Backup password</span><span class="hint">Set ✓ on ${day}\\.`));
+  assert.match(html, new RegExp(`Backup password</span><button class="tip-btn"[^]*?</div><span class="hint">Set ✓ on ${day}\\.`));
   const clock = sandbox.backupClock(copy);
   assert.match(clock, /\d{1,2}:\d{2}/);
   assert.ok(html.includes(`Settings locked into the ${clock} backup: config.json, env, pin.key, token.json, wyze.env.`));
@@ -2218,7 +2218,7 @@ test('backupsCardHtml: with a password set, a clear status row, what the last co
 
 test('backupsCardHtml: a set password with no stored date still says Set, and an unset one keeps the open form', () => {
   const noDate = sandbox.backupsCardHtml(BK({ password_set: true }), NOW_MS);
-  assert.match(noDate, /Backup password<\/span><span class="hint">Set ✓<\/span>/);
+  assert.match(noDate, /Backup password<\/span><button class="tip-btn"[^]*?<\/div><span class="hint">Set ✓<\/span>/);
   const unset = sandbox.backupsCardHtml(BK(), NOW_MS);
   assert.ok(!/data-bk-changepw/.test(unset) && !/Set ✓/.test(unset));
   assert.ok(!/bk-pw hidden/.test(unset), 'no folded form when nothing is set');
@@ -2289,14 +2289,14 @@ test('restoreTestDate: a plain date, the year only when it is not this one', () 
 
 test('backupsCardHtml: no restore test yet says when the first one runs', () => {
   const html = sandbox.backupsCardHtml(BK({ restore_test: null }), NOW_MS);
-  assert.match(html, /Restore test<\/span><span class="hint">Not tested yet\. The first test runs a day after the first backup\./);
+  assert.match(html, /Restore test<\/span><button class="tip-btn"[^]*?<\/div><span class="hint">Not tested yet\. The first test runs a day after the first backup\./);
   assert.match(html, /<button class="padmin-btn" type="button" data-bk-test="1">Test restore now<\/button>/);
 });
 
 test('backupsCardHtml: a passed restore test shows its date', () => {
   const html = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 3), ok: true,
     snapshot: 'hub-20261103-0930.db', reason: null } }), localMs(2026, 11, 27));
-  assert.match(html, /Restore test<\/span><span class="hint">Last restore test passed November 3\./);
+  assert.match(html, /Restore test<\/span><button class="tip-btn"[^]*?<\/div><span class="hint">Last restore test passed November 3\./);
   assert.ok(!/bk-test-error/.test(html));
 });
 
@@ -2323,7 +2323,7 @@ test('backupsCardHtml: a restore test time the hub could not read still says pas
 test('backupsCardHtml: a pass that skipped the settings says so, not a full pass', () => {
   const html = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 27), ok: true,
     reason: null, settings_checked: false, settings_skip: 'no backup password set' } }), localMs(2026, 11, 27, 18));
-  assert.match(html, /Restore test<\/span><span class="hint">Database restored on November 27\. Settings weren’t checked: no backup password set\./);
+  assert.match(html, /Restore test<\/span><button class="tip-btn"[^]*?<\/div><span class="hint">Database restored on November 27\. Settings weren’t checked: no backup password set\./);
   assert.ok(!/Last restore test passed/.test(html));
   const full = sandbox.backupsCardHtml(BK({ restore_test: { at: localIso(2026, 11, 27), ok: true,
     reason: null, settings_checked: true, settings_skip: null } }), localMs(2026, 11, 27, 18));
@@ -2351,4 +2351,119 @@ test('restore test text: no em or en dashes, balanced divs', () => {
     assert.ok(!html.includes(String.fromCharCode(0x2013)), 'no en dashes');
     assert.equal((html.match(/<div/g) || []).length, (html.match(/<\/div>/g) || []).length);
   }
+});
+
+/* ------------------------------------------------ Settings info tips */
+
+const TIP_PROJ = {
+  children: [{ id: 1, perfect: { week: 100, month: 433, year: 5200 }, usual: { week: 50, month: 217, year: 2600 } }],
+  total: { perfect: { week: 100, month: 433, year: 5200 }, usual: { week: 50, month: 217, year: 2600 } },
+};
+
+// Every Settings builder in every state that draws a different set of labels.
+const tipSurfaces = () => [
+  sandbox.dimCardHtml(null),
+  sandbox.dimCardHtml({ dim: { hours: { on: true, start: '22:00', end: '06:00' },
+    away: { enabled: true, state: 'home', home: 2 } } }),
+  sandbox.rewardsCardHtml(RW_STATE()),
+  sandbox.rewardsCardHtml(RW_STATE({ pin_set: false })),
+  sandbox.rewardsCardHtml(RW_STATE({ launch: null, active: false })),
+  sandbox.rewardsCardHtml(RW_STATE({ settings: { ...RW_SET, levels_on: true } })),
+  sandbox.projectionHtml(TIP_PROJ, RW_STATE().people, true),
+  sandbox.backupsCardHtml(BK(), NOW_MS),
+  sandbox.backupsCardHtml(BK({ password_set: true, restore_test: { at: agoIso(86400), ok: true } }), NOW_MS),
+  sandbox.backupsCardHtml(BK({ enabled: false, why_off: 'no_folder', dir: null, last_ok: null, counts: null }), NOW_MS),
+  sandbox.caldavPanelHtml(null, {}),
+  sandbox.caldavPanelHtml({ id: 'icloud_caldav', account: 'bot@example.com', readonly: true }, { collections: [] }),
+];
+
+// Every setting label in the markup: a .settings-k (its badge included), the
+// Wallets head, or a form field's <label>.
+const labelsIn = (html) => {
+  const out = [];
+  const re = /<span class="settings-k">[\s\S]*?<\/span>(?=<button)|<span class="padmin-head-label">Wallets<\/span>|<label for="[^"]+">[^<]*<\/label>|<(div|span) class="settings-k">[^<]*<\/\1>/g;
+  let m;
+  while ((m = re.exec(html))) out.push(m[0]);
+  return out;
+};
+
+test('info tips: the text map is filled in, plain and short', () => {
+  const tips = vm.runInContext('SETTING_TIPS', sandbox);
+  const keys = Object.keys(tips);
+  assert.ok(keys.length >= 40, `a tip for every setting (have ${keys.length})`);
+  for (const k of keys) {
+    const t = tips[k];
+    assert.equal(typeof t, 'string', k);
+    const sentences = t.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).filter(Boolean);
+    assert.ok(sentences.length >= 1 && sentences.length <= 3, `${k}: 1 to 3 sentences, got ${sentences.length}`);
+    assert.ok(t.length <= 320, `${k}: short enough to read at a glance (${t.length} chars)`);
+    assert.ok(!t.includes(String.fromCharCode(0x2014)) && !t.includes(String.fromCharCode(0x2013)), `${k}: no em or en dashes`);
+    assert.doesNotMatch(t, /colour|centre|favourite|licence/i, `${k}: American spelling`);
+    assert.doesNotMatch(t, /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/, `${k}: no addresses`);
+    assert.doesNotMatch(t, /:\s/, `${k}: no colons inside a sentence`);
+  }
+});
+
+test('info tips: one ⓘ button per label, wired for a screen reader, closed by default', () => {
+  vm.runInContext("infoTipOpen = ''", sandbox);
+  const h = sandbox.tipLabelHtml('Shields');
+  assert.match(h, /<span class="tip-head"><span class="settings-k">Shields<\/span><button class="tip-btn" type="button"/);
+  assert.match(h, /data-tip="Shields"/);
+  assert.match(h, /aria-expanded="false"/);
+  assert.match(h, /aria-controls="tip-shields"/);
+  assert.match(h, /aria-label="What is Shields\?"/);
+  assert.match(h, /<div class="tip-body" id="tip-shields" data-tip-body="Shields" hidden>/);
+  assert.match(h, /A shield saves/, 'the explanation is in the markup, so opening it needs no fetch');
+});
+
+test('info tips: the open tip stays open through a repaint, and only that one', () => {
+  vm.runInContext("infoTipOpen = 'Shields'", sandbox);
+  try {
+    const h = sandbox.rewardsCardHtml(RW_STATE());
+    assert.match(h, /data-tip="Shields" aria-expanded="true"/);
+    assert.match(h, /id="tip-shields" data-tip-body="Shields">/, 'not hidden');
+    assert.equal((h.match(/aria-expanded="true"/g) || []).length, 1, 'one open at a time');
+    assert.equal((h.match(/class="tip-body"[^>]* hidden>/g) || []).length,
+      (h.match(/class="tip-body"/g) || []).length - 1);
+  } finally {
+    vm.runInContext("infoTipOpen = ''", sandbox);
+  }
+});
+
+test('info tips: a tap opens, the same tap closes, another tap moves it', () => {
+  assert.equal(sandbox.infoTipNextOpen('', 'Shields'), 'Shields');
+  assert.equal(sandbox.infoTipNextOpen('Shields', 'Shields'), '');
+  assert.equal(sandbox.infoTipNextOpen('Shields', 'Theme'), 'Theme');
+});
+
+test('info tips: ids are safe and unique for every key', () => {
+  const keys = Object.keys(vm.runInContext('SETTING_TIPS', sandbox));
+  const ids = keys.map((k) => sandbox.infoTipId(k));
+  ids.forEach((id) => assert.match(id, /^tip-[a-z0-9-]+$/));
+  assert.equal(new Set(ids).size, ids.length, 'no two tips share an id');
+  assert.equal(sandbox.infoTipId('integ:icloud_caldav'), 'tip-integ-icloud-caldav');
+});
+
+test('info tips: every setting label on every Settings card has its tip', () => {
+  const tips = vm.runInContext('SETTING_TIPS', sandbox);
+  let seen = 0;
+  for (const html of tipSurfaces()) {
+    for (const label of labelsIn(html)) {
+      seen += 1;
+      // the label sits in a tip head with its button right after it
+      const at = html.indexOf(label);
+      assert.ok(html.slice(Math.max(0, at - 40), at).endsWith('<span class="tip-head">'),
+        `label has no tip head: ${label}`);
+      const btn = /^<button class="tip-btn" type="button" data-tip="([^"]+)"/.exec(html.slice(at + label.length));
+      assert.ok(btn, `label has no tip button after it: ${label}`);
+      assert.ok(tips[btn[1].replace(/&amp;/g, '&')], `tip text missing for ${btn[1]}`);
+    }
+  }
+  assert.ok(seen >= 25, `scanned the real labels (${seen})`);
+});
+
+test('info tips: a key with no text still draws the label, with no empty button', () => {
+  const h = sandbox.tipLabelHtml('No such setting');
+  assert.match(h, /<span class="settings-k">No such setting<\/span>/);
+  assert.doesNotMatch(h, /tip-btn/);
 });

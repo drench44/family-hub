@@ -10,6 +10,10 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+### Added
+
+- Every setting in Settings has a small ⓘ beside its name. Tapping it opens a short plain explanation right under the label, often with an example ("At 40¢ a chore, 3 chores is $1.20 that day"), and pushes the rest down. One is open at a time, and a second tap closes it. It works by finger, on the wall's touchscreen and by keyboard, and each button reads "What is ...?" to a screen reader. The words for all of them live in one list in common.js, and a test fails any setting label drawn without one.
+
 ## [1.26.1] — 2026-11-27
 
 ### Fixed

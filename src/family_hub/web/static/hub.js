@@ -2591,6 +2591,7 @@ function openOverlay(view) {
     content.innerHTML = `<div class="overlay-panel settings-panel"><div id="settings-full"></div></div>`;
     caldavUi.formError = '';   // a stale validation message shouldn't outlive a reopen
     caldavUi.user = '';        // nor a half-typed Apple ID from an earlier visit
+    infoTipOpen = '';          // every ⓘ tip starts closed
     renderSettingsFull();      // instant paint from cache (hubData / lastIntegrations)
   }
   overlay().classList.add('open');
@@ -6191,6 +6192,7 @@ function seasonalCardHtml() {
     + s.looks.map(tile).join('')
     + '</div></div>').join('');
   return '<div class="settings-row">'
+    + tipLabelHtml('Mode')
     + '<div class="seg" role="group" aria-label="Seasonal looks">'
     + '<button type="button" data-season-set="off">Off</button>'
     + '<button type="button" data-season-mode="calendar">Calendar</button>'
@@ -6230,14 +6232,23 @@ function renderIntegrations(data) {
     // shows "reconnect" so the family knows to fix it (the cached view stays).
     const warn = it.status === 'needs_auth' ? 'reconnect'
       : (it.status === 'error' ? 'error' : '');
-    return `<button class="integ-row" type="button" role="switch"`
-      + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
-      + ` data-integ-toggle="${escapeHtml(it.id)}">`
-      + `<span class="integ-name">${escapeHtml(it.name)}`
+    // The name and its ⓘ sit outside the switch (a button can't hold a
+    // button); a tap on the name or the empty middle still flips it.
+    const id = escapeHtml(it.id);
+    const key = `integ:${it.id}`;
+    const name = `<span class="integ-name" data-integ-toggle="${id}">${escapeHtml(it.name)}`
       + (warn ? `<span class="integ-warn">${warn}</span>` : '')
-      + `</span>`
+      + `</span>`;
+    return `<div class="integ-item"><div class="integ-line">`
+      + tipHeadHtml(key, name, it.name)
+      + `<button class="integ-row" type="button" role="switch"`
+      + ` aria-checked="${it.enabled ? 'true' : 'false'}"`
+      + ` aria-label="${escapeHtml(it.name)}${warn ? ` (${warn})` : ''}"`
+      + ` data-integ-toggle="${id}">`
       + `<span class="integ-switch${it.enabled ? ' on' : ''}" aria-hidden="true"></span>`
-      + `</button>`;
+      + `</button></div>`
+      + tipBodyHtml(key)
+      + `</div>`;
   };
   // Chores/To-Dos (group: 'feature') get their own header ahead of the
   // external services, so the switch list reads as "things this hub does"
@@ -6276,6 +6287,29 @@ async function toggleIntegration(id) {
    below it). Built the same way as chores-full/todos-full/cal-full: an
    instant paint from cached state, wired through the same delegated click
    listener as the rest of the app. */
+/* ---- Settings: the ⓘ info tips (text and markup in common.js) ---- */
+
+/* Open the tip for `key`, or close it when it is the open one. One tip is
+   open at a time; the state lives in infoTipOpen, so a card repainted by a
+   poll draws it the same way. */
+function toggleInfoTip(key) {
+  infoTipOpen = infoTipNextOpen(infoTipOpen, key);
+  syncInfoTips();
+}
+
+/* Show the open tip and hide the rest, in place (no repaint, so nothing
+   being typed into a Settings field is lost). */
+function syncInfoTips() {
+  const host = document.getElementById('settings-full');
+  if (!host || !host.querySelectorAll) return;
+  host.querySelectorAll('[data-tip]').forEach((b) => {
+    b.setAttribute('aria-expanded', b.dataset.tip === infoTipOpen ? 'true' : 'false');
+  });
+  host.querySelectorAll('[data-tip-body]').forEach((p) => {
+    p.hidden = p.dataset.tipBody !== infoTipOpen;
+  });
+}
+
 /* ---- Settings: the chore wallet card ---- */
 
 let rwState = null;      // the last /api/rewards answer
@@ -6571,7 +6605,7 @@ function renderSettingsFull() {
     + `<div class="card pad settings-card" id="settings-display">`
     + `<div class="shead"><span class="tick"></span><h2>Display</h2></div>`
     + `<div class="theme-ctl">`
-    + `<div class="settings-row"><span class="settings-k">Theme</span>`
+    + `<div class="settings-row">${tipLabelHtml('Theme')}`
     + `<div class="seg seg-theme" role="group" aria-label="Theme">`
     + `<button type="button" data-theme-set="light">Light</button>`
     + `<button type="button" data-theme-set="soft">Soft</button>`
@@ -6579,14 +6613,14 @@ function renderSettingsFull() {
     + `<button type="button" data-theme-set="grey">Grey</button>`
     + `<button type="button" data-theme-set="black">Black</button>`
     + `</div></div>`
-    + `<div class="settings-row"><span class="settings-k">Accent</span>`
+    + `<div class="settings-row">${tipLabelHtml('Accent')}`
     + `<div class="swatches" role="group" aria-label="Accent color">`
     + `<button class="swatch" type="button" data-c="cyan" aria-label="Cyan accent"></button>`
     + `<button class="swatch" type="button" data-c="violet" aria-label="Violet accent"></button>`
     + `<button class="swatch" type="button" data-c="amber" aria-label="Amber accent"></button>`
     + `<button class="swatch" type="button" data-c="green" aria-label="Green accent"></button>`
     + `</div><div class="look-accent-note">The seasonal look sets the color while it shows</div></div>`
-    + `<div class="settings-row"><span class="settings-k">Columns</span>`
+    + `<div class="settings-row">${tipLabelHtml('Columns')}`
     + `<div class="seg" role="group" aria-label="Column separation">`
     + `<button type="button" data-cols-set="none">None</button>`
     + `<button type="button" data-cols-set="wells">Wells</button>`
@@ -6610,14 +6644,14 @@ function renderSettingsFull() {
     + `<div class="theme-ctl">`
     // Auto follows screen width; Desktop forces the full wall at any width
     // (the escape hatch for a TV that mis-reports a phone-narrow width).
-    + `<div class="settings-row"><span class="settings-k">Layout</span>`
+    + `<div class="settings-row">${tipLabelHtml('Layout')}`
     + `<div class="seg" role="group" aria-label="Layout mode">`
     + `<button type="button" data-layout-set="auto">Auto</button>`
     + `<button type="button" data-layout-set="desktop">Desktop</button>`
     + `</div></div>`
     // Auto-return: On = drift back to the home wall after an idle timeout (the
     // shared-wall default); Off = stay on the page you opened (a personal phone/TV).
-    + `<div class="settings-row"><span class="settings-k">Auto-return</span>`
+    + `<div class="settings-row">${tipLabelHtml('Auto-return')}`
     + `<div class="seg" role="group" aria-label="Return to home when idle">`
     + `<button type="button" data-idle-set="on">On</button>`
     + `<button type="button" data-idle-set="off">Off</button>`
@@ -6972,7 +7006,7 @@ function renderTodoSourcePicker() {
   const hint = (source === 'icloud' && readonly)
     ? `<div class="hint">Reminders show read-only until you set Sync direction to 2-way, below.</div>`
     : '';
-  host.innerHTML = `<div class="settings-row"><span class="settings-k">To-Do list</span>`
+  host.innerHTML = `<div class="settings-row">${tipLabelHtml('To-Do list')}`
     + `<div class="segmented" role="group" aria-label="To-Do list source">`
     + `<button class="seg-btn${source === 'local' ? ' active' : ''}" type="button" data-todo-source="local">On this hub</button>`
     + `<button class="seg-btn${source === 'icloud' ? ' active' : ''}" type="button" data-todo-source="icloud">iCloud</button>`
@@ -7264,6 +7298,10 @@ async function refreshWall(btn) {
 // the iCloud CalDAV panel's actions.
 document.addEventListener('click', (e) => {
   const pop = document.getElementById('theme-pop');
+  // A Settings ⓘ: open its explanation under the label, or close it. First,
+  // so a tip beside a switch's name never flips the switch.
+  const tip = e.target.closest('[data-tip]');
+  if (tip) { toggleInfoTip(tip.dataset.tip); return; }
   // Refresh button: sync the calendars, then reload the wall (also picks up a
   // new deploy and unsticks a stale page).
   const refreshBtn = e.target.closest('#wall-refresh');
