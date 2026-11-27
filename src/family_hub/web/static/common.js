@@ -1669,7 +1669,14 @@ function formatCents(c) {
   const n = Math.round(Number(c) || 0);
   if (n > 0 && n < 100) return `${n}¢`;
   const a = Math.abs(n);
-  return `${n < 0 ? '-' : ''}$${Math.floor(a / 100)}.${String(a % 100).padStart(2, '0')}`;
+  const dollars = String(Math.floor(a / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${n < 0 ? '-' : ''}$${dollars}.${String(a % 100).padStart(2, '0')}`;
+}
+
+/* A bonus amount reads cleaner without ".00": "$100", "$7.50". Pure. */
+function formatBonus(c) {
+  const n = Math.round(Number(c) || 0);
+  return n >= 100 && n % 100 === 0 ? `$${n / 100}` : formatCents(n);
 }
 
 const SHIELD_SVG = (on) => `<svg class="shield ${on ? 'shield-on' : 'shield-off'}" viewBox="0 0 16 18" aria-hidden="true">`
@@ -1694,9 +1701,9 @@ function walletLineHtml(r) {
   if (!r) return '';
   let right = '';
   if (Number(r.bonus_today_cents) > 0) {
-    right = `<span class="wallet-bonus">+${formatCents(r.bonus_today_cents)} bonus today</span>`;
+    right = `<span class="wallet-bonus">+${formatBonus(r.bonus_today_cents)} bonus today</span>`;
   } else if (r.next_bonus) {
-    right = `<span class="wallet-next">next bonus ${formatCents(r.next_bonus.cents)} at ${Number(r.next_bonus.at)}</span>`;
+    right = `<span class="wallet-next">next bonus ${formatBonus(r.next_bonus.cents)} at ${Number(r.next_bonus.at)}</span>`;
   } else if (r.next_level) {
     right = `<span class="wallet-next">${formatCents(r.next_level.cents)} a chore at ${Number(r.next_level.at)}</span>`;
   }
@@ -1779,9 +1786,9 @@ function rewardsCardHtml(st) {
   }
   const s = st.settings;
   return intro
-    + `<div class="rw-form">`
+    + `<div class="theme-ctl stack rw-form">`
     + `<div class="settings-row"><span class="settings-k">Each chore pays</span>`
-    + `<input class="txt-input rw-num" type="number" min="0" max="500" inputmode="numeric" name="cents_per_chore" value="${Number(s.cents_per_chore)}" aria-label="Cents a chore"><span class="rw-word">¢</span></div>`
+    + `<div class="rw-inline"><input class="txt-input rw-num" type="number" min="0" max="500" inputmode="numeric" name="cents_per_chore" value="${Number(s.cents_per_chore)}" aria-label="Cents a chore"><span class="rw-word">¢ for each house chore done</span></div></div>`
     + `<div class="settings-row"><span class="settings-k">Streak bonus</span>${RW_ONOFF('bonus_on', s.bonus_on)}</div>`
     + `<div class="rw-sub${s.bonus_on ? '' : ' hidden'}" data-rw-for="bonus_on">${rwStepsHtml('ms', s.milestones)}</div>`
     + `<div class="settings-row"><span class="settings-k">More per chore on a streak</span>${RW_ONOFF('levels_on', s.levels_on)}</div>`
@@ -1789,7 +1796,7 @@ function rewardsCardHtml(st) {
     + `<div class="settings-row"><span class="settings-k">Shields</span>${RW_ONOFF('shields_on', s.shields_on)}`
     + `<span class="hint">One for every ${Number(s.shield_every)} good days, up to ${Number(s.shield_max)}. A missed day uses one.</span></div>`
     + `<div class="settings-row"><span class="settings-k">Fix yesterday until</span>`
-    + `<input class="txt-input" type="time" name="fix_cutoff" value="${escapeHtml(s.fix_cutoff)}" aria-label="Fix yesterday until"></div>`
+    + `<input class="txt-input rw-time" type="time" name="fix_cutoff" value="${escapeHtml(s.fix_cutoff)}" aria-label="Fix yesterday until"></div>`
     + `<div id="rw-projection" class="rw-projection" aria-live="polite"></div>`
     + `<div class="form-error hidden" id="rw-error"></div>`
     + `<button class="btn-primary" type="button" data-rw-save="1">Save amounts</button>`

@@ -2728,7 +2728,9 @@ body.integ-off-todos .todo-slot { display: none; }
 /* ============ Settings: the chore wallet card ============ */
 .rewards-ctl { display: flex; flex-direction: column; gap: 10px; }
 .rw-form { display: flex; flex-direction: column; gap: 8px; }
-.rw-num { width: 84px; text-align: right; }
+.rw-form .txt-input.rw-num { width: 96px; flex: none; text-align: right; }
+.rw-form .txt-input.rw-time { width: 170px; flex: none; }
+.rw-inline { display: flex; align-items: center; gap: 8px; }
 .rw-word { color: var(--dim); font-size: 14px; }
 .rw-sub { padding-left: 12px; border-left: 2px solid var(--edge); }
 .rw-steps { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }

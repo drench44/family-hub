@@ -12886,7 +12886,7 @@ test('personCardHtml: the wallet card shows progress, shields, pay and the walle
   assert.match(card, /\+30¢/);
   assert.match(card, /personal goal/);
   assert.match(card, /Wallet <b class="num">\$18\.50<\/b>/);
-  assert.match(card, /next bonus \$100\.00 at 100/);
+  assert.match(card, /next bonus \$100 at 100/);
   // a day a shield saved shows as saved on the week strip
   assert.match(card, /ws-saved/);
   assert.doesNotMatch(card, /🔥 3</, 'the old chore-day count is replaced');

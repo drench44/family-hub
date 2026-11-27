@@ -6983,6 +6983,12 @@ document.addEventListener('click', (e) => {
 // confirm, the chore/person editor and the event card (stacked in that order
 // over the overlay), then the full-screen overlay itself.
 document.addEventListener('keydown', (e) => {
+  // Enter in the parent PIN box answers it, like tapping OK
+  if (e.key === 'Enter' && e.target && e.target.id === 'pin-input') {
+    e.preventDefault();
+    closePinPrompt(e.target.value.trim());
+    return;
+  }
   if (e.key !== 'Escape') return;
   const pop = document.getElementById('theme-pop');
   if (pop && pop.classList.contains('open')) {

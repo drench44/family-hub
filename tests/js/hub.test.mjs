@@ -1621,12 +1621,19 @@ test('helpHtml escapes every string, keeps open rows open, one details row per t
 
 /* ------------------------------------------------------------ chore wallet */
 
+test('formatBonus: whole dollars drop the cents', () => {
+  assert.equal(sandbox.formatBonus(10000), '$100');
+  assert.equal(sandbox.formatBonus(750), '$7.50');
+  assert.equal(sandbox.formatBonus(35), '35¢');
+});
+
 test('formatCents: dollars, cents under a dollar, zero and below', () => {
   assert.equal(sandbox.formatCents(1850), '$18.50');
   assert.equal(sandbox.formatCents(30), '30¢');
   assert.equal(sandbox.formatCents(100), '$1.00');
   assert.equal(sandbox.formatCents(0), '$0.00');
   assert.equal(sandbox.formatCents(-250), '-$2.50');
+  assert.equal(sandbox.formatCents(118924), '$1,189.24');
 });
 
 const R = {
@@ -1651,13 +1658,13 @@ test('rewardHeadHtml: streak toward the goal and one mark per shield', () => {
 test('walletLineHtml: the wallet and what comes next', () => {
   const w = sandbox.walletLineHtml(R);
   assert.match(w, /\$18\.50/);
-  assert.match(w, /next bonus \$100\.00 at 100/);
+  assert.match(w, /next bonus \$100 at 100/);
   const lv = sandbox.walletLineHtml({ ...R, next_bonus: null, next_level: { at: 25, cents: 35 } });
   assert.match(lv, /35¢ a chore at 25/);
   const none = sandbox.walletLineHtml({ ...R, next_bonus: null, next_level: null });
   assert.doesNotMatch(none, /next/);
   const paid = sandbox.walletLineHtml({ ...R, bonus_today_cents: 10000 });
-  assert.match(paid, /\+\$100\.00 bonus today/);
+  assert.match(paid, /\+\$100 bonus today/);
   assert.doesNotMatch(paid, /next bonus/);
   assert.equal(sandbox.walletLineHtml(undefined), '');
 });
