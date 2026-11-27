@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS chores(
   fixed_person_id INTEGER, rotation_order TEXT NOT NULL DEFAULT '[]',
   rotation_epoch TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
-  rotate_every TEXT NOT NULL DEFAULT 'turn');   -- rotation: 'turn' | 'week'
+  rotate_every TEXT NOT NULL DEFAULT 'turn',   -- rotation: 'turn' | 'week'
+  kind TEXT NOT NULL DEFAULT 'house');         -- 'house' | 'personal' (chore wallet)
 CREATE TABLE IF NOT EXISTS completions(
   chore_id INTEGER NOT NULL,
   date TEXT NOT NULL,
@@ -45,7 +46,26 @@ CREATE TABLE IF NOT EXISTS occurrence_log(
   icon TEXT NOT NULL DEFAULT '',
   rot INTEGER NOT NULL DEFAULT 0,
   covering_for INTEGER,   -- the away person this row is standing in for (P5)
+  cents INTEGER NOT NULL DEFAULT 0,      -- what this row pays when done, frozen
+  kind TEXT NOT NULL DEFAULT 'house',    -- the chore's kind when served, frozen
   PRIMARY KEY(date, chore_id));
+-- Days the wall actually served (today frozen with a healthy away overlay),
+-- even when nobody had anything that day. A day missing here was an outage:
+-- the chore wallet counts it as neither kept nor missed.
+CREATE TABLE IF NOT EXISTS served_days(date TEXT PRIMARY KEY);
+-- The chore wallet's money record: streak bonuses and payouts. Chore earnings
+-- are not rows here; they are summed from the log's frozen cents.
+CREATE TABLE IF NOT EXISTS ledger(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('bonus','payout')),
+  cents INTEGER NOT NULL,
+  run_key TEXT,            -- bonus: which streak run paid it
+  at_streak INTEGER,       -- bonus: the streak length it paid at
+  day TEXT NOT NULL,       -- the house day it was paid on
+  created_at TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  UNIQUE(person_id, run_key, at_streak));
 CREATE TABLE IF NOT EXISTS events(
   id TEXT NOT NULL, calendar_id TEXT NOT NULL, title TEXT NOT NULL,
   start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, all_day INTEGER NOT NULL,
@@ -163,7 +183,7 @@ _CHORE_COLUMNS = {
     "title", "icon", "schedule_kind", "days_mask", "week_interval",
     "interval_days", "due_times", "assign_kind",
     "fixed_person_id", "rotation_order", "rotation_epoch", "sort", "active",
-    "rotate_every",
+    "rotate_every", "kind",
 }
 _TODO_FIELDS = {"title", "bucket"}
 
@@ -308,6 +328,28 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     todo_cols = {r["name"] for r in conn.execute("PRAGMA table_info(todos)")}
     if "sort" not in todo_cols:
         conn.execute("ALTER TABLE todos ADD COLUMN sort INTEGER")
+        conn.commit()
+    # 2026-11-26: the chore wallet. chores.kind says whether a chore is a house
+    # chore (earns, counts for the streak) or a personal goal; the log freezes
+    # each row's kind and what it paid (cents) so re-tagging a chore or changing
+    # the rate never rewrites the past. Old rows read as unpaid house rows:
+    # money starts on the day the wallet is turned on. served_days is seeded
+    # from the days the log already holds. All additive; a second boot no-ops.
+    if "kind" not in chore_cols:
+        conn.execute("ALTER TABLE chores ADD COLUMN kind TEXT NOT NULL "
+                     "DEFAULT 'house'")
+        conn.commit()
+    occ_cols = {r["name"]
+                for r in conn.execute("PRAGMA table_info(occurrence_log)")}
+    if "cents" not in occ_cols:
+        conn.execute("ALTER TABLE occurrence_log ADD COLUMN cents INTEGER "
+                     "NOT NULL DEFAULT 0")
+        conn.commit()
+    if "kind" not in occ_cols:
+        conn.execute("ALTER TABLE occurrence_log ADD COLUMN kind TEXT "
+                     "NOT NULL DEFAULT 'house'")
+        conn.execute("INSERT OR IGNORE INTO served_days(date) "
+                     "SELECT DISTINCT date FROM occurrence_log")
         conn.commit()
     # Seed the local_rev counter once, above any revision already stored.
     conn.execute("INSERT OR IGNORE INTO cal_rev(id, n) "
@@ -730,17 +772,17 @@ def away_map(conn, from_date: str, to_date: str) -> dict[int, dict]:
 def add_chore(conn, *, title, icon, schedule_kind, days_mask, assign_kind,
               fixed_person_id, rotation_order, rotation_epoch,
               week_interval=1, interval_days=None, due_times=None,
-              rotate_every="turn") -> int:
+              rotate_every="turn", kind="house") -> int:
     with conn:
         cur = conn.execute(
             """INSERT INTO chores(title, icon, schedule_kind, days_mask, week_interval,
                                   interval_days, due_times, assign_kind,
                                   fixed_person_id, rotation_order, rotation_epoch,
-                                  rotate_every)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  rotate_every, kind)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, icon, schedule_kind, days_mask, week_interval, interval_days,
              json.dumps(due_times or []), assign_kind, fixed_person_id,
-             json.dumps(rotation_order), rotation_epoch, rotate_every))
+             json.dumps(rotation_order), rotation_epoch, rotate_every, kind))
     return int(cur.lastrowid)
 
 
@@ -794,15 +836,25 @@ def _log_row(r: sqlite3.Row) -> dict:
     return dict(r)
 
 
+_LOG_INSERT = ("INSERT INTO occurrence_log(date, chore_id, person_id, title, "
+               "icon, rot, covering_for, cents, kind) "
+               "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+
+
+def _log_values(date: str, r: dict) -> tuple:
+    """One log row's values. A caller that knows nothing of the wallet (the
+    legacy backfill, wallet off) writes an unpaid house row."""
+    return (date, r["chore_id"], r["person_id"], r["title"], r["icon"],
+            r["rot"], r.get("covering_for"), int(r.get("cents") or 0),
+            r.get("kind") or "house")
+
+
 def replace_day_log(conn, date: str, rows: list[dict]) -> None:
     """Freeze ``date``'s plan: fully replace that day's log rows."""
     with conn:
         conn.execute("DELETE FROM occurrence_log WHERE date = ?", (date,))
         conn.executemany(
-            "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-            "icon, rot, covering_for) VALUES(?, ?, ?, ?, ?, ?, ?)",
-            [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
-              r["rot"], r.get("covering_for")) for r in rows])
+            _LOG_INSERT, [_log_values(date, r) for r in rows])
 
 
 def day_log(conn, date: str) -> list[dict]:
@@ -836,12 +888,47 @@ def backfill_occurrence_log(conn, day_rows: list, done_flag_key: str) -> None:
     with conn:   # single transaction: every day + the flag, or nothing
         for date, rows in day_rows:
             conn.executemany(
-                "INSERT INTO occurrence_log(date, chore_id, person_id, title, "
-                "icon, rot, covering_for) VALUES(?, ?, ?, ?, ?, ?, ?)",
-                [(date, r["chore_id"], r["person_id"], r["title"], r["icon"],
-                  r["rot"], r.get("covering_for")) for r in rows])
+                _LOG_INSERT, [_log_values(date, r) for r in rows])
         conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)",
                      (done_flag_key, json.dumps(True)))
+
+
+def mark_served(conn, date: str) -> None:
+    """Record that the wall served ``date`` (see the served_days table)."""
+    with conn:
+        conn.execute("INSERT OR IGNORE INTO served_days(date) VALUES(?)", (date,))
+
+
+def served_between(conn, date_from: str, date_to: str) -> set[str]:
+    return {r["date"] for r in conn.execute(
+        "SELECT date FROM served_days WHERE date >= ? AND date <= ?",
+        (date_from, date_to))}
+
+
+# --- chore wallet ledger ----------------------------------------------------
+
+def add_ledger(conn, *, person_id: int, kind: str, cents: int, day: str,
+               run_key: str | None = None, at_streak: int | None = None,
+               note: str = "") -> int | None:
+    """Write one bonus or payout. A bonus is keyed by (person, run, streak
+    length): a second write of the same bonus returns None and changes
+    nothing, so an award that runs on every poll can never pay twice.
+    Payouts carry no run key; SQLite treats NULLs as distinct, so each
+    payout is its own row."""
+    with conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO ledger(person_id, kind, cents, run_key, "
+            "at_streak, day, created_at, note) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            (person_id, kind, int(cents), run_key, at_streak, day, _now_iso(),
+             note))
+    return int(cur.lastrowid) if cur.rowcount else None
+
+
+def ledger_for(conn, person_id: int | None = None) -> list[dict]:
+    sql, args = "SELECT * FROM ledger", ()
+    if person_id is not None:
+        sql, args = sql + " WHERE person_id = ?", (person_id,)
+    return [dict(r) for r in conn.execute(sql + " ORDER BY id", args)]
 
 
 # --- completions ----------------------------------------------------------

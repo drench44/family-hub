@@ -35,10 +35,17 @@ def test_caldav_available_only_with_credentials():
 
 def test_available_only_filters_to_configured():
     cfg = _cfg(weather_base="http://w")   # only weather configured
-    # chores/todos are always-on core features, so they're included alongside
-    # whatever's actually configured (weather here)
+    # chores/todos and the chore wallet are always-on core features, so
+    # they're included alongside whatever's actually configured (weather here)
     assert {i["id"] for i in fi.available_only(cfg, {})} == \
-        {"weather", "chores", "todos"}
+        {"weather", "chores", "rewards", "todos"}
+
+
+def test_rewards_in_registry_as_feature():
+    rewards = next(i for i in fi.available_integrations(_cfg(), {})
+                   if i["id"] == "rewards")
+    assert rewards == {"id": "rewards", "kind": "rewards", "name": "Chore wallet",
+                       "available": True, "group": "feature"}
 
 
 def test_chores_and_todos_are_always_available_features():

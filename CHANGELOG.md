@@ -10,6 +10,12 @@ rolls that section to a dated version via `python scripts/release.py`.
 
 ## [Unreleased]
 
+## [1.17.0] — 2026-11-26
+
+### Added
+
+- The chore wallet (in progress): each chore can be a house chore or a personal goal, and every day's chore record now keeps what each chore paid, so changing amounts later never rewrites the past. Streaks for the wallet count calendar days, a missed day can use up a shield instead of ending the run, and the streak reward can be a bonus at set days, higher pay per chore, or both. A parent PIN guards the money settings; five wrong tries lock it for five minutes. Each child's wallet adds up what their chores paid and their streak bonuses, less what has been paid out, and a bonus is never paid twice. Once the wallet is on, yesterday can be fixed until 9:00 in the morning, and older days need the parent PIN. Turning the wallet on keeps each child's current streak. The demo wall shows it on (demo PIN 1234). On the wall, each card shows the streak toward the next goal with its shields, what each chore pays, and the wallet; a tick floats up what it earned, and a streak bonus gets a bigger celebration. The chore form asks whether a chore is a house chore or a personal goal. Settings has a Chore wallet card: set the parent PIN, turn the wallet on, change the amounts and see the projected cost per week, month and year before saving, and mark each wallet Paid with its history kept. "How it works" explains it. Bonuses read in whole dollars ("$100"), big amounts get commas, and Enter in the PIN box works like OK. Once the wallet is on, switching it off or changing away dates on old days also needs the PIN; turning it on after today's chores are done no longer counts today twice; new shield or bonus settings never rewrite days already behind a run or pay a bonus already passed; a double tap on Paid pays once; and a card says "Wallet unavailable" instead of quietly hiding the wallet when something goes wrong.
+
 ### Changed
 
 - Comments and test wording now name the climate service generically. No behavior change.

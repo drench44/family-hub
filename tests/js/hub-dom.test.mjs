@@ -12860,3 +12860,179 @@ test('a hub that answers 502 (a proxy while the container restarts) holds the re
   assert.equal(reloadCalls.length, 0, 'a 502 is not an answer');
   assert.match(document.getElementById('toast').textContent, /hub isn't answering/);
 });
+
+/* ------------------------------------------------------------ chore wallet */
+
+const WALLET_P = {
+  person: { id: 1, name: 'Ava', color: '#5BC9F0' }, away: false,
+  chores: [
+    { id: 10, title: 'Dishes', icon: '', done: true, rot: false, kind: 'house', cents: 30 },
+    { id: 11, title: 'Read', icon: '', done: false, rot: false, kind: 'personal', cents: 0 },
+  ],
+  week: ['done', 'done', 'none', 'done', 'done', 'done', 'partial'], streak: 3,
+  total: 2, done_count: 1,
+  reward: {
+    streak: 47, goal: 100, shields: 1, shield_max: 2, wallet_cents: 1850, rate_cents: 30,
+    next_bonus: { at: 100, cents: 10000 }, next_level: null, bonus_today_cents: 0,
+    outcomes7: ['kept', 'kept', 'saved', 'kept', 'kept', 'kept', 'open'],
+  },
+};
+
+test('personCardHtml: the wallet card shows progress, shields, pay and the wallet line', () => {
+  const { sandbox } = newHub();
+  const card = sandbox.personCardHtml(WALLET_P);
+  assert.match(card, /47 \/ 100/);
+  assert.match(card, /shield-on/);
+  assert.match(card, /\+30¢/);
+  assert.match(card, /personal goal/);
+  assert.match(card, /Wallet <b class="num">\$18\.50<\/b>/);
+  assert.match(card, /next bonus \$100 at 100/);
+  // a day a shield saved shows as saved on the week strip
+  assert.match(card, /ws-saved/);
+  assert.doesNotMatch(card, /🔥 3</, 'the old chore-day count is replaced');
+});
+
+test('personCardHtml: without the wallet the card is exactly as before', () => {
+  const { sandbox } = newHub();
+  const plain = { ...WALLET_P, reward: undefined,
+    chores: WALLET_P.chores.map(({ kind, cents, ...rest }) => rest) };
+  const card = sandbox.personCardHtml(plain);
+  assert.doesNotMatch(card, /wallet-line|chore-money|shield|ws-saved/);
+  assert.match(card, /🔥 3<\/span>/);
+});
+
+test('toggleChore asks for the parent PIN when an old day needs it, then retries with it', async () => {
+  const { sandbox } = newHub();
+  const calls = [];
+  sandbox.attemptToggle = async (id, done, date, headers) => {
+    calls.push(headers || null);
+    if (!headers) {
+      sandbox.attemptToggle.lastPin = { pin: 'required', wait_s: 0 };
+      return false;
+    }
+    sandbox.attemptToggle.lastPin = null;
+    return true;
+  };
+  const asked = [];
+  sandbox.askParentPin = async (msg) => { asked.push(msg); return '2468'; };
+  await sandbox.toggleChore(42, false);
+  assert.equal(asked.length, 1);
+  assert.deepEqual({ ...calls[1] }, { 'X-Parent-Pin': '2468' });
+});
+
+test('toggleChore shows the wait when the PIN is locked, and does not ask', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.attemptToggle = async () => {
+    sandbox.attemptToggle.lastPin = { pin: 'locked', wait_s: 240 };
+    return false;
+  };
+  let asked = 0;
+  sandbox.askParentPin = async () => { asked++; return null; };
+  await sandbox.toggleChore(42, false);
+  assert.equal(asked, 0);
+  assert.match(document.getElementById('toast').textContent, /Try again in 4 minutes/);
+});
+
+test('toggleChore: a cancelled PIN prompt writes nothing more and says why', async () => {
+  const { document, sandbox } = newHub();
+  let writes = 0;
+  sandbox.attemptToggle = async () => {
+    writes++;
+    sandbox.attemptToggle.lastPin = { pin: 'required', wait_s: 0 };
+    return false;
+  };
+  sandbox.askParentPin = async () => null;
+  await sandbox.toggleChore(42, false);
+  assert.equal(writes, 1);
+  assert.match(document.getElementById('toast').textContent, /needs a parent/);
+});
+
+const rwEvent = (attr, dataset = {}) => ({
+  target: { closest: (sel) => (sel === `[${attr}]` ? { dataset, disabled: false } : null) },
+});
+
+test('rewardsClick: Paid asks through the parent PIN and posts the payout', async () => {
+  const { document, sandbox } = newHub();
+  const calls = [];
+  sandbox.jParent = async (url, opts, msg) => { calls.push([url, opts.method, msg]); return { paid: { cents: 1850 } }; };
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-pay', { rwPay: '7' }));
+  assert.deepEqual(calls[0].slice(0, 2), ['/api/rewards/payout/7', 'POST']);
+  assert.match(calls[0][2], /needs a parent/);
+  assert.match(document.getElementById('toast').textContent, /Paid \$18\.50/);
+});
+
+test('rewardsClick: Save sends the form as it stands, through the PIN', async () => {
+  const { sandbox } = newHub();
+  const sent = [];
+  sandbox.readRewardsForm = () => ({ cents_per_chore: 35, bonus_on: true, milestones: [[100, 10000]] });
+  sandbox.jParent = async (url, opts) => { sent.push([url, opts.method, JSON.parse(opts.body)]); return {}; };
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-save'));
+  assert.equal(sent[0][0], '/api/rewards/settings');
+  assert.equal(sent[0][1], 'PUT');
+  assert.equal(sent[0][2].cents_per_chore, 35);
+});
+
+test('rewardsClick: setting a PIN needs it typed twice the same', async () => {
+  const { document, sandbox } = newHub();
+  const answers = ['2468', '2469'];
+  sandbox.askParentPin = async () => answers.shift();
+  let posted = 0;
+  sandbox.j = async () => { posted++; return null; };
+  sandbox.paintRewards = async () => {};
+  await sandbox.rewardsClick(rwEvent('data-rw-setpin'));
+  assert.equal(posted, 0);
+  assert.match(document.getElementById('toast').textContent, /didn’t match/);
+});
+
+/* ---- review fixes (2026-11-26) ---- */
+
+test('personCardHtml: a broken wallet keeps the old streak chip and says it is unavailable', () => {
+  const { sandbox } = newHub();
+  const card = sandbox.personCardHtml({ ...WALLET_P, reward: { error: true } });
+  assert.match(card, /🔥 3<\/span>/);
+  assert.match(card, /Wallet unavailable/);
+  assert.doesNotMatch(card, /ws-saved|shield-/);
+});
+
+test('toggleChore: a wrong PIN on the retry says the PIN did not match', async () => {
+  const { document, sandbox } = newHub();
+  sandbox.attemptToggle = async (id, done, date, headers) => {
+    sandbox.attemptToggle.lastPin = { pin: headers ? 'wrong' : 'required', wait_s: 0 };
+    return false;
+  };
+  sandbox.askParentPin = async () => '0000';
+  await sandbox.toggleChore(42, false);
+  assert.match(document.getElementById('toast').textContent, /PIN didn’t match/);
+});
+
+test('parent PIN memory: kept two minutes, forgotten after, and after a wrong one', () => {
+  const { sandbox } = newHub();
+  vm.runInContext("parentPinCache = { pin: '2468', until: Date.now() + 60000 };", sandbox);
+  assert.deepEqual({ ...sandbox.parentPinHeaders() }, { 'X-Parent-Pin': '2468' });
+  vm.runInContext("parentPinCache = { pin: '2468', until: Date.now() - 1 };", sandbox);
+  assert.equal(sandbox.parentPinHeaders(), null);
+  vm.runInContext("parentPinCache = { pin: '2468', until: Date.now() + 60000 };", sandbox);
+  sandbox.forgetParentPin();
+  assert.equal(sandbox.parentPinHeaders(), null);
+});
+
+test('rewardsClick: Paid turns the button off while it saves, so a double tap pays once', async () => {
+  const { sandbox } = newHub();
+  const btn = { dataset: { rwPay: '7' }, disabled: false };
+  let calls = 0;
+  let release;
+  sandbox.jParent = () => { calls++; return new Promise((r) => { release = r; }); };
+  sandbox.paintRewards = async () => {};
+  sandbox.poll = async () => {};
+  const ev = { target: { closest: (sel) => (sel === '[data-rw-pay]' ? btn : null) } };
+  const first = sandbox.rewardsClick(ev);
+  await sandbox.rewardsClick(ev);              // the second tap, mid-request
+  assert.equal(calls, 1);
+  assert.equal(btn.disabled, true);
+  release({ paid: { cents: 30 } });
+  await first;
+});

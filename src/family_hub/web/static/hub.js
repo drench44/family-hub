@@ -456,10 +456,13 @@ function closeEventDetail() {
 
 /* --------------------------------------------------------------- people */
 
-function weekStripHtml(week) {
+function weekStripHtml(week, outcomes) {
+  // With the chore wallet on, a day a shield saved shows as its own "saved"
+  // cell (outcomes is the wallet's 7-day list, oldest first, like week).
   return `<div class="week-strip">` + week.map((st, i) => {
     const today = i === week.length - 1 ? ' ws-today' : '';
-    return `<span class="ws-cell ws-${st}${today}"></span>`;
+    const shown = outcomes && outcomes[i] === 'saved' ? 'saved' : st;
+    return `<span class="ws-cell ws-${shown}${today}"></span>`;
   }).join('') + `</div>`;
 }
 
@@ -482,7 +485,7 @@ function choreRowHtml(ch, firstName, opts = {}) {
     ? `<span class="chore-covering">covering for ${escapeHtml(coveringName)}</span>` : '';
   const cls = `chore-row${ch.done ? ' done' : ''}${readonly ? ' readonly' : ''}${editing ? ' is-editing' : ''}`;
   const body = `<span class="chore-check">✓</span>`
-    + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}${covering}</span>`;
+    + `<span class="chore-body">${icon}<span class="chore-title">${escapeHtml(ch.title)}</span>${rot}${covering}${choreMoneyHtml(ch)}</span>`;
   if (readonly) return `<div class="${cls}">${body}</div>`;   // past/future: look, don't touch
   // finished earlier, then paused or edited off today: stays done, not tappable
   if (ch.locked && !editing) return `<div class="${cls} locked" title="Finished before it came off today's plan">${body}</div>`;
@@ -509,9 +512,13 @@ function personCardHtml(p, opts = {}) {
   // tooltip spells this out since the bare number can't; no visible sub-label.
   // An away day is rest-day-neutral (see chores.streak/week_strip), so the
   // streak keeps showing even while away — it hasn't broken, it's paused.
-  const streak = p.streak >= 2
-    ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
-      + `🔥 ${p.streak}</span>` : '';
+  // With the chore wallet on, the head shows the wallet streak (calendar
+  // days toward the next goal, plus shields) instead, from p.reward.
+  const wallet = p.reward && !p.reward.error;
+  const streak = wallet ? rewardHeadHtml(p.reward)
+    : p.streak >= 2
+      ? `<span class="chip-streak" title="${p.streak} chore days finished in a row (a day with no chores neither counts nor breaks it)">`
+        + `🔥 ${p.streak}</span>` : '';
   let rows;
   if (p.away) {
     // Away: their fixed chores are reassigned to a backup (or paused) and
@@ -543,10 +550,11 @@ function personCardHtml(p, opts = {}) {
     + `<div class="person-head">`
     + `<span class="person-name" style="color:${safeColor(p.person.color)}">${escapeHtml(p.person.name)}</span>`
     + streak
-    + weekStripHtml(p.week)
+    + weekStripHtml(p.week, wallet ? p.reward.outcomes7 : null)
     + `</div>`
     + rows
     + addRow
+    + walletLineHtml(p.reward)
     + `</div>`;
 }
 
@@ -1660,6 +1668,35 @@ function fireCelebrations(people) {
     const card = document.querySelector(`.person-card[data-person="${p.person.id}"]`);
     if (card) celebrate(card, p.person.color);
   });
+  // The chore wallet's big moment: a streak bonus landed today. Fires on the
+  // poll that first carries it (a load of a day already paid stays quiet).
+  people.forEach((p) => {
+    const now = p.reward ? Number(p.reward.bonus_today_cents) || 0 : 0;
+    const key = `bonus:${p.person.id}:${data_date}`;
+    if (!now || celebrated.has(key)) return;
+    celebrated.add(key);
+    const prev = lastPeople.find((q) => q.person.id === p.person.id);
+    if (!prev || !prev.reward || Number(prev.reward.bonus_today_cents)) return;
+    const card = document.querySelector(`.person-card[data-person="${p.person.id}"]`);
+    if (card) celebrateBonus(card, p.person.color);
+  });
+}
+
+function celebrateBonus(card, color) {
+  celebrate(card, color);
+  card.classList.add('card-bonus');
+  const burst = document.createElement('div');
+  burst.className = 'confetti confetti-big';
+  for (let i = 0; i < 18; i++) {
+    const bit = document.createElement('span');
+    bit.className = 'confetti-particle';
+    bit.style.background = i % 3 ? color : 'var(--warn)';
+    bit.style.setProperty('--dx', `${Math.round((i - 8.5) * 18)}px`);
+    bit.style.setProperty('--dy', `${40 + (i % 4) * 22}px`);
+    burst.appendChild(bit);
+  }
+  card.appendChild(burst);
+  setTimeout(() => { card.classList.remove('card-bonus'); burst.remove(); }, 1800);
 }
 
 function celebrate(card, color) {
@@ -2568,6 +2605,7 @@ function closeOverlay() {
    the idle-timer/#overlay-home pair drifted apart in the first place (issue
    #34: only closeOverlay() knew to close the overlay, nothing closed these). */
 const MODAL_CLOSERS = {
+  'pin-modal': () => closePinPrompt(null),
   'ev-modal': () => closeEventDetail(),
   'chore-modal': () => closeChoreEditor(),
   'confirm-modal': () => closeDeleteConfirm(),
@@ -4659,6 +4697,101 @@ function showToast(msg) {
   _toastTimer = setTimeout(() => el.classList.remove('hub-toast-visible'), 4000);
 }
 
+/* ------------------------------------------------- parent PIN (chore wallet) */
+
+/* The PIN a parent typed, kept in memory only (never storage) for two
+   minutes so a run of fixes asks once. */
+let parentPinCache = null;
+const PARENT_PIN_MS = 2 * 60 * 1000;
+
+function parentPinHeaders() {
+  if (parentPinCache && parentPinCache.until > Date.now()) {
+    return { 'X-Parent-Pin': parentPinCache.pin };
+  }
+  parentPinCache = null;
+  return null;
+}
+
+function forgetParentPin() { parentPinCache = null; }
+
+let pinResolve = null;
+
+/* Ask for the parent PIN. Resolves to the digits, or null on Cancel. */
+function askParentPin(message) {
+  if (pinResolve) pinResolve(null);            // a stale prompt never wins
+  const modal = document.getElementById('pin-modal');
+  if (!modal) return Promise.resolve(null);
+  document.getElementById('pin-sub').textContent = message || '';
+  const input = document.getElementById('pin-input');
+  input.value = '';
+  modal.classList.remove('hidden');
+  dialogOpened('pin-modal', input);
+  armIdle();
+  return new Promise((resolve) => { pinResolve = resolve; });
+}
+
+function closePinPrompt(pin) {
+  const modal = document.getElementById('pin-modal');
+  if (modal) modal.classList.add('hidden');
+  dialogClosed('pin-modal');
+  const done = pinResolve;
+  pinResolve = null;
+  const digits = pin && /^[0-9]{4,6}$/.test(pin) ? pin : null;
+  if (digits) parentPinCache = { pin: digits, until: Date.now() + PARENT_PIN_MS };
+  if (done) done(digits);
+}
+
+/* Run a write that may need the parent PIN: send any remembered PIN; on a
+   "needs a parent" refusal ask once and retry. Resolves {ok, why} where why
+   is 'cancelled' or 'locked' (with wait_s) when the PIN stopped it. */
+async function withParentPin(write, refusalOf, message) {
+  let ok = await write(parentPinHeaders());
+  let r = ok ? null : refusalOf();
+  if (r && r.pin === 'wrong') forgetParentPin();
+  if (r && (r.pin === 'required' || r.pin === 'wrong')) {
+    const pin = await askParentPin(r.pin === 'wrong'
+      ? 'That PIN didn’t match. Try again.' : message);
+    if (!pin) return { ok: false, why: 'cancelled' };
+    ok = await write({ 'X-Parent-Pin': pin });
+    r = ok ? null : refusalOf();
+    if (r && r.pin === 'wrong') { forgetParentPin(); return { ok: false, why: 'wrong' }; }
+  }
+  if (r && r.pin === 'locked') return { ok: false, why: 'locked', wait_s: r.wait_s };
+  return { ok, why: ok ? '' : 'failed' };
+}
+
+/* j() for a write that may need the parent PIN: asks once and retries.
+   Throws like j() does; a cancelled or locked PIN throws a plain message. */
+async function jParent(url, opts, message) {
+  let lastErr = null;
+  let result = null;
+  const write = async (headers) => {
+    try {
+      result = await j(url, { ...opts, headers: { ...((opts && opts.headers) || {}), ...(headers || {}) } });
+      lastErr = null;
+      return true;
+    } catch (e) { lastErr = e; return false; }
+  };
+  const res = await withParentPin(write, () => pinRefusal(lastErr), message);
+  if (res.ok) return result;
+  if (res.why === 'locked') throw new Error(pinLockMessage(res.wait_s));
+  if (res.why === 'wrong') throw new Error('That PIN didn’t match. Nothing was changed.');
+  if (res.why === 'cancelled') throw new Error('Not saved. That change needs a parent.');
+  throw lastErr || new Error('Couldn’t save. Check the hub and try again.');
+}
+
+/* A small "+30¢" that floats up from a row that just earned it. */
+function floatMoney(id) {
+  const row = document.querySelector(`.chore-row[data-chore="${id}"]`);
+  const tag = row && row.querySelector('.chore-money:not(.chore-goal)');
+  if (!tag) return;
+  const f = document.createElement('span');
+  f.className = 'money-float num';
+  f.textContent = tag.textContent;
+  row.appendChild(f);
+  setTimeout(() => f.remove(), 1100);
+}
+
 async function toggleChore(id, done, rowDay) {
   // attemptToggle (common.js) returns false if the write failed. Surface it
   // with a toast instead of swallowing: under a PERSISTENT write failure (full
@@ -4678,11 +4811,21 @@ async function toggleChore(id, done, rowDay) {
     else if (hubData) renderPeople(hubData);
     return;
   }
-  const ok = await attemptToggle(id, done, shown || undefined);
+  // With the chore wallet on, an older day needs the parent PIN: the
+  // server refuses, we ask once and retry (withParentPin).
+  const res = await withParentPin(
+    (headers) => attemptToggle(id, done, shown || undefined, headers || undefined),
+    () => attemptToggle.lastPin,
+    'Changing an older day needs a parent.');
+  const ok = res.ok;
+  if (ok && !done) floatMoney(id);
   await poll();
   // A refused tap on a day that has since rolled over will never succeed on
   // retry, so don't tell anyone to tap again: say the day has ended.
-  if (!ok) {
+  if (res.why === 'locked') showToast(pinLockMessage(res.wait_s));
+  else if (res.why === 'cancelled') showToast('Not changed. That day needs a parent.');
+  else if (res.why === 'wrong') showToast('That PIN didn’t match. Nothing was changed.');
+  else if (!ok) {
     showToast(choreToggleMessage(attemptToggle.lastError,
       Boolean(shown && data_date && data_date !== shown)));
   }
@@ -4730,11 +4873,13 @@ async function submitChore(url, method, body, form, people) {
   const savedFor = [];
   try {
     for (const b of bodies) {
-      await j(url, {
+      // jParent: with the chore wallet on, turning a house chore into a
+      // personal goal (or back) needs the parent PIN
+      await jParent(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(b),
-      });
+      }, 'Changing whether a chore earns money needs a parent.');
       savedFor.push(b.fixed_person_id);
     }
   } catch (e) {
@@ -5110,6 +5255,14 @@ async function confirmDelete() {
 document.addEventListener('click', (e) => {
   const tabBtn = e.target.closest('.tab-btn');
   if (tabBtn) { setTab(tabBtn.dataset.tab); return; }
+  // parent PIN prompt (above everything): Cancel or a backdrop tap answers null
+  if (e.target.closest('[data-pin-cancel]')
+      || (e.target.closest('.pin-modal') && !e.target.closest('.pin-card'))) {
+    closePinPrompt(null); return;
+  }
+  if (e.target.closest('[data-pin-ok]')) {
+    closePinPrompt(document.getElementById('pin-input').value.trim()); return;
+  }
   // delete confirm (above everything): Cancel or a backdrop tap dismisses it
   // with NO write; Delete fires the DELETE. Checked before the editor so its
   // own backdrop logic can't run against this modal.
@@ -6095,6 +6248,168 @@ async function toggleIntegration(id) {
    below it). Built the same way as chores-full/todos-full/cal-full: an
    instant paint from cached state, wired through the same delegated click
    listener as the rest of the app. */
+/* ---- Settings: the chore wallet card ---- */
+
+let rwState = null;      // the last /api/rewards answer
+let rwDraftOn = false;   // the form holds unsaved edits
+let rwProjTimer = null;
+let rwProjSeq = 0;       // only the newest projection request may paint
+
+async function paintRewards() {
+  const host = document.getElementById('rewards-ctl');
+  if (!host) return;
+  try {
+    rwState = await j('/api/rewards');
+  } catch (e) {
+    rwState = null;            // nothing below may act on a stale copy
+    host.innerHTML = `<div class="hint">Couldn’t load the chore wallet. ${escapeHtml(e.message || '')}</div>`;
+    return;
+  }
+  rwDraftOn = false;
+  host.innerHTML = rewardsCardHtml(rwState);
+  if (rwState.launch) refreshProjection();
+}
+
+/* The amounts as the form shows them now. */
+function readRewardsForm() {
+  const host = document.getElementById('rewards-ctl');
+  const val = (sel) => { const el = host.querySelector(sel); return el ? el.value : ''; };
+  const on = (name) => {
+    const b = host.querySelector(`[data-rw-toggle="${name}"].on`);
+    return b ? b.dataset.rwVal === '1' : !!(rwState && rwState.settings[name]);
+  };
+  const rows = (daysAttr, amtAttr, amtKey) => Array.from(host.querySelectorAll(`[${daysAttr}]`))
+    .map((el) => {
+      const i = el.getAttribute(daysAttr);
+      const amt = host.querySelector(`[${amtAttr}="${i}"]`);
+      return { days: el.value, [amtKey]: amt ? amt.value : '' };
+    });
+  return rewardsDraft({
+    cents_per_chore: val('[name="cents_per_chore"]'),
+    bonus_on: on('bonus_on'), levels_on: on('levels_on'), shields_on: on('shields_on'),
+    fix_cutoff: val('[name="fix_cutoff"]'),
+    milestones: rows('data-rw-ms-days', 'data-rw-ms-dollars', 'dollars'),
+    levels: rows('data-rw-lv-days', 'data-rw-lv-cents', 'cents'),
+  });
+}
+
+/* Re-draw the form from a draft (a toggle, an added or removed step),
+   keeping the unsaved edits. */
+function repaintRewardsDraft(draft) {
+  const host = document.getElementById('rewards-ctl');
+  if (!host || !rwState) return;
+  rwDraftOn = true;
+  host.innerHTML = rewardsCardHtml({ ...rwState, settings: { ...rwState.settings, ...draft } });
+  refreshProjection();
+}
+
+function refreshProjection() {
+  clearTimeout(rwProjTimer);
+  rwProjTimer = setTimeout(async () => {
+    const box = document.getElementById('rw-projection');
+    if (!box || !rwState) return;
+    const seq = ++rwProjSeq;
+    let draft;
+    try { draft = readRewardsForm(); } catch (e) {
+      box.innerHTML = `<div class="hint">Can’t read the amounts above. Check each box has a number.</div>`;
+      return;
+    }
+    try {
+      const proj = await j('/api/rewards/projection', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      });
+      if (seq !== rwProjSeq || !rwState) return;   // a newer edit is on its way
+      box.innerHTML = projectionHtml(proj, rwState.people || [], rwDraftOn);
+    } catch (e) {
+      if (seq !== rwProjSeq) return;
+      // a draft the server refuses (a step out of order) says why, in place
+      box.innerHTML = `<div class="hint">${escapeHtml(e.message || 'Can’t work out the cost yet.')}</div>`;
+    }
+  }, 300);
+}
+
+async function rewardsClick(e) {
+  const t = e.target;
+  if (t.closest('[data-rw-setpin]')) {
+    const a = await askParentPin('Pick a parent PIN, 4 to 6 digits.');
+    if (!a) return;
+    const b = await askParentPin('Type the same PIN again.');
+    if (a !== b) { forgetParentPin(); showToast('Those didn’t match. Nothing was set.'); return; }
+    try {
+      await j('/api/rewards/pin', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: a }) });
+      showToast('Parent PIN set.');
+    } catch (err) { forgetParentPin(); showToast(err.message || 'Couldn’t set the PIN.'); }
+    await paintRewards();
+    return;
+  }
+  if (t.closest('[data-rw-enable]')) {
+    try {
+      await jParent('/api/rewards/enable', { method: 'POST' }, 'Turning on the wallet needs a parent.');
+      showToast('The chore wallet is on.');
+    } catch (err) { showToast(err.message); }
+    await paintRewards();
+    await poll();
+    return;
+  }
+  const tog = t.closest('[data-rw-toggle]');
+  if (tog) {
+    repaintRewardsDraft({ ...readRewardsForm(), [tog.dataset.rwToggle]: tog.dataset.rwVal === '1' });
+    return;
+  }
+  const add = t.closest('[data-rw-add]');
+  if (add) {
+    const d = readRewardsForm();
+    if (add.dataset.rwAdd === 'ms') {
+      const last = d.milestones.length ? d.milestones[d.milestones.length - 1][0] : 0;
+      d.milestones.push([Math.min(1000, last + 25), 1000]);
+    } else {
+      const last = d.levels.length ? d.levels[d.levels.length - 1] : [0, d.cents_per_chore];
+      d.levels.push([Math.min(1000, last[0] + 25), Math.min(500, last[1] + 5)]);
+    }
+    repaintRewardsDraft(d);
+    return;
+  }
+  const del = t.closest('[data-rw-del]');
+  if (del) {
+    const [kind, i] = del.dataset.rwDel.split(':');
+    const d = readRewardsForm();
+    const list = kind === 'ms' ? d.milestones : d.levels;
+    list.splice(Number(i), 1);
+    repaintRewardsDraft(d);
+    return;
+  }
+  if (t.closest('[data-rw-save]')) {
+    const err = document.getElementById('rw-error');
+    if (err) err.classList.add('hidden');
+    try {
+      await jParent('/api/rewards/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(readRewardsForm()),
+      }, 'Changing the amounts needs a parent.');
+      showToast('Amounts saved. They apply from today on.');
+      await paintRewards();
+      await poll();
+    } catch (ex) {
+      if (err) { err.textContent = ex.message || 'Couldn’t save.'; err.classList.remove('hidden'); }
+    }
+    return;
+  }
+  const pay = t.closest('[data-rw-pay]');
+  if (pay && !pay.disabled) {
+    const pid = Number(pay.dataset.rwPay);
+    pay.disabled = true;       // a double tap must not send a second payout
+    try {
+      const r = await jParent(`/api/rewards/payout/${pid}`, { method: 'POST' },
+        'Marking a wallet paid needs a parent.');
+      showToast(r && r.paid ? `Paid ${formatCents(r.paid.cents)}. The wallet is back to $0.` : 'Nothing to pay.');
+    } catch (ex) { showToast(ex.message); }
+    await paintRewards();
+    await poll();
+  }
+}
+
 function renderSettingsFull() {
   const host = document.getElementById('settings-full');
   if (!host) return;
@@ -6155,6 +6470,11 @@ function renderSettingsFull() {
     + `<div class="todo-source-ctl" id="todo-source-ctl"></div>`
     + `<div class="caldav-panel" id="caldav-panel"></div>`
     + `</div>`
+    // The chore wallet: PIN, amounts, projected cost, each wallet and Paid.
+    + `<div class="card pad settings-card" id="rewards-card">`
+    + `<div class="shead"><span class="tick"></span><h2>Chore wallet</h2></div>`
+    + `<div class="rewards-ctl" id="rewards-ctl">${rewardsCardHtml(null)}</div>`
+    + `</div>`
     // How it works: plain-words help, one tap-to-open row per feature this
     // wall has on (helpTopics in common.js). The gear popover's "How it works"
     // link opens Settings scrolled here.
@@ -6176,6 +6496,12 @@ function renderSettingsFull() {
   renderTodoSourcePicker();
   renderCaldavPanel();
   fetchCaldavCollections();   // refresh the Calendars picker every time the panel opens
+  const rw = document.getElementById('rewards-ctl');
+  if (rw) {
+    rw.addEventListener('click', rewardsClick);
+    rw.addEventListener('input', () => { rwDraftOn = true; refreshProjection(); });
+  }
+  paintRewards();
 }
 
 /* What the help needs to know about this wall, from the last hub payload:
@@ -6669,6 +6995,12 @@ document.addEventListener('click', (e) => {
 // confirm, the chore/person editor and the event card (stacked in that order
 // over the overlay), then the full-screen overlay itself.
 document.addEventListener('keydown', (e) => {
+  // Enter in the parent PIN box answers it, like tapping OK
+  if (e.key === 'Enter' && e.target && e.target.id === 'pin-input') {
+    e.preventDefault();
+    closePinPrompt(e.target.value.trim());
+    return;
+  }
   if (e.key !== 'Escape') return;
   const pop = document.getElementById('theme-pop');
   if (pop && pop.classList.contains('open')) {
@@ -6677,6 +7009,7 @@ document.addEventListener('keydown', (e) => {
     if (gear) { try { gear.focus({ preventScroll: true }); } catch (err) { /* not focusable */ } }
     return;
   }
+  if (modalShown('pin-modal')) { closePinPrompt(null); return; }
   if (modalShown('confirm-modal')) { closeDeleteConfirm(); return; }
   if (modalShown('chore-modal')) { closeChoreEditor(); return; }
   if (modalShown('ev-modal')) { closeEventDetail(); return; }

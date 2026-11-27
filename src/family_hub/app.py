@@ -41,6 +41,9 @@ from . import db as fdb
 from . import demo as fdemo
 from . import go2rtc_proxy
 from . import integrations as fintegrations
+from . import parent_pin
+from . import rewards
+from . import wallet
 from . import reminders as remlogic
 from . import tiles
 from . import todos as tdlogic
@@ -1228,8 +1231,10 @@ def _freeze_day(c, d_str: str, rows: list[dict]) -> None:
         # already changes whenever the covering does, but including it keeps
         # the comparison exact (and catches a covering change that somehow
         # didn't move the assignee).
+        # kind and cents too: re-tagging a chore today must re-freeze today
         return (r["chore_id"], r["person_id"], r["title"], r["icon"], r["rot"],
-                r.get("covering_for"))
+                r.get("covering_for"), r.get("kind") or "house",
+                int(r.get("cents") or 0))
     if sorted(key(r) for r in fdb.day_log(c, d_str)) != \
             sorted(key(r) for r in rows):
         fdb.replace_day_log(c, d_str, rows)
@@ -1283,12 +1288,22 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         rows = chlogic.plan_rows(fdb.list_chores(c), people, d, away_view)
         if d == today:
             rows = _keep_done_rows(c, d_str, rows)
+        wallet_on = _rewards_on_safe(c) if d == today else False
+        priced_ok = wallet_on is not None    # unknown state: don't freeze
+        if wallet_on:
+            rows, priced_ok = _price_rows(c, rows, today)
         # Only freeze a plan built WITH the away overlay. A degraded build
         # treats everyone as present, and the log is permanent history: it
         # would record the wrong owner for good. The next healthy serve
         # freezes the real plan.
-        if d == today and away_ok:
+        if d == today and away_ok and not priced_ok:
+            log.warning("today's chore log not saved (chore wallet pricing "
+                        "failed); the next serve retries")
+        elif d == today and away_ok:
             _freeze_day(c, d_str, rows)
+            # served even when nobody had anything today: the chore wallet
+            # counts a rest day as kept, but an outage day as neither
+            fdb.mark_served(c, d_str)
         elif d == today:
             log.warning("today's chore log not saved (away overlay failed); "
                         "if it keeps failing, %s drops out of chore history",
@@ -1342,7 +1357,116 @@ def _people_day(c, d: dt.date) -> tuple[list[dict], bool]:
         entry["away"] = pid in away_today
         entry["streak"] = chlogic.streak(occ, cbd, d, away_dates)
         entry["week"] = chlogic.week_strip(occ, cbd, d, away_dates)
+    if d == today and wallet_on:
+        _add_rewards(c, plan, rows, today, priced_ok)
     return plan, away_ok
+
+
+def _rewards_on_safe(c) -> bool | None:
+    """True / False, or None when the wallet's state can't be read (then the
+    caller shows the wall without it and does not freeze today)."""
+    try:
+        return rewards_active(c)
+    except Exception:
+        log.error("chore wallet state unreadable; showing the wall without it "
+                  "and not saving today's chore log", exc_info=True)
+        return None
+
+
+def _wallet_away(c, launch_day: str, today: dt.date) -> dict:
+    """Away dates per person since launch (the wall's own away window only
+    reaches back about a year; the wallet walks back to launch)."""
+    amap = fdb.away_map(c, launch_day, today.isoformat())
+    return {pid: v.get("dates", set()) for pid, v in amap.items()}
+
+
+def _price_rows(c, rows: list[dict], today: dt.date):
+    """Stamp what each of today's rows pays (house rows only). Returns
+    (rows, ok); on a failure the rows come back unpriced and ok is False so
+    the caller does not freeze a day that would then pay nothing for good."""
+    try:
+        settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
+        away_by = _wallet_away(c, launch["day"], today)
+        rate: dict[int, int] = {}
+        out = []
+        for r in rows:
+            r = dict(r)
+            if (r.get("kind") or "house") == "house" and not r.get("locked"):
+                pid = r["person_id"]
+                if pid not in rate:
+                    rate[pid] = wallet.cents_for_today(
+                        c, pid, today, settings, launch, away_by.get(pid, set()))
+                r["cents"] = rate[pid]
+            elif r.get("locked"):
+                pass                     # a kept done row keeps its frozen pay
+            else:
+                r["cents"] = 0
+            out.append(r)
+        return out, True
+    except Exception:
+        log.error("chore wallet could not price today's chores", exc_info=True)
+        return rows, False
+
+
+def _reward_block(c, pid: int, today: dt.date, settings: dict, launch: dict,
+                  away: set) -> dict:
+    run = wallet.person_run(c, pid, today, settings, launch, away)
+    wallet.award(c, pid, run, settings, today)
+    ts = today.isoformat()
+    kept_today = run.outcomes.get(ts) == rewards.KEPT
+    bonus_today = sum(r["cents"] for r in fdb.ledger_for(c, pid)
+                      if r["kind"] == "bonus" and r["day"] == ts)
+    nb = (rewards.next_milestone(run.streak, settings.get("milestones") or [])
+          if settings.get("bonus_on") else None)
+    nl = rewards.next_level(run.streak, settings)
+    days = [(today - dt.timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+    return {
+        "streak": run.streak,
+        "goal": rewards.goal_for(run.streak, settings),
+        "shields": run.shields,
+        "shield_max": int(settings["shield_max"]) if settings.get("shields_on") else 0,
+        "wallet_cents": wallet.balance_cents(c, pid, launch["day"]),
+        "rate_cents": rewards.rate_for(run.streak - (1 if kept_today else 0),
+                                       settings),
+        "next_bonus": {"at": nb[0], "cents": nb[1]} if nb else None,
+        "next_level": {"at": nl[0], "cents": nl[1]} if nl else None,
+        "bonus_today_cents": bonus_today,
+        "outcomes7": [run.outcomes.get(ds, "before") for ds in days],
+    }
+
+
+def _add_rewards(c, plan: list, rows: list, today: dt.date,
+                 priced_ok: bool = True) -> None:
+    """Add each child's wallet to today's plan, and what each row pays. A
+    failure says so on the card ({"error": True}: "Wallet unavailable")
+    instead of failing the wall or quietly showing no wallet."""
+    failed = {"error": True}
+    try:
+        if not priced_ok:
+            raise RuntimeError("today's chores could not be priced")
+        settings, launch = reward_settings(c), fdb.kv_get(c, wallet.LAUNCH_KEY)
+        away_by = _wallet_away(c, launch["day"], today)
+    except Exception:
+        log.error("chore wallet unavailable; every card says so", exc_info=True)
+        for entry in plan:
+            entry["reward"] = dict(failed)
+        return
+    by_id = {r["chore_id"]: r for r in rows}
+    for entry in plan:
+        pid = entry["person"]["id"]
+        try:
+            block = _reward_block(c, pid, today, settings, launch,
+                                  away_by.get(pid, set()))
+        except Exception:
+            log.error("chore wallet failed for person %s; card says so",
+                      pid, exc_info=True)
+            entry["reward"] = dict(failed)
+            continue
+        entry["reward"] = block
+        for ch in entry["chores"]:
+            r = by_id.get(ch["id"], {})
+            ch["kind"] = r.get("kind") or "house"
+            ch["cents"] = int(r.get("cents") or 0)
 
 
 def _backup_status(last_success, now, stale_s, remote=None):
@@ -1515,7 +1639,7 @@ class CompleteBody(BaseModel):
 
 
 @app.post("/api/chores/{chore_id}/complete")
-def complete(chore_id: int, body: CompleteBody | None = None):
+def complete(chore_id: int, request: Request, body: CompleteBody | None = None):
     c = _db()
     body = body or CompleteBody()
     date_str = body.date or _today().isoformat()
@@ -1530,6 +1654,7 @@ def complete(chore_id: int, body: CompleteBody | None = None):
         # The wall shows future days read-only; a future check-off would make
         # that day start already done (review, 2026-09-22).
         raise HTTPException(422, "can't check off a day that hasn't come yet")
+    _guard_old_day(c, d, request)
     person_id = body.person_id
     if d < today:
         # Frozen day: the occurrence log is the truth about what occurred and
@@ -1608,7 +1733,7 @@ def _resolved_owner(c, chore_id: int, date_str: str) -> int | None:
 
 
 @app.delete("/api/chores/{chore_id}/complete")
-def uncomplete(chore_id: int, date: str | None = None):
+def uncomplete(chore_id: int, request: Request, date: str | None = None):
     c = _db()
     date_str = date or _today().isoformat()
     # Same checks as complete(): the wall sends the day it is showing.
@@ -1618,6 +1743,7 @@ def uncomplete(chore_id: int, date: str | None = None):
         raise HTTPException(422, "bad date")
     if abs((d - _today()).days) > 366:
         raise HTTPException(422, "date out of range")
+    _guard_old_day(c, d, request)
     if d == _today() and fdb.completion_exists(c, chore_id, date_str):
         _, away_view, away_ok = _away_view(c, d)
         if not away_ok:
@@ -1638,6 +1764,291 @@ def uncomplete(chore_id: int, date: str | None = None):
     chore_mirror.push_completion(c, chore_id, date_str, False,
                                  expected_person_id=owner)
     return {"ok": True}
+
+
+# --- chore wallet: settings, on/off, the old-day lock ----------------------
+
+REWARD_DEFAULTS = {
+    "cents_per_chore": 30,
+    "bonus_on": True, "milestones": [[100, 10000]],
+    "levels_on": False, "levels": [[25, 35], [50, 40], [100, 45]],
+    "shields_on": True, "shield_every": 20, "shield_max": 2,
+    "fix_cutoff": "09:00",
+}
+
+
+def reward_settings(c) -> dict:
+    return {**REWARD_DEFAULTS, **(fdb.kv_get(c, "rewards.settings") or {})}
+
+
+def rewards_active(c) -> bool:
+    """The wallet is on: its feature switch is on, a parent PIN is set, and
+    it has been turned on (launched). Off, the wall is exactly as before."""
+    return (_integration_on(c, "rewards") and parent_pin.is_set(c)
+            and bool(fdb.kv_get(c, wallet.LAUNCH_KEY)))
+
+
+def _edit_allowed(d: dt.date, now: dt.datetime, cutoff: str) -> bool:
+    """Today, or yesterday before the morning cutoff (house time)."""
+    if d == now.date():
+        return True
+    hh, mm = (int(x) for x in cutoff.split(":"))
+    return (d == now.date() - dt.timedelta(days=1)
+            and (now.hour, now.minute) < (hh, mm))
+
+
+def _guard_old_day(c, d: dt.date, request: Request) -> None:
+    """With the wallet on, ticking or unticking an older day changes money,
+    so it needs the parent PIN. Off, the old rules stand."""
+    if (d < _today() and rewards_active(c) and not _edit_allowed(
+            d, _now_local(), reward_settings(c)["fix_cutoff"])):
+        _pin_gate(c, request.headers.get(PIN_HEADER))
+
+
+def _fix_floor(c) -> dt.date:
+    """The oldest day anyone may still change without the PIN."""
+    now = _now_local()
+    y = now.date() - dt.timedelta(days=1)
+    return y if _edit_allowed(y, now, reward_settings(c)["fix_cutoff"]) else now.date()
+
+
+def _away_days(rows, lo: dt.date, hi: dt.date) -> set:
+    out = set()
+    for r in rows:
+        a = max(lo, dt.date.fromisoformat(r["start_date"]))
+        b = hi if not r.get("end_date") else min(hi, dt.date.fromisoformat(r["end_date"]))
+        while a <= b:
+            out.add((r["person_id"], a.isoformat()))
+            a += dt.timedelta(days=1)
+    return out
+
+
+def _guard_away(c, request: Request, *, inserts=(), updates=(), deletes=()) -> None:
+    """An away change that alters which OLD days (before the fix window,
+    since launch) count as away rewrites a wallet streak: with the wallet on,
+    it needs the parent PIN. Changes to today and later never do."""
+    if not rewards_active(c):
+        return
+    lo = dt.date.fromisoformat(fdb.kv_get(c, wallet.LAUNCH_KEY)["day"])
+    hi = _fix_floor(c) - dt.timedelta(days=1)
+    if hi < lo:
+        return
+    rows = {r["id"]: dict(r) for r in fdb.list_away_periods(c)}
+    before = _away_days(rows.values(), lo, hi)
+    for i in deletes:
+        rows.pop(i, None)
+    for i, fields in updates:
+        if i in rows:
+            rows[i].update(fields)
+    after = list(rows.values()) + [dict(r) for r in inserts]
+    if _away_days(after, lo, hi) != before:
+        _pin_gate(c, request.headers.get(PIN_HEADER))
+
+
+# --- chore wallet: parent PIN ---------------------------------------------
+
+PIN_HEADER = "X-Parent-Pin"
+
+
+def _pin_gate(c, pin) -> None:
+    """Raise the PIN refusal for ``pin`` unless it is right: 403 not_set,
+    required (no PIN sent), wrong; 429 locked with the wait in seconds."""
+    if not parent_pin.is_set(c):
+        raise HTTPException(403, {"pin": "not_set"})
+    ok, wait = parent_pin.check(c, pin, _now_local())
+    if wait:
+        raise HTTPException(429, {"pin": "locked", "wait_s": wait})
+    if ok:
+        return
+    raise HTTPException(403, {"pin": "required" if not pin else "wrong"})
+
+
+def require_parent(request: Request) -> None:
+    _pin_gate(_db(), request.headers.get(PIN_HEADER))
+
+
+class PinBody(BaseModel):
+    pin: str
+    current: str | None = None
+
+
+@app.post("/api/rewards/pin", status_code=204)
+def rewards_set_pin(body: PinBody):
+    c = _db()
+    if parent_pin.is_set(c):
+        _pin_gate(c, body.current)
+    try:
+        parent_pin.set_pin(c, body.pin, current=body.current)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return Response(status_code=204)
+
+
+@app.post("/api/rewards/pin/check", status_code=204)
+def rewards_check_pin(request: Request):
+    require_parent(request)
+    return Response(status_code=204)
+
+
+# --- chore wallet: settings, turning it on, payouts ------------------------
+
+_REWARD_INT_RANGES = {"cents_per_chore": (0, 500), "shield_every": (1, 365),
+                      "shield_max": (0, 5)}
+_REWARD_BOOLS = {"bonus_on", "levels_on", "shields_on"}
+
+
+def _check_steps(name: str, v, max_cents: int) -> list:
+    if not isinstance(v, list) or len(v) > 10:
+        raise HTTPException(422, f"{name} must be a list of up to 10 steps")
+    out, last = [], 0
+    for step in v:
+        if (not isinstance(step, list) or len(step) != 2
+                or not all(isinstance(x, int) and not isinstance(x, bool)
+                           for x in step)):
+            raise HTTPException(422, f"each {name} step is [days, cents]")
+        days, cents = step
+        if not 1 <= days <= 1000 or not 0 <= cents <= max_cents or days <= last:
+            raise HTTPException(422, f"{name}: days 1 to 1000 in order, "
+                                     f"cents 0 to {max_cents}")
+        last = days
+        out.append([days, cents])
+    return out
+
+
+def _validated_reward_settings(c, patch: dict) -> dict:
+    unknown = set(patch) - set(REWARD_DEFAULTS)
+    if unknown:
+        raise HTTPException(422, f"unknown settings: {sorted(unknown)}")
+    merged = {**reward_settings(c), **patch}
+    for k, (lo, hi) in _REWARD_INT_RANGES.items():
+        v = merged[k]
+        if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+            raise HTTPException(422, f"{k} must be a whole number {lo} to {hi}")
+    for k in _REWARD_BOOLS:
+        if not isinstance(merged[k], bool):
+            raise HTTPException(422, f"{k} must be true or false")
+    merged["milestones"] = _check_steps("milestones", merged["milestones"], 100000)
+    merged["levels"] = _check_steps("levels", merged["levels"], 500)
+    cut = merged["fix_cutoff"]
+    if not (isinstance(cut, str) and re.fullmatch(r"([01][0-9]|2[0-3]):[0-5][0-9]", cut)):
+        raise HTTPException(422, "fix_cutoff must be HH:MM")
+    return merged
+
+
+def _wallet_people(c, today: dt.date) -> list[dict]:
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    out = []
+    for p in fdb.list_people(c, include_inactive=True):
+        item = {"id": p["id"], "name": p["name"], "color": p["color"],
+                "active": bool(p["active"]),
+                "pace": wallet.pace(c, p["id"], today)}
+        if launch:
+            item["balance_cents"] = wallet.balance_cents(c, p["id"], launch["day"])
+            item["history"] = wallet.history(c, p["id"], launch["day"])
+        else:
+            item["balance_cents"], item["history"] = 0, {"weeks": [], "ledger": []}
+        if not item["active"] and not item["balance_cents"] \
+                and not item["history"]["ledger"] and not item["history"]["weeks"]:
+            continue                      # gone, and nothing left to settle
+        out.append(item)
+    return out
+
+
+def _rewards_state(c) -> dict:
+    today = _today()
+    return {"settings": reward_settings(c),
+            "pin_set": parent_pin.is_set(c),
+            "feature_on": _integration_on(c, "rewards"),
+            "launch": fdb.kv_get(c, wallet.LAUNCH_KEY),
+            "active": rewards_active(c),
+            "people": _wallet_people(c, today)}
+
+
+@app.get("/api/rewards")
+def rewards_get():
+    """Read-only: settings, balances and history (the wall cards already
+    show each balance). Every change below needs the parent PIN."""
+    return _rewards_state(_db())
+
+
+@app.put("/api/rewards/settings")
+def rewards_put_settings(patch: dict, request: Request):
+    """Amounts apply from today on: earlier days keep the pay they were
+    frozen with, the shield rule they were judged by, and a milestone a run
+    has already passed is never paid by adding it now."""
+    c = _db()
+    require_parent(request)
+    old = reward_settings(c)
+    new = _validated_reward_settings(c, patch)
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    today = _today()
+    if launch:
+        if any(old[k] != new[k] for k in ("shields_on", "shield_every", "shield_max")):
+            wallet.record_shield_rule(c, new, launch, today)
+        if old["bonus_on"] != new["bonus_on"] or old["milestones"] != new["milestones"]:
+            away_by = _wallet_away(c, launch["day"], today)
+            for p in fdb.list_people(c):
+                run = wallet.person_run(c, p["id"], today, old, launch,
+                                        away_by.get(p["id"], set()))
+                wallet.record_milestone_floor(c, p["id"], run)
+    fdb.kv_set(c, "rewards.settings", new)
+    return _rewards_state(c)
+
+
+@app.post("/api/rewards/projection")
+def rewards_projection(draft: dict):
+    """What the draft amounts would cost, before they are saved. Read-only."""
+    c = _db()
+    settings = _validated_reward_settings(c, draft)
+    today = _today()
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    away_by = _wallet_away(c, launch["day"], today) if launch else {}
+    kids, partial = [], []
+    for p in fdb.list_people(c):
+        try:
+            pace = wallet.pace(c, p["id"], today)
+            streak = (wallet.person_run(c, p["id"], today, settings, launch,
+                                        away_by.get(p["id"], set())).streak
+                      if launch else 0)
+        except Exception:
+            log.error("projection: could not count person %s", p["id"],
+                      exc_info=True)
+            partial.append(p["id"])     # left out, and the card says who
+            continue
+        kids.append({"id": p["id"], **pace, "streak": streak})
+    return {**rewards.project(kids, settings), "partial": partial}
+
+
+@app.post("/api/rewards/enable")
+def rewards_enable(request: Request):
+    """Turn the wallet on, once: each child's run carries on from the streak
+    the wall shows right now (the old count), and money starts at $0."""
+    c = _db()
+    require_parent(request)
+    if not fdb.kv_get(c, wallet.LAUNCH_KEY):
+        plan, _ = _people_day(c, _today())
+        # The old count includes today once today is all done, and the new
+        # rules count launch day again: seed from the count as of yesterday.
+        seeds = {e["person"]["id"]: max(0, int(e.get("streak") or 0) - (
+                     1 if e.get("total") and e.get("done_count") == e.get("total")
+                     else 0))
+                 for e in plan}
+        wallet.launch(c, _today(), reward_settings(c), seeds)
+    return _rewards_state(c)
+
+
+@app.post("/api/rewards/payout/{pid}")
+def rewards_payout(pid: int, request: Request):
+    c = _db()
+    require_parent(request)
+    if not any(p["id"] == pid for p in fdb.list_people(c, include_inactive=True)):
+        raise HTTPException(404, "no such person")
+    launch = fdb.kv_get(c, wallet.LAUNCH_KEY)
+    if not launch:
+        raise HTTPException(409, "the chore wallet is not on")
+    paid = wallet.pay_out(c, pid, _today())
+    return {"paid": paid,
+            "balance_cents": wallet.balance_cents(c, pid, launch["day"]) if launch else 0}
 
 
 # --- todos ----------------------------------------------------------------
@@ -1785,11 +2196,17 @@ def integrations_list():
 
 
 @app.patch("/api/integrations/{iid}")
-def integrations_patch(iid: str, body: IntegrationPatch):
+def integrations_patch(iid: str, body: IntegrationPatch, request: Request):
     c = _db()
     avail = {i["id"]: i for i in _available_only()}
     if iid not in avail:
         raise HTTPException(404, "unknown integration")
+    # Switching the chore wallet off lifts its old-day lock, so once it has
+    # been turned on, the switch is a parent action in both directions.
+    if (iid == "rewards" and body.enabled is not None
+            and fdb.kv_get(c, wallet.LAUNCH_KEY)
+            and body.enabled != fdb.integration_enabled(c, iid)):
+        require_parent(request)
     # ensure a row exists (a never-toggled integration has none yet), then set it
     fdb.seed_integration(c, iid, avail[iid]["kind"])
     if body.enabled is not None:
@@ -2084,6 +2501,9 @@ class ChoreIn(BaseModel):
     # When a rotation passes the turn on: 'turn' (every time it comes up) or
     # 'week' (one person all week, the next person next week).
     rotate_every: Literal["turn", "week"] = "turn"
+    # 'house' earns and counts for the chore wallet's streak; 'personal' is a
+    # personal goal (vitamins, reading): on the card, but neither.
+    kind: Literal["house", "personal"] = "house"
     # A one-time chore's single due date ('YYYY-MM-DD'); stored as rotation_epoch.
     # Ignored for daily/weekly chores (those anchor to today).
     date: str | None = None
@@ -2101,6 +2521,7 @@ class ChorePatch(BaseModel):
     fixed_person_id: int | None = None
     rotation_order: list[int] | None = None
     rotate_every: Literal["turn", "week"] | None = None
+    kind: Literal["house", "personal"] | None = None
     date: str | None = None
     sort: int | None = None
     active: Literal[0, 1] | None = None   # 0/1 only, as on PersonPatch
@@ -2117,7 +2538,8 @@ class ChorePatch(BaseModel):
 _PERSON_NONNULL_PATCH = {"name", "color", "sort", "active"}
 _CHORE_NONNULL_PATCH = {"title", "icon", "schedule_kind", "days_mask",
                         "week_interval", "due_times", "assign_kind",
-                        "rotation_order", "rotate_every", "sort", "active"}
+                        "rotation_order", "rotate_every", "kind", "sort",
+                        "active"}
 # interval_days is nullable (only set for the 'interval' kind), so it is NOT in
 # the non-null set — an explicit null clears it, which is correct.
 
@@ -2311,16 +2733,22 @@ def admin_add_chore(ch: ChoreIn):
         fixed_person_id=merged["fixed_person_id"] if merged["assign_kind"] == "fixed" else None,
         rotation_order=merged["rotation_order"] if merged["assign_kind"] == "rotation" else [],
         rotate_every=merged["rotate_every"] if merged["assign_kind"] == "rotation" else "turn",
+        kind=merged["kind"],
         rotation_epoch=epoch)
     return _chore_row(c, cid)
 
 
 @app.patch("/api/admin/chores/{cid}")
-def admin_patch_chore(cid: int, ch: ChorePatch):
+def admin_patch_chore(cid: int, ch: ChorePatch, request: Request):
     c = _db()
     row = _chore_row(c, cid)
     fields = ch.model_dump(exclude_unset=True)
     _reject_null_nonnullable(fields, _CHORE_NONNULL_PATCH)
+    # Turning a house chore into a personal goal (or back) changes what a
+    # child earns, so with the wallet on it needs the parent PIN.
+    if ("kind" in fields and fields["kind"] != row.get("kind", "house")
+            and rewards_active(c)):
+        require_parent(request)
     merged = {**row, **fields}
     kind = merged["schedule_kind"]
     # Converting a daily/weekly chore to one-time needs a real due date. Its
@@ -2586,10 +3014,12 @@ def admin_away_list():
 
 
 @app.post("/api/admin/away")
-def admin_away_open(a: AwayIn):
+def admin_away_open(a: AwayIn, request: Request):
     c = _db()
     _person_row(c, a.person_id)                     # 404 if unknown
     start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
+    _guard_away(c, request, inserts=[{"person_id": a.person_id,
+                                      "start_date": start, "end_date": None}])
     if a.backup_person_id is not None:
         _validate_backup(c, a.backup_person_id, a.person_id, (start, None))
     # No overlapping periods per person: a second "going away" that overlaps one
@@ -2606,13 +3036,16 @@ def admin_away_open(a: AwayIn):
 
 
 @app.post("/api/admin/away/everyone")
-def admin_away_everyone(a: AwayEveryoneIn):
+def admin_away_everyone(a: AwayEveryoneIn, request: Request):
     """API only since the wall's "Pause everyone" became the Trip sheet (which
     posts /api/trip). Kept for scripts and existing clients."""
     c = _db()
     start = _valid_date(a.start_date) if a.start_date else _today().isoformat()
     open_pids = {r["person_id"] for r in fdb.list_away_periods(c)
                  if _spans_overlap(start, None, r["start_date"], r["end_date"])}
+    _guard_away(c, request, inserts=[
+        {"person_id": p["id"], "start_date": start, "end_date": None}
+        for p in fdb.list_people(c) if p["id"] not in open_pids])
     created = []
     for p in fdb.list_people(c):                    # active only
         if p["id"] in open_pids:
@@ -2622,7 +3055,7 @@ def admin_away_everyone(a: AwayEveryoneIn):
 
 
 @app.patch("/api/admin/away/{pid}")
-def admin_away_patch(pid: int, a: AwayPatch):
+def admin_away_patch(pid: int, a: AwayPatch, request: Request):
     c = _db()
     row = fdb.get_away_period(c, pid)
     if row is None:
@@ -2655,12 +3088,13 @@ def admin_away_patch(pid: int, a: AwayPatch):
     if effective_end is not None and effective_start is not None \
             and effective_end < effective_start:
         raise HTTPException(422, "end_date must not be before start_date")
+    _guard_away(c, request, updates=[(pid, fields)])
     fdb.update_away_period(c, pid, **fields)
     return {"ok": True}
 
 
 @app.post("/api/admin/away/{pid}/back")
-def admin_away_back(pid: int, a: AwayBackIn | None = None):
+def admin_away_back(pid: int, request: Request, a: AwayBackIn | None = None):
     c = _db()
     row = fdb.get_away_period(c, pid)
     if row is None:
@@ -2671,6 +3105,7 @@ def admin_away_back(pid: int, a: AwayBackIn | None = None):
         # yesterday, falls before the start, so the period never took effect.
         # Remove it instead of 422ing every tap. A trip planned for a LATER
         # start still 422s below: one tap must not quietly delete a plan.
+        _guard_away(c, request, deletes=[pid])
         fdb.delete_away_period(c, pid)
         return {"ok": True}
     end = (_valid_date(a.end_date) if explicit
@@ -2679,13 +3114,16 @@ def admin_away_back(pid: int, a: AwayBackIn | None = None):
     # away_map's a>b skip.
     if end < row["start_date"]:
         raise HTTPException(422, "end_date must not be before start_date")
+    _guard_away(c, request, updates=[(pid, {"end_date": end})])
     fdb.close_away_period(c, pid, end)
     return {"ok": True}
 
 
 @app.delete("/api/admin/away/{pid}")
-def admin_away_delete(pid: int):
-    if not fdb.delete_away_period(_db(), pid):
+def admin_away_delete(pid: int, request: Request):
+    c = _db()
+    _guard_away(c, request, deletes=[pid])
+    if not fdb.delete_away_period(c, pid):
         raise HTTPException(404, "unknown away period")
     return {"ok": True}
 
@@ -2769,7 +3207,7 @@ def _periods_by_id(c, ids: list[int]) -> dict[int, dict]:
 
 
 @app.post("/api/trip")
-def trip_save(t: TripIn):
+def trip_save(t: TripIn, request: Request):
     """Start, plan or edit a trip in one transaction. Editing (ids given)
     keeps each staying traveller's row (history intact), ends the rows of
     anyone taken off the trip the way "back home" does, and adds rows for
@@ -2849,12 +3287,13 @@ def trip_save(t: TripIn):
             deletes.append(change[1])
         elif change:
             updates.append(change[1])
+    _guard_away(c, request, inserts=inserts, updates=updates, deletes=deletes)
     fdb.apply_away_changes(c, inserts=inserts, updates=updates, deletes=deletes)
     return {"trips": _trip_rows(c, today)}
 
 
 @app.post("/api/trip/end")
-def trip_end(t: TripEndIn):
+def trip_end(t: TripEndIn, request: Request):
     """Back early, or cancel a planned trip: every named period ends the way
     "back home" does (see _end_period_change), all in one transaction."""
     c = _db()
@@ -2868,6 +3307,7 @@ def trip_end(t: TripEndIn):
             deletes.append(change[1])
         elif change:
             updates.append(change[1])
+    _guard_away(c, request, updates=updates, deletes=deletes)
     fdb.apply_away_changes(c, updates=updates, deletes=deletes)
     return {"trips": _trip_rows(c, today)}
 

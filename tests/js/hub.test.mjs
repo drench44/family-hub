@@ -262,6 +262,7 @@ test('buildChorePayload: daily fixed chore trims and shapes correctly', () => {
     title: 'Dishes', icon: '🍽️', schedule_kind: 'daily', days_mask: 0,
     week_interval: 1, interval_days: null, due_times: [],
     assign_kind: 'fixed', fixed_person_id: 3, rotation_order: [], rotate_every: 'turn', date: null,
+    kind: 'house',
   });
 });
 
@@ -277,6 +278,7 @@ test('buildChorePayload: one-time chore carries its date and forces fixed', () =
     week_interval: 1, interval_days: null, due_times: [],
     assign_kind: 'fixed',              // rotation is coerced away
     fixed_person_id: 4, rotation_order: [], rotate_every: 'turn', date: '2026-08-20',
+    kind: 'house',
   });
 });
 
@@ -1614,4 +1616,200 @@ test('helpHtml escapes every string, keeps open rows open, one details row per t
   assert.equal((html.match(/<\/details>/g) || []).length, 2, 'balanced');
   assert.match(html, /data-help="z" open>/, 'a topic open before a repaint stays open');
   assert.ok(!/data-help="x&quot;y" open/.test(html));
+});
+
+
+/* ------------------------------------------------------------ chore wallet */
+
+test('formatBonus: whole dollars drop the cents', () => {
+  assert.equal(sandbox.formatBonus(10000), '$100');
+  assert.equal(sandbox.formatBonus(750), '$7.50');
+  assert.equal(sandbox.formatBonus(35), '35¢');
+});
+
+test('formatCents: dollars, cents under a dollar, zero and below', () => {
+  assert.equal(sandbox.formatCents(1850), '$18.50');
+  assert.equal(sandbox.formatCents(30), '30¢');
+  assert.equal(sandbox.formatCents(100), '$1.00');
+  assert.equal(sandbox.formatCents(0), '$0.00');
+  assert.equal(sandbox.formatCents(-250), '-$2.50');
+  assert.equal(sandbox.formatCents(118924), '$1,189.24');
+});
+
+const R = {
+  streak: 47, goal: 100, shields: 2, shield_max: 2, wallet_cents: 1850,
+  rate_cents: 30, next_bonus: { at: 100, cents: 10000 }, next_level: null,
+  bonus_today_cents: 0, outcomes7: ['kept', 'kept', 'saved', 'kept', 'kept', 'kept', 'open'],
+};
+
+test('rewardHeadHtml: streak toward the goal and one mark per shield', () => {
+  const h = sandbox.rewardHeadHtml(R);
+  assert.match(h, /47 \/ 100/);
+  assert.equal((h.match(/shield-on/g) || []).length, 2);
+  assert.equal((h.match(/shield-off/g) || []).length, 0);
+  const one = sandbox.rewardHeadHtml({ ...R, shields: 1 });
+  assert.equal((one.match(/shield-on/g) || []).length, 1);
+  assert.equal((one.match(/shield-off/g) || []).length, 1);
+  // shields switched off: no shield marks at all
+  assert.doesNotMatch(sandbox.rewardHeadHtml({ ...R, shields: 0, shield_max: 0 }), /shield-/);
+  assert.equal(sandbox.rewardHeadHtml(null), '');
+});
+
+test('walletLineHtml: the wallet and what comes next', () => {
+  const w = sandbox.walletLineHtml(R);
+  assert.match(w, /\$18\.50/);
+  assert.match(w, /next bonus \$100 at 100/);
+  const lv = sandbox.walletLineHtml({ ...R, next_bonus: null, next_level: { at: 25, cents: 35 } });
+  assert.match(lv, /35¢ a chore at 25/);
+  const none = sandbox.walletLineHtml({ ...R, next_bonus: null, next_level: null });
+  assert.doesNotMatch(none, /next/);
+  const paid = sandbox.walletLineHtml({ ...R, bonus_today_cents: 10000 });
+  assert.match(paid, /\+\$100 bonus today/);
+  assert.doesNotMatch(paid, /next bonus/);
+  assert.equal(sandbox.walletLineHtml(undefined), '');
+});
+
+test('choreMoneyHtml: what a row pays, a personal goal tag, or nothing', () => {
+  assert.match(sandbox.choreMoneyHtml({ kind: 'house', cents: 30 }), /\+30¢/);
+  assert.match(sandbox.choreMoneyHtml({ kind: 'personal', cents: 0 }), /personal goal/);
+  assert.equal(sandbox.choreMoneyHtml({ kind: 'once', cents: 0 }), '');
+  assert.equal(sandbox.choreMoneyHtml({ title: 'no wallet' }), '');
+});
+
+test('pinRefusal: reads the server refusal off a failed write', () => {
+  const e = (status, detail) => Object.assign(new Error('x'), { status, detail });
+  assert.deepEqual({ ...sandbox.pinRefusal(e(403, { pin: 'required' })) }, { pin: 'required', wait_s: 0 });
+  assert.deepEqual({ ...sandbox.pinRefusal(e(403, { pin: 'wrong' })) }, { pin: 'wrong', wait_s: 0 });
+  assert.deepEqual({ ...sandbox.pinRefusal(e(429, { pin: 'locked', wait_s: 120 })) }, { pin: 'locked', wait_s: 120 });
+  assert.equal(sandbox.pinRefusal(e(403, 'forbidden')), null);
+  assert.equal(sandbox.pinRefusal(e(500, { pin: 'required' })), null);
+  assert.equal(sandbox.pinRefusal(null), null);
+});
+
+test('pinLockMessage: says how long to wait in plain words', () => {
+  assert.equal(sandbox.pinLockMessage(30), 'Too many wrong tries. Try again in a minute.');
+  assert.equal(sandbox.pinLockMessage(240), 'Too many wrong tries. Try again in 4 minutes.');
+});
+
+test('buildChorePayload and choreToModel carry house chore or personal goal', () => {
+  const p = sandbox.buildChorePayload({
+    title: 'Read', repeat: 'daily', days: new Set(), assign: 'fixed', person: '3',
+    rot: [], choreKind: 'personal',
+  });
+  assert.equal(p.kind, 'personal');
+  assert.equal(sandbox.buildChorePayload({ title: 'x', repeat: 'daily', days: new Set(),
+    assign: 'fixed', person: '3', rot: [], choreKind: 'nonsense' }).kind, 'house');
+  const m = sandbox.choreToModel({ title: 'Read', icon: '', schedule_kind: 'daily', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [], kind: 'personal' });
+  assert.equal(m.choreKind, 'personal');
+  const old = sandbox.choreToModel({ title: 'Bed', icon: '', schedule_kind: 'daily', days_mask: 0,
+    assign_kind: 'fixed', fixed_person_id: 1, rotation_order: [] });
+  assert.equal(old.choreKind, 'house');
+});
+
+/* ------------------------------------------------ chore wallet: Settings */
+
+const RW_SET = {
+  cents_per_chore: 30, bonus_on: true, milestones: [[100, 10000]],
+  levels_on: false, levels: [[25, 35], [50, 40], [100, 45]],
+  shields_on: true, shield_every: 20, shield_max: 2, fix_cutoff: '09:00',
+};
+const RW_STATE = (over) => ({
+  settings: RW_SET, pin_set: true, feature_on: true,
+  launch: { day: '2026-12-01', seeds: {} }, active: true,
+  people: [
+    { id: 1, name: 'Ava', color: '#5BC9F0', active: true, balance_cents: 1850,
+      pace: { chores_per_week: 14, done_share: 0.9 },
+      history: { weeks: [{ week_start: '2026-11-30', earned_cents: 420 }],
+        ledger: [{ kind: 'payout', cents: 500, day: '2026-12-02', note: 'Paid' }] } },
+    { id: 2, name: 'Ben', color: '#F05B5B', active: false, balance_cents: 90,
+      pace: { chores_per_week: 0, done_share: 1 },
+      history: { weeks: [], ledger: [] } },
+  ],
+  ...over,
+});
+
+test('rewardsCardHtml: no PIN yet offers to set one, and nothing else', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE({ pin_set: false, launch: null, active: false }));
+  assert.match(h, /data-rw-setpin/);
+  assert.doesNotMatch(h, /data-rw-enable|data-rw-save|data-rw-pay/);
+});
+
+test('rewardsCardHtml: PIN set, not on yet, offers to turn it on and says what happens', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE({ launch: null, active: false }));
+  assert.match(h, /data-rw-enable/);
+  assert.match(h, /keeps the streak/);
+  assert.doesNotMatch(h, /data-rw-pay/);
+});
+
+test('rewardsCardHtml: on, shows the amounts, the projection host and each wallet', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE());
+  assert.match(h, /name="cents_per_chore" value="30"/);
+  assert.match(h, /data-rw-ms-days="0" value="100"/);
+  assert.match(h, /data-rw-ms-dollars="0" value="100"/);    // $100, shown in dollars
+  assert.match(h, /name="fix_cutoff" value="09:00"/);
+  assert.match(h, /id="rw-projection"/);
+  assert.match(h, /data-rw-pay="1"/);
+  assert.match(h, /\$18\.50/);
+  // a person who has gone but still has money is listed under Inactive
+  assert.match(h, /Inactive[\s\S]*Ben[\s\S]*90¢/);
+  assert.match(h, /data-rw-save/);
+});
+
+test('rewardsCardHtml: the switch off in Features says so', () => {
+  const h = sandbox.rewardsCardHtml(RW_STATE({ feature_on: false, active: false }));
+  assert.match(h, /switched off/);
+});
+
+test('rewardsDraft: reads dollars as cents and keeps steps in order', () => {
+  const d = sandbox.rewardsDraft({
+    cents_per_chore: '35', bonus_on: true, levels_on: false, shields_on: true,
+    fix_cutoff: '08:30',
+    milestones: [{ days: '100', dollars: '100' }, { days: '25', dollars: '7.50' }, { days: '', dollars: '5' }],
+    levels: [{ days: '50', cents: '40' }],
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(d)), {
+    cents_per_chore: 35, bonus_on: true, levels_on: false, shields_on: true,
+    fix_cutoff: '08:30',
+    milestones: [[25, 750], [100, 10000]],
+    levels: [[50, 40]],
+  });
+});
+
+test('projectionHtml: per child and family, week month year, both rows', () => {
+  const proj = {
+    children: [{ id: 1, perfect: { week: 1780, month: 7713, year: 92560 },
+      usual: { week: 900, month: 3900, year: 46800 } }],
+    total: { perfect: { week: 1780, month: 7713, year: 92560 },
+      usual: { week: 900, month: 3900, year: 46800 } },
+  };
+  const h = sandbox.projectionHtml(proj, RW_STATE().people, true);
+  assert.match(h, /Ava/);
+  assert.match(h, /\$17\.80/);
+  assert.match(h, /\$925\.60/);
+  assert.match(h, /Perfect streak/);
+  assert.match(h, /Usual pace, about/);
+  assert.match(h, /Family/);
+  assert.match(h, /not saved yet/);
+  assert.doesNotMatch(sandbox.projectionHtml(proj, RW_STATE().people, false), /not saved yet/);
+});
+
+test('helpTopics: the chore wallet topic only when its switch is on', () => {
+  const on = sandbox.helpTopics({ enabled: new Set(['chores', 'rewards']) });
+  assert.ok(on.some((t) => t.id === 'wallet'));
+  const off = sandbox.helpTopics({ enabled: new Set(['chores']) });
+  assert.ok(!off.some((t) => t.id === 'wallet'));
+});
+
+/* ---- review fixes (2026-11-26) ---- */
+
+test('walletLineHtml / rewardHeadHtml: a broken wallet says so', () => {
+  assert.match(sandbox.walletLineHtml({ error: true }), /Wallet unavailable/);
+  assert.equal(sandbox.rewardHeadHtml({ error: true }), '');
+});
+
+test('projectionHtml: names anyone it could not count', () => {
+  const proj = { children: [], total: { perfect: { week: 0, month: 0, year: 0 },
+    usual: { week: 0, month: 0, year: 0 } }, partial: [1] };
+  assert.match(sandbox.projectionHtml(proj, RW_STATE().people, false), /Not counted: Ava/);
 });

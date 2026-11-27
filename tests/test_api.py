@@ -7144,3 +7144,460 @@ def test_away_patch_checks_the_backup_against_the_periods_own_dates(
     assert client.patch(f"/api/admin/away/{pid}",
                         json={"end_date": "2026-12-21"}).status_code == 422
     assert fdb.get_away_period(app_mod._db(), pid)["end_date"] == "2026-11-30"
+
+
+def test_chore_kind_round_trips_through_admin_api(client, app_mod):
+    """A chore is a house chore (earns, counts for the wallet streak) unless
+    it is marked a personal goal; the kind is frozen into each day's log."""
+    pid = _mk_person(client, "Ava")
+    house = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()
+    assert house["kind"] == "house"
+    goal = client.post("/api/admin/chores", json={
+        "title": "Read 15 min", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid, "kind": "personal"}).json()
+    assert goal["kind"] == "personal"
+    assert client.post("/api/admin/chores", json={
+        "title": "x", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid, "kind": "chore"}).status_code == 422
+    assert client.patch(f"/api/admin/chores/{house['id']}",
+                        json={"kind": None}).status_code == 422
+    r = client.patch(f"/api/admin/chores/{house['id']}", json={"kind": "personal"})
+    assert r.status_code == 200 and r.json()["kind"] == "personal"
+    client.get("/api/hub")
+    today = _today().isoformat()
+    kinds = {r["chore_id"]: r["kind"] for r in fdb.day_log(app_mod._db(), today)}
+    assert kinds == {house["id"]: "personal", goal["id"]: "personal"}
+    assert today in fdb.served_between(app_mod._db(), today, today)
+
+
+def test_parent_pin_routes(client, app_mod):
+    """The PIN is set once, changed only with the current PIN, and checked
+    from the X-Parent-Pin header; a lockout answers 429 with the wait."""
+    r = client.post("/api/rewards/pin/check")
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "not_set"}
+    assert client.post("/api/rewards/pin", json={"pin": "12"}).status_code == 422
+    assert client.post("/api/rewards/pin", json={"pin": "2468"}).status_code == 204
+    # changing needs the current PIN
+    assert client.post("/api/rewards/pin", json={"pin": "1357"}).status_code == 403
+    assert client.post("/api/rewards/pin", json={"pin": "1357", "current": "2468"}
+                       ).status_code == 204
+    assert client.post("/api/rewards/pin/check").json()["detail"] == {"pin": "required"}
+    assert client.post("/api/rewards/pin/check",
+                       headers={"X-Parent-Pin": "0000"}).json()["detail"] == {"pin": "wrong"}
+    assert client.post("/api/rewards/pin/check",
+                       headers={"X-Parent-Pin": "1357"}).status_code == 204
+    for _ in range(5):
+        client.post("/api/rewards/pin/check", headers={"X-Parent-Pin": "0000"})
+    r = client.post("/api/rewards/pin/check", headers={"X-Parent-Pin": "1357"})
+    assert r.status_code == 429
+    assert r.json()["detail"]["pin"] == "locked" and r.json()["detail"]["wait_s"] > 0
+
+
+def _wallet_on(client, app_mod, monkeypatch, now):
+    """A hub with the chore wallet on, a clock frozen at ``now`` (house
+    time), one child with a daily chore and frozen rows for the last 3 days."""
+    monkeypatch.setattr(app_mod, "_now_local", lambda: now)
+    pid = _mk_person(client, "Ava")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    c = app_mod._db()
+    for back in (1, 2, 3):
+        ds = (now.date() - dt.timedelta(days=back)).isoformat()
+        fdb.replace_day_log(c, ds, [{"chore_id": cid, "person_id": pid,
+                                     "title": "Dishes", "icon": "", "rot": 0,
+                                     "cents": 30}])
+    assert client.post("/api/rewards/pin", json={"pin": "2468"}).status_code == 204
+    fdb.kv_set(c, "rewards.launch", {"day": (now.date() - dt.timedelta(days=3)).isoformat(),
+                                     "seeds": {}})
+    return pid, cid
+
+
+def _house_now(h, m=0):
+    import family_hub.app as appmod
+    return dt.datetime(2026, 12, 10, h, m, tzinfo=appmod.TZ)
+
+
+def test_yesterday_editable_until_cutoff(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(8, 59))
+    y = (_house_now(8).date() - dt.timedelta(days=1)).isoformat()
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": y}).status_code == 200
+    assert client.delete(f"/api/chores/{cid}/complete?date={y}").status_code == 200
+
+
+def test_cutoff_passes_while_open(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(9, 1))
+    y = (_house_now(9).date() - dt.timedelta(days=1)).isoformat()
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": y})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": y},
+                       headers={"X-Parent-Pin": "2468"}).status_code == 200
+    r = client.delete(f"/api/chores/{cid}/complete?date={y}")
+    assert r.status_code == 403
+    assert fdb.completion_exists(app_mod._db(), cid, y)      # refused: kept
+
+
+def test_older_day_needs_pin(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(7))
+    old = (_house_now(7).date() - dt.timedelta(days=3)).isoformat()
+    r = client.post(f"/api/chores/{cid}/complete", json={"date": old})
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "required"}
+    assert not fdb.completion_exists(app_mod._db(), cid, old)
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": old},
+                       headers={"X-Parent-Pin": "0000"}).status_code == 403
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": old},
+                       headers={"X-Parent-Pin": "2468"}).status_code == 200
+    # today never asks
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+
+
+def test_lock_off_when_rewards_off(client, app_mod, monkeypatch):
+    pid, cid = _wallet_on(client, app_mod, monkeypatch, _house_now(12))
+    fdb.kv_set(app_mod._db(), "rewards.launch", None)      # never turned on
+    old = (_house_now(12).date() - dt.timedelta(days=3)).isoformat()
+    assert client.post(f"/api/chores/{cid}/complete", json={"date": old}).status_code == 200
+
+
+PIN = {"X-Parent-Pin": "2468"}
+
+
+def _kid_with_history(client, app_mod, days_done=3):
+    """A child with a daily house chore done on each of the last
+    ``days_done`` days (frozen and served), and a personal goal."""
+    c = app_mod._db()
+    pid = _mk_person(client, "Ava")
+    cid = client.post("/api/admin/chores", json={
+        "title": "Dishes", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid}).json()["id"]
+    goal = client.post("/api/admin/chores", json={
+        "title": "Read", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid, "kind": "personal"}).json()["id"]
+    for back in range(1, days_done + 1):
+        ds = (_today() - dt.timedelta(days=back)).isoformat()
+        fdb.replace_day_log(c, ds, [
+            {"chore_id": cid, "person_id": pid, "title": "Dishes", "icon": "",
+             "rot": 0},
+            {"chore_id": goal, "person_id": pid, "title": "Read", "icon": "",
+             "rot": 0, "kind": "personal"}])
+        fdb.mark_served(c, ds)
+        fdb.set_completion(c, cid, ds, pid)
+        fdb.set_completion(c, goal, ds, pid)
+    return pid, cid, goal
+
+
+def _enable(client):
+    assert client.post("/api/rewards/pin", json={"pin": "2468"}).status_code == 204
+    r = client.post("/api/rewards/enable", headers=PIN)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_hub_has_no_reward_when_off(client, app_mod):
+    _kid_with_history(client, app_mod)
+    hub = client.get("/api/hub").json()
+    p = hub["people"][0]
+    assert "reward" not in p and p["streak"] == 3
+    assert all("cents" not in ch and "kind" not in ch for ch in p["chores"])
+    # a PIN alone does not turn it on: the parent still has to tap "Turn on"
+    client.post("/api/rewards/pin", json={"pin": "2468"})
+    assert "reward" not in client.get("/api/hub").json()["people"][0]
+
+
+def test_enable_requires_pin_and_seeds(client, app_mod):
+    pid, _, _ = _kid_with_history(client, app_mod)
+    r = client.post("/api/rewards/enable")
+    assert r.status_code == 403 and r.json()["detail"] == {"pin": "not_set"}
+    rec = _enable(client)
+    assert rec["launch"] == {"day": _today().isoformat(), "seeds": {str(pid): 3}}
+    # a second tap changes nothing
+    again = client.post("/api/rewards/enable", headers=PIN).json()
+    assert again["launch"] == rec["launch"]
+
+
+def test_hub_reward_block_shape(client, app_mod):
+    pid, cid, goal = _kid_with_history(client, app_mod)
+    _enable(client)
+    p = client.get("/api/hub").json()["people"][0]
+    r = p["reward"]
+    assert r["streak"] == 3 and r["goal"] == 100 and r["shields"] == 0
+    assert r["shield_max"] == 2 and r["wallet_cents"] == 0 and r["rate_cents"] == 30
+    assert r["next_bonus"] == {"at": 100, "cents": 10000}
+    assert r["next_level"] is None and r["bonus_today_cents"] == 0
+    assert len(r["outcomes7"]) == 7 and r["outcomes7"][-1] == "open"
+    rows = {ch["id"]: ch for ch in p["chores"]}
+    assert (rows[cid]["cents"], rows[cid]["kind"]) == (30, "house")
+    assert (rows[goal]["cents"], rows[goal]["kind"]) == (0, "personal")
+    assert client.post(f"/api/chores/{cid}/complete").status_code == 200
+    p = client.get("/api/hub").json()["people"][0]
+    assert p["reward"]["wallet_cents"] == 30 and p["reward"]["streak"] == 4
+    # the personal goal earns nothing and does not hold the streak back
+    assert p["reward"]["outcomes7"][-1] == "kept"
+
+
+def test_hub_pays_the_bonus_on_the_day(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    c = app_mod._db()
+    _enable(client)
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["seeds"] = {str(pid): 99}
+    fdb.kv_set(c, "rewards.launch", rec)
+    client.post(f"/api/chores/{cid}/complete")
+    r = client.get("/api/hub").json()["people"][0]["reward"]
+    assert r["streak"] == 100 and r["bonus_today_cents"] == 10000
+    assert r["wallet_cents"] == 10030
+    client.get("/api/hub")                                   # every poll
+    assert len([x for x in fdb.ledger_for(c, pid) if x["kind"] == "bonus"]) == 1
+
+
+def test_reward_failure_is_fail_soft(client, app_mod, monkeypatch):
+    _kid_with_history(client, app_mod)
+    _enable(client)
+
+    def boom(*a, **k):
+        raise RuntimeError("bad wallet")
+    monkeypatch.setattr(app_mod.wallet, "person_run", boom)
+    r = client.get("/api/hub")
+    assert r.status_code == 200
+    p = r.json()["people"][0]
+    # the wall still works, and the card says the wallet is unavailable
+    # rather than quietly showing no wallet (review, 2026-11-26)
+    assert p["reward"] == {"error": True} and p["streak"] == 3
+
+
+def test_settings_put_needs_pin_and_validates(client, app_mod):
+    _kid_with_history(client, app_mod)
+    _enable(client)
+    body = {"cents_per_chore": 40}
+    assert client.put("/api/rewards/settings", json=body).status_code == 403
+    r = client.put("/api/rewards/settings", json=body, headers=PIN)
+    assert r.status_code == 200 and r.json()["settings"]["cents_per_chore"] == 40
+    for bad in ({"cents_per_chore": -1}, {"cents_per_chore": 501},
+                {"milestones": [[100, 10000], [50, 100]]},
+                {"milestones": [[0, 100]]}, {"levels": [[25, 100001]]},
+                {"fix_cutoff": "25:00"}, {"shield_max": 9}, {"nonsense": 1}):
+        assert client.put("/api/rewards/settings", json=bad,
+                          headers=PIN).status_code == 422, bad
+    assert client.get("/api/rewards").json()["settings"]["cents_per_chore"] == 40
+
+
+def test_projection_follows_draft_settings(client, app_mod):
+    pid, _, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    r = client.post("/api/rewards/projection", json={"cents_per_chore": 50})
+    assert r.status_code == 200
+    kid = r.json()["children"][0]
+    assert kid["id"] == pid
+    # 3 chores in the last 8 weeks, all done: 3 * 7 / 56 a week at 50 cents,
+    # plus $100 every 100 days
+    # (pace rounds chores a week to 0.38)
+    assert kid["perfect"]["week"] == round(0.38 * 50) + 700
+    assert "total" in r.json()
+
+
+def test_payout_route(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    assert client.post(f"/api/rewards/payout/{pid}").status_code == 403
+    r = client.post(f"/api/rewards/payout/{pid}", headers=PIN)
+    assert r.status_code == 200 and r.json()["paid"]["cents"] == 30
+    assert client.get("/api/hub").json()["people"][0]["reward"]["wallet_cents"] == 0
+    assert client.post(f"/api/rewards/payout/{pid}", headers=PIN).json()["paid"] is None
+    assert client.post("/api/rewards/payout/999", headers=PIN).status_code == 404
+
+
+def test_inactive_person_keeps_balance(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    client.get("/api/hub")
+    client.post(f"/api/chores/{cid}/complete")
+    client.patch(f"/api/admin/people/{pid}", json={"active": 0})
+    kids = client.get("/api/rewards").json()["people"]
+    me = next(k for k in kids if k["id"] == pid)
+    assert me["active"] is False and me["balance_cents"] == 30
+    assert client.post(f"/api/rewards/payout/{pid}", headers=PIN).json()["paid"]["cents"] == 30
+
+
+def test_chore_kind_change_needs_pin_once_wallet_is_on(client, app_mod):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    r = client.patch(f"/api/admin/chores/{cid}", json={"kind": "personal"})
+    assert r.status_code == 403
+    assert client.patch(f"/api/admin/chores/{cid}", json={"title": "Dishes!"}
+                        ).status_code == 200
+    assert client.patch(f"/api/admin/chores/{cid}", json={"kind": "personal"},
+                        headers=PIN).json()["kind"] == "personal"
+    # a NEW personal goal needs no PIN: it pays nothing
+    assert client.post("/api/admin/chores", json={
+        "title": "Stretch", "schedule_kind": "daily", "assign_kind": "fixed",
+        "fixed_person_id": pid, "kind": "personal"}).status_code == 200
+
+
+# --- review fixes (2026-11-26): PIN gaps, launch day, rules that rewrite history,
+# --- payouts, and errors that hid ---------------------------------------------
+
+def test_turning_the_wallet_off_needs_the_pin(client, app_mod):
+    """Switching the feature off lifts the old-day lock, so once the wallet
+    has been turned on, the switch itself is a parent action, both ways."""
+    _kid_with_history(client, app_mod)
+    _enable(client)
+    r = client.patch("/api/integrations/rewards", json={"enabled": False})
+    assert r.status_code == 403
+    assert app_mod.rewards_active(app_mod._db())
+    assert client.patch("/api/integrations/rewards", json={"enabled": False},
+                        headers=PIN).status_code == 200
+    assert client.patch("/api/integrations/rewards", json={"enabled": True}
+                        ).status_code == 403
+    assert client.patch("/api/integrations/rewards", json={"enabled": True},
+                        headers=PIN).status_code == 200
+
+
+def test_rewards_switch_is_free_before_launch(client, app_mod):
+    _kid_with_history(client, app_mod)
+    assert client.patch("/api/integrations/rewards",
+                        json={"enabled": False}).status_code == 200
+
+
+def test_away_dates_before_the_fix_window_need_the_pin(client, app_mod):
+    """Marking someone away on an old day turns a miss into a rest, and
+    removing an old away stretch turns rest into kept days: both rewrite a
+    streak, so with the wallet on they are parent actions."""
+    pid, _, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    # launch is today, so back-date the launch to make the past matter
+    c = app_mod._db()
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["day"] = (_today() - dt.timedelta(days=5)).isoformat()
+    fdb.kv_set(c, "rewards.launch", rec)
+    old = (_today() - dt.timedelta(days=3)).isoformat()
+    r = client.post("/api/admin/away", json={"person_id": pid, "start_date": old})
+    assert r.status_code == 403
+    assert fdb.list_away_periods(c) == []
+    r = client.post("/api/admin/away", json={"person_id": pid, "start_date": old},
+                    headers=PIN)
+    assert r.status_code == 200
+    period = r.json()["id"]
+    # ending it today only changes today and later: no PIN
+    assert client.post(f"/api/admin/away/{period}/back").status_code == 200
+    # deleting it rewrites the old days again
+    assert client.delete(f"/api/admin/away/{period}").status_code == 403
+    assert client.delete(f"/api/admin/away/{period}", headers=PIN).status_code == 200
+
+
+def test_a_trip_from_today_needs_no_pin(client, app_mod):
+    pid, _, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    r = client.post("/api/trip", json={"person_ids": [pid]})
+    assert r.status_code == 200, r.text
+    old = (_today() - dt.timedelta(days=2)).isoformat()
+    c = app_mod._db()
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["day"] = (_today() - dt.timedelta(days=5)).isoformat()
+    fdb.kv_set(c, "rewards.launch", rec)
+    ids = r.json()["trips"][0]["ids"]
+    r = client.post("/api/trip", json={"person_ids": [pid], "ids": ids,
+                                       "start_date": old})
+    assert r.status_code == 403
+
+
+def test_turning_on_after_todays_chores_does_not_count_today_twice(client, app_mod):
+    pid, cid, goal = _kid_with_history(client, app_mod)
+    client.post(f"/api/chores/{cid}/complete")
+    client.post(f"/api/chores/{goal}/complete")
+    assert client.get("/api/hub").json()["people"][0]["streak"] == 4
+    rec = _enable(client)
+    assert rec["launch"]["seeds"] == {str(pid): 3}
+    assert client.get("/api/hub").json()["people"][0]["reward"]["streak"] == 4
+
+
+def test_adding_a_milestone_mid_run_does_not_back_pay(client, app_mod):
+    """A child 30 days into a run when a parent adds a 25-day bonus is not
+    paid for the 25 already behind them; the next one counts."""
+    pid, _, _ = _kid_with_history(client, app_mod, days_done=30)
+    _enable(client)
+    c = app_mod._db()
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["day"] = (_today() - dt.timedelta(days=30)).isoformat()
+    rec["seeds"] = {}
+    fdb.kv_set(c, "rewards.launch", rec)
+    assert client.get("/api/hub").json()["people"][0]["reward"]["streak"] == 30
+    r = client.put("/api/rewards/settings", headers=PIN,
+                   json={"milestones": [[25, 1000], [50, 2500], [100, 10000]]})
+    assert r.status_code == 200
+    client.get("/api/hub")
+    assert [x for x in fdb.ledger_for(c, pid) if x["kind"] == "bonus"] == []
+
+
+def test_turning_shields_off_does_not_rewrite_a_saved_day(client, app_mod):
+    """A day a shield saved stays saved when shields are later turned off:
+    the rule in force on each day decides that day."""
+    pid, cid, goal = _kid_with_history(client, app_mod, days_done=0)
+    c = app_mod._db()
+    _enable(client)
+    launch = _today() - dt.timedelta(days=25)
+    rec = fdb.kv_get(c, "rewards.launch")
+    rec["day"] = launch.isoformat()
+    fdb.kv_set(c, "rewards.launch", rec)
+    fdb.kv_set(c, "rewards.shield_rules",
+               [[launch.isoformat(), True, 20, 2]])
+    for back in range(1, 26):
+        ds = (_today() - dt.timedelta(days=back)).isoformat()
+        fdb.replace_day_log(c, ds, [{"chore_id": cid, "person_id": pid,
+                                     "title": "Dishes", "icon": "", "rot": 0}])
+        fdb.mark_served(c, ds)
+        if back != 2:                      # 23 kept, one miss 2 days ago, kept
+            fdb.set_completion(c, cid, ds, pid)
+    before = client.get("/api/hub").json()["people"][0]["reward"]["streak"]
+    assert before == 24
+    assert client.put("/api/rewards/settings", headers=PIN,
+                      json={"shields_on": False}).status_code == 200
+    assert client.get("/api/hub").json()["people"][0]["reward"]["streak"] == before
+
+
+def test_pricing_failure_does_not_freeze_today_unpaid(client, app_mod, monkeypatch):
+    pid, cid, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    real = app_mod.wallet.cents_for_today
+
+    def boom(*a, **k):
+        raise RuntimeError("bad pricing")
+    monkeypatch.setattr(app_mod.wallet, "cents_for_today", boom)
+    p = client.get("/api/hub").json()["people"][0]
+    assert p["reward"] == {"error": True}
+    today = _today().isoformat()
+    monkeypatch.setattr(app_mod.wallet, "cents_for_today", real)
+    client.get("/api/hub")
+    assert {r["chore_id"]: r["cents"] for r in fdb.day_log(app_mod._db(), today)
+            }[cid] == 30
+
+
+def test_one_childs_wallet_failure_says_so_on_that_card(client, app_mod, monkeypatch):
+    _kid_with_history(client, app_mod)
+    _enable(client)
+    monkeypatch.setattr(app_mod, "_reward_block",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    p = client.get("/api/hub").json()["people"][0]
+    assert p["reward"] == {"error": True}
+
+
+def test_projection_names_who_it_could_not_count(client, app_mod, monkeypatch):
+    pid, _, _ = _kid_with_history(client, app_mod)
+    _enable(client)
+    monkeypatch.setattr(app_mod.wallet, "pace",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    r = client.post("/api/rewards/projection", json={})
+    assert r.status_code == 200
+    assert r.json()["partial"] == [pid] and r.json()["children"] == []
+
+
+def test_settings_reject_wrong_types(client, app_mod):
+    _kid_with_history(client, app_mod)
+    _enable(client)
+    for bad in ({"cents_per_chore": True}, {"cents_per_chore": "30"},
+                {"milestones": [[100, 10000.5]]}, {"fix_cutoff": "9:00"},
+                {"fix_cutoff": None}, {"levels": "none"}):
+        assert client.put("/api/rewards/settings", json=bad,
+                          headers=PIN).status_code == 422, bad

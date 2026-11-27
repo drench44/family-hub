@@ -30,6 +30,7 @@ async function j(url, opts) {
       try { detail = (await r.json()).detail || ''; } catch (e) { /* not json */ }
       const err = new Error((typeof detail === 'string' && detail) || `${url} -> HTTP ${r.status}`);
       err.status = r.status;   // lets a caller tell "refused" (4xx) from "down"
+      err.detail = detail;     // a structured refusal (the parent PIN's {pin: ...})
       throw err;
     }
     // `return await` (not bare `return r.json()`) is load-bearing: it keeps the
@@ -718,6 +719,8 @@ function buildChorePayload(f) {
     rotate_every: assign === 'rotation' && f.rotateEvery === 'week' ? 'week' : 'turn',
     // The one-time due date; the server ignores it for daily/weekly chores.
     date: kind === 'once' ? (f.date || '') : null,
+    // House chore (earns in the chore wallet) or personal goal (doesn't).
+    kind: f.choreKind === 'personal' ? 'personal' : 'house',
   };
 }
 
@@ -788,6 +791,7 @@ function choreToModel(ch) {
     assign: ch.assign_kind, fixed_person_id: ch.fixed_person_id,
     rot: ch.rotation_order.slice(),
     rotateEvery: ch.rotate_every === 'week' ? 'week' : 'turn',
+    choreKind: ch.kind === 'personal' ? 'personal' : 'house',
     each: [],
     // For a one-time chore the due date is stored as rotation_epoch.
     date: ch.schedule_kind === 'once' ? (ch.rotation_epoch || '') : '',
@@ -1022,6 +1026,12 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
           </div>
         </div>
       </div></div>
+    <div class="field f-kindfield"><label>Does it earn money?</label>
+      <div class="segmented f-kind">
+        <button class="seg-btn" type="button" data-kind="house">House chore</button>
+        <button class="seg-btn" type="button" data-kind="personal">Personal goal</button>
+      </div>
+      <div class="hint">A personal goal (like reading or vitamins) stays on the card but doesn't earn money or count for the streak.</div></div>
     <div class="chore-preview f-preview hidden" aria-live="polite">
       <div class="preview-head">Coming up</div>
       <div class="preview-cells f-cells"></div>
@@ -1041,6 +1051,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
 
   const $ = (sel) => host.querySelector(sel);
   if (!model.rotateEvery) model.rotateEvery = 'turn';
+  if (model.choreKind !== 'personal') model.choreKind = 'house';
   if (!Array.isArray(model.each)) model.each = [];
   $('.f-title').value = model.title || '';
   $('.f-icon').value = model.icon || '';
@@ -1070,7 +1081,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     intervalDays: $('.f-intervaldays').value, times: model.times,
     assign: model.repeat === 'once' ? 'fixed' : model.assign,
     person: model.fixed_person_id, rot: model.rot, rotateEvery: model.rotateEvery,
-    each: model.each, date: $('.f-date').value,
+    each: model.each, date: $('.f-date').value, choreKind: model.choreKind,
   });
   const paintSummary = () => {
     $('.f-summary').textContent = choreSummary({ ...model, ...draft(), fixed_person_id: model.fixed_person_id }, people);
@@ -1084,6 +1095,12 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     $('.f-weekfreq').classList.toggle('hidden', model.repeat !== 'weekly');
     $('.f-interval').classList.toggle('hidden', model.repeat !== 'interval');
     $('.f-date').classList.toggle('hidden', model.repeat !== 'once');
+    // a one-time item never earns or counts, so there is nothing to choose
+    $('.f-kindfield').classList.toggle('hidden', model.repeat === 'once');
+  };
+  const paintKind = () => {
+    $('.f-kind').querySelectorAll('.seg-btn').forEach((b) =>
+      b.classList.toggle('active', b.dataset.kind === model.choreKind));
   };
   const paintDays = () => {
     $('.f-days').innerHTML = DAY_LABELS.map((d, i) =>
@@ -1283,6 +1300,7 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
   };
   const repaintAll = () => {
     paintRepeat(); paintDays(); paintWeekFreq(); paintTimes(); paintAssign(); paintPeople(); paintRotation();
+    paintKind();
     refreshPreview();
   };
   repaintAll();
@@ -1402,6 +1420,12 @@ function buildChoreForm(host, model, submitLabel, onsubmit, people, opts = {}) {
     model.rotateEvery = b.dataset.rotevery === 'week' ? 'week' : 'turn';
     paintRotation();
     refreshPreview();
+  };
+  $('.f-kind').onclick = (e) => {
+    const b = e.target.closest('[data-kind]');
+    if (!b) return;
+    model.choreKind = b.dataset.kind === 'personal' ? 'personal' : 'house';
+    paintKind();
   };
   $('.f-first').onclick = (e) => {
     const b = e.target.closest('[data-first]');
@@ -1638,19 +1662,199 @@ function buildPersonForm(host, model, submitLabel, onsubmit, opts) {
    `date` is the day the wall is showing. Send it: just after midnight the wall
    still shows yesterday until its next poll, and a dateless tap would land on
    the server's new day and vanish from the row that was tapped. */
-async function attemptToggle(id, done, date) {
+/* ------------------------------------------------------------ chore wallet */
+
+/* Money is whole cents: "$18.50", and "30¢" under a dollar. Pure. */
+function formatCents(c) {
+  const n = Math.round(Number(c) || 0);
+  if (n > 0 && n < 100) return `${n}¢`;
+  const a = Math.abs(n);
+  const dollars = String(Math.floor(a / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${n < 0 ? '-' : ''}$${dollars}.${String(a % 100).padStart(2, '0')}`;
+}
+
+/* A bonus amount reads cleaner without ".00": "$100", "$7.50". Pure. */
+function formatBonus(c) {
+  const n = Math.round(Number(c) || 0);
+  return n >= 100 && n % 100 === 0 ? `$${n / 100}` : formatCents(n);
+}
+
+const SHIELD_SVG = (on) => `<svg class="shield ${on ? 'shield-on' : 'shield-off'}" viewBox="0 0 16 18" aria-hidden="true">`
+  + '<path d="M8 1 15 4v5c0 4-3 7-7 8-4-1-7-4-7-8V4z"/></svg>';
+
+/* The card head when the wallet is on: the streak toward the next goal and
+   one shield per save held (an outline for each still to earn). Pure. */
+function rewardHeadHtml(r) {
+  if (!r || r.error) return '';
+  const max = Math.max(0, Number(r.shield_max) || 0);
+  const held = Math.min(max, Math.max(0, Number(r.shields) || 0));
+  const shields = max
+    ? `<span class="shields" title="${held} of ${max} saves: a missed day uses one instead of ending the streak">`
+      + Array.from({ length: max }, (_, i) => SHIELD_SVG(i < held)).join('') + `</span>`
+    : '';
+  return `<span class="chip-streak chip-wallet" title="${Number(r.streak)} days in a row toward ${Number(r.goal)}">`
+    + `🔥 <span class="num">${Number(r.streak)} / ${Number(r.goal)}</span></span>` + shields;
+}
+
+/* The wallet line under a card's chores. Pure. */
+function walletLineHtml(r) {
+  if (!r) return '';
+  // the server could not work the wallet out: say so, never show a stale $0
+  if (r.error) return `<div class="wallet-line wallet-down">Wallet unavailable right now</div>`;
+  let right = '';
+  if (Number(r.bonus_today_cents) > 0) {
+    right = `<span class="wallet-bonus">+${formatBonus(r.bonus_today_cents)} bonus today</span>`;
+  } else if (r.next_bonus) {
+    right = `<span class="wallet-next">next bonus ${formatBonus(r.next_bonus.cents)} at ${Number(r.next_bonus.at)}</span>`;
+  } else if (r.next_level) {
+    right = `<span class="wallet-next">${formatCents(r.next_level.cents)} a chore at ${Number(r.next_level.at)}</span>`;
+  }
+  return `<div class="wallet-line"><span class="wallet-amt">Wallet <b class="num">${formatCents(r.wallet_cents)}</b></span>${right}</div>`;
+}
+
+/* What a chore row pays, or a quiet tag on a personal goal. Rows from a
+   wall without the wallet carry no kind, and get nothing. Pure. */
+function choreMoneyHtml(ch) {
+  if (!ch || !ch.kind) return '';
+  if (ch.kind === 'personal') return `<span class="chore-money chore-goal">personal goal</span>`;
+  if (ch.kind === 'house' && Number(ch.cents) > 0) {
+    return `<span class="chore-money num">+${formatCents(ch.cents)}</span>`;
+  }
+  return '';
+}
+
+/* The parent-PIN refusal on a failed write, or null for any other failure:
+   {pin: 'required'|'wrong'|'not_set'|'locked', wait_s}. Pure. */
+function pinRefusal(err) {
+  if (!err || (err.status !== 403 && err.status !== 429)) return null;
+  const d = err.detail;
+  if (!d || typeof d !== 'object' || typeof d.pin !== 'string') return null;
+  return { pin: d.pin, wait_s: Number(d.wait_s) || 0 };
+}
+
+function pinLockMessage(waitS) {
+  const mins = Math.max(1, Math.ceil((Number(waitS) || 0) / 60));
+  return `Too many wrong tries. Try again in ${mins === 1 ? 'a minute' : `${mins} minutes`}.`;
+}
+
+/* ---- chore wallet: the Settings card (pure renderers, wired in hub.js) ---- */
+
+const RW_ONOFF = (name, on) => `<div class="seg" role="group" aria-label="${name}">`
+  + `<button type="button" data-rw-toggle="${name}" data-rw-val="1" class="${on ? 'on' : ''}">On</button>`
+  + `<button type="button" data-rw-toggle="${name}" data-rw-val="0" class="${on ? '' : 'on'}">Off</button></div>`;
+
+function rwStepsHtml(kind, steps) {
+  const rows = (steps || []).map(([days, amt], i) => (kind === 'ms'
+    ? `<div class="rw-step"><input class="txt-input rw-num" type="number" min="1" max="1000" inputmode="numeric" data-rw-ms-days="${i}" value="${Number(days)}" aria-label="Days in a row">`
+      + `<span class="rw-word">days pays $</span><input class="txt-input rw-num" type="number" min="0" step="0.01" inputmode="decimal" data-rw-ms-dollars="${i}" value="${(Number(amt) / 100).toFixed(2).replace(/\.00$/, '')}" aria-label="Bonus in dollars">`
+    : `<div class="rw-step"><input class="txt-input rw-num" type="number" min="1" max="1000" inputmode="numeric" data-rw-lv-days="${i}" value="${Number(days)}" aria-label="Days in a row">`
+      + `<span class="rw-word">days or more pays</span><input class="txt-input rw-num" type="number" min="0" max="500" inputmode="numeric" data-rw-lv-cents="${i}" value="${Number(amt)}" aria-label="Cents a chore"><span class="rw-word">¢ a chore</span>`)
+    + `<button class="padmin-btn" type="button" data-rw-del="${kind}:${i}" aria-label="Remove this step">✕</button></div>`).join('');
+  return `<div class="rw-steps" data-rw-steps="${kind}">${rows}`
+    + `<button class="padmin-btn" type="button" data-rw-add="${kind}">+ Add a step</button></div>`;
+}
+
+function walletPeopleHtml(people) {
+  const row = (k) => `<div class="padmin-row rw-kid">`
+    + `<span class="padmin-name" style="color:${safeColor(k.color)}">${escapeHtml(k.name)}</span>`
+    + `<span class="rw-bal num">${formatCents(k.balance_cents)}</span>`
+    + `<button class="padmin-btn" type="button" data-rw-pay="${k.id}"${k.balance_cents > 0 ? '' : ' disabled'}>Paid</button>`
+    + `<details class="rw-hist"><summary>History</summary>`
+    + ((k.history && (k.history.weeks.length || k.history.ledger.length))
+      ? `<ul>${k.history.ledger.map((l) => `<li>${escapeHtml(l.day)}: ${l.kind === 'payout' ? 'paid out' : escapeHtml(l.note || 'streak bonus')} ${formatCents(l.cents)}</li>`).join('')}`
+        + `${k.history.weeks.map((w) => `<li>Week of ${escapeHtml(w.week_start)}: chores earned ${formatCents(w.earned_cents)}</li>`).join('')}</ul>`
+      : `<div class="hint">Nothing yet.</div>`)
+    + `</details></div>`;
+  const here = people.filter((k) => k.active);
+  const gone = people.filter((k) => !k.active);
+  return here.map(row).join('')
+    + (gone.length ? `<div class="padmin-head"><span class="padmin-head-label">Inactive</span></div>${gone.map(row).join('')}` : '');
+}
+
+/* The whole Chore wallet card for a /api/rewards state. Pure. */
+function rewardsCardHtml(st) {
+  if (!st) return `<div class="hint">Loading…</div>`;
+  const intro = `<div class="settings-sub">Each chore adds money to the child’s wallet on their card, with extra for a long streak. You pay them and tap Paid.</div>`;
+  if (!st.feature_on) {
+    return intro + `<div class="hint">The chore wallet is switched off in Features &amp; integrations above.</div>`;
+  }
+  if (!st.pin_set) {
+    return intro + `<div class="hint">First pick a parent PIN. It keeps the money settings, payouts and fixes to old days for grown-ups.</div>`
+      + `<button class="btn-primary" type="button" data-rw-setpin="1">Set a parent PIN</button>`;
+  }
+  if (!st.launch) {
+    return intro + `<div class="hint">When it turns on, each child keeps the streak they have now, and every wallet starts at $0.</div>`
+      + `<button class="btn-primary" type="button" data-rw-enable="1">Turn on the wallet</button>`;
+  }
+  const s = st.settings;
+  return intro
+    + `<div class="theme-ctl stack rw-form">`
+    + `<div class="settings-row"><span class="settings-k">Each chore pays</span>`
+    + `<div class="rw-inline"><input class="txt-input rw-num" type="number" min="0" max="500" inputmode="numeric" name="cents_per_chore" value="${Number(s.cents_per_chore)}" aria-label="Cents a chore"><span class="rw-word">¢ for each house chore done</span></div></div>`
+    + `<div class="settings-row"><span class="settings-k">Streak bonus</span>${RW_ONOFF('bonus_on', s.bonus_on)}</div>`
+    + `<div class="rw-sub${s.bonus_on ? '' : ' hidden'}" data-rw-for="bonus_on">${rwStepsHtml('ms', s.milestones)}</div>`
+    + `<div class="settings-row"><span class="settings-k">More per chore on a streak</span>${RW_ONOFF('levels_on', s.levels_on)}</div>`
+    + `<div class="rw-sub${s.levels_on ? '' : ' hidden'}" data-rw-for="levels_on">${rwStepsHtml('lv', s.levels)}</div>`
+    + `<div class="settings-row"><span class="settings-k">Shields</span>${RW_ONOFF('shields_on', s.shields_on)}`
+    + `<span class="hint">One for every ${Number(s.shield_every)} good days, up to ${Number(s.shield_max)}. A missed day uses one.</span></div>`
+    + `<div class="settings-row"><span class="settings-k">Fix yesterday until</span>`
+    + `<input class="txt-input rw-time" type="time" name="fix_cutoff" value="${escapeHtml(s.fix_cutoff)}" aria-label="Fix yesterday until"></div>`
+    + `<div id="rw-projection" class="rw-projection" aria-live="polite"></div>`
+    + `<div class="form-error hidden" id="rw-error"></div>`
+    + `<button class="btn-primary" type="button" data-rw-save="1">Save amounts</button>`
+    + `</div>`
+    + `<div class="padmin rw-people"><div class="padmin-head"><span class="padmin-head-label">Wallets</span></div>`
+    + walletPeopleHtml(st.people || []) + `</div>`;
+}
+
+/* The form's values -> a settings patch in cents, steps sorted by days and
+   blank rows dropped. Pure. */
+function rewardsDraft(f) {
+  const steps = (rows, amt) => rows
+    .filter((r) => String(r.days).trim() !== '' && String(amt(r)).trim() !== '')
+    .map((r) => [Math.round(Number(r.days)), Math.round(Number(amt(r)))])
+    .sort((a, b) => a[0] - b[0]);
+  return {
+    cents_per_chore: Math.round(Number(f.cents_per_chore) || 0),
+    bonus_on: !!f.bonus_on, levels_on: !!f.levels_on, shields_on: !!f.shields_on,
+    fix_cutoff: f.fix_cutoff,
+    milestones: steps(f.milestones || [], (r) => (String(r.dollars).trim() === '' ? '' : Number(r.dollars) * 100)),
+    levels: steps(f.levels || [], (r) => r.cents),
+  };
+}
+
+/* The projected cost table. Pure. */
+function projectionHtml(proj, people, unsaved) {
+  if (!proj) return '';
+  const name = (id) => (people.find((k) => k.id === id) || {}).name || '';
+  const cells = (v) => `<td class="num">${formatCents(v.week)}</td><td class="num">${formatCents(v.month)}</td><td class="num">${formatCents(v.year)}</td>`;
+  const rows = (label, pick) => proj.children.map((c) => `<tr><th scope="row">${escapeHtml(name(c.id))}</th>${cells(c[pick])}</tr>`).join('')
+    + `<tr class="rw-total"><th scope="row">Family</th>${cells(proj.total[pick])}</tr>`;
+  const table = (label, pick) => `<div class="rw-proj-head">${label}</div>`
+    + `<table class="rw-proj"><thead><tr><th></th><th>Week</th><th>Month</th><th>Year</th></tr></thead>`
+    + `<tbody>${rows(label, pick)}</tbody></table>`;
+  const missing = (proj.partial || []).map(name).filter(Boolean);
+  return `<div class="settings-k">Projected cost${unsaved ? ' <span class="rw-unsaved">not saved yet</span>' : ''}</div>`
+    + (missing.length ? `<div class="hint rw-partial">Not counted: ${escapeHtml(missing.join(', '))} (couldn’t read their chores just now).</div>` : '')
+    + table('Perfect streak (the most it can cost)', 'perfect')
+    + table('Usual pace, about (from the last 8 weeks)', 'usual');
+}
+
+async function attemptToggle(id, done, date, headers) {
   const url = `/api/chores/${id}/complete`;
   try {
     if (done) {
-      await j(date ? `${url}?date=${encodeURIComponent(date)}` : url, { method: 'DELETE' });
+      await j(date ? `${url}?date=${encodeURIComponent(date)}` : url,
+        { method: 'DELETE', headers: headers || undefined });
     } else {
       await j(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(headers || {}) },
         body: JSON.stringify(date ? { date } : {}),
       });
     }
     attemptToggle.lastError = '';
+    attemptToggle.lastPin = null;
     return true;
   } catch (e) {
     // keep the server's reason findable, and readable by the caller
@@ -1658,10 +1862,12 @@ async function attemptToggle(id, done, date) {
     // "tap again"
     console.warn('chore toggle failed:', e && e.message);
     attemptToggle.lastError = (e && e.message) || '';
+    attemptToggle.lastPin = pinRefusal(e);
     return false;
   }
 }
 attemptToggle.lastError = '';
+attemptToggle.lastPin = null;
 
 /* The toast for a refused chore tap. 'stays done' matches the detail
    app.uncomplete sends (409) for a chore finished before it came off today's
@@ -2202,6 +2408,18 @@ function helpTopics(ctx) {
         'Tap All chores (or a name) for the big view. Use ‹ and › there to look at other days. Only today can be checked off.',
       ],
     });
+    if (on('rewards')) {
+      topics.push({
+        id: 'wallet', title: 'The chore wallet',
+        paras: [
+          'Each house chore adds money to the wallet on that person’s card. The row shows what it pays. A personal goal, like reading or vitamins, stays on the card but doesn’t earn money or count for the streak.',
+          'The 🔥 line counts days in a row where every house chore got done. A day with nothing due counts too, and away days are skipped. Hitting the number on the right pays the streak bonus.',
+          'Shields keep one bad day from wiping out a streak. You earn one for every 20 good days, up to 2. A missed day uses a shield instead of starting over.',
+          'Forgot to tap something? Yesterday can be fixed until 9 in the morning. After that a parent needs to enter the PIN.',
+          'When you pay someone, open Settings, find Chore wallet and tap Paid. Their wallet goes back to $0 and the payout is kept in their history.',
+        ],
+      });
+    }
     topics.push({
       id: 'trips', title: 'Going out of town',
       paras: [
